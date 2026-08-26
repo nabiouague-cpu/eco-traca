@@ -89,6 +89,7 @@
   .badge.warn{background:var(--warn-bg);color:var(--warn);}
   .badge.danger{background:var(--danger-bg);color:var(--danger);}
   .badge.neutral{background:var(--gray-bg);color:var(--ink-soft);}
+  .badge.info{background:#E7EEFA;color:#2C5FAE;}
   .row-actions{display:flex;gap:6px;flex-wrap:wrap;align-items:center;}
 
   .detail{background:var(--surface-2);padding:16px 18px 20px;border-bottom:1px solid var(--border);}
@@ -226,6 +227,7 @@ let state = {
   nonconformites: [],
   campagnes: [],
   coopUsers: null,
+  demandesIdentite: null,
   demandesCoop: null,
   demandesSousOnglet: null,
   newDemandeTypes: new Set(),
@@ -936,6 +938,48 @@ async function refreshAccesTab(){
   render();
 }
 
+async function refreshDemandesIdentite(){
+  if (!supabaseClient) return;
+  const { data, error } = await supabaseClient.from('demandes_identite').select('*').order('created_at', {ascending:false});
+  if (error){ showToast('Impossible de charger les demandes d\'identité : '+error.message); state.demandesIdentite = []; render(); return; }
+  state.demandesIdentite = data || [];
+  render();
+}
+
+async function validerDemandeIdentite(id){
+  const d = (state.demandesIdentite||[]).find(x=>x.id===id);
+  if (!d) return;
+  askConfirm('Appliquer ces changements à la fiche de la coopérative ?', async ()=>{
+    const champs = d.champs_proposes || {};
+    const propre = {};
+    Object.entries(champs).forEach(([k,v])=>{ if (v) propre[k]=v; });
+    const { error: updErr } = await supabaseClient.from('cooperatives').update(propre).eq('id', d.cooperative_id);
+    if (updErr){ showToast('Échec de la mise à jour de la fiche : '+updErr.message); return; }
+    const { error: diErr } = await supabaseClient.from('demandes_identite').update({statut:'validee', traite_le: new Date().toISOString()}).eq('id', id);
+    if (diErr){ showToast('Fiche mise à jour, mais échec du marquage de la demande : '+diErr.message); return; }
+    showToast('Fiche mise à jour et demande validée.', 'success');
+    await refreshDemandesIdentite();
+    await refreshAccesTab();
+    state.cooperatives = await safeGet(KEY_COOP, state.cooperatives);
+    render();
+  });
+}
+
+function ouvrirRejetDemandeIdentite(id){
+  openModal('rejeterDemandeIdentite', {id});
+}
+
+async function rejeterDemandeIdentite(){
+  const id = state.modal.payload.id;
+  const motif = fv('rejet_identite_motif').trim();
+  if (!motif){ showToast('Indique un motif — la coopérative doit savoir pourquoi.'); return; }
+  const { error } = await supabaseClient.from('demandes_identite').update({statut:'rejetee', commentaire: motif, traite_le: new Date().toISOString()}).eq('id', id);
+  if (error){ showToast('Échec : '+error.message); return; }
+  showToast('Demande rejetée.', 'success');
+  closeModal();
+  await refreshDemandesIdentite();
+}
+
 async function lierCompteCooperative(){
   const userId = fv('link_user_id').trim();
   const coopId = fv('link_cooperative_id');
@@ -959,8 +1003,37 @@ async function delierCompteCooperative(userId, coopId){
 
 function renderAccesTab(){
   if (!state.coopUsers){ refreshAccesTab(); return '<div class="loading">Chargement des accès…</div>'; }
+  if (!state.demandesIdentite){ refreshDemandesIdentite(); }
 
-  let html = '<div class="panel"><div class="panel-head"><h2>Lier un compte à une coopérative</h2></div>'
+  let html = '';
+
+  const pendingIdentite = (state.demandesIdentite||[]).filter(d=>d.statut==='soumise');
+  html += '<div class="panel"><div class="panel-head"><h2>Demandes de mise à jour d\'identité — à traiter ('+pendingIdentite.length+')</h2></div>';
+  if (pendingIdentite.length===0){
+    html += '<div class="empty">Aucune demande en attente.</div>';
+  } else {
+    pendingIdentite.forEach(d=>{
+      const coop = coopById(d.cooperative_id);
+      const champs = d.champs_proposes || {};
+      const FIELD_LABELS = { representant_legal_nom:'Représentant légal — Nom', representant_legal_contact:'Représentant légal — Contact', contact_nom:'Personne contact — Nom', contact_contact:'Personne contact — Contact', rccm:'RCCM', ville:'Ville', siege_social:'Siège social', adresse_postale:'Adresse postale', email1:'Email 1', email2:'Email 2', email3:'Email 3' };
+      html += '<div style="padding:14px 18px;border-bottom:1px solid var(--border);">'
+        + '<div style="font-weight:600;margin-bottom:8px;">'+esc(coop?coop.nom:'(coopérative introuvable)')+'</div>'
+        + '<div class="info-grid" style="padding:0;grid-template-columns:1fr 1fr;gap:6px 20px;">'
+        + Object.entries(champs).filter(([k,v])=>v).map(([k,v])=>{
+            const actuel = coop ? (coop[k]||'—') : '—';
+            const change = actuel !== v;
+            return '<div><span>'+esc(FIELD_LABELS[k]||k)+'</span>'+(change ? '<s style="color:var(--ink-faint);">'+esc(actuel)+'</s> → <b style="color:var(--accent);">'+esc(v)+'</b>' : esc(v))+'</div>';
+          }).join('')
+        + '</div>'
+        + '<div style="margin-top:10px;">'
+        + '<button class="btn btn-primary" style="padding:6px 12px;font-size:12px;" onclick="validerDemandeIdentite(\''+d.id+'\')">Valider et appliquer</button>'
+        + '<button class="btn-danger-text" onclick="ouvrirRejetDemandeIdentite(\''+d.id+'\')">Rejeter</button>'
+        + '</div></div>';
+    });
+  }
+  html += '</div>';
+
+  html += '<div class="panel"><div class="panel-head"><h2>Lier un compte à une coopérative</h2></div>'
     + '<div class="hint" style="margin:0 18px 12px;">Crée d\'abord le compte dans Supabase (Authentication → Users → Create a new user), copie son identifiant (UUID) depuis la liste, puis lie-le ici à la bonne coopérative.</div>'
     + '<div style="padding:0 18px 18px;display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">'
     + '<label class="field" style="flex:1;min-width:280px;">Identifiant du compte (UUID)<input type="text" id="link_user_id_input" name="link_user_id" placeholder="ex : 3f2a9c1e-6b7d-4e21-9a3b-8f1c2d3e4f5a"></label>'
@@ -1074,6 +1147,30 @@ async function voirResultatsWhisp(demandeId){
   openModal('resultatsWhisp', { demandeId, resultats: data||[] });
 }
 
+async function validerDemande(id){
+  askConfirm('Valider cette demande ? La coopérative verra le statut passer à "Accepté".', async ()=>{
+    const { error } = await supabaseClient.from('demandes').update({statut:'acceptee', commentaire_ecorigine: null}).eq('id', id);
+    if (error){ showToast('Échec : '+error.message); return; }
+    showToast('Demande validée.', 'success');
+    await refreshDemandesTab();
+  });
+}
+
+function ouvrirRejetDemande(id){
+  openModal('rejeterDemande', {id});
+}
+
+async function rejeterDemande(){
+  const id = state.modal.payload.id;
+  const motif = fv('rejet_motif').trim();
+  if (!motif){ showToast('Indique un motif — la coopérative doit savoir quoi corriger.'); return; }
+  const { error } = await supabaseClient.from('demandes').update({statut:'rejetee', commentaire_ecorigine: motif}).eq('id', id);
+  if (error){ showToast('Échec : '+error.message); return; }
+  showToast('Demande rejetée, la coopérative verra le motif.', 'success');
+  closeModal();
+  await refreshDemandesTab();
+}
+
 async function annulerDemande(id){
   askConfirm('Annuler cette demande ?', async ()=>{
     const { error } = await supabaseClient.from('demandes').update({statut:'annulee'}).eq('id', id);
@@ -1114,29 +1211,42 @@ function renderDemandesTab(){
   const forType = state.demandesCoop.filter(d=>(d.types||[]).includes(typeActif));
 
   const pending = forType.filter(d=>d.statut==='demandee');
+  const enValidation = forType.filter(d=>d.statut==='en_validation');
   const accepted = forType.filter(d=>d.statut==='acceptee');
+  const rejected = forType.filter(d=>d.statut==='rejetee');
   const cancelled = forType.filter(d=>d.statut==='annulee');
 
-  [['Data Requests — En attente', pending, false], ['Accepted Data — Reçues', accepted, true], ['Annulées', cancelled, false]].forEach(([title, list, isAccepted])=>{
+  const STATUT_BADGE = { demandee:['warn','Requête'], en_validation:['info','En cours de validation'], acceptee:['ok','Accepté'], rejetee:['danger','Rejeté'], annulee:['neutral','Annulé'] };
+
+  [
+    ['En attente', pending, 'attente'],
+    ['En cours de validation — à traiter', enValidation, 'validation'],
+    ['Acceptées', accepted, 'acceptee'],
+    ['Rejetées', rejected, 'rejetee'],
+    ['Annulées', cancelled, 'annulee'],
+  ].forEach(([title, list, mode])=>{
     html += '<div class="panel"><div class="panel-head"><h2>'+title+' ('+list.length+')</h2></div>';
     if (list.length===0){
       html += '<div class="empty">Aucune demande dans cette catégorie.</div>';
     } else {
-      html += '<div class="row row-head" style="grid-template-columns:1.6fr 1.4fr 1.6fr 1fr 1fr 1fr;">'
+      html += '<div class="row row-head" style="grid-template-columns:1.6fr 1.4fr 1.6fr 1fr 1fr 1.4fr;">'
         + '<div>Nom</div><div>Coopérative</div><div>Type(s)</div><div>Statut</div><div>Échéance</div><div></div></div>';
       list.forEach(d=>{
         const coop = coopById(d.cooperative_id);
         const types = (d.types||[]).map(t=>'<span class="badge neutral" style="margin:1px 3px 1px 0;">'+esc(DEMANDE_TYPE_LABELS[t]||t)+'</span>').join('');
-        html += '<div class="row" style="grid-template-columns:1.6fr 1.4fr 1.6fr 1fr 1fr 1fr;">'
+        const [badgeClass, badgeLabel] = STATUT_BADGE[d.statut] || ['neutral', d.statut];
+        html += '<div class="row" style="grid-template-columns:1.6fr 1.4fr 1.6fr 1fr 1fr 1.4fr;">'
           + '<div>'+esc(d.name)+'</div>'
           + '<div>'+esc(coop?coop.nom:'—')+'</div>'
           + '<div>'+types+'</div>'
-          + '<div><span class="badge '+(d.statut==='demandee'?'warn':d.statut==='acceptee'?'ok':'neutral')+'">'+(d.statut==='demandee'?'Requested':d.statut==='acceptee'?'Accepted':'Canceled')+'</span></div>'
+          + '<div><span class="badge '+badgeClass+'">'+badgeLabel+'</span></div>'
           + '<div>'+(d.deadline?new Date(d.deadline+'T00:00:00').toLocaleDateString('fr-FR'):'—')+'</div>'
           + '<div>'
-          + (isAccepted && d.fichier_path ? '<button class="btn-ghost" onclick="telechargerFichierDemande(\''+d.fichier_path+'\',\''+esc(d.fichier_nom||'')+'\')">Télécharger</button>' : '')
-          + (isAccepted && d.fichier_path && (d.types||[]).includes('plots_boundaries') ? '<button class="btn-ghost" onclick="lancerAnalyseWhisp(\''+d.id+'\')" id="whisp-btn-'+d.id+'">Lancer l\'analyse Whisp</button>' : '')
-          + (d.statut==='demandee' ? '<button class="btn-danger-text" onclick="annulerDemande(\''+d.id+'\')">Annuler</button>' : '')
+          + (d.fichier_path ? '<button class="btn-ghost" onclick="telechargerFichierDemande(\''+d.fichier_path+'\',\''+esc(d.fichier_nom||'')+'\')">Télécharger</button>' : '')
+          + (mode==='validation' ? '<button class="btn-primary" style="padding:6px 10px;font-size:12px;" onclick="validerDemande(\''+d.id+'\')">Valider</button><button class="btn-danger-text" onclick="ouvrirRejetDemande(\''+d.id+'\')">Rejeter</button>' : '')
+          + ((mode==='acceptee') && d.fichier_path && (d.types||[]).includes('plots_boundaries') ? '<button class="btn-ghost" onclick="lancerAnalyseWhisp(\''+d.id+'\')" id="whisp-btn-'+d.id+'">Lancer l\'analyse Whisp</button>' : '')
+          + (mode==='attente' ? '<button class="btn-danger-text" onclick="annulerDemande(\''+d.id+'\')">Annuler</button>' : '')
+          + (d.commentaire_ecorigine ? '<div class="hint" style="width:100%;margin-top:4px;">Motif : '+esc(d.commentaire_ecorigine)+'</div>' : '')
           + '</div></div>';
       });
     }
@@ -2928,6 +3038,23 @@ function render(){
       + sorted.map(r=>'<tr'+(r.disturbance_after_2020?' style="background:var(--danger-bg);"':'')+'><td>'+esc(r.plot_id||'—')+'</td><td>'+(r.disturbance_after_2020?'⚠ Oui':'Non')+'</td><td>'+esc(r.risk_pcrop||'—')+'</td></tr>').join('')
       + '</tbody></table></div>'
       + '<div class="actions"><button class="btn btn-primary" onclick="closeModal()">Fermer</button></div>'
+      + '</div></div>';
+  }
+
+  if (state.modal && state.modal.type==='rejeterDemandeIdentite'){
+    html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
+      + '<h3>Rejeter cette demande de mise à jour</h3>'
+      + '<div id="modal-fields"><label class="field">Motif du rejet<textarea name="rejet_identite_motif" rows="3"></textarea></label></div>'
+      + '<div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="rejeterDemandeIdentite()">Confirmer le rejet</button></div>'
+      + '</div></div>';
+  }
+
+  if (state.modal && state.modal.type==='rejeterDemande'){
+    html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
+      + '<h3>Rejeter cette demande</h3>'
+      + '<div class="hint" style="margin-bottom:12px;">Le motif sera visible par la coopérative, pour qu\'elle sache quoi corriger avant de soumettre à nouveau.</div>'
+      + '<div id="modal-fields"><label class="field">Motif du rejet<textarea name="rejet_motif" rows="3" placeholder="ex : GeoJSON incomplet, il manque les parcelles de la zone nord."></textarea></label></div>'
+      + '<div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="rejeterDemande()">Confirmer le rejet</button></div>'
       + '</div></div>';
   }
 
