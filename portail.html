@@ -418,6 +418,17 @@ async function signUp(){
     state.authView = 'login'; render();
   }
 }
+async function changerMotDePasse(){
+  const p1 = fv('newpass1');
+  const p2 = fv('newpass2');
+  if (!p1 || p1.length<6){ showToast('Le mot de passe doit contenir au moins 6 caractères.'); return; }
+  if (p1 !== p2){ showToast('Les deux mots de passe ne correspondent pas.'); return; }
+  const { error } = await supabaseClient.auth.updateUser({ password: p1 });
+  if (error){ showToast('Échec : '+error.message); return; }
+  showToast('Mot de passe mis à jour avec succès.', 'success');
+  closeModal();
+}
+
 async function signOut(){
   await supabaseClient.auth.signOut();
   state.session = null; state.coop = null; state.demandes = []; state.docChecks = [];
@@ -659,7 +670,8 @@ function render(){
   let html = '<div class="topbar"><div class="brand">'
     + '<img src="data:image/png;base64,'+ECORIGINE_LOGO_B64+'">'
     + '<div><div class="name">ECORIGINE</div><div class="sub">Portail coopérative'+(state.coop?' — '+esc(state.coop.nom):'')+'</div></div>'
-    + '</div><button class="btn-ghost" onclick="signOut()">Se déconnecter ('+esc(state.session.user.email)+')</button></div>';
+    + '</div><button class="btn-ghost" onclick="openModal(\'changerMotDePasse\')">Changer mon mot de passe</button>'
+    + '<button class="btn-ghost" onclick="signOut()">Se déconnecter ('+esc(state.session.user.email)+')</button></div>';
 
   html += '<div class="wrap">';
 
@@ -850,6 +862,16 @@ function renderOnboarding(){
 
 function renderModal(){
   const m = state.modal;
+  if (m.type==='changerMotDePasse'){
+    return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
+      + '<h3>Changer mon mot de passe</h3>'
+      + '<div id="modal-fields">'
+      + '<label class="field">Nouveau mot de passe<input type="password" name="newpass1" autocomplete="new-password"></label>'
+      + '<label class="field">Confirmer le nouveau mot de passe<input type="password" name="newpass2" autocomplete="new-password"></label>'
+      + '</div>'
+      + '<div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="changerMotDePasse()">Mettre à jour</button></div>'
+      + '</div></div>';
+  }
   if (m.type==='depotRejete'){
     const p = m.payload;
     return '<div class="modal-overlay"><div class="modal">'
