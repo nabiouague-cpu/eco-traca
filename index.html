@@ -1040,6 +1040,32 @@ async function creerDemande(){
   await refreshDemandesTab();
 }
 
+async function lancerAnalyseWhisp(demandeId){
+  const btn = document.getElementById('whisp-btn-'+demandeId);
+  if (btn){ btn.disabled = true; btn.textContent = 'Analyse en cours…'; }
+  showToast("Analyse Whisp lancée — ça peut prendre jusqu'à 2 minutes selon le nombre de parcelles.", 'success');
+  try{
+    const { data, error } = await supabaseClient.functions.invoke('whisp-analyse', { body: { demande_id: demandeId } });
+    if (error){
+      showToast("Échec de l'analyse Whisp : "+error.message);
+    } else if (data && data.error){
+      showToast("Échec de l'analyse Whisp : "+data.error);
+    } else {
+      showToast('Analyse Whisp terminée — '+(data.count||0)+' parcelle(s) traitée(s).', 'success');
+      await voirResultatsWhisp(demandeId);
+    }
+  }catch(e){
+    showToast('Erreur : '+e.message);
+  }
+  if (btn){ btn.disabled = false; btn.textContent = "Lancer l'analyse Whisp"; }
+}
+
+async function voirResultatsWhisp(demandeId){
+  const { data, error } = await supabaseClient.from('whisp_resultats').select('*').eq('demande_id', demandeId);
+  if (error){ showToast('Impossible de charger les résultats : '+error.message); return; }
+  openModal('resultatsWhisp', { demandeId, resultats: data||[] });
+}
+
 async function annulerDemande(id){
   askConfirm('Annuler cette demande ?', async ()=>{
     const { error } = await supabaseClient.from('demandes').update({statut:'annulee'}).eq('id', id);
@@ -1086,6 +1112,7 @@ function renderDemandesTab(){
           + '<div>'+(d.deadline?new Date(d.deadline+'T00:00:00').toLocaleDateString('fr-FR'):'—')+'</div>'
           + '<div>'
           + (isAccepted && d.fichier_path ? '<button class="btn-ghost" onclick="telechargerFichierDemande(\''+d.fichier_path+'\',\''+esc(d.fichier_nom||'')+'\')">Télécharger</button>' : '')
+          + (isAccepted && d.fichier_path && (d.types||[]).includes('plots_boundaries') ? '<button class="btn-ghost" onclick="lancerAnalyseWhisp(\''+d.id+'\')" id="whisp-btn-'+d.id+'">Lancer l\'analyse Whisp</button>' : '')
           + (d.statut==='demandee' ? '<button class="btn-danger-text" onclick="annulerDemande(\''+d.id+'\')">Annuler</button>' : '')
           + '</div></div>';
       });
@@ -2859,6 +2886,24 @@ function render(){
       + '<label class="field">Mesure atténuante<input type="text" name="mesure" placeholder="ex : suspension des achats en attente de vérification"></label>'
       + '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Annuler</button><button type="button" class="btn btn-primary" onclick="submitNonConf()">Enregistrer</button></div>'
       + '</div></div></div>';
+  }
+
+  if (state.modal && state.modal.type==='resultatsWhisp'){
+    const p = state.modal.payload;
+    const sorted = p.resultats.slice().sort((a,b)=>{
+      const score = r => (r.disturbance_after_2020 && r.risk_pcrop==='high') ? 0 : (r.disturbance_after_2020 ? 1 : (r.risk_pcrop==='high' ? 2 : 9));
+      return score(a) - score(b);
+    });
+    const critiques = sorted.filter(r=>r.disturbance_after_2020).length;
+    html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal" style="max-width:700px;">'
+      + '<h3>Résultats de l\'analyse Whisp</h3>'
+      + '<p class="hint" style="margin-bottom:14px;">'+p.resultats.length+' parcelle(s) analysée(s)'+(critiques>0?' — <span style="color:var(--danger);font-weight:600;">'+critiques+' avec perturbation détectée après 2020</span>':', aucune perturbation post-2020 détectée')+'.</p>'
+      + '<div style="max-height:400px;overflow-y:auto;">'
+      + '<table class="data-table"><thead><tr><th>PlotID</th><th>Perturbation &gt;2020</th><th>Risque cacao</th></tr></thead><tbody>'
+      + sorted.map(r=>'<tr'+(r.disturbance_after_2020?' style="background:var(--danger-bg);"':'')+'><td>'+esc(r.plot_id||'—')+'</td><td>'+(r.disturbance_after_2020?'⚠ Oui':'Non')+'</td><td>'+esc(r.risk_pcrop||'—')+'</td></tr>').join('')
+      + '</tbody></table></div>'
+      + '<div class="actions"><button class="btn btn-primary" onclick="closeModal()">Fermer</button></div>'
+      + '</div></div>';
   }
 
   if (state.modal && state.modal.type==='changerMotDePasse'){
