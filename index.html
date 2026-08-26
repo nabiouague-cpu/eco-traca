@@ -1258,6 +1258,16 @@ async function submitCooperative(){
   closeModal();
 }
 
+async function verifierCooperative(id){
+  const idx = state.cooperatives.findIndex(c=>c.id===id);
+  if (idx===-1) return;
+  state.cooperatives[idx].verifiee = true;
+  const ok = await saveKey(KEY_COOP, state.cooperatives);
+  if (ok) showToast('Coopérative marquée comme vérifiée.', 'success');
+  else showToast('Échec de la mise à jour.');
+  render();
+}
+
 async function deleteCooperative(id){
   const linked = state.producteurs.filter(p=>p.cooperative_id===id);
   const msg = linked.length>0
@@ -2176,8 +2186,9 @@ function renderConformiteTab(){
 
 function renderCoopRow(c){
   const stats = coopStats(c.id);
-  let html = '<div class="row coop-row">'
-    + '<div class="p-name"><div class="name">'+esc(c.nom)+(c.ccc_num?' <span class="num" style="font-size:11px;color:var(--ink-faint)">('+esc(c.ccc_num)+')</span>':'')+'</div><div class="coop">'+esc(c.certifications||'—')+'</div></div>'
+  const aVerifier = c.created_by && !c.verifiee;
+  let html = '<div class="row coop-row'+(aVerifier?' unverified':'')+'">'
+    + '<div class="p-name"><div class="name">'+esc(c.nom)+(c.ccc_num?' <span class="num" style="font-size:11px;color:var(--ink-faint)">('+esc(c.ccc_num)+')</span>':'')+(aVerifier?' <span class="badge warn" style="margin-left:6px;">Auto-inscrite — à vérifier</span>':'')+'</div><div class="coop">'+esc(c.certifications||'—')+'</div></div>'
     + '<div><span class="stat-label">Statut</span><span class="badge neutral">'+esc(c.statut||'—')+'</span></div>'
     + '<div><span class="stat-label">Producteurs</span><span class="num">'+fmtNum(stats.count)+'</span></div>'
     + '<div><span class="stat-label">Potentiel</span><span class="num">'+fmtKg(stats.potentiel)+'</span><br>'
@@ -2185,6 +2196,7 @@ function renderCoopRow(c){
       + '<span class="hint">Net payé : '+(stats.netProduit>0?fmtKg(stats.netProduit):'—')+(stats.netProduitPending>0?' <span style="color:var(--warn)">('+stats.netProduitPending+' en attente de pesée)</span>':'')+'</span>'
       + '</div>'
     + '<div class="row-actions">'
+    + (aVerifier ? '<button class="btn btn-primary" onclick="verifierCooperative(\''+c.id+'\')">Marquer comme vérifiée</button>' : '')
     + '<input type="file" accept=".xlsx,.xls" style="display:none" id="file-'+c.id+'" onchange="handleExcelFile(this,\''+c.id+'\')">'
     + '<button class="btn" onclick="document.getElementById(\'file-'+c.id+'\').click()">Importer (Excel)</button>'
     + '<button class="btn" onclick="openCoopDashboard(\''+c.id+'\')">Tableau de bord</button>'
