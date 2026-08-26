@@ -227,6 +227,7 @@ let state = {
   campagnes: [],
   coopUsers: null,
   demandesCoop: null,
+  demandesSousOnglet: null,
   newDemandeTypes: new Set(),
   settings: { seuil: 90 },
   campagneFilter: 'all',
@@ -1090,9 +1091,23 @@ function renderDemandesTab(){
 
   let html = '<div class="controls"><button class="btn btn-primary" onclick="openModal(\'nouvelleDemande\')">+ Nouvelle demande</button></div>';
 
-  const pending = state.demandesCoop.filter(d=>d.statut==='demandee');
-  const accepted = state.demandesCoop.filter(d=>d.statut==='acceptee');
-  const cancelled = state.demandesCoop.filter(d=>d.statut==='annulee');
+  const DEMANDE_GROUPS = [
+    ['farms_facilities', 'Registre des producteurs'],
+    ['plots_boundaries', 'Géolocalisation'],
+    ['product_movements', 'Traçabilité'],
+    ['questionnaires', 'Questionnaires'],
+  ];
+
+  html += '<div class="tabs">'
+    + DEMANDE_GROUPS.map(([type,label])=>'<button class="tab-btn '+(state.demandesSousOnglet===type?'active':'')+'" onclick="setDemandesSousOnglet(\''+type+'\')">'+label+'</button>').join('')
+    + '</div>';
+
+  const typeActif = state.demandesSousOnglet || DEMANDE_GROUPS[0][0];
+  const forType = state.demandesCoop.filter(d=>(d.types||[]).includes(typeActif));
+
+  const pending = forType.filter(d=>d.statut==='demandee');
+  const accepted = forType.filter(d=>d.statut==='acceptee');
+  const cancelled = forType.filter(d=>d.statut==='annulee');
 
   [['Data Requests — En attente', pending, false], ['Accepted Data — Reçues', accepted, true], ['Annulées', cancelled, false]].forEach(([title, list, isAccepted])=>{
     html += '<div class="panel"><div class="panel-head"><h2>'+title+' ('+list.length+')</h2></div>';
@@ -1121,6 +1136,8 @@ function renderDemandesTab(){
   });
   return html;
 }
+
+function setDemandesSousOnglet(type){ state.demandesSousOnglet = type; render(); }
 
 async function checkStorage(){
   try{
