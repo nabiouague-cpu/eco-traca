@@ -125,6 +125,7 @@ try {
 } catch(e) {}
 
 const TYPE_LABELS = {
+  compliance: 'Documents de conformité',
   plots_boundaries: 'Parcelles & limites (géolocalisation)',
   product_movements: 'Mouvements de produit (traçabilité)',
   farms_facilities: 'Exploitations & sites (données de base)',
@@ -373,7 +374,15 @@ function dismissToast(){ state.toast = null; render(); }
 function openModal(type, payload){ state.modal = {type, payload: payload||{}}; render(); }
 function closeModal(){ state.modal = null; render(); }
 function setTab(t){ state.tab = t; state.view = null; render(); }
-function openRequestDetail(id){ state.view = 'requestDetail'; state.detailId = id; render(); }
+function openRequestDetail(id){
+  const d = state.demandes.find(x=>x.id===id);
+  if (d && (d.types||[]).includes('compliance')){
+    state.tab = 'documents'; state.view = null; render();
+    showToast('Coche les documents que tu as déjà, et joins-les — pas besoin de tous les avoir pour continuer.', 'success');
+    return;
+  }
+  state.view = 'requestDetail'; state.detailId = id; render();
+}
 function closeRequestDetail(){ state.view = null; state.detailId = null; render(); }
 function fv(name){ const el = document.querySelector('#modal-fields [name="'+name+'"]'); return el ? el.value : ''; }
 
@@ -752,9 +761,25 @@ function renderDocumentsTab(){
         + '<button class="btn" onclick="document.getElementById(\'doc-file-'+d.id+'\').click()">Joindre un fichier</button>'
         + '</div>';
     });
+    html += '<div style="padding:16px 18px;border-top:1px solid var(--border);">'
+      + '<div class="hint" style="margin-bottom:10px;">Une fois vos documents cochés/joints, envoyez votre mise à jour — vous recevrez par email la liste de ce qu\'il reste éventuellement à transmettre.</div>'
+      + '<button class="btn btn-primary" id="envoyer-maj-conformite-btn" onclick="envoyerMajConformite()">Envoyer ma mise à jour</button>'
+      + '</div>';
   }
   html += '</div>';
   return html;
+}
+
+async function envoyerMajConformite(){
+  const btn = document.getElementById('envoyer-maj-conformite-btn');
+  if (btn){ btn.disabled = true; btn.textContent = 'Envoi en cours…'; }
+  try{
+    const { data, error } = await supabaseClient.functions.invoke('email-documents-manquants', { body: { cooperative_id: state.coop.id } });
+    if (error){ showToast("Échec de l'envoi : "+error.message); }
+    else if (data && data.error){ showToast("Échec de l'envoi : "+data.error); }
+    else { showToast('Mise à jour envoyée — vérifiez votre boîte mail.', 'success'); }
+  }catch(e){ showToast('Erreur : '+e.message); }
+  if (btn){ btn.disabled = false; btn.textContent = 'Envoyer ma mise à jour'; }
 }
 
 function renderProfileTab(){
