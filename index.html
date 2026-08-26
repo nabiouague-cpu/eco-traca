@@ -227,6 +227,9 @@ let state = {
   docCheck: [],
   nonconformites: [],
   campagnes: [],
+  coopUsers: null,
+  demandesCoop: null,
+  newDemandeTypes: new Set(),
   settings: { seuil: 90 },
   campagneFilter: 'all',
   periodeFilter: 'principale',
@@ -698,6 +701,7 @@ try {
         persistSession: true,      // garde la connexion active meme apres fermeture du navigateur
         autoRefreshToken: true,    // renouvelle automatiquement la session en arriere-plan
         storage: window.localStorage,
+        storageKey: 'ecorigine-admin-auth', // espace de session distinct du portail cooperative (meme origine GitHub Pages)
       }
     });
   }
@@ -907,6 +911,181 @@ async function saveKey(key, value){
     return false;
   }
 }
+/* ============================================================
+   Accès coopératives : liaison compte de connexion <-> coopérative
+   ============================================================ */
+async function loadCoopUsers(){
+  if (!supabaseClient) return [];
+  const { data, error } = await supabaseClient.from('cooperative_users').select('user_id, cooperative_id');
+  if (error){ showToast('Impossible de charger les accès : '+error.message); return []; }
+  return data || [];
+}
+
+async function refreshAccesTab(){
+  state.coopUsers = await loadCoopUsers();
+  render();
+}
+
+async function lierCompteCooperative(){
+  const userId = fv('link_user_id').trim();
+  const coopId = fv('link_cooperative_id');
+  if (!userId || !coopId){ showToast("Renseigne l'identifiant du compte (UUID) et choisis une coopérative."); return; }
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuidPattern.test(userId)){ showToast("Cet identifiant ne ressemble pas à un UUID valide (format attendu : 8-4-4-4-12 caractères). Copie-le depuis Supabase → Authentication → Users."); return; }
+  const { error } = await supabaseClient.from('cooperative_users').insert({ user_id: userId, cooperative_id: coopId });
+  if (error){ showToast("Échec de la liaison : "+error.message); return; }
+  showToast('Compte lié avec succès.', 'success');
+  await refreshAccesTab();
+}
+
+async function delierCompteCooperative(userId, coopId){
+  askConfirm('Retirer cet accès pour cette coopérative ?', async ()=>{
+    const { error } = await supabaseClient.from('cooperative_users').delete().eq('user_id', userId).eq('cooperative_id', coopId);
+    if (error){ showToast('Échec : '+error.message); return; }
+    showToast('Accès retiré.', 'success');
+    await refreshAccesTab();
+  });
+}
+
+function renderAccesTab(){
+  if (!state.coopUsers){ refreshAccesTab(); return '<div class="loading">Chargement des accès…</div>'; }
+
+  let html = '<div class="panel"><div class="panel-head"><h2>Lier un compte à une coopérative</h2></div>'
+    + '<div class="hint" style="margin:0 18px 12px;">Crée d\'abord le compte dans Supabase (Authentication → Users → Create a new user), copie son identifiant (UUID) depuis la liste, puis lie-le ici à la bonne coopérative.</div>'
+    + '<div style="padding:0 18px 18px;display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">'
+    + '<label class="field" style="flex:1;min-width:280px;">Identifiant du compte (UUID)<input type="text" id="link_user_id_input" name="link_user_id" placeholder="ex : 3f2a9c1e-6b7d-4e21-9a3b-8f1c2d3e4f5a"></label>'
+    + '<label class="field" style="flex:1;min-width:220px;">Coopérative<select name="link_cooperative_id">'
+    + '<option value="">— Choisir —</option>'
+    + state.cooperatives.map(c=>'<option value="'+esc(c.id)+'">'+esc(c.nom)+'</option>').join('')
+    + '</select></label>'
+    + '<button class="btn btn-primary" onclick="lierCompteCooperative()">Lier ce compte</button>'
+    + '</div></div>';
+
+  html += '<div class="panel"><div class="panel-head"><h2>Accès actifs ('+fmtNum(state.coopUsers.length)+')</h2></div>';
+  if (state.coopUsers.length===0){
+    html += '<div class="empty">Aucun compte coopérative lié pour le moment.</div>';
+  } else {
+    html += '<div class="row row-head" style="grid-template-columns:2fr 2fr auto;"><div>Coopérative</div><div>Identifiant du compte</div><div></div></div>';
+    state.coopUsers.forEach(link=>{
+      const coop = coopById(link.cooperative_id);
+      html += '<div class="row" style="grid-template-columns:2fr 2fr auto;">'
+        + '<div>'+esc(coop?coop.nom:'(coopérative introuvable)')+'</div>'
+        + '<div class="hint" style="font-family:monospace;font-size:12px;">'+esc(link.user_id)+'</div>'
+        + '<div><button class="btn-danger-text" onclick="delierCompteCooperative(\''+link.user_id+'\',\''+link.cooperative_id+'\')">Retirer</button></div>'
+        + '</div>';
+    });
+  }
+  html += '</div>';
+  return html;
+}
+
+/* ============================================================
+   Demandes coopératives (cote ECORIGINE)
+   ============================================================ */
+const DEMANDE_TYPE_LABELS = {
+  plots_boundaries: 'Plots & Boundaries (Geolocations)',
+  product_movements: 'Product Movements (Traceability)',
+  farms_facilities: 'Farms & Facilities (Master Data)',
+  questionnaires: 'Questionnaires',
+};
+
+async function loadDemandes(){
+  if (!supabaseClient) return [];
+  const { data, error } = await supabaseClient.from('demandes').select('*').order('created_at', {ascending:false});
+  if (error){ showToast('Impossible de charger les demandes : '+error.message); return []; }
+  return data || [];
+}
+async function refreshDemandesTab(){
+  state.demandesCoop = await loadDemandes();
+  render();
+}
+
+function toggleDemandeType(type){
+  const s = state.newDemandeTypes;
+  if (s.has(type)) s.delete(type); else s.add(type);
+  render();
+}
+
+async function creerDemande(){
+  const name = fv('demande_name').trim();
+  const coopId = fv('demande_cooperative_id');
+  const deadline = fv('demande_deadline');
+  const message = fv('demande_message').trim();
+  const demandeurNom = fv('demande_demandeur_nom').trim();
+  if (!name || !coopId){ showToast('Renseigne au moins un nom et une coopérative.'); return; }
+  if (state.newDemandeTypes.size===0){ showToast('Sélectionne au moins un type de données.'); return; }
+  const { error } = await supabaseClient.from('demandes').insert({
+    id: 'req_'+Date.now(),
+    name, cooperative_id: coopId,
+    statut: 'demandee',
+    types: Array.from(state.newDemandeTypes),
+    deadline: deadline || null,
+    requested_at: new Date().toISOString().slice(0,10),
+    demandeur_nom: demandeurNom || (state.session && state.session.user ? state.session.user.email : 'ECORIGINE'),
+    message: message || null,
+  });
+  if (error){ showToast('Échec de la création : '+error.message); return; }
+  showToast('Demande créée avec succès.', 'success');
+  state.newDemandeTypes = new Set();
+  closeModal();
+  await refreshDemandesTab();
+}
+
+async function annulerDemande(id){
+  askConfirm('Annuler cette demande ?', async ()=>{
+    const { error } = await supabaseClient.from('demandes').update({statut:'annulee'}).eq('id', id);
+    if (error){ showToast('Échec : '+error.message); return; }
+    showToast('Demande annulée.', 'success');
+    await refreshDemandesTab();
+  });
+}
+
+async function telechargerFichierDemande(path, nom){
+  try{
+    const { data, error } = await supabaseClient.storage.from('documents-coop').download(path);
+    if (error){ showToast('Téléchargement impossible : '+error.message); return; }
+    const url = URL.createObjectURL(data);
+    const a = document.createElement('a'); a.href=url; a.download = nom||'document';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+  }catch(e){ showToast('Erreur : '+e.message); }
+}
+
+function renderDemandesTab(){
+  if (!state.demandesCoop){ refreshDemandesTab(); return '<div class="loading">Chargement des demandes…</div>'; }
+
+  let html = '<div class="controls"><button class="btn btn-primary" onclick="openModal(\'nouvelleDemande\')">+ Nouvelle demande</button></div>';
+
+  const pending = state.demandesCoop.filter(d=>d.statut==='demandee');
+  const accepted = state.demandesCoop.filter(d=>d.statut==='acceptee');
+  const cancelled = state.demandesCoop.filter(d=>d.statut==='annulee');
+
+  [['Data Requests — En attente', pending, false], ['Accepted Data — Reçues', accepted, true], ['Annulées', cancelled, false]].forEach(([title, list, isAccepted])=>{
+    html += '<div class="panel"><div class="panel-head"><h2>'+title+' ('+list.length+')</h2></div>';
+    if (list.length===0){
+      html += '<div class="empty">Aucune demande dans cette catégorie.</div>';
+    } else {
+      html += '<div class="row row-head" style="grid-template-columns:1.6fr 1.4fr 1.6fr 1fr 1fr 1fr;">'
+        + '<div>Nom</div><div>Coopérative</div><div>Type(s)</div><div>Statut</div><div>Échéance</div><div></div></div>';
+      list.forEach(d=>{
+        const coop = coopById(d.cooperative_id);
+        const types = (d.types||[]).map(t=>'<span class="badge neutral" style="margin:1px 3px 1px 0;">'+esc(DEMANDE_TYPE_LABELS[t]||t)+'</span>').join('');
+        html += '<div class="row" style="grid-template-columns:1.6fr 1.4fr 1.6fr 1fr 1fr 1fr;">'
+          + '<div>'+esc(d.name)+'</div>'
+          + '<div>'+esc(coop?coop.nom:'—')+'</div>'
+          + '<div>'+types+'</div>'
+          + '<div><span class="badge '+(d.statut==='demandee'?'warn':d.statut==='acceptee'?'ok':'neutral')+'">'+(d.statut==='demandee'?'Requested':d.statut==='acceptee'?'Accepted':'Canceled')+'</span></div>'
+          + '<div>'+(d.deadline?new Date(d.deadline+'T00:00:00').toLocaleDateString('fr-FR'):'—')+'</div>'
+          + '<div>'
+          + (isAccepted && d.fichier_path ? '<button class="btn-ghost" onclick="telechargerFichierDemande(\''+d.fichier_path+'\',\''+esc(d.fichier_nom||'')+'\')">Télécharger</button>' : '')
+          + (d.statut==='demandee' ? '<button class="btn-danger-text" onclick="annulerDemande(\''+d.id+'\')">Annuler</button>' : '')
+          + '</div></div>';
+      });
+    }
+    html += '</div>';
+  });
+  return html;
+}
+
 async function checkStorage(){
   try{
     if (!supabaseClient){ state.storageErrorMsg = "La bibliothèque Supabase ne s'est pas chargée (vérifie ta connexion internet, puis recharge la page)."; return false; }
@@ -2010,7 +2189,7 @@ function renderCoopRow(c){
     html += '<div class="detail">'
       + '<div class="info-grid">'
       + '<div><span>Responsable :</span> '+esc(c.responsable_nom||'—')+(c.responsable_contact?' ('+esc(c.responsable_contact)+')':'')+'</div>'
-      + '<div><span>ADG :</span> '+esc(c.adg_nom||'—')+(c.adg_contact?' ('+esc(c.adg_contact)+')':'')+'</div>'
+      + '<div><span>Personne contact :</span> '+esc(c.adg_nom||'—')+(c.adg_contact?' ('+esc(c.adg_contact)+')':'')+'</div>'
       + '<div><span>Emails :</span> '+esc([c.email1,c.email2,c.email3].filter(Boolean).join(', ')||'—')+'</div>'
       + '<div><span>RCCM :</span> '+esc(c.rccm||'—')+'</div>'
       + '<div><span>Adresse postale :</span> '+esc(c.adresse_postale||'—')+'</div>'
@@ -2284,7 +2463,7 @@ function renderCoopDashboard(){
 
   html += '<div class="info-grid" style="margin-bottom:18px;">'
     + '<div><span>Responsable :</span> '+esc(coop.responsable_nom||'—')+(coop.responsable_contact?' ('+esc(coop.responsable_contact)+')':'')+'</div>'
-    + '<div><span>ADG :</span> '+esc(coop.adg_nom||'—')+(coop.adg_contact?' ('+esc(coop.adg_contact)+')':'')+'</div>'
+    + '<div><span>Personne contact :</span> '+esc(coop.adg_nom||'—')+(coop.adg_contact?' ('+esc(coop.adg_contact)+')':'')+'</div>'
     + '<div><span>Emails :</span> '+esc([coop.email1,coop.email2,coop.email3].filter(Boolean).join(', ')||'—')+'</div>'
     + '<div><span>RCCM :</span> '+esc(coop.rccm||'—')+'</div>'
     + '<div><span>Adresse postale :</span> '+esc(coop.adresse_postale||'—')+'</div>'
@@ -2419,10 +2598,14 @@ function render(){
       + '<button class="tab-btn '+(state.tab==='cooperatives'?'active':'')+'" onclick="setTab(\'cooperatives\')">Coopératives</button>'
       + '<button class="tab-btn '+(state.tab==='dashboard'?'active':'')+'" onclick="setTab(\'dashboard\')">Tableau de bord</button>'
       + '<button class="tab-btn '+(state.tab==='conformite'?'active':'')+'" onclick="setTab(\'conformite\')">Conformité & documents</button>'
+      + '<button class="tab-btn '+(state.tab==='acces'?'active':'')+'" onclick="setTab(\'acces\')">Accès coopératives</button>'
+      + '<button class="tab-btn '+(state.tab==='demandes'?'active':'')+'" onclick="setTab(\'demandes\')">Demandes coopératives</button>'
       + '</div>';
 
     if (state.tab==='cooperatives') html += renderCooperativesTab();
     else if (state.tab==='conformite') html += renderConformiteTab();
+    else if (state.tab==='acces') html += renderAccesTab();
+    else if (state.tab==='demandes') html += renderDemandesTab();
     else html += renderDashboardTab();
   }
 
@@ -2454,7 +2637,7 @@ function render(){
       + '<label class="field">Contact<input type="text" name="responsable_contact" value="'+esc(c.responsable_contact||'')+'"></label>'
       + '<div class="hint">Fonction déduite automatiquement du nom : SCOOPS → Président du Comité de gestion, COOP-CA → Président du Conseil d\'Administration.</div>'
       + '</fieldset>'
-      + '<fieldset><legend>ADG</legend>'
+      + '<fieldset><legend>Personne contact</legend>'
       + '<label class="field">Nom<input type="text" name="adg_nom" value="'+esc(c.adg_nom||'')+'"></label>'
       + '<label class="field">Contact<input type="text" name="adg_contact" value="'+esc(c.adg_contact||'')+'"></label>'
       + '</fieldset>'
@@ -2654,6 +2837,28 @@ function render(){
       + '<label class="field">Mesure atténuante<input type="text" name="mesure" placeholder="ex : suspension des achats en attente de vérification"></label>'
       + '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Annuler</button><button type="button" class="btn btn-primary" onclick="submitNonConf()">Enregistrer</button></div>'
       + '</div></div></div>';
+  }
+
+  if (state.modal && state.modal.type==='nouvelleDemande'){
+    html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
+      + '<h3>Nouvelle demande de données</h3>'
+      + '<div id="modal-fields">'
+      + '<label class="field">Nom de la demande<input type="text" name="demande_name" placeholder="ex : Mise à jour des parcelles — campagne 2026-2027"></label>'
+      + '<label class="field">Coopérative<select name="demande_cooperative_id"><option value="">— Choisir —</option>'
+      + state.cooperatives.map(c=>'<option value="'+esc(c.id)+'">'+esc(c.nom)+'</option>').join('')
+      + '</select></label>'
+      + '<div class="field"><label>Type(s) de données demandées</label>'
+      + Object.entries(DEMANDE_TYPE_LABELS).map(([k,label])=>
+          '<label style="display:flex;align-items:center;gap:8px;font-weight:normal;margin-bottom:6px;">'
+          + '<input type="checkbox" '+(state.newDemandeTypes.has(k)?'checked':'')+' onchange="toggleDemandeType(\''+k+'\')"> '+esc(label)+'</label>'
+        ).join('')
+      + '</div>'
+      + '<label class="field">Échéance<input type="date" name="demande_deadline"></label>'
+      + '<label class="field">Ton nom (affiché à la coopérative)<input type="text" name="demande_demandeur_nom" placeholder="ex : Nabi Ouague"></label>'
+      + '<label class="field">Message pour la coopérative<textarea name="demande_message" rows="3" placeholder="ex : Merci de transmettre les parcelles actualisées avant le début de la campagne."></textarea></label>'
+      + '</div>'
+      + '<div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="creerDemande()">Créer la demande</button></div>'
+      + '</div></div>';
   }
 
   if (state.modal && state.modal.type==='emailPreview'){
