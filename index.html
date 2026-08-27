@@ -1104,8 +1104,9 @@ async function creerDemande(){
   const demandeurNom = fv('demande_demandeur_nom').trim();
   if (!name || !coopId){ showToast('Renseigne au moins un nom et une coopérative.'); return; }
   if (state.newDemandeTypes.size===0){ showToast('Sélectionne au moins un type de données.'); return; }
+  const newId = 'req_'+Date.now();
   const { error } = await supabaseClient.from('demandes').insert({
-    id: 'req_'+Date.now(),
+    id: newId,
     name, cooperative_id: coopId,
     statut: 'demandee',
     types: Array.from(state.newDemandeTypes),
@@ -1118,6 +1119,8 @@ async function creerDemande(){
   showToast('Demande créée avec succès.', 'success');
   state.newDemandeTypes = new Set();
   closeModal();
+  try{ await supabaseClient.functions.invoke('email-nouvelle-demande', { body: { demande_id: newId } }); }
+  catch(e){ /* la demande existe meme si la notification echoue */ }
   await refreshDemandesTab();
 }
 
