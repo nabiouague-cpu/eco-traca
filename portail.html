@@ -102,6 +102,14 @@
   .checklist-item{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--border);}
   .checklist-item:last-child{border-bottom:none;}
   .checklist-item input[type=checkbox]{width:17px;height:17px;accent-color:var(--accent);}
+  .checklist-item-v2{border-bottom:1px solid var(--border);}
+  .checklist-item-v2:last-child{border-bottom:none;}
+  .checklist-row{display:flex;align-items:center;gap:12px;padding:14px 18px;cursor:pointer;}
+  .checklist-row:hover{background:var(--surface-2);}
+  .checklist-status{width:24px;height:24px;border-radius:50%;border:2px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:13px;color:#fff;flex-shrink:0;}
+  .checklist-status.ok{background:var(--accent);border-color:var(--accent);}
+  .chevron{color:var(--ink-faint);font-size:11px;}
+  .checklist-upload-zone{padding:0 18px 18px;}
   .info-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px 20px;padding:16px 18px;}
   .info-grid div span{color:var(--ink-soft);font-size:12px;display:block;}
 
@@ -174,12 +182,6 @@ const TYPE_LABELS = {
 };
 
 const TYPE_META = {
-  compliance: {
-    label: 'Documents de conformité',
-    desc: 'Registre de commerce, statuts, attestations et autres documents administratifs de la coopérative.',
-    format: '.PDF / .JPG / .DOCX',
-    icon: '📋',
-  },
   plots_boundaries: {
     label: 'Parcelles & limites (géolocalisation)',
     desc: 'Points ou polygones des parcelles montrant précisément où a lieu la production.',
@@ -276,6 +278,7 @@ let state = {
   pendingUpload: null,
   uploadSelectionne: null,
   userMenuOpen: false,
+  docOuvert: null,
 };
 
 function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -857,13 +860,30 @@ function renderDocumentsTab(){
     html += '<div class="empty">Aucun document à vérifier pour le moment.</div>';
   } else {
     state.docChecks.forEach(d=>{
-      html += '<div class="checklist-item">'
-        + '<input type="checkbox" '+(d.disponible?'checked':'')+' onchange="toggleDocDisponible(\''+d.id+'\', this.checked)">'
-        + '<div style="flex:1;">'+esc(d.doc)+(d.fichier_nom?' <span class="hint">— '+esc(d.fichier_nom)+'</span>':'')+'</div>'
-        + (d.fichier_path ? '<button class="btn-ghost" onclick="telechargerFichier(\''+d.fichier_path+'\',\''+esc(d.fichier_nom||'')+'\')">Télécharger</button>' : '')
-        + '<input type="file" style="display:none" id="doc-file-'+d.id+'" onchange="soumettreDocument(this,\''+d.id+'\')">'
-        + '<button class="btn" onclick="document.getElementById(\'doc-file-'+d.id+'\').click()">Joindre un fichier</button>'
+      const ouvert = state.docOuvert === d.id;
+      html += '<div class="checklist-item-v2">'
+        + '<div class="checklist-row" onclick="toggleDocOuvert(\''+d.id+'\')">'
+        + '<span class="checklist-status '+(d.disponible?'ok':'')+'">'+(d.disponible?'✓':'')+'</span>'
+        + '<div style="flex:1;">'
+        + '<div style="font-weight:600;">'+esc(d.doc)+'</div>'
+        + (d.fichier_nom ? '<div class="hint">'+esc(d.fichier_nom)+'</div>' : '<div class="hint">Cliquez pour joindre ce document</div>')
+        + '</div>'
+        + (d.fichier_path ? '<button class="btn-ghost" onclick="event.stopPropagation();telechargerFichier(\''+d.fichier_path+'\',\''+esc(d.fichier_nom||'')+'\')">Télécharger</button>' : '')
+        + '<span class="chevron">'+(ouvert?'▲':'▼')+'</span>'
         + '</div>';
+      if (ouvert){
+        html += '<div class="checklist-upload-zone">'
+          + '<input type="file" style="display:none" id="doc-file-'+d.id+'" onchange="soumettreDocument(this,\''+d.id+'\')">'
+          + '<div class="drop-zone" style="padding:22px 16px;" onclick="document.getElementById(\'doc-file-'+d.id+'\').click()">'
+          + '<div class="drop-zone-icon" style="font-size:20px;margin-bottom:4px;">⇧</div>'
+          + '<div>Glissez un fichier ici ou cliquez pour parcourir</div>'
+          + '</div>'
+          + '<label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;cursor:pointer;">'
+          + '<input type="checkbox" '+(d.disponible?'checked':'')+' onchange="toggleDocDisponible(\''+d.id+'\', this.checked)"> Marquer comme disponible sans joindre de fichier'
+          + '</label>'
+          + '</div>';
+      }
+      html += '</div>';
     });
     html += '<div style="padding:16px 18px;border-top:1px solid var(--border);">'
       + '<div class="hint" style="margin-bottom:10px;">Une fois vos documents cochés/joints, envoyez votre mise à jour — vous recevrez par email la liste de ce qu\'il reste éventuellement à transmettre.</div>'
@@ -872,6 +892,11 @@ function renderDocumentsTab(){
   }
   html += '</div>';
   return html;
+}
+
+function toggleDocOuvert(id){
+  state.docOuvert = state.docOuvert===id ? null : id;
+  render();
 }
 
 async function envoyerMajConformite(){
