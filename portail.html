@@ -124,7 +124,13 @@
   .glossary-item p{margin:0;font-size:12px;color:var(--ink-soft);line-height:1.5;}
   .action-bar{position:sticky;bottom:0;background:var(--surface);border-top:1px solid var(--border);padding:14px 24px;display:flex;align-items:center;justify-content:space-between;margin:24px -20px -60px;box-shadow:0 -2px 12px rgba(0,0,0,0.04);}
   .btn-start-upload{background:#E8A317;color:#2A1E00;border:none;padding:12px 26px;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;}
-  .btn-start-upload:hover{background:#D6960F;}
+  .btn-start-upload:hover:not(:disabled){background:#D6960F;}
+  .btn-start-upload:disabled{background:var(--gray-bg);color:var(--ink-faint);cursor:not-allowed;}
+  .drop-zone{border:2px dashed var(--accent-line);border-radius:10px;padding:36px 20px;text-align:center;cursor:pointer;color:var(--ink-soft);font-size:14px;transition:background 0.15s, border-color 0.15s;}
+  .drop-zone:hover{background:var(--accent-soft);border-color:var(--accent);}
+  .drop-zone.has-file{border-style:solid;border-color:var(--accent);background:var(--accent-soft);}
+  .drop-zone-icon{font-size:26px;margin-bottom:8px;color:var(--accent);}
+  .drop-zone-file{font-size:15px;color:var(--ink);margin-bottom:4px;}
 </style>
 </head>
 <body>
@@ -201,6 +207,8 @@ function deduireFonctionRepresentant(nom){
 }
 
 function genererTemplate(type){
+  state.templatesTelecharges = state.templatesTelecharges || new Set();
+  state.templatesTelecharges.add(type);
   if (type==='plots_boundaries'){
     const geojson = { type:'FeatureCollection', features:[
       { type:'Feature', properties:{ Nom_producteur:'', Code_producteur:'', PlotID:'' }, geometry:{ type:'Polygon', coordinates:[[]] } }
@@ -209,6 +217,7 @@ function genererTemplate(type){
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a'); a.href=url; a.download='template_parcelles.geojson';
     document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+    render();
     return;
   }
   let headers, sheetName, fname;
@@ -227,6 +236,7 @@ function genererTemplate(type){
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, sheetName);
   XLSX.writeFile(wb, fname);
+  render();
 }
 
 let state = {
@@ -244,6 +254,7 @@ let state = {
   modal: null,
   toast: null,
   pendingUpload: null,
+  uploadSelectionne: null,
 };
 
 function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -535,9 +546,17 @@ async function creerMaFiche(){
 /* ============================================================
    Data Requests / Accepted Data
    ============================================================ */
-async function soumettreDemande(input, demandeId){
+function selectionnerFichierDemande(input, demandeId){
   const file = input.files[0];
   if (!file) return;
+  state.uploadSelectionne = { demandeId, file };
+  render();
+}
+
+async function confirmerUploadDemande(demandeId){
+  const sel = state.uploadSelectionne;
+  if (!sel || sel.demandeId!==demandeId || !sel.file) return;
+  const file = sel.file;
   const d = state.demandes.find(x=>x.id===demandeId);
   if (!d) return;
 
@@ -559,20 +578,19 @@ async function soumettreDemande(input, demandeId){
 
     if (controle && !controle.accepted){
       openModal('depotRejete', { demandeId, fileName: file.name, controle, typeControle });
-      input.value = '';
       return;
     }
     if (controle && ((controle.reports||[]).some(r=>r.warnings.length) || (controle.warnings||[]).length)){
-      state.pendingUpload = { input, demandeId, file };
+      state.pendingUpload = { demandeId, file };
       openModal('depotAvertissement', { controle, typeControle });
       return;
     }
 
     await envoyerFichierDemande(demandeId, file);
+    state.uploadSelectionne = null;
   }catch(e){
     showToast('Erreur lors du contrôle du fichier : '+e.message);
   }
-  input.value = '';
 }
 
 async function confirmerEnvoiMalgreAvertissements(){
@@ -580,7 +598,7 @@ async function confirmerEnvoiMalgreAvertissements(){
   if (!p) return;
   closeModal();
   await envoyerFichierDemande(p.demandeId, p.file);
-  p.input.value = '';
+  state.uploadSelectionne = null;
   state.pendingUpload = null;
 }
 
@@ -875,11 +893,13 @@ function renderRequestDetail(id){
   html += '<div class="detail-col"><div class="panel"><div class="panel-head"><h2>Télécharger les modèles de données</h2></div><div style="padding:16px 18px;">';
   types.forEach(t=>{
     const meta = TYPE_META[t]; if (!meta) return;
+    const dejaTelecharge = state.templatesTelecharges && state.templatesTelecharges.has(t);
     html += '<div class="template-card"><div class="row-top">'
       + '<div class="file-icon">'+meta.icon+'</div>'
       + '<div style="flex:1;"><h4>'+esc(meta.label)+' <span class="hint" title="'+esc(meta.format)+'">ⓘ</span></h4>'
       + '<p>'+esc(meta.desc)+'</p>'
       + '<button class="btn btn-teal" onclick="genererTemplate(\''+t+'\')">Télécharger</button>'
+      + (dejaTelecharge ? '<div class="hint" style="color:var(--accent);margin-top:6px;">✓ Modèle téléchargé</div>' : '')
       + '</div></div>'
       + (t==='plots_boundaries' ? '<div class="geo-note">ECORIGINE applique automatiquement de légers ajustements géométriques aux données géo transmises, afin de garantir leur conformité réglementaire (RDUE), sans invalider les limites de parcelles déclarées. <a href="#" onclick="return false;">En savoir plus</a></div>' : '')
       + '</div>';
@@ -897,9 +917,21 @@ function renderRequestDetail(id){
 
   html += '</div>'; // fin detail-grid
 
-  html += '<input type="file" style="display:none" id="detail-upload-input" onchange="soumettreDemande(this,\''+d.id+'\')">'
-    + '<div class="action-bar"><span class="hint">Téléchargez et remplissez les modèles avant de les charger</span>'
-    + '<button class="btn-start-upload" onclick="document.getElementById(\'detail-upload-input\').click()">Déposer mes fichiers</button></div>';
+  const fichierChoisi = state.uploadSelectionne && state.uploadSelectionne.demandeId===d.id ? state.uploadSelectionne.file : null;
+
+  html += '<div class="panel" style="margin-top:6px;"><div class="panel-head"><h2>Déposer votre fichier complété</h2></div>'
+    + '<div style="padding:16px 18px;">'
+    + '<input type="file" style="display:none" id="detail-upload-input" onchange="selectionnerFichierDemande(this,\''+d.id+'\')">'
+    + '<div class="drop-zone'+(fichierChoisi?' has-file':'')+'" onclick="document.getElementById(\'detail-upload-input\').click()">'
+    + (fichierChoisi
+        ? '<div class="drop-zone-file">📄 <b>'+esc(fichierChoisi.name)+'</b></div><div class="hint">Cliquez pour choisir un autre fichier</div>'
+        : '<div class="drop-zone-icon">⇧</div><div>Cliquez ici pour accéder aux fichiers de votre ordinateur</div><div class="hint">et sélectionner le document complété à partir du modèle téléchargé</div>')
+    + '</div>'
+    + '</div></div>';
+
+  html += '<input type="file" style="display:none" id="detail-upload-input-legacy">'
+    + '<div class="action-bar"><span class="hint">'+(fichierChoisi?'Fichier prêt à être envoyé.':'Téléchargez et remplissez les modèles, puis déposez le fichier ci-dessus.')+'</span>'
+    + '<button class="btn-start-upload" '+(fichierChoisi?'':'disabled')+' onclick="confirmerUploadDemande(\''+d.id+'\')">Envoyer à ECORIGINE</button></div>';
 
   return html;
 }
