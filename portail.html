@@ -174,6 +174,21 @@ try {
   }
 } catch(e) {}
 
+const DOCS_REQUIS = [
+  'Registre de commerce',
+  'Délégation de pouvoir',
+  'BIC (si disponible)',
+  'Journal officiel',
+  'DFE',
+  "Attestation d'agrément",
+  'ARF (Attestation de Régularité Fiscale)',
+  'Procuration pour les personnes mandataires (procuration de justice)',
+  'Statuts et règlement intérieur',
+  "Procès-verbal de la dernière Assemblée Générale Ordinaire (AGO)",
+  'Liste des producteurs avec leur matricule CCC',
+  'Certificat(s) (si disponible(s))'
+];
+
 const TYPE_LABELS = {
   plots_boundaries: 'Parcelles & limites (géolocalisation)',
   product_movements: 'Mouvements de produit (traçabilité)',
@@ -674,22 +689,32 @@ async function telechargerFichier(path, nom){
 /* ============================================================
    Documents de conformité (checklist)
    ============================================================ */
-async function toggleDocDisponible(docId, checked){
-  const { error } = await supabaseClient.from('doc_check').update({ disponible: checked }).eq('id', docId);
+function findOrNewDocCheckId(docName){
+  const existing = (state.docChecks||[]).find(d=>d.doc===docName);
+  return existing ? existing.id : ('dc_'+state.coop.id+'_'+docName.replace(/[^a-z0-9]+/gi,'_').toLowerCase());
+}
+
+async function toggleDocDisponible(docName, checked){
+  const id = findOrNewDocCheckId(docName);
+  const { error } = await supabaseClient.from('doc_check').upsert({
+    id, cooperative_id: state.coop.id, doc: docName, disponible: checked
+  });
   if (error){ showToast('Échec : '+error.message); return; }
   await loadAll();
 }
-async function soumettreDocument(input, docId){
+async function soumettreDocument(input, docName){
   const file = input.files[0];
   if (!file) return;
   try{
-    const path = state.coop.id + '/documents/' + docId + '_' + file.name;
+    const id = findOrNewDocCheckId(docName);
+    const path = state.coop.id + '/documents/' + id + '_' + file.name;
     const { error: upErr } = await supabaseClient.storage.from('documents-coop').upload(path, file, { upsert: true });
     if (upErr){ showToast("Échec de l'envoi : "+upErr.message); return; }
-    const { error } = await supabaseClient.from('doc_check').update({
+    const { error } = await supabaseClient.from('doc_check').upsert({
+      id, cooperative_id: state.coop.id, doc: docName,
       disponible: true, fichier_path: path, fichier_nom: file.name,
       soumis_par: state.session.user.id, soumis_le: new Date().toISOString()
-    }).eq('id', docId);
+    });
     if (error){ showToast('Échec : '+error.message); return; }
     showToast('Document envoyé.', 'success');
     await loadAll();
@@ -856,13 +881,13 @@ function renderRequestsTable(list, isAccepted){
 
 function renderDocumentsTab(){
   let html = '<div class="panel"><div class="panel-head"><h2>Documents de conformité</h2></div>';
-  if (state.docChecks.length===0){
-    html += '<div class="empty">Aucun document à vérifier pour le moment.</div>';
-  } else {
-    state.docChecks.forEach(d=>{
-      const ouvert = state.docOuvert === d.id;
+  {
+    DOCS_REQUIS.forEach(docName=>{
+      const d = (state.docChecks||[]).find(x=>x.doc===docName) || { doc: docName, disponible:false, fichier_nom:null, fichier_path:null };
+      const docKey = docName; // identifiant stable pour l'ouverture/fermeture, meme sans enregistrement existant
+      const ouvert = state.docOuvert === docKey;
       html += '<div class="checklist-item-v2">'
-        + '<div class="checklist-row" onclick="toggleDocOuvert(\''+d.id+'\')">'
+        + '<div class="checklist-row" onclick="toggleDocOuvert(\''+esc(docKey).replace(/'/g,"\\'")+'\')">'
         + '<span class="checklist-status '+(d.disponible?'ok':'')+'">'+(d.disponible?'✓':'')+'</span>'
         + '<div style="flex:1;">'
         + '<div style="font-weight:600;">'+esc(d.doc)+'</div>'
@@ -872,14 +897,15 @@ function renderDocumentsTab(){
         + '<span class="chevron">'+(ouvert?'▲':'▼')+'</span>'
         + '</div>';
       if (ouvert){
+        const safeName = docName.replace(/[^a-z0-9]+/gi,'_');
         html += '<div class="checklist-upload-zone">'
-          + '<input type="file" style="display:none" id="doc-file-'+d.id+'" onchange="soumettreDocument(this,\''+d.id+'\')">'
-          + '<div class="drop-zone" style="padding:22px 16px;" onclick="document.getElementById(\'doc-file-'+d.id+'\').click()">'
+          + '<input type="file" style="display:none" id="doc-file-'+safeName+'" onchange="soumettreDocument(this,\''+esc(docName).replace(/'/g,"\\'")+'\')">'
+          + '<div class="drop-zone" style="padding:22px 16px;" onclick="document.getElementById(\'doc-file-'+safeName+'\').click()">'
           + '<div class="drop-zone-icon" style="font-size:20px;margin-bottom:4px;">⇧</div>'
           + '<div>Glissez un fichier ici ou cliquez pour parcourir</div>'
           + '</div>'
           + '<label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;cursor:pointer;">'
-          + '<input type="checkbox" '+(d.disponible?'checked':'')+' onchange="toggleDocDisponible(\''+d.id+'\', this.checked)"> Marquer comme disponible sans joindre de fichier'
+          + '<input type="checkbox" '+(d.disponible?'checked':'')+' onchange="toggleDocDisponible(\''+esc(docName).replace(/'/g,"\\'")+'\', this.checked)"> Marquer comme disponible sans joindre de fichier'
           + '</label>'
           + '</div>';
       }
