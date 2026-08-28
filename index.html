@@ -1152,12 +1152,47 @@ async function voirResultatsWhisp(demandeId){
 }
 
 async function validerDemande(id){
+  const demande = (state.demandesCoop||[]).find(d=>d.id===id);
   askConfirm('Valider cette demande ? La coopérative verra le statut passer à "Accepté".', async ()=>{
     const { error } = await supabaseClient.from('demandes').update({statut:'acceptee', commentaire_ecorigine: null}).eq('id', id);
     if (error){ showToast('Échec : '+error.message); return; }
     showToast('Demande validée.', 'success');
+    if (demande && (demande.types||[]).includes('farms_facilities') && demande.fichier_path){
+      await extraireProducteursValides(demande);
+    }
     await refreshDemandesTab();
   });
+}
+
+async function extraireProducteursValides(demande){
+  try{
+    const { data: fileBlob, error: dlErr } = await supabaseClient.storage.from('documents-coop').download(demande.fichier_path);
+    if (dlErr){ showToast("Registre validé, mais échec de l'extraction des producteurs : "+dlErr.message); return; }
+    const buf = await fileBlob.arrayBuffer();
+    const wb = XLSX.read(buf, {type:'array'});
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
+    // Colonnes attendues (Template_registre_membres.xlsx) : ... 3=Farmer ID, 4=Farmer Name ...
+    const dataRows = rows.slice(1).filter(r=>r.some(c=>String(c||'').trim()!==''));
+    const producteurs = dataRows.map((r,i)=>{
+      const code = String(r[2]||'').trim();
+      const nomComplet = String(r[3]||'').trim();
+      const espace = nomComplet.indexOf(' ');
+      const prenom = espace>0 ? nomComplet.slice(0,espace) : '';
+      const nom = espace>0 ? nomComplet.slice(espace+1) : nomComplet;
+      return { id: 'pv_'+demande.cooperative_id+'_'+i, cooperative_id: demande.cooperative_id, code, nom, prenom };
+    }).filter(p=>p.code);
+
+    if (producteurs.length===0){ showToast('Registre validé, mais aucune ligne producteur exploitable trouvée dans le fichier.'); return; }
+
+    // remplace entierement la liste precedente par la nouvelle version validee
+    await supabaseClient.from('producteurs_valides').delete().eq('cooperative_id', demande.cooperative_id);
+    const { error: insErr } = await supabaseClient.from('producteurs_valides').insert(producteurs);
+    if (insErr){ showToast("Registre validé, mais échec de l'enregistrement des producteurs : "+insErr.message); return; }
+    showToast(producteurs.length+' producteur(s) validé(s) et enregistré(s) pour cette coopérative.', 'success');
+  }catch(e){
+    showToast("Registre validé, mais échec de l'extraction : "+e.message);
+  }
 }
 
 function ouvrirRejetDemande(id){
