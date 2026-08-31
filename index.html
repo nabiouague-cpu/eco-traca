@@ -663,6 +663,64 @@ function construireContratDocxBlob(coop, campagne_label, periode_label, dateDebu
   return Packer.toBlob(doc);
 }
 
+// Propose un nom complet selon la regle : "La Societe Cooperative [nom]" par defaut.
+// Deux cas connus sont traites en exception avec leur vrai nom (les sigles etant des
+// acronymes qui ne reprennent pas les mots du nom reel, la regle generique ne peut
+// pas les deviner correctement). Pour toutes les autres cooperatives, c'est une
+// proposition de depart a verifier/corriger -- jamais une valeur figee.
+const NOMS_COMPLETS_CONNUS = {
+  'SCOOPS ECOPAK': "L'Entreprise Coopérative des Producteurs Agricoles de Kouan-Houlé",
+  'SCOOPS UM': 'La Société Coopérative Unité de Mahapleu',
+};
+function normaliserSigle(s){ return String(s||'').toUpperCase().replace(/[\s\-_]+/g,' ').trim(); }
+function proposerNomComplet(coop){
+  if (coop.nom_complet) return coop.nom_complet;
+  const nom = String(coop.nom||'').trim();
+  const connu = NOMS_COMPLETS_CONNUS[normaliserSigle(nom)];
+  if (connu) return connu;
+  let core = nom
+    .replace(/^(SCOOPS|COOP-CA|COOPCA)[\s\-_]*/i, '')
+    .replace(/[\s\-_]*(COOP-CA|COOPCA)$/i, '')
+    .trim();
+  if (!core) core = nom;
+  const isEcopak = /ECOPAK/i.test(nom);
+  const determinant = isEcopak ? "L'Entreprise Coopérative" : 'La Société Coopérative';
+  return determinant + ' ' + core;
+}
+
+function ouvrirCompletionNomsComplets(){
+  if (state.cooperatives.length===0){ showToast('Aucune coopérative enregistrée.'); return; }
+  const coops = state.cooperatives.slice()
+    .sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'}))
+    .map(c=>({ id:c.id, nom:c.nom, propose: proposerNomComplet(c) }));
+  state.modal = {type:'nomsComplets', payload:{ coops }};
+  render();
+}
+
+async function enregistrerNomsComplets(){
+  const m = state.modal;
+  if (!m || m.type!=='nomsComplets') return;
+  let changed = 0;
+  m.payload.coops.forEach(ligne=>{
+    const input = document.getElementById('nc_'+ligne.id);
+    if (!input) return;
+    const val = input.value.trim();
+    const coop = coopById(ligne.id);
+    if (coop && val && coop.nom_complet !== val){
+      coop.nom_complet = val;
+      changed++;
+    }
+  });
+  if (changed===0){ showToast('Aucune modification à enregistrer.'); return; }
+  const ok = await saveKey(KEY_COOP, state.cooperatives);
+  if (ok){
+    showToast(changed+' nom(s) complet(s) enregistré(s).', 'success');
+    closeModal();
+  } else {
+    showToast('Échec de la mise à jour : '+(state.storageErrorMsg||'erreur inconnue'));
+  }
+}
+
 function ouvrirGenerationContratsGroupe(){
   const certifiees = state.cooperatives.filter(c=>c.statut!=='Non certifiée')
     .sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'}));
@@ -824,7 +882,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-08-31-06';
+const APP_VERSION = '2026-08-31-07';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -2832,8 +2890,11 @@ function renderCoopGroup(sectionKey, title, list){
 function renderCooperativesTab(){
   let html = '';
   const nCertifieesTotal = state.cooperatives.filter(c=>c.statut!=='Non certifiée').length;
-  if (nCertifieesTotal>0){
-    html += '<div class="controls"><button class="btn btn-primary" onclick="ouvrirGenerationContratsGroupe()">Générer des contrats en masse</button></div>';
+  if (state.cooperatives.length>0){
+    html += '<div class="controls">'
+      + (nCertifieesTotal>0 ? '<button class="btn btn-primary" onclick="ouvrirGenerationContratsGroupe()">Générer des contrats en masse</button>' : '')
+      + '<button class="btn" onclick="ouvrirCompletionNomsComplets()">Compléter les noms complets</button>'
+      + '</div>';
   }
 
   if (state.cooperatives.length===0){
@@ -3609,6 +3670,26 @@ function render(){
       + '<div class="actions" style="margin-top:16px;">'
       + '<button type="button" class="btn" onclick="closeModal()">Annuler</button>'
       + '<button type="button" class="btn btn-primary" onclick="genererContratsGroupe()">Générer et envoyer à toutes</button>'
+      + '</div></div></div>';
+  }
+
+  if (state.modal && state.modal.type==='nomsComplets'){
+    const pl = state.modal.payload;
+    html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal wide">'
+      + '<h3>Compléter les noms complets</h3>'
+      + '<div class="hint" style="margin-bottom:14px;">Proposition automatique : « La Société Coopérative [nom] », sauf ECOPAK (« L\'Entreprise Coopérative »). Vérifie et corrige chaque ligne avant d\'enregistrer — les noms déjà renseignés ne sont pas modifiés ici, mais restent éditables si besoin.</div>'
+      + '<div style="max-height:400px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;">'
+      + '<div class="row" style="grid-template-columns:180px 1fr;font-size:11px;text-transform:uppercase;color:var(--ink-faint);font-weight:600;padding:8px 14px;border-bottom:1px solid var(--border);"><div>Sigle</div><div>Nom complet</div></div>'
+      + pl.coops.map(c=>
+          '<div class="row" style="grid-template-columns:180px 1fr;padding:8px 14px;">'
+          + '<div>'+esc(c.nom)+'</div>'
+          + '<div><input type="text" id="nc_'+c.id+'" value="'+esc(c.propose)+'" style="width:100%;"></div>'
+          + '</div>'
+        ).join('')
+      + '</div>'
+      + '<div class="actions" style="margin-top:16px;">'
+      + '<button type="button" class="btn" onclick="closeModal()">Annuler</button>'
+      + '<button type="button" class="btn btn-primary" onclick="enregistrerNomsComplets()">Enregistrer tout</button>'
       + '</div></div></div>';
   }
 
