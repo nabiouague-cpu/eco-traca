@@ -734,7 +734,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-08-31-03';
+const APP_VERSION = '2026-08-31-04';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1315,48 +1315,69 @@ async function creerDemande(){
   }
   if (!name || !coopId){ showToast('Renseigne au moins un nom et une coopérative.'); restaurerFichierSourceInput(); return; }
   if (state.newDemandeTypes.size===0){ showToast('Sélectionne au moins un type de données.'); restaurerFichierSourceInput(); return; }
-  const newId = 'req_'+Date.now();
 
   const fileInput = document.getElementById('demande_fichier_source_input');
   const fichierSource = (fileInput && fileInput.files[0]) ? fileInput.files[0] : (state.modal.payload && state.modal.payload.fichierSource);
-  let fichier_source_path = null, fichier_source_nom = null;
-  if (fichierSource){
-    const path = coopId + '/demandes/' + newId + '/source/' + fichierSource.name;
-    const { error: upErr } = await supabaseClient.storage.from('documents-coop').upload(path, fichierSource, { upsert: true });
-    if (upErr){ showToast("Échec de l'envoi du document à faire signer : "+upErr.message); restaurerFichierSourceInput(); return; }
-    fichier_source_path = path;
-    fichier_source_nom = fichierSource.name;
+  const typesArr = Array.from(state.newDemandeTypes);
+
+  const targetCoops = coopId==='__all__' ? state.cooperatives.slice() : [coopById(coopId)].filter(Boolean);
+  if (targetCoops.length===0){ showToast('Aucune coopérative à cibler.'); return; }
+
+  const btn = document.querySelector('.modal .actions .btn-primary');
+  if (btn){ btn.disabled = true; btn.textContent = targetCoops.length>1 ? 'Création en cours… (0/'+targetCoops.length+')' : 'Création…'; }
+
+  let created = 0, sansEmail = [], lastCreated = null;
+  for (const coop of targetCoops){
+    const newId = 'req_'+Date.now()+'_'+coop.id;
+    let fichier_source_path = null, fichier_source_nom = null;
+    if (fichierSource){
+      const path = coop.id + '/demandes/' + newId + '/source/' + fichierSource.name;
+      const { error: upErr } = await supabaseClient.storage.from('documents-coop').upload(path, fichierSource, { upsert: true });
+      if (upErr){ showToast("Échec de l'envoi du document pour "+coop.nom+" : "+upErr.message); continue; }
+      fichier_source_path = path;
+      fichier_source_nom = fichierSource.name;
+    }
+    const demandeObj = {
+      id: newId,
+      name, cooperative_id: coop.id,
+      statut: 'demandee',
+      types: typesArr,
+      deadline: deadline || null,
+      requested_at: new Date().toISOString().slice(0,10),
+      demandeur_nom: demandeurNom || (state.session && state.session.user ? state.session.user.email : 'ECORIGINE'),
+      message: message || null,
+      fichier_source_path, fichier_source_nom,
+    };
+    const { error } = await supabaseClient.from('demandes').insert(demandeObj);
+    if (error){ showToast('Échec de la création pour '+coop.nom+' : '+error.message); continue; }
+    created++;
+    lastCreated = { coop, demandeObj };
+    // Tentative d'envoi automatique par coopérative (silencieuse, en tache de fond)
+    supabaseClient.functions.invoke('email-nouvelle-demande', { body: { demande_id: newId } }).catch(()=>{});
+    if (![coop.email1, coop.email2, coop.email3].some(e=>String(e||'').trim())) sansEmail.push(coop.nom);
+    if (btn && targetCoops.length>1) btn.textContent = 'Création en cours… ('+created+'/'+targetCoops.length+')';
   }
 
-  const typesArr = Array.from(state.newDemandeTypes);
-  const demandeObj = {
-    id: newId,
-    name, cooperative_id: coopId,
-    statut: 'demandee',
-    types: typesArr,
-    deadline: deadline || null,
-    requested_at: new Date().toISOString().slice(0,10),
-    demandeur_nom: demandeurNom || (state.session && state.session.user ? state.session.user.email : 'ECORIGINE'),
-    message: message || null,
-    fichier_source_path, fichier_source_nom,
-  };
-  const { error } = await supabaseClient.from('demandes').insert(demandeObj);
-  if (error){ showToast('Échec de la création : '+error.message); restaurerFichierSourceInput(); return; }
-  showToast('Demande créée avec succès.', 'success');
+  if (btn){ btn.disabled = false; btn.textContent = 'Créer la demande'; }
   state.newDemandeTypes = new Set();
   closeModal();
-  // Tentative d'envoi automatique (fonctionnera une fois le domaine Resend verifie) --
-  // silencieuse : l'apercu email juste en dessous reste le moyen fiable pour l'instant.
-  supabaseClient.functions.invoke('email-nouvelle-demande', { body: { demande_id: newId } }).catch(()=>{});
-  const coop = coopById(coopId);
-  if (coop){
-    const emailData = buildNouvelleDemandeEmail(demandeObj, coop);
+
+  if (targetCoops.length===1 && lastCreated){
+    // Comportement inchange pour une seule coopérative : apercu email pret a copier
+    const emailData = buildNouvelleDemandeEmail(lastCreated.demandeObj, lastCreated.coop);
     if (emailData.emails.length>0){
       showEmailPreview(emailData.emails.join(', '), emailData.subject, emailData.body);
     } else {
       showToast('Demande créée, mais aucune adresse email enregistrée sur la fiche de cette coopérative.', 'success');
     }
+  } else {
+    showToast(
+      created+' demande(s) créée(s) sur '+targetCoops.length+' coopérative(s).'
+      + (sansEmail.length>0 ? ' ⚠ Sans email enregistré : '+sansEmail.join(', ') : ''),
+      created>0 ? 'success' : 'error'
+    );
   }
+
   await refreshDemandesTab();
 }
 
@@ -3385,6 +3406,7 @@ function render(){
       + '<div id="modal-fields">'
       + '<label class="field">Nom de la demande<input type="text" name="demande_name" value="'+esc(nd.demande_name||'')+'" placeholder="ex : Mise à jour des parcelles — campagne 2026-2027"></label>'
       + '<label class="field">Coopérative<select name="demande_cooperative_id"><option value="">— Choisir —</option>'
+      + '<option value="__all__"'+(nd.demande_cooperative_id==='__all__'?' selected':'')+'>— Toutes les coopératives ('+state.cooperatives.length+') —</option>'
       + state.cooperatives.map(c=>'<option value="'+esc(c.id)+'"'+(nd.demande_cooperative_id===c.id?' selected':'')+'>'+esc(c.nom)+'</option>').join('')
       + '</select></label>'
       + '<div class="field"><label>Type de donnée demandée</label>'
