@@ -457,11 +457,27 @@ function genererContratRA(){
   const date_debut_raw = fv('date_debut');
   const volume = fv('volume').trim();
   if (!volume){ showToast('Indique le volume contractuel.'); return; }
+  if (typeof docx === 'undefined'){ showToast("La bibliothèque de génération Word n'a pas pu se charger (connexion internet requise). Réessaie dans un instant."); return; }
   const dateDebut = date_debut_raw ? new Date(date_debut_raw+'T00:00:00').toLocaleDateString('fr-FR') : '—';
   const capaciteTotale = fmtNum(Math.round(coopStats(coop.id).potentiel)) + ' kg (potentiel estimé cumulé)';
   const fonctionRepresentant = fonctionRepresentantFor(coop.nom);
+  construireContratDocxBlob(coop, campagne_label, periode_label, dateDebut, volume, capaciteTotale, fonctionRepresentant).then(blob=>{
+    const url = URL.createObjectURL(blob);
+    const aTag = document.createElement('a');
+    aTag.href = url;
+    aTag.download = 'Contrat_'+(coop.certifications==='Fairtrade'?'FT':coop.certifications==='Cocoa Horizon'?'CH':'RA')+'_'+coop.nom.replace(/[^a-z0-9]+/gi,'_')+'_'+campagne_label.replace(/[^a-z0-9]+/gi,'_')+'.docx';
+    document.body.appendChild(aTag); aTag.click(); document.body.removeChild(aTag);
+    URL.revokeObjectURL(url);
+    showToast('Contrat Word généré et téléchargé.', 'success');
+    closeModal();
+  }).catch(err=>{
+    showToast("Erreur lors de la génération du contrat Word : "+err.message);
+  });
+}
 
-  if (typeof docx === 'undefined'){ showToast("La bibliothèque de génération Word n'a pas pu se charger (connexion internet requise). Réessaie dans un instant."); return; }
+// Construit le document Word du contrat -- reutilisable en generation individuelle (telechargement local)
+// ou en generation groupee (upload + creation d'une demande "Autres documents" par cooperative).
+function construireContratDocxBlob(coop, campagne_label, periode_label, dateDebut, volume, capaciteTotale, fonctionRepresentant){
   const { Document, Packer, Paragraph, TextRun, AlignmentType, LevelFormat, Table, TableRow, TableCell, WidthType, ShadingType, BorderStyle, VerticalAlign, Header, Footer, PageNumber, ImageRun } = docx;
 
   const INK="1A1A1A", ACCENT="42693C", SOFT_GRAY="5A5A5A", BORDER="A9BBA3", HEAD_FILL="42693C", FONT="Times New Roman";
@@ -644,18 +660,92 @@ function genererContratRA(){
       children}],
   });
 
-  Packer.toBlob(doc).then(blob=>{
-    const url = URL.createObjectURL(blob);
-    const aTag = document.createElement('a');
-    aTag.href = url;
-    aTag.download = 'Contrat_'+(coop.certifications==='Fairtrade'?'FT':coop.certifications==='Cocoa Horizon'?'CH':'RA')+'_'+coop.nom.replace(/[^a-z0-9]+/gi,'_')+'_'+campagne_label.replace(/[^a-z0-9]+/gi,'_')+'.docx';
-    document.body.appendChild(aTag); aTag.click(); document.body.removeChild(aTag);
-    URL.revokeObjectURL(url);
-    showToast('Contrat Word généré et téléchargé.', 'success');
-    closeModal();
-  }).catch(err=>{
-    showToast("Erreur lors de la génération du contrat Word : "+err.message);
+  return Packer.toBlob(doc);
+}
+
+function ouvrirGenerationContratsGroupe(){
+  const certifiees = state.cooperatives.filter(c=>c.statut!=='Non certifiée')
+    .sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'}));
+  if (certifiees.length===0){ showToast('Aucune coopérative certifiée pour le moment.'); return; }
+  state.modal = {type:'contratsGroupe', payload:{
+    campagne_label:'2026-2027', periode_label:'Septembre 2026 à août 2027', date_debut:'2026-09-01',
+    coops: certifiees.map(c=>({ id:c.id, nom:c.nom, inclus:true, volume: fmtNum(Math.round(coopStats(c.id).potentiel)) })),
+  }};
+  render();
+}
+
+async function genererContratsGroupe(){
+  const m = state.modal;
+  if (!m || m.type!=='contratsGroupe') return;
+  const campagne_label = fv('grp_campagne_label').trim() || '—';
+  const periode_label = fv('grp_periode_label').trim() || '—';
+  const date_debut_raw = fv('grp_date_debut');
+  const dateDebut = date_debut_raw ? new Date(date_debut_raw+'T00:00:00').toLocaleDateString('fr-FR') : '—';
+  if (typeof docx === 'undefined'){ showToast("La bibliothèque de génération Word n'a pas pu se charger (connexion internet requise). Réessaie dans un instant."); return; }
+
+  const lignes = m.payload.coops.filter(l=>{
+    const cb = document.getElementById('grp_inclus_'+l.id);
+    return cb ? cb.checked : l.inclus;
   });
+  if (lignes.length===0){ showToast('Sélectionne au moins une coopérative.'); return; }
+
+  const btn = document.querySelector('.modal .actions .btn-primary');
+  if (btn){ btn.disabled = true; }
+
+  let ok = 0, sansEmail = [], ignorees = [];
+  for (const ligne of lignes){
+    const coop = coopById(ligne.id);
+    if (!coop) continue;
+    const volumeInput = document.getElementById('grp_volume_'+ligne.id);
+    const volume = (volumeInput ? volumeInput.value : ligne.volume || '').trim();
+    if (btn) btn.textContent = 'Génération… ('+(ok+ignorees.length+1)+'/'+lignes.length+') — '+coop.nom;
+
+    const missing = [];
+    if (!volume) missing.push('volume contractuel');
+    if (!coop.rccm) missing.push('N° RCCM');
+    if (!coop.ccc_num) missing.push('N° agrément CCC');
+    if (!coop.identifiant_certification) missing.push('Identifiant de certification');
+    if (!coop.representant_legal_nom) missing.push('Nom du représentant légal');
+    if (!coop.siege_social && !coop.ville) missing.push('Ville ou Siège social');
+    if (missing.length>0){ ignorees.push(coop.nom+' ('+missing.join(', ')+')'); continue; }
+
+    try{
+      const capaciteTotale = fmtNum(Math.round(coopStats(coop.id).potentiel)) + ' kg (potentiel estimé cumulé)';
+      const fonctionRepresentant = fonctionRepresentantFor(coop.nom);
+      const blob = await construireContratDocxBlob(coop, campagne_label, periode_label, dateDebut, volume, capaciteTotale, fonctionRepresentant);
+      const fileName = 'Contrat_'+(coop.certifications==='Fairtrade'?'FT':coop.certifications==='Cocoa Horizon'?'CH':'RA')+'_'+coop.nom.replace(/[^a-z0-9]+/gi,'_')+'_'+campagne_label.replace(/[^a-z0-9]+/gi,'_')+'.docx';
+      const file = new File([blob], fileName, { type: blob.type });
+
+      const newId = 'req_'+Date.now()+'_'+coop.id;
+      const path = coop.id + '/demandes/' + newId + '/source/' + fileName;
+      const { error: upErr } = await supabaseClient.storage.from('documents-coop').upload(path, file, { upsert: true });
+      if (upErr){ ignorees.push(coop.nom+' (échec envoi : '+upErr.message+')'); continue; }
+
+      const demandeObj = {
+        id: newId, name: 'Contrat '+campagne_label, cooperative_id: coop.id,
+        statut: 'demandee', types: ['autres'],
+        deadline: null, requested_at: new Date().toISOString().slice(0,10),
+        demandeur_nom: (state.session && state.session.user ? state.session.user.email : 'ECORIGINE'),
+        message: 'Merci de télécharger votre contrat, de le signer, puis de nous retourner la version signée.',
+        fichier_source_path: path, fichier_source_nom: fileName,
+      };
+      const { error } = await supabaseClient.from('demandes').insert(demandeObj);
+      if (error){ ignorees.push(coop.nom+' (échec création demande : '+error.message+')'); continue; }
+
+      supabaseClient.functions.invoke('email-nouvelle-demande', { body: { demande_id: newId } }).catch(()=>{});
+      if (![coop.email1, coop.email2, coop.email3].some(e=>String(e||'').trim())) sansEmail.push(coop.nom);
+      ok++;
+    }catch(err){
+      ignorees.push(coop.nom+' (erreur : '+err.message+')');
+    }
+  }
+
+  closeModal();
+  await refreshDemandesTab();
+  let msg = ok+' contrat(s) généré(s) et envoyé(s) sur '+lignes.length+' coopérative(s).';
+  if (sansEmail.length>0) msg += ' ⚠ Sans email enregistré : '+sansEmail.join(', ')+'.';
+  if (ignorees.length>0) msg += ' ⚠ Non générés : '+ignorees.join(' · ');
+  showToast(msg, ok>0 ? 'success' : 'error');
 }
 
 function showToast(message, type){
@@ -734,7 +824,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-08-31-04';
+const APP_VERSION = '2026-08-31-05';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -2740,6 +2830,10 @@ function renderCoopGroup(sectionKey, title, list){
 
 function renderCooperativesTab(){
   let html = '';
+  const nCertifieesTotal = state.cooperatives.filter(c=>c.statut!=='Non certifiée').length;
+  if (nCertifieesTotal>0){
+    html += '<div class="controls"><button class="btn btn-primary" onclick="ouvrirGenerationContratsGroupe()">Générer des contrats en masse</button></div>';
+  }
 
   if (state.cooperatives.length===0){
     html += '<div class="panel"><div class="panel-head"><h2>Coopératives (0)</h2></div>'
@@ -3486,6 +3580,32 @@ function render(){
       + '<div class="actions">'
       + '<button type="button" class="btn" onclick="closeModal()">Annuler</button>'
       + '<button type="button" class="btn btn-primary" onclick="genererContratRA()">Générer le contrat</button>'
+      + '</div></div></div>';
+  }
+
+  if (state.modal && state.modal.type==='contratsGroupe'){
+    const pl = state.modal.payload;
+    html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal wide">'
+      + '<h3>Génération de contrats en masse</h3>'
+      + '<div class="hint" style="margin-bottom:14px;">Champs communs à toutes les coopératives cochées ci-dessous. Chaque contrat est généré individuellement, puis envoyé à sa coopérative via une demande « Autres documents » — elle devra le télécharger, le signer, et retourner la version signée.</div>'
+      + '<div id="modal-fields" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px;">'
+      + '<label class="field">Campagne<input type="text" name="grp_campagne_label" value="'+esc(pl.campagne_label)+'"></label>'
+      + '<label class="field">Période (texte affiché)<input type="text" name="grp_periode_label" value="'+esc(pl.periode_label)+'"></label>'
+      + '<label class="field">Date de début du contrat<input type="date" name="grp_date_debut" value="'+esc(pl.date_debut)+'"></label>'
+      + '</div>'
+      + '<div style="max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;">'
+      + '<div class="row" style="grid-template-columns:40px 1fr 200px;font-size:11px;text-transform:uppercase;color:var(--ink-faint);font-weight:600;padding:8px 14px;border-bottom:1px solid var(--border);"><div></div><div>Coopérative</div><div>Volume contractuel (kg)</div></div>'
+      + pl.coops.map(c=>
+          '<div class="row" style="grid-template-columns:40px 1fr 200px;padding:8px 14px;">'
+          + '<div><input type="checkbox" id="grp_inclus_'+c.id+'" '+(c.inclus?'checked':'')+'></div>'
+          + '<div>'+esc(c.nom)+'</div>'
+          + '<div><input type="number" step="1" min="0" id="grp_volume_'+c.id+'" value="'+esc(c.volume)+'" style="width:140px;"></div>'
+          + '</div>'
+        ).join('')
+      + '</div>'
+      + '<div class="actions" style="margin-top:16px;">'
+      + '<button type="button" class="btn" onclick="closeModal()">Annuler</button>'
+      + '<button type="button" class="btn btn-primary" onclick="genererContratsGroupe()">Générer et envoyer à toutes</button>'
       + '</div></div></div>';
   }
 
