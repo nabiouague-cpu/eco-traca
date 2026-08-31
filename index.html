@@ -284,6 +284,7 @@ let state = {
   demandesIdentite: null,
   demandesCoop: null,
   demandeFichiers: [],
+  coopDatabaseFiles: null,
   demandesSousOnglet: null,
   demandesFocusStatus: null,
   newDemandeTypes: new Set(),
@@ -414,6 +415,7 @@ const ICON_DASHBOARD = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColo
 const ICON_CONFORMITE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h4"/></svg>';
 const ICON_ACCES = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="3.2"/><path d="M10.3 12.7 19 4"/><path d="M15.5 7.5 18 10"/><path d="M17.2 5.8 19.5 8"/></svg>';
 const ICON_SAUVEGARDES = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 19h16"/></svg>';
+const ICON_BASEDONNEES = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg>';
 const ICON_DEMANDES = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7"/><path d="M8 7h9v9"/></svg>';
 
 function openContratRAModal(coopId){
@@ -1161,6 +1163,90 @@ async function refreshDemandesTab(){
   render();
 }
 
+/* ============================================================
+   Base de donnees coop. -- registre + geolocalisation transmis
+   par ECORIGINE (analyse deforestation/conformite deja menee),
+   a mettre a disposition en telechargement de chaque cooperative
+   deja inscrite (jamais de creation manuelle de fiche a partir de
+   ceci -- seules les cooperatives deja enregistrees apparaissent).
+   ============================================================ */
+async function refreshBaseDonnees(){
+  const { data, error } = await supabaseClient.from('coop_database_files').select('*').order('uploaded_at', {ascending:false});
+  state.coopDatabaseFiles = error ? [] : (data || []);
+  render();
+}
+
+async function uploadBaseDonneesFichier(type){
+  const coopId = fv('basedonnees_coop_id');
+  if (!coopId){ showToast('Choisis une coopérative.'); return; }
+  const input = document.getElementById('basedonnees_'+type+'_input');
+  const file = input && input.files[0];
+  if (!file){ showToast('Choisis un fichier.'); return; }
+  const btn = document.getElementById('basedonnees_'+type+'_btn');
+  if (btn){ btn.disabled = true; btn.textContent = 'Envoi…'; }
+
+  const path = coopId + '/database/' + type + '_' + file.name;
+  const { error: upErr } = await supabaseClient.storage.from('documents-coop').upload(path, file, { upsert: true });
+  if (upErr){
+    showToast("Échec de l'envoi : "+upErr.message);
+    if (btn){ btn.disabled = false; btn.textContent = type==='registre' ? 'Téléverser le registre' : 'Téléverser la géolocalisation'; }
+    return;
+  }
+  const { error } = await supabaseClient.from('coop_database_files').upsert({
+    id: 'bdd_'+coopId+'_'+type,
+    cooperative_id: coopId,
+    type, path, nom: file.name,
+    campagne: '2026-2027',
+    uploaded_at: new Date().toISOString(),
+  });
+  if (error){ showToast('Échec : '+error.message); }
+  else { showToast((type==='registre'?'Registre':'Géolocalisation')+' envoyé(e) avec succès.', 'success'); input.value=''; }
+  if (btn){ btn.disabled = false; btn.textContent = type==='registre' ? 'Téléverser le registre' : 'Téléverser la géolocalisation'; }
+  await refreshBaseDonnees();
+}
+
+function renderBaseDonneesTab(){
+  if (state.coopDatabaseFiles===null){ refreshBaseDonnees(); return '<div class="loading">Chargement…</div>'; }
+
+  const filesByCoop = {};
+  state.coopDatabaseFiles.forEach(f=>{
+    if (!filesByCoop[f.cooperative_id]) filesByCoop[f.cooperative_id] = {};
+    filesByCoop[f.cooperative_id][f.type] = f;
+  });
+
+  let html = '<div class="panel"><div class="panel-head"><h2>Déposer les données d\'une coopérative</h2></div>'
+    + '<div style="padding:18px;">'
+    + '<p class="hint" style="margin-bottom:14px;">Le registre des membres et les données de géolocalisation transmis à la coopérative pour la campagne 2026-2027 (analyse déforestation et conformité déjà menée par ECORIGINE). Seules les coopératives déjà inscrites sur la plateforme apparaissent dans la liste — pas de création de fiche depuis cet écran.</p>'
+    + '<label class="field">Coopérative<select name="basedonnees_coop_id">'
+    + '<option value="">— Choisir —</option>'
+    + state.cooperatives.slice().sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'})).map(c=>'<option value="'+c.id+'">'+esc(c.nom)+'</option>').join('')
+    + '</select></label>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:14px;">'
+    + '<div><label class="field">Registre des membres (.xlsx)<input type="file" id="basedonnees_registre_input" accept=".xlsx,.xls"></label>'
+    + '<button class="btn btn-primary" id="basedonnees_registre_btn" onclick="uploadBaseDonneesFichier(\'registre\')">Téléverser le registre</button></div>'
+    + '<div><label class="field">Données de géolocalisation (.geojson)<input type="file" id="basedonnees_geolocalisation_input" accept=".geojson,.json"></label>'
+    + '<button class="btn btn-primary" id="basedonnees_geolocalisation_btn" onclick="uploadBaseDonneesFichier(\'geolocalisation\')">Téléverser la géolocalisation</button></div>'
+    + '</div>'
+    + '</div></div>';
+
+  html += '<div class="panel"><div class="panel-head"><h2>État par coopérative ('+state.cooperatives.length+')</h2></div>';
+  if (state.cooperatives.length===0){
+    html += '<div class="empty">Aucune coopérative inscrite pour le moment.</div>';
+  } else {
+    html += '<div class="checklist-grid">';
+    state.cooperatives.slice().sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'})).forEach(c=>{
+      const f = filesByCoop[c.id] || {};
+      const okReg = !!f.registre, okGeo = !!f.geolocalisation;
+      html += '<div class="achat-item"><span>'+esc(c.nom)+'</span>'
+        + '<span class="hint">'+(okReg?'✓ Registre':'— Registre')+' · '+(okGeo?'✓ Géolocalisation':'— Géolocalisation')+'</span></div>';
+    });
+    html += '</div>';
+  }
+  html += '</div>';
+
+  return html;
+}
+
 function toggleDemandeType(type){
   if (state.modal && state.modal.type==='nouvelleDemande'){
     const fileInput = document.getElementById('demande_fichier_source_input');
@@ -1508,6 +1594,7 @@ async function actualiserDonnees(){
   // Recharge aussi les onglets a chargement differe, seulement s'ils ont deja ete visites,
   // pour que le contenu affiche a l'ecran soit lui aussi remis a jour.
   if (state.demandesCoop !== null) await refreshDemandesTab();
+  if (state.coopDatabaseFiles !== null) await refreshBaseDonnees();
   if (state.coopUsers !== null) await refreshAccesTab();
   if (state.demandesIdentite !== null) await refreshDemandesIdentite();
   showToast('Données actualisées.', 'success');
@@ -2983,6 +3070,7 @@ function render(){
     + '<button class="sidebar-nav-item '+(!dashActive&&state.tab==='conformite'?'active':'')+'" onclick="setTab(\'conformite\')">'+ICON_CONFORMITE+'<span>Conformité &<br>documents</span></button>'
     + '<button class="sidebar-nav-item '+(!dashActive&&state.tab==='acces'?'active':'')+'" onclick="setTab(\'acces\')">'+ICON_ACCES+'<span>Accès<br>coopératives</span></button>'
     + '<button class="sidebar-nav-item '+(!dashActive&&state.tab==='sauvegardes'?'active':'')+'" onclick="setTab(\'sauvegardes\')">'+ICON_SAUVEGARDES+'<span>Sauvegardes</span></button>'
+    + '<button class="sidebar-nav-item '+(!dashActive&&state.tab==='basedonnees'?'active':'')+'" onclick="setTab(\'basedonnees\')">'+ICON_BASEDONNEES+'<span>Base de<br>données coop.</span></button>'
     + '</div></nav>'
     + '<div class="main-area">';
 
@@ -3034,6 +3122,7 @@ function render(){
     else if (state.tab==='conformite') html += renderConformiteTab();
     else if (state.tab==='acces') html += renderAccesTab();
     else if (state.tab==='sauvegardes') html += renderSauvegardesTab();
+    else if (state.tab==='basedonnees') html += renderBaseDonneesTab();
     else if (state.tab==='demandes') html += renderDemandesTab();
     else html += renderDashboardTab();
   }
