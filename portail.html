@@ -309,6 +309,7 @@ let state = {
   coop: null,          // la fiche cooperative liee a ce compte
   demandes: [],
   demandeFichiers: [],
+  baseDonneesFiles: [],
   docChecks: [],
   docOuvert: null,
   tab: 'requests',
@@ -427,6 +428,8 @@ async function loadAll(){
     state.demandeFichiers = fichiers || [];
     const { data: docs } = await supabaseClient.from('doc_check').select('*').eq('cooperative_id', coopId);
     state.docChecks = docs || [];
+    const { data: bdd } = await supabaseClient.from('coop_database_files').select('*').eq('cooperative_id', coopId);
+    state.baseDonneesFiles = bdd || [];
     // Lien direct depuis un email (?demande=req_xxx) : ouvre cette requete precise,
     // une seule fois par session pour ne pas re-forcer la navigation a chaque actualisation.
     if (!state.deepLinkHandled){
@@ -822,8 +825,46 @@ function renderRequestsTable(list, isAccepted){
   return html;
 }
 
+function renderBaseDonneesPanel(){
+  const reg = (state.baseDonneesFiles||[]).find(f=>f.type==='registre');
+  const geo = (state.baseDonneesFiles||[]).find(f=>f.type==='geolocalisation');
+  if (!reg && !geo) return '';
+  const campagne = (reg && reg.campagne) || (geo && geo.campagne) || '2026-2027';
+  return '<div class="panel"><div class="panel-head"><h2>Données déjà disponibles chez ECORIGINE</h2></div>'
+    + '<div style="padding:18px;">'
+    + '<p style="margin:0 0 14px;">Étant donné qu\'ECORIGINE possède déjà une base de données de sa coopérative, une analyse déforestation et conformité a été menée sur ces données. Voici la version qui servira de référence à ECORIGINE et à votre coopérative tout au long de la campagne <b>'+esc(campagne)+'</b>.</p>'
+    + '<span class="link-action" onclick="telechargerBaseDonneesZip()">Télécharger le dossier (ZIP) ⭳</span>'
+    + '</div></div>';
+}
+
+async function telechargerBaseDonneesZip(){
+  const files = (state.baseDonneesFiles||[]).filter(f=>f.type==='registre'||f.type==='geolocalisation');
+  if (files.length===0){ showToast('Aucune donnée disponible pour le moment.'); return; }
+  if (typeof JSZip === 'undefined'){ showToast("La bibliothèque de compression n'a pas pu se charger (connexion internet requise). Réessaie dans un instant."); return; }
+  try{
+    const zip = new JSZip();
+    let ok = 0;
+    for (const f of files){
+      const { data, error } = await supabaseClient.storage.from('documents-coop').download(f.path);
+      if (error){ showToast("Échec du téléchargement de "+(f.nom||f.path)+" : "+error.message); continue; }
+      zip.file(f.nom || f.path.split('/').pop(), data);
+      ok++;
+    }
+    if (ok===0){ showToast("Aucun fichier n'a pu être récupéré."); return; }
+    const blob = await zip.generateAsync({type:'blob'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = 'donnees_ecorigine_'+String(state.coop.nom||'coop').replace(/[^a-z0-9]+/gi,'_')+'.zip';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast(ok+' fichier(s) regroupé(s) dans le ZIP.', 'success');
+  }catch(e){
+    showToast('Erreur : '+e.message);
+  }
+}
+
 function renderDocumentsTab(){
-  let html = '<div class="panel"><div class="panel-head"><h2>Documents de conformité</h2></div>';
+  let html = renderBaseDonneesPanel();
+  html += '<div class="panel"><div class="panel-head"><h2>Documents de conformité</h2></div>';
   DOCS_REQUIS.forEach(docName=>{
     const d = (state.docChecks||[]).find(x=>x.doc===docName) || { doc: docName, disponible:false, fichier_nom:null, fichier_path:null };
     const docKey = docName;
