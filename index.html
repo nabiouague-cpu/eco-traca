@@ -701,7 +701,7 @@ function ouvrirCompletionNomsComplets(){
 async function enregistrerNomsComplets(){
   const m = state.modal;
   if (!m || m.type!=='nomsComplets') return;
-  let changed = 0;
+  const coopsAMaj = [];
   m.payload.coops.forEach(ligne=>{
     const input = document.getElementById('nc_'+ligne.id);
     if (!input) return;
@@ -709,16 +709,18 @@ async function enregistrerNomsComplets(){
     const coop = coopById(ligne.id);
     if (coop && val && coop.nom_complet !== val){
       coop.nom_complet = val;
-      changed++;
+      coopsAMaj.push({ id: coop.id, nom_complet: val });
     }
   });
-  if (changed===0){ showToast('Aucune modification à enregistrer.'); return; }
-  const ok = await saveKey(KEY_COOP, state.cooperatives);
-  if (ok){
-    showToast(changed+' nom(s) complet(s) enregistré(s).', 'success');
+  if (coopsAMaj.length===0){ showToast('Aucune modification à enregistrer.'); return; }
+  // Ecriture ciblee sur les seules fiches modifiees, jamais une resynchronisation
+  // de toute la table cooperatives.
+  const { error } = await supabaseClient.from('cooperatives').upsert(coopsAMaj);
+  if (!error){
+    showToast(coopsAMaj.length+' nom(s) complet(s) enregistré(s).', 'success');
     closeModal();
   } else {
-    showToast('Échec de la mise à jour : '+(state.storageErrorMsg||'erreur inconnue'));
+    showToast('Échec de la mise à jour : '+error.message);
   }
 }
 
@@ -883,7 +885,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-08-31-09';
+const APP_VERSION = '2026-08-31-10';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1890,13 +1892,20 @@ async function submitCooperative(){
     email2: fv('email2').trim(),
     email3: fv('email3').trim()
   };
+  let coopId;
   if (editId){
     const existing = state.cooperatives.find(c=>c.id===editId);
     if (existing) Object.assign(existing, data);
+    coopId = editId;
   } else {
-    state.cooperatives.push(Object.assign({ id: genId('c') }, data));
+    coopId = genId('c');
+    state.cooperatives.push(Object.assign({ id: coopId }, data));
   }
-  await saveKey(KEY_COOP, state.cooperatives);
+  // Ecriture ciblee sur cette seule fiche (jamais de resynchronisation globale ici) --
+  // une session admin pas a jour ne doit jamais pouvoir supprimer une fiche qu'une
+  // coopérative vient de creer elle-meme entre-temps.
+  const { error } = await supabaseClient.from('cooperatives').upsert(Object.assign({ id: coopId }, data));
+  if (error){ showToast('Échec de l\'enregistrement : '+error.message); return; }
   showToast('Coopérative enregistrée.', 'success');
   closeModal();
 }
@@ -1905,9 +1914,9 @@ async function verifierCooperative(id){
   const idx = state.cooperatives.findIndex(c=>c.id===id);
   if (idx===-1) return;
   state.cooperatives[idx].verifiee = true;
-  const ok = await saveKey(KEY_COOP, state.cooperatives);
-  if (ok) showToast('Coopérative marquée comme vérifiée.', 'success');
-  else showToast('Échec de la mise à jour : '+(state.storageErrorMsg||'erreur inconnue'));
+  const { error } = await supabaseClient.from('cooperatives').update({ verifiee: true }).eq('id', id);
+  if (!error) showToast('Coopérative marquée comme vérifiée.', 'success');
+  else { state.cooperatives[idx].verifiee = false; showToast('Échec de la mise à jour : '+error.message); }
   render();
 }
 
