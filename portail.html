@@ -498,9 +498,8 @@ async function creerMaFiche(){
   }
 
   const userId = state.session.user.id;
-  const coopId = 'coop_'+Date.now();
   const payload = {
-    id: coopId, nom, nom_complet,
+    nom, nom_complet,
     statut,
     certifications,
     rccm, ccc_num,
@@ -512,8 +511,25 @@ async function creerMaFiche(){
     created_by: userId,
   };
   try{
-    const { error: coopErr } = await supabaseClient.from('cooperatives').insert(payload);
-    if (coopErr){ showToast("Échec de la création de la fiche : "+coopErr.message); return; }
+    // Si une tentative precedente a echoue APRES la creation de la fiche mais AVANT
+    // la liaison du compte (ex. erreur reseau, bug cote serveur), une fiche orpheline
+    // existe deja pour ce compte. On la reutilise au lieu d'en creer une nouvelle a
+    // chaque nouvel essai -- ca evite les doublons.
+    let coopId = null;
+    const { data: dejaLie } = await supabaseClient.from('cooperative_users').select('cooperative_id').eq('user_id', userId).maybeSingle();
+    if (dejaLie){ showToast('Un compte est déjà lié à une fiche coopérative.'); return; }
+
+    const { data: fichesOrphelines } = await supabaseClient.from('cooperatives').select('id').eq('created_by', userId).order('created_at', {ascending:true});
+    if (fichesOrphelines && fichesOrphelines.length > 0){
+      coopId = fichesOrphelines[0].id;
+      const { error: updErr } = await supabaseClient.from('cooperatives').update(payload).eq('id', coopId);
+      if (updErr){ showToast("Échec de la mise à jour de la fiche existante : "+updErr.message); return; }
+    } else {
+      coopId = 'coop_'+Date.now();
+      const { error: coopErr } = await supabaseClient.from('cooperatives').insert(Object.assign({id: coopId}, payload));
+      if (coopErr){ showToast("Échec de la création de la fiche : "+coopErr.message); return; }
+    }
+
     const { error: linkErr } = await supabaseClient.from('cooperative_users').insert({ user_id: userId, cooperative_id: coopId });
     if (linkErr){ showToast("La fiche a été créée mais la liaison du compte a échoué : "+linkErr.message); return; }
     showToast('Votre fiche coopérative a été créée avec succès.', 'success');

@@ -883,7 +883,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-08-31-08';
+const APP_VERSION = '2026-08-31-09';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1917,17 +1917,25 @@ async function deleteCooperative(id){
     ? 'Cette coopérative a ' + linked.length + ' producteur(s) enregistré(s). Les supprimer également avec leurs achats et supprimer la coopérative ?'
     : 'Supprimer cette coopérative ?';
   askConfirm(msg, async ()=>{
-    const linkedIds = new Set(linked.map(p=>p.id));
+    const linkedIds = Array.from(new Set(linked.map(p=>p.id)));
     state.cooperatives = state.cooperatives.filter(c=>c.id!==id);
     state.producteurs = state.producteurs.filter(p=>p.cooperative_id!==id);
-    state.achats = state.achats.filter(a=>!linkedIds.has(a.producteur_id));
+    state.achats = state.achats.filter(a=>!linkedIds.includes(a.producteur_id));
     state.docCheck = state.docCheck.filter(d=>d.cooperative_id!==id);
     state.nonconformites = state.nonconformites.filter(n=>n.cooperative_id!==id);
-    await saveKey(KEY_COOP, state.cooperatives);
-    await saveKey(KEY_PROD, state.producteurs);
-    await saveKey(KEY_ACHATS, state.achats);
-    await saveKey(KEY_DOCCHECK, state.docCheck);
-    await saveKey(KEY_NONCONF, state.nonconformites);
+    // Suppressions ciblees uniquement -- jamais de resynchronisation globale d'une
+    // table entiere, pour ne jamais risquer d'effacer par erreur les donnees d'une
+    // AUTRE cooperative (c'est ce mecanisme, via saveKey, qui a cause la perte de
+    // donnees sur doc_check).
+    try{
+      if (linkedIds.length>0) await supabaseClient.from('achats').delete().in('producteur_id', linkedIds);
+      await supabaseClient.from('producteurs').delete().eq('cooperative_id', id);
+      await supabaseClient.from('doc_check').delete().eq('cooperative_id', id);
+      await supabaseClient.from('nonconformites').delete().eq('cooperative_id', id);
+      await supabaseClient.from('cooperatives').delete().eq('id', id);
+      showToast('Coopérative supprimée.', 'success');
+    }catch(e){ showToast('Échec de la suppression : '+e.message); }
+    render();
   });
 }
 
@@ -2121,7 +2129,7 @@ async function importBackupFile(input){
     input.value = '';
     return;
   }
-  askConfirm('Restaurer cette sauvegarde va REMPLACER toutes les données actuellement affichées (coopératives, producteurs, achats, documents, non-conformités, campagnes). Continuer ?', async ()=>{
+  askConfirm('Restaurer cette sauvegarde va SUPPRIMER DÉFINITIVEMENT toutes les données actuellement en ligne qui ne figurent pas dans ce fichier (coopératives, producteurs, achats, documents, non-conformités, campagnes) — y compris tout ce que les coopératives ont soumis depuis l\'export de cette sauvegarde. Cette action est irréversible. Continuer ?', async ()=>{
     state.cooperatives = data.cooperatives || [];
     state.producteurs = data.producteurs || [];
     state.achats = data.achats || [];
@@ -2421,7 +2429,11 @@ async function toggleDocCheck(coopId, idx){
     state.docCheck.push(rec);
   }
   rec.disponible = !rec.disponible;
-  await saveKey(KEY_DOCCHECK, state.docCheck);
+  // Ecriture ciblee sur cette seule ligne (jamais de resynchronisation globale ici) --
+  // une session admin dont l'etat local n'est pas a jour ne doit jamais pouvoir
+  // supprimer des documents soumis entre-temps par une cooperative.
+  const { error } = await supabaseClient.from('doc_check').upsert(rec);
+  if (error){ showToast('Échec de la mise à jour : '+error.message); rec.disponible = !rec.disponible; }
   render();
 }
 function missingDocs(coopId){
@@ -2556,12 +2568,17 @@ async function genererEmailManquants(coopId){
   ].concat(missing.map((d,i)=> (i+1)+'. '+d)).concat(['', 'Merci de nous les transmettre dès que possible.', '', 'Cordialement,', "L'équipe Durabilité — ECORIGINE"]);
   const body = bodyLines.join('\n');
   showEmailPreview(emails.join(', '), subject, body);
+  const recsAMaj = [];
   missing.forEach(doc=>{
     let rec = getDocCheck(coopId, doc);
     if (!rec){ rec = { id: genId('dc'), cooperative_id: coopId, doc, disponible:false, rappels:[] }; state.docCheck.push(rec); }
     rec.rappels.push(new Date().toISOString().slice(0,10));
+    recsAMaj.push(rec);
   });
-  await saveKey(KEY_DOCCHECK, state.docCheck);
+  // Ecriture ciblee sur les seules lignes concernees par ce rappel, jamais une
+  // resynchronisation de toute la table.
+  const { error } = await supabaseClient.from('doc_check').upsert(recsAMaj);
+  if (error){ showToast('Échec de l\'enregistrement du rappel : '+error.message); }
 }
 
 /* --- Non-conformités --- */
