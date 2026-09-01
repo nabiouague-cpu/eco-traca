@@ -885,7 +885,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-01-02';
+const APP_VERSION = '2026-09-01-03';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1752,11 +1752,11 @@ async function loadAll(){
   try{
     state.cooperatives = await safeGet(KEY_COOP, []);
     { // Migration : l'ancien champ "code" faisait office de N° agrément CCC — on le reporte automatiquement
-      let migrated = false;
+      const aMigrer = [];
       state.cooperatives.forEach(c=>{
-        if (c.code && !c.ccc_num){ c.ccc_num = c.code; c.code = ''; migrated = true; }
+        if (c.code && !c.ccc_num){ c.ccc_num = c.code; c.code = ''; aMigrer.push({ id: c.id, ccc_num: c.ccc_num, code: '' }); }
       });
-      if (migrated) await saveKey(KEY_COOP, state.cooperatives);
+      if (aMigrer.length>0) await supabaseClient.from('cooperatives').upsert(aMigrer);
     }
     state.producteurs = await safeGet(KEY_PROD, []);
     state.achats = await safeGet(KEY_ACHATS, []);
@@ -1964,8 +1964,12 @@ async function deleteProducteur(id){
   askConfirm('Supprimer ce producteur et ses achats enregistrés ?', async ()=>{
     state.producteurs = state.producteurs.filter(p=>p.id!==id);
     state.achats = state.achats.filter(a=>a.producteur_id!==id);
-    await saveKey(KEY_PROD, state.producteurs);
-    await saveKey(KEY_ACHATS, state.achats);
+    try{
+      await supabaseClient.from('achats').delete().eq('producteur_id', id);
+      await supabaseClient.from('producteurs').delete().eq('id', id);
+      showToast('Producteur supprimé.', 'success');
+    }catch(e){ showToast('Échec de la suppression : '+e.message); }
+    render();
   });
 }
 
@@ -1992,13 +1996,17 @@ async function submitAchat(){
     campagne_id: campId,
     periode: fv('periode') || ''
   };
+  let achatId;
   if (editId){
     const existing = state.achats.find(a=>a.id===editId);
     if (existing) Object.assign(existing, data);
+    achatId = editId;
   } else {
-    state.achats.push(Object.assign({ id: genId('a') }, data));
+    achatId = genId('a');
+    state.achats.push(Object.assign({ id: achatId }, data));
   }
-  await saveKey(KEY_ACHATS, state.achats);
+  const { error } = await supabaseClient.from('achats').upsert(Object.assign({ id: achatId }, data));
+  if (error){ showToast('Échec de l\'enregistrement : '+error.message); return; }
   showToast('Achat enregistré.', 'success');
   closeModal();
 }
@@ -2009,7 +2017,8 @@ async function submitCampagne(){
   if (!nom){ showToast('Le nom de la campagne est obligatoire.'); return; }
   const camp = { id: genId('camp'), nom: nom, date_debut: fv('debut')||'', date_fin: fv('fin')||'' };
   state.campagnes.push(camp);
-  await saveKey(KEY_CAMPAGNES, state.campagnes);
+  const { error } = await supabaseClient.from('campagnes').insert(camp);
+  if (error){ showToast('Échec de l\'enregistrement : '+error.message); return; }
   showToast('Campagne ajoutée.', 'success');
   render();
 }
@@ -2022,9 +2031,12 @@ async function deleteCampagne(id){
   askConfirm(msg, async ()=>{
     state.campagnes = state.campagnes.filter(c=>c.id!==id);
     state.achats = state.achats.filter(a=>a.campagne_id!==id);
-    await saveKey(KEY_CAMPAGNES, state.campagnes);
-    await saveKey(KEY_ACHATS, state.achats);
-    showToast('Campagne'+(achatsLies.length>0?' et '+achatsLies.length+' achat(s) associé(s) supprimés.':' supprimée.'), 'success');
+    try{
+      await supabaseClient.from('achats').delete().eq('campagne_id', id);
+      await supabaseClient.from('campagnes').delete().eq('id', id);
+      showToast('Campagne'+(achatsLies.length>0?' et '+achatsLies.length+' achat(s) associé(s) supprimés.':' supprimée.'), 'success');
+    }catch(e){ showToast('Échec de la suppression : '+e.message); }
+    render();
   });
 }
 
@@ -2070,7 +2082,9 @@ async function alerterCooperative(producteurId){
 
 async function deleteAchat(id){
   state.achats = state.achats.filter(a=>a.id!==id);
-  await saveKey(KEY_ACHATS, state.achats);
+  try{
+    await supabaseClient.from('achats').delete().eq('id', id);
+  }catch(e){ showToast('Échec de la suppression : '+e.message); }
   render();
 }
 
@@ -2296,6 +2310,7 @@ async function confirmImportRapportCCC(){
   if (!campagneId){ showToast('Sélectionne la campagne correspondant à ce rapport avant de confirmer.'); return; }
 
   let created = 0, updated = 0, unchanged = 0;
+  const aEnregistrer = [];
   Object.values(pi.parCoop).forEach(({coop, rows})=>{
     rows.forEach(r=>{
       const month = r.date ? Number(r.date.slice(5,7)) : 0;
@@ -2307,24 +2322,33 @@ async function confirmImportRapportCCC(){
           existing.nombre_sacs_accepte = r.sacs;
           existing.poids_brut_accepte = r.poids_accepte;
           existing.poids_net_produit = r.poids_accepte;
+          aEnregistrer.push(existing);
           updated++;
         } else {
           unchanged++;
         }
       } else {
-        state.achats.push({
+        const nouvel = {
           id: genId('a'), cooperative_id: coop.id, producteur_id: '',
           date: r.date || new Date().toISOString().slice(0,10),
           quantite_kg: 0, poids_brut: 0, nombre_sacs: 0,
           poids_brut_accepte: r.poids_accepte, poids_net_produit: r.poids_accepte, nombre_sacs_accepte: r.sacs,
           connaissement: r.connaissement, type_cacao: '', campagne_id: campagneId, periode,
-        });
+        };
+        state.achats.push(nouvel);
+        aEnregistrer.push(nouvel);
         created++;
       }
     });
   });
 
-  const ok = await saveKey(KEY_ACHATS, state.achats);
+  // Ecriture ciblee : uniquement les achats reellement crees ou modifies par cet
+  // import, jamais une resynchronisation de toute la table achats.
+  let ok = true;
+  if (aEnregistrer.length>0){
+    const { error } = await supabaseClient.from('achats').upsert(aEnregistrer);
+    if (error){ ok = false; state.storageErrorMsg = error.message; }
+  }
   state.pendingRapportCCC = null;
   closeModal();
   if (ok){
@@ -2391,18 +2415,26 @@ async function handleExcelFile(input, cooperativeId){
 async function confirmImport(){
   const pi = state.pendingImport;
   if (!pi) return;
+  const aEnregistrer = [];
   pi.rows.forEach(r=>{
     let existing = r.code ? state.producteurs.find(p=>p.cooperative_id===pi.cooperative_id && p.code && p.code===r.code) : null;
     const fields = ['nom','surface_ha','rendement_kg_ha','matricule_ccc','lat','lon','farm_id','pays','village_district','first_aggregator','polygon_filename','farm_mapping_date','volume_estime_kg'];
     if (existing){
       fields.forEach(f=>{ existing[f] = r[f]; });
+      aEnregistrer.push(existing);
     } else {
       const rec = { id: genId('p'), cooperative_id: pi.cooperative_id, code:r.code };
       fields.forEach(f=>{ rec[f] = r[f]; });
       state.producteurs.push(rec);
+      aEnregistrer.push(rec);
     }
   });
-  await saveKey(KEY_PROD, state.producteurs);
+  // Ecriture ciblee : uniquement les producteurs reellement crees ou modifies par
+  // cet import, jamais une resynchronisation de toute la table producteurs.
+  if (aEnregistrer.length>0){
+    const { error } = await supabaseClient.from('producteurs').upsert(aEnregistrer);
+    if (error){ showToast('Échec de l\'enregistrement : '+error.message); }
+  }
   state.pendingImport = null;
   closeModal();
 }
@@ -2608,19 +2640,25 @@ async function submitNonConf(){
     statut: 'ouverte', date_creation: new Date().toISOString().slice(0,10)
   };
   state.nonconformites.push(n);
-  await saveKey(KEY_NONCONF, state.nonconformites);
+  const { error } = await supabaseClient.from('nonconformites').insert(n);
+  if (error){ showToast('Échec de l\'enregistrement : '+error.message); return; }
   showToast('Non-conformité enregistrée.', 'success');
   closeModal();
 }
 async function setNonConfStatut(id, statut){
   const n = state.nonconformites.find(x=>x.id===id); if(!n) return;
   n.statut = statut;
-  await saveKey(KEY_NONCONF, state.nonconformites); render();
+  const { error } = await supabaseClient.from('nonconformites').update({ statut }).eq('id', id);
+  if (error){ showToast('Échec de la mise à jour : '+error.message); }
+  render();
 }
 async function deleteNonConf(id){
   askConfirm('Supprimer cette non-conformité ?', async ()=>{
     state.nonconformites = state.nonconformites.filter(x=>x.id!==id);
-    await saveKey(KEY_NONCONF, state.nonconformites);
+    try{
+      await supabaseClient.from('nonconformites').delete().eq('id', id);
+    }catch(e){ showToast('Échec de la suppression : '+e.message); }
+    render();
   });
 }
 
