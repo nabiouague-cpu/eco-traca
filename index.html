@@ -885,7 +885,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-01-01';
+const APP_VERSION = '2026-09-01-02';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1055,10 +1055,12 @@ async function safeGet(key, fallback){
     }
     const table = KEY_TO_TABLE[key];
     if (!table) return fallback;
-    // doc_check n'a pas de colonne created_at (elle utilise soumis_le) -- trier par
-    // created_at sur cette table faisait echouer la requete en silence, et safeGet
-    // retournait alors le tableau vide de secours a chaque chargement.
-    const orderCol = table === 'doc_check' ? 'soumis_le' : 'created_at';
+    // doc_check utilise soumis_le et nonconformites utilise date_creation --
+    // ni l'une ni l'autre n'a de colonne created_at. Trier par created_at sur ces
+    // tables faisait echouer la requete en silence, et safeGet retournait alors
+    // le tableau vide de secours a chaque chargement, sans jamais remonter d'erreur.
+    const ORDER_COL_OVERRIDES = { doc_check: 'soumis_le', nonconformites: 'date_creation' };
+    const orderCol = ORDER_COL_OVERRIDES[table] || 'created_at';
     const { data, error } = await supabaseClient.from(table).select('*').order(orderCol, {ascending:true, nullsFirst:true});
     if (error) return fallback;
     return (data||[]).map(rowToRecord);
