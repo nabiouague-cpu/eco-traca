@@ -886,7 +886,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-01-07';
+const APP_VERSION = '2026-09-01-08';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -2399,11 +2399,15 @@ async function confirmImportRapportCCC(){
     });
   });
 
-  // Ecriture ciblee : uniquement les achats reellement crees ou modifies par cet
-  // import, jamais une resynchronisation de toute la table achats.
+  // Deduplique par id avant l'envoi (meme raison que pour l'import producteurs :
+  // deux connaissements identiques dans le rapport donneraient sinon le meme achat
+  // deux fois dans le tableau).
+  const dedupMap = new Map();
+  aEnregistrer.forEach(r=> dedupMap.set(r.id, r));
+  const aEnregistrerUnique = Array.from(dedupMap.values());
   let ok = true;
-  if (aEnregistrer.length>0){
-    const { error } = await supabaseClient.from('achats').upsert(aEnregistrer);
+  if (aEnregistrerUnique.length>0){
+    const { error } = await supabaseClient.from('achats').upsert(aEnregistrerUnique);
     if (error){ ok = false; state.storageErrorMsg = error.message; }
   }
   state.pendingRapportCCC = null;
@@ -2486,10 +2490,16 @@ async function confirmImport(){
       aEnregistrer.push(rec);
     }
   });
-  // Ecriture ciblee : uniquement les producteurs reellement crees ou modifies par
-  // cet import, jamais une resynchronisation de toute la table producteurs.
-  if (aEnregistrer.length>0){
-    const { error } = await supabaseClient.from('producteurs').upsert(aEnregistrer);
+  // Deduplique par id avant l'envoi : si le fichier contient deux lignes pour le
+  // meme code producteur, le meme enregistrement pourrait sinon se retrouver deux
+  // fois dans le tableau, ce que Postgres refuse dans un seul upsert (on garde la
+  // derniere occurrence, qui reflete l'etat final apres traitement de toutes les
+  // lignes correspondantes).
+  const dedupMap = new Map();
+  aEnregistrer.forEach(r=> dedupMap.set(r.id, r));
+  const aEnregistrerUnique = Array.from(dedupMap.values());
+  if (aEnregistrerUnique.length>0){
+    const { error } = await supabaseClient.from('producteurs').upsert(aEnregistrerUnique);
     if (error){ showToast('Échec de l\'enregistrement : '+error.message); }
   }
   state.pendingImport = null;
