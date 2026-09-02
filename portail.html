@@ -7,6 +7,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js"></script>
 <style>
   :root{
     --bg:#F5F6F5; --surface:#FFFFFF; --surface-2:#F7F8F6;
@@ -122,6 +123,8 @@
   .due-date-box .value{font-size:16px;font-weight:700;color:var(--ink);margin-top:2px;}
   .template-card{border:1px solid var(--border);border-radius:9px;padding:14px 16px;margin-bottom:12px;}
   .dropzone{border:2px dashed var(--border);border-radius:9px;padding:22px 14px;text-align:center;color:var(--ink-soft);font-size:13px;cursor:pointer;margin-top:10px;}
+  .spinner-check{width:22px;height:22px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;margin:0 auto 8px;animation:spin-check 0.8s linear infinite;}
+  @keyframes spin-check{to{transform:rotate(360deg);}}
   .dropzone:hover{border-color:var(--accent-line);background:var(--accent-soft);}
   .dropzone.dragover{border-color:var(--accent);background:var(--accent-soft);}
   .dropzone-icon{font-size:20px;color:var(--accent);margin-bottom:4px;}
@@ -181,31 +184,24 @@ try {
 } catch(e) {}
 
 const TYPE_LABELS = {
-  plots_boundaries: 'Parcelles & limites (géolocalisation)',
+  masterdata: 'Registre des membres et données de géolocalisation',
   product_movements: 'Mouvements de produit (traçabilité)',
-  farms_facilities: 'Exploitations & sites (données de base)',
   questionnaires: 'Questionnaire',
   autres: 'Autres documents',
 };
 
 const TYPE_META = {
-  plots_boundaries: {
-    label: 'Parcelles & limites (géolocalisation)',
-    desc: 'Points ou polygones des parcelles montrant précisément où a lieu la production.',
-    format: 'GeoJSON',
-    icon: '◈',
+  masterdata: {
+    label: 'Registre des membres et données de géolocalisation',
+    desc: 'Le registre de vos membres (producteurs) et la cartographie de leurs parcelles — utilisés comme référence pour la campagne.',
+    format: '.XLSX + .GeoJSON',
+    icon: '⌂',
   },
   product_movements: {
     label: 'Données de traçabilité (mouvements de produit)',
     desc: 'Mouvements de produit : localisation de départ/arrivée, certifications, chaîne de traçabilité, volume.',
     format: '.XLSX / .CSV',
     icon: '⇄',
-  },
-  farms_facilities: {
-    label: 'Exploitations & sites (données de base)',
-    desc: 'Détails de localisation de la ferme, du groupe de producteurs ou du site.',
-    format: '.XLSX / .CSV',
-    icon: '⌂',
   },
   questionnaires: {
     label: 'Questionnaire',
@@ -269,17 +265,22 @@ function telechargerFichierBase64(b64, filename, mime){
 }
 
 function genererTemplate(type){
-  if (type==='plots_boundaries'){
+  if (type==='geolocalisation'){
+    // Modele avec les 4 champs obligatoires exacts (PlotID, Surface, Latitude,
+    // Longitude) et un exemple de parcelle valide (petit polygone reel), pour que
+    // la coopérative voie a la fois la structure de la table attributaire et une
+    // geometrie correcte a suivre.
     const geojson = { type:'FeatureCollection', features:[
-      { type:'Feature', properties:{ Nom_producteur:'', Code_producteur:'', PlotID:'' }, geometry:{ type:'Polygon', coordinates:[[]] } }
+      { type:'Feature', properties:{ PlotID:'FARM-0001', Surface:2.5, Latitude:6.8206, Longitude:-5.2767 },
+        geometry:{ type:'Polygon', coordinates:[[[-5.2769,6.8204],[-5.2765,6.8204],[-5.2765,6.8208],[-5.2769,6.8208],[-5.2769,6.8204]]] } }
     ]};
     const blob = new Blob([JSON.stringify(geojson, null, 2)], {type:'application/geo+json'});
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href=url; a.download='template_parcelles.geojson';
+    const a = document.createElement('a'); a.href=url; a.download='Modele_geolocalisation_ECORIGINE.geojson';
     document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
     return;
   }
-  if (type==='farms_facilities'){
+  if (type==='registre'){
     // Vrai modele de production (Template_registre_membres.xlsx), avec ses couleurs
     // d'origine — la bibliotheque XLSX cote navigateur ne sait pas ecrire de styles,
     // donc on sert le fichier reel integre plutot que d'en generer un sans mise en forme.
@@ -319,6 +320,7 @@ let state = {
   docOuvert: null,
   tab: 'requests',
   uploadStaging: {},    // { [type]: File[] } — fichiers en attente avant soumission
+  masterdataSlots: { registre: null, geolocalisation: null }, // { file, status: idle|checking|accepted|rejected, rapport } par emplacement
   modal: null,
   toast: null,
 };
@@ -330,8 +332,8 @@ function dismissToast(){ state.toast = null; render(); }
 function openModal(type, payload){ state.modal = {type, payload: payload||{}}; render(); }
 function closeModal(){ state.modal = null; render(); }
 function setTab(t){ state.tab = t; state.view = null; render(); }
-function openRequestDetail(id){ state.view = 'requestDetail'; state.detailId = id; state.uploadStaging = {}; render(); }
-function closeRequestDetail(){ state.view = null; state.detailId = null; state.uploadStaging = {}; render(); }
+function openRequestDetail(id){ state.view = 'requestDetail'; state.detailId = id; state.uploadStaging = {}; state.masterdataSlots = { registre: null, geolocalisation: null }; render(); }
+function closeRequestDetail(){ state.view = null; state.detailId = null; state.uploadStaging = {}; state.masterdataSlots = { registre: null, geolocalisation: null }; render(); }
 function fv(name){ const el = document.querySelector('#modal-fields [name="'+name+'"]'); return el ? el.value : ''; }
 
 /* ============================================================
@@ -542,9 +544,7 @@ async function creerMaFiche(){
    Data Requests / Accepted Data
    ============================================================ */
 const FORMAT_EXT = {
-  plots_boundaries: ['.geojson', '.json'],
   product_movements: ['.xlsx', '.csv'],
-  farms_facilities: ['.xlsx', '.csv'],
   questionnaires: ['.pdf'],
   autres: ['.pdf', '.jpg', '.jpeg', '.png', '.docx', '.xlsx', '.zip'],
 };
@@ -584,9 +584,11 @@ function hasAnyStagedFile(){
 }
 
 async function finalizeUpload(demandeId){
-  if (!hasAnyStagedFile()) return;
   const d = state.demandes.find(x=>x.id===demandeId);
   if (!d) return;
+  const estMasterdata = (d.types||[]).includes('masterdata');
+  if (estMasterdata && !masterdataPret()) return;
+  if (!estMasterdata && !hasAnyStagedFile()) return;
   try{
     const entries = [];
     for (const type of Object.keys(state.uploadStaging)){
@@ -595,6 +597,18 @@ async function finalizeUpload(demandeId){
         const { error: upErr } = await supabaseClient.storage.from('documents-coop').upload(path, file, { upsert: true });
         if (upErr){ showToast("Échec de l'envoi de "+file.name+" : "+upErr.message); return; }
         entries.push({ demande_id: demandeId, type, path, nom: file.name, uploaded_by: state.session.user.id });
+      }
+    }
+    // Les deux fichiers Masterdata (deja verifies et acceptes individuellement)
+    // ne sont reellement televerses qu'a cet instant, au moment de la soumission
+    // effective de la demande.
+    if (estMasterdata){
+      for (const soustype of ['registre','geolocalisation']){
+        const slot = state.masterdataSlots[soustype];
+        const path = state.coop.id + '/demandes/' + demandeId + '/' + soustype + '/' + slot.file.name;
+        const { error: upErr } = await supabaseClient.storage.from('documents-coop').upload(path, slot.file, { upsert: true });
+        if (upErr){ showToast("Échec de l'envoi de "+slot.file.name+" : "+upErr.message); return; }
+        entries.push({ demande_id: demandeId, type: soustype, path, nom: slot.file.name, uploaded_by: state.session.user.id });
       }
     }
     if (entries.length){
@@ -611,6 +625,7 @@ async function finalizeUpload(demandeId){
     // un souci d'envoi d'email ne doit pas remettre ca en cause pour la cooperative.
     supabaseClient.functions.invoke('email-soumission-demande', { body: { demande_id: demandeId } }).catch(()=>{});
     state.uploadStaging = {};
+    state.masterdataSlots = { registre: null, geolocalisation: null };
     await loadAll();
     closeRequestDetail();
   }catch(e){
@@ -996,25 +1011,182 @@ function renderRequestDetail(id){
 
   // ---- Colonne 3 : glossaire general ----
   html += '<div class="detail-col"><div class="panel"><div class="panel-head"><h2>Types de données</h2></div><div style="padding:6px 18px 16px;">'
-    + '<div class="glossary-item"><h4>Données de base<span class="fmt">.XLSX / .CSV</span></h4><p>Détails de localisation de la ferme, du groupe de producteurs ou du site.</p></div>'
+    + '<div class="glossary-item"><h4>Registre & géolocalisation<span class="fmt">.XLSX + GeoJSON</span></h4><p>Registre des membres (modèle ECORIGINE) et cartographie des parcelles — chaque fichier est vérifié dès son dépôt.</p></div>'
     + '<div class="glossary-item"><h4>Données de traçabilité<span class="fmt">.XLSX / .CSV</span></h4><p>Mouvements de produit : localisations de départ/arrivée, certifications, chaîne de traçabilité, volume.</p></div>'
-    + '<div class="glossary-item"><h4>Données de géolocalisation<span class="fmt">GeoJSON</span></h4><p>Polygones et points des fermes ou groupes de producteurs.</p></div>'
     + '<div class="glossary-item"><h4>Autres documents<span class="fmt">.PDF / .JPG / .DOCX</span></h4><p>Certifications, déclarations fournisseurs, rapports d\'audit, images justificatives.</p></div>'
     + '</div><div style="padding:14px 18px;border-top:1px solid var(--border);"><div class="hint">Besoin d\'aide ?<br>Contacte <strong>nabi.ouague@ecorigine.ci</strong></div></div>'
     + '</div></div>';
 
   html += '</div>'; // fin detail-grid
 
-  const enabled = hasAnyStagedFile();
+  const enabled = hasAnyStagedFile() || (types.includes('masterdata') && masterdataPret());
   html += '<div class="action-bar"><span class="hint">Téléchargez les modèles, complétez-les, puis déposez-les ci-dessus avant de soumettre.</span>'
     + '<button class="btn-start-upload" '+(enabled?'':'disabled style="opacity:.45;cursor:not-allowed;"')+' onclick="finalizeUpload(\''+d.id+'\')">Soumettre la requête</button></div>';
 
   return html;
 }
 
+// Colonnes exactes du modele de registre ECORIGINE (feuille "Registre"), dans l'ordre.
+// Une soumission qui ne suit pas ce modele exactement est rejetee.
+const COLONNES_REGISTRE_ECORIGINE = ['Pays','Village / District / Region','Farmer ID','Farmer Name','Farmer National Traceability ID','Premier Agregateur (Cooperative)','Type de Geocoordonnees','Fichier Polygone Associe','Latitude','Longitude','Farm ID','Date de Cartographie','Surface (Ha)','Volume Estime (kg)'];
+
+// Verification stricte du registre par rapport au modele ECORIGINE -- contrairement
+// a l'import flexible cote admin, ici toute colonne manquante ou renommee entraine
+// un rejet, pour garantir que seules des soumissions de bonne qualite arrivent.
+async function validerRegistreMasterdata(file){
+  let wb;
+  try{
+    const data = await file.arrayBuffer();
+    wb = XLSX.read(data, {type:'array', cellDates:true});
+  }catch(e){
+    return { valide:false, rapport:["Le fichier n'a pas pu être lu — vérifiez qu'il s'agit bien d'un fichier Excel (.xlsx), idéalement le modèle téléchargé directement."] };
+  }
+  const sheetName = wb.SheetNames.includes('Registre') ? 'Registre' : wb.SheetNames[0];
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], {header:1, defval:''});
+  if (rows.length===0) return { valide:false, rapport:["Le fichier est vide."] };
+  const headerRow = (rows[0]||[]).map(h=>String(h||'').trim());
+  const manquantes = COLONNES_REGISTRE_ECORIGINE.filter(c=>!headerRow.some(h=>h.toLowerCase()===c.toLowerCase()));
+  if (manquantes.length>0){
+    return { valide:false, rapport:["Ce fichier ne correspond pas au modèle de registre ECORIGINE. Colonne(s) manquante(s) ou renommée(s) : "+manquantes.join(', ')+". Téléchargez le modèle et complétez-le sans renommer ni réorganiser les colonnes."] };
+  }
+  const nbLignes = rows.slice(1).filter(r=>r.some(v=>String(v||'').trim()!=='')).length;
+  if (nbLignes===0) return { valide:false, rapport:["Le modèle est correct, mais aucune ligne de données n'a été trouvée sous l'en-tête."] };
+  return { valide:true, rapport:['Fichier conforme au modèle ECORIGINE : '+nbLignes+' ligne(s) de données détectée(s).'] };
+}
+
+// Verification du GeoJSON : geometrie valide (pas d'auto-intersection), pas de
+// chevauchement de plus de 20% entre parcelles du meme fichier, et table
+// attributaire contenant les 4 champs obligatoires avec un code de parcelle
+// (pas le nom du producteur) dans PlotID/Name.
+async function validerGeojsonMasterdata(file){
+  let geojson;
+  try{
+    geojson = JSON.parse(await file.text());
+  }catch(e){
+    return { valide:false, rapport:["Le fichier n'est pas un GeoJSON valide (JSON illisible)."] };
+  }
+  const features = geojson.features || (geojson.type==='Feature' ? [geojson] : []);
+  if (features.length===0) return { valide:false, rapport:["Aucune parcelle trouvée dans ce fichier."] };
+  if (typeof turf === 'undefined') return { valide:false, rapport:["Impossible de vérifier ce fichier pour le moment (connexion internet requise). Réessaie dans un instant."] };
+
+  const rapport = [];
+
+  // 1) champs obligatoires + code plutot que nom du producteur
+  let champsManquants = 0, nomsAuLieuDeCodes = 0;
+  features.forEach(f=>{
+    const p = f.properties || {};
+    const keysLower = {};
+    Object.keys(p).forEach(k=> keysLower[k.toLowerCase()] = k);
+    const plotIdKey = keysLower['plotid'] || keysLower['name'];
+    const ok = plotIdKey && keysLower['surface'] && keysLower['latitude'] && keysLower['longitude'];
+    if (!ok){ champsManquants++; return; }
+    const val = String(p[plotIdKey]||'').trim();
+    const ressembleANom = /^[a-zA-ZÀ-ÿ]+(\s+[a-zA-ZÀ-ÿ]+)+$/.test(val) && !/\d/.test(val);
+    if (ressembleANom) nomsAuLieuDeCodes++;
+  });
+  if (champsManquants>0) rapport.push(champsManquants+' parcelle(s) sans les 4 champs obligatoires (PlotID ou Name, Surface, Latitude, Longitude) dans la table attributaire.');
+  if (nomsAuLieuDeCodes>0) rapport.push(nomsAuLieuDeCodes+' parcelle(s) semblent avoir le nom du producteur au lieu d\'un code de parcelle dans le champ PlotID/Name.');
+
+  // 2) auto-intersection (une parcelle dont le tracé se croise lui-même)
+  let autoIntersections = 0;
+  features.forEach(f=>{
+    try{
+      if (f.geometry && (f.geometry.type==='Polygon' || f.geometry.type==='MultiPolygon') && turf.kinks(f).features.length>0) autoIntersections++;
+    }catch(e){}
+  });
+  if (autoIntersections>0) rapport.push(autoIntersections+' parcelle(s) avec une géométrie qui se croise elle-même (auto-intersection).');
+
+  // 3) chevauchement de plus de 20% entre deux parcelles du meme fichier
+  const withGeom = features.map(f=>{ try{ return { f, aire: turf.area(f), bbox: turf.bbox(f) }; }catch(e){ return null; } }).filter(x=>x && x.aire>0);
+  const bboxChevauche = (a,b)=> a[0]<=b[2] && b[0]<=a[2] && a[1]<=b[3] && b[1]<=a[3];
+  let chevauchements = 0;
+  for (let i=0;i<withGeom.length;i++){
+    for (let j=i+1;j<withGeom.length;j++){
+      if (!bboxChevauche(withGeom[i].bbox, withGeom[j].bbox)) continue;
+      try{
+        const inter = turf.intersect(withGeom[i].f, withGeom[j].f);
+        if (inter){
+          const aireInter = turf.area(inter);
+          const minAire = Math.min(withGeom[i].aire, withGeom[j].aire);
+          if (minAire>0 && aireInter/minAire > 0.20) chevauchements++;
+        }
+      }catch(e){}
+    }
+  }
+  if (chevauchements>0) rapport.push(chevauchements+' paire(s) de parcelles se chevauchent de plus de 20 % entre elles, dans ce même fichier.');
+
+  const valide = rapport.length===0;
+  return { valide, rapport: valide ? ['Fichier conforme : '+features.length+' parcelle(s) vérifiée(s), aucune anomalie détectée.'] : rapport };
+}
+
+// Gere le depot d'un fichier dans l'un des deux emplacements Masterdata : bascule
+// sur "en cours de verification", lance le controle correspondant, puis affiche
+// le resultat -- accepte ou rejete avec son rapport. Chaque emplacement est
+// independant : le rejet ou l'acceptation de l'un ne touche jamais l'autre.
+async function onMasterdataFileChange(input, soustype){
+  const file = input.files && input.files[0];
+  input.value = '';
+  if (!file) return;
+  state.masterdataSlots[soustype] = { file, status:'checking', rapport:null };
+  render();
+  const resultat = soustype==='registre' ? await validerRegistreMasterdata(file) : await validerGeojsonMasterdata(file);
+  state.masterdataSlots[soustype] = { file, status: resultat.valide?'accepted':'rejected', rapport: resultat.rapport };
+  render();
+}
+function retirerMasterdataFichier(soustype){
+  state.masterdataSlots[soustype] = null;
+  render();
+}
+function masterdataPret(){
+  const s = state.masterdataSlots || {};
+  return s.registre && s.registre.status==='accepted' && s.geolocalisation && s.geolocalisation.status==='accepted';
+}
+
+function renderMasterdataSlot(soustype, label, icon, formatHint){
+  const slot = (state.masterdataSlots && state.masterdataSlots[soustype]) || null;
+  const inputId = 'masterdata-input-'+soustype;
+  let html = '<div class="template-card"><div class="row-top">'
+    + '<div class="file-icon">'+icon+'</div>'
+    + '<div style="flex:1;"><h4>'+esc(label)+' <span class="hint" title="'+esc(formatHint)+'">ⓘ</span></h4>'
+    + '<button class="btn btn-teal" onclick="genererTemplate(\''+soustype+'\')">Télécharger le modèle</button>'
+    + '</div></div>';
+
+  if (!slot || slot.status==='idle'){
+    html += '<div class="dropzone" onclick="document.getElementById(\''+inputId+'\').click()">'
+      + '<div class="dropzone-icon">⇪</div><div>Glissez un fichier ici ou <span class="dropzone-browse">parcourez vos fichiers</span></div>'
+      + '<div class="hint">Format attendu : '+esc(formatHint)+'</div></div>';
+  } else if (slot.status==='checking'){
+    html += '<div class="dropzone" style="opacity:.7;"><div class="spinner-check"></div><div>Vérification en cours…</div></div>';
+  } else if (slot.status==='accepted'){
+    html += '<div class="staged-file"><span class="file-icon-sm">'+icon+'</span>'
+      + '<div style="flex:1;"><div class="staged-file-name">'+esc(slot.file.name)+'</div>'
+      + '<div class="staged-file-status ok">✓ '+esc((slot.rapport&&slot.rapport[0])||'Fichier conforme.')+'</div></div>'
+      + '<button class="btn-icon-danger" title="Retirer" onclick="retirerMasterdataFichier(\''+soustype+'\')">✕</button></div>';
+  } else if (slot.status==='rejected'){
+    html += '<div class="staged-file" style="align-items:flex-start;"><span class="file-icon-sm">'+icon+'</span>'
+      + '<div style="flex:1;"><div class="staged-file-name">'+esc(slot.file.name)+'</div>'
+      + '<div class="staged-file-status warn">✕ Fichier rejeté</div>'
+      + '<ul style="margin:6px 0 0;padding-left:18px;font-size:12.5px;color:var(--danger);">'+(slot.rapport||[]).map(a=>'<li>'+esc(a)+'</li>').join('')+'</ul>'
+      + '</div>'
+      + '<button class="btn-icon-danger" title="Retirer" onclick="retirerMasterdataFichier(\''+soustype+'\')">✕</button></div>'
+      + '<div class="dropzone" style="margin-top:10px;" onclick="document.getElementById(\''+inputId+'\').click()"><div class="dropzone-icon">⇪</div><div>Réessayer avec un autre fichier</div></div>';
+  }
+  html += '<input type="file" style="display:none" id="'+inputId+'" onchange="onMasterdataFileChange(this,\''+soustype+'\')">'
+    + renderMesFichiersSoumis(soustype)
+    + '</div>';
+  return html;
+}
+
+
 function renderResponseColumn(d, types){
   let html = '<div class="detail-col"><div class="panel"><div class="panel-head"><h2>Télécharger les modèles & déposer vos fichiers</h2></div><div style="padding:16px 18px;">';
   types.forEach(t=>{
+    if (t==='masterdata'){
+      html += '<div class="hint" style="margin-bottom:12px;">Les deux fichiers ci-dessous sont vérifiés indépendamment dès leur dépôt. Les deux doivent être acceptés avant de pouvoir soumettre.</div>';
+      html += renderMasterdataSlot('registre', 'Registre des membres', '⌂', 'Modèle .XLSX ECORIGINE');
+      html += renderMasterdataSlot('geolocalisation', 'Données de géolocalisation', '◈', 'GeoJSON');
+      return;
+    }
     const meta = TYPE_META[t]; if (!meta) return;
     const staged = state.uploadStaging[t] || [];
     html += '<div class="template-card"><div class="row-top">'
@@ -1045,7 +1217,6 @@ function renderResponseColumn(d, types){
       + '<div class="hint">Formats acceptés : '+esc(meta.format)+'</div>'
       + '</div>'
       + '<input type="file" multiple style="display:none" id="file-input-'+t+'" onchange="onFileInputChange(this,\''+t+'\')">'
-      + (t==='plots_boundaries' ? '<div class="geo-note">ECORIGINE applique automatiquement de légers ajustements géométriques aux données géo transmises, afin de garantir leur conformité réglementaire (RDUE), sans invalider les limites de parcelles déclarées.</div>' : '')
       + renderMesFichiersSoumis(t)
       + '</div>';
   });
