@@ -886,7 +886,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-01-06';
+const APP_VERSION = '2026-09-01-07';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1356,7 +1356,7 @@ async function uploadBaseDonneesFichiers(){
   const btn = document.getElementById('basedonnees_envoyer_btn');
   if (btn){ btn.disabled = true; btn.textContent = 'Envoi…'; }
 
-  let ok = 0; const echecs = [];
+  let ok = 0; const echecs = []; const fichiersEnvoyes = []; let registreInput = null;
   for (const { type, input, file } of aEnvoyer){
     const path = coopId + '/database/' + type + '_' + file.name;
     const { error: upErr } = await supabaseClient.storage.from('documents-coop').upload(path, file, { upsert: true });
@@ -1369,14 +1369,59 @@ async function uploadBaseDonneesFichiers(){
       uploaded_at: new Date().toISOString(),
     });
     if (error){ echecs.push(type+' : '+error.message); continue; }
-    input.value = '';
     ok++;
+    fichiersEnvoyes.push({ type, file });
+    // Le registre efface son propre champ dans handleExcelFile plus bas -- on ne le
+    // vide pas ici pour que son fichier reste lisible le temps de l'analyser.
+    if (type==='registre') registreInput = input; else input.value = '';
   }
 
   if (btn){ btn.disabled = false; btn.textContent = 'Téléverser'; }
-  if (ok>0) showToast(ok+' fichier(s) envoyé(s) avec succès.'+(echecs.length>0?' ⚠ Échec pour : '+echecs.join(', '):''), echecs.length===0?'success':undefined);
-  else showToast('Échec : '+echecs.join(', '));
+  if (ok>0){
+    showToast(ok+' fichier(s) envoyé(s) avec succès.'+(echecs.length>0?' ⚠ Échec pour : '+echecs.join(', '):''), echecs.length===0?'success':undefined);
+    await creerDemandeBaseDonnees(coopId, fichiersEnvoyes);
+  } else {
+    showToast('Échec : '+echecs.join(', '));
+  }
   await refreshBaseDonnees();
+
+  // Reutilise exactement la meme analyse que le bouton "Importer (Excel)" de la
+  // carte coopérative -- ouvre la fenetre de previsualisation habituelle, pour que
+  // le registre depose ici alimente aussi la liste des producteurs, sans dupliquer
+  // la logique de lecture du fichier.
+  if (registreInput) await handleExcelFile(registreInput, coopId);
+}
+
+async function creerDemandeBaseDonnees(coopId, fichiers){
+  const coop = coopById(coopId);
+  if (!coop) return;
+  if (typeof JSZip === 'undefined'){ showToast("Fichiers déposés, mais la notification de demande n'a pas pu être créée (bibliothèque de compression indisponible)."); return; }
+  try{
+    const zip = new JSZip();
+    fichiers.forEach(({file})=> zip.file(file.name, file));
+    const blob = await zip.generateAsync({type:'blob'});
+    const newId = 'req_'+Date.now()+'_'+coopId;
+    const zipName = 'donnees_campagne_'+coop.nom.replace(/[^a-z0-9]+/gi,'_')+'.zip';
+    const path = coopId + '/demandes/' + newId + '/source/' + zipName;
+    const { error: upErr } = await supabaseClient.storage.from('documents-coop').upload(path, blob, { upsert: true });
+    if (upErr){ showToast("Fichiers déposés, mais la notification de demande a échoué : "+upErr.message); return; }
+
+    const labels = fichiers.map(f=>f.type==='registre'?'le registre des membres':'les données de géolocalisation');
+    const demandeObj = {
+      id: newId, name: 'Données pour la campagne 2026-2027', cooperative_id: coopId,
+      statut: 'demandee', types: ['autres'],
+      deadline: null, requested_at: new Date().toISOString().slice(0,10),
+      demandeur_nom: (state.session && state.session.user ? state.session.user.email : 'ECORIGINE'),
+      message: "ECORIGINE possède déjà une base de données de votre coopérative ; une analyse déforestation et conformité a déjà été menée sur ces données. Vous trouverez ci-joint "+labels.join(' et ')+", qui serviront de référence pour la campagne 2026-2027. Téléchargez-les pour votre suivi — aucune signature ni retour n'est nécessaire.",
+      fichier_source_path: path, fichier_source_nom: zipName,
+    };
+    const { error } = await supabaseClient.from('demandes').insert(demandeObj);
+    if (error){ showToast("Fichiers déposés, mais la création de la demande a échoué : "+error.message); return; }
+    supabaseClient.functions.invoke('email-nouvelle-demande', { body: { demande_id: newId } }).catch(()=>{});
+    await refreshDemandesTab();
+  }catch(e){
+    showToast("Fichiers déposés, mais la notification de demande a échoué : "+e.message);
+  }
 }
 
 function renderBaseDonneesTab(){
