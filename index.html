@@ -888,7 +888,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-02-06';
+const APP_VERSION = '2026-09-02-07';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1457,13 +1457,42 @@ function renderBaseDonneesTab(){
       const f = filesByCoop[c.id] || {};
       const okReg = !!f.registre, okGeo = !!f.geolocalisation;
       html += '<div class="achat-item"><span>'+esc(c.nom)+'</span>'
-        + '<span class="hint">'+(okReg?'✓ Registre':'— Registre')+' · '+(okGeo?'✓ Géolocalisation':'— Géolocalisation')+'</span></div>';
+        + '<span style="display:flex;align-items:center;gap:10px;">'
+        + '<span class="hint">'+(okReg?'✓ Registre':'— Registre')+' · '+(okGeo?'✓ Géolocalisation':'— Géolocalisation')+'</span>'
+        + (okReg ? '<button class="btn-ghost" onclick="importerProducteursDepuisBaseDonnees(\''+c.id+'\')">Importer vers producteurs</button>' : '')
+        + '</span></div>';
     });
     html += '</div>';
   }
   html += '</div>';
 
   return html;
+}
+
+// Relance l'import producteurs a partir d'un registre (et de sa geolocalisation si
+// disponible) DEJA depose via "Base de donnees coop." -- utile quand le depot du
+// fichier a bien reussi mais que la fenetre de confirmation d'import n'a jamais ete
+// validee, sans avoir a tout redeposer.
+async function importerProducteursDepuisBaseDonnees(coopId){
+  const fichiers = (state.coopDatabaseFiles||[]).filter(f=>f.cooperative_id===coopId);
+  const fichierRegistre = fichiers.find(f=>f.type==='registre');
+  const fichierGeoloc = fichiers.find(f=>f.type==='geolocalisation');
+  if (!fichierRegistre){ showToast('Aucun registre déposé pour cette coopérative.'); return; }
+  try{
+    const { data: registreBlob, error: dlErr } = await supabaseClient.storage.from('documents-coop').download(fichierRegistre.path);
+    if (dlErr){ showToast('Échec du téléchargement du registre : '+dlErr.message); return; }
+    const registreFile = new File([registreBlob], fichierRegistre.nom || 'registre.xlsx');
+
+    let geojsonFile = null;
+    if (fichierGeoloc){
+      const { data: geoBlob, error: geoErr } = await supabaseClient.storage.from('documents-coop').download(fichierGeoloc.path);
+      if (!geoErr) geojsonFile = new File([geoBlob], fichierGeoloc.nom || 'geolocalisation.geojson');
+    }
+
+    await traiterFichierRegistreExcel(registreFile, coopId, geojsonFile);
+  }catch(e){
+    showToast("Échec de la préparation de l'import : "+e.message);
+  }
 }
 
 // Exemple de message affiche en filigrane selon le(s) type(s) de donnees choisi(s)
