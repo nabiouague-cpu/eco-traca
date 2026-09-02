@@ -886,7 +886,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-01-09';
+const APP_VERSION = '2026-09-01-10';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -2497,18 +2497,31 @@ function reconcilierDoublonsFarmId(rows){
 
   const aSupprimer = new Set();
   const renumerotations = [];
+  const conflits = [];
   let doublonsSupprimes = 0;
 
   Object.entries(parFarmId).forEach(([farmId, idxs])=>{
     if (idxs.length < 2) return;
     const surfaceProche = (a,b)=> Math.abs((Number(a.surface_ha)||0) - (Number(b.surface_ha)||0)) < 0.01;
     const gpsIdentiques = (a,b)=> String(a.lat||'').trim()===String(b.lat||'').trim() && String(a.lon||'').trim()===String(b.lon||'').trim();
+    const nomIdentique = (a,b)=> String(a.nom||'').trim().toLowerCase()===String(b.nom||'').trim().toLowerCase();
+    const codeIdentique = (a,b)=> a.code && b.code && String(a.code).trim()===String(b.code).trim();
+
     const premiere = rows[idxs[0]];
     const toutesIdentiques = idxs.every(i => surfaceProche(rows[i], premiere) && gpsIdentiques(rows[i], premiere));
 
     if (toutesIdentiques){
       idxs.slice(1).forEach(i=>{ aSupprimer.add(i); doublonsSupprimes++; });
-    } else {
+      return;
+    }
+
+    // Farm ID en double sur des lignes differentes : on ne renumerote en -P1/-P2/...
+    // que si c'est bien le MEME producteur (meme nom et/ou meme code) -- ce suffixe
+    // designe plusieurs parcelles d'UNE seule personne, jamais un moyen de distinguer
+    // deux producteurs differents.
+    const memeProducteur = idxs.every(i => nomIdentique(rows[i], premiere) || codeIdentique(rows[i], premiere));
+
+    if (memeProducteur){
       const m = farmId.match(/^(.*?)[-_]?P\d+$/i);
       const base = m ? m[1] : farmId;
       idxs.forEach((i, n)=>{
@@ -2518,11 +2531,16 @@ function reconcilierDoublonsFarmId(rows){
           rows[i].farm_id = nouveauFarmId;
         }
       });
+    } else {
+      // Producteurs clairement differents partageant le meme Farm ID par erreur de
+      // saisie -- jamais de correction automatique ici, juste un signalement clair
+      // pour verification manuelle (voir la piste de croisement avec le GeoJSON).
+      conflits.push({ farmId, producteurs: idxs.map(i=>({ nom: rows[i].nom, code: rows[i].code })) });
     }
   });
 
   const cleanedRows = rows.filter((r,idx)=>!aSupprimer.has(idx));
-  return { rows: cleanedRows, doublonsSupprimes, renumerotations };
+  return { rows: cleanedRows, doublonsSupprimes, renumerotations, conflits };
 }
 
 async function confirmImport(){
@@ -3564,7 +3582,13 @@ function render(){
       + (rec && (rec.doublonsSupprimes>0 || rec.renumerotations.length>0) ? (
           '<div class="hint" style="background:var(--warn-bg);color:var(--warn);border-radius:6px;padding:8px 12px;margin-bottom:10px;">'
           + (rec.doublonsSupprimes>0 ? rec.doublonsSupprimes+' ligne(s) en double supprimée(s) automatiquement (même Farm ID, même surface, mêmes coordonnées GPS — parcelle saisie deux fois). ' : '')
-          + (rec.renumerotations.length>0 ? rec.renumerotations.length+' Farm ID renuméroté(s) automatiquement (même identifiant partagé par erreur entre parcelles distinctes) : '+rec.renumerotations.slice(0,5).map(r=>esc(r.ancien)+' → '+esc(r.nouveau)).join(', ')+(rec.renumerotations.length>5?', …':'')+'.' : '')
+          + (rec.renumerotations.length>0 ? rec.renumerotations.length+' Farm ID renuméroté(s) automatiquement (même producteur, parcelles mal numérotées) : '+rec.renumerotations.slice(0,5).map(r=>esc(r.ancien)+' → '+esc(r.nouveau)).join(', ')+(rec.renumerotations.length>5?', …':'')+'.' : '')
+          + '</div>'
+        ) : '')
+      + (rec && rec.conflits.length>0 ? (
+          '<div class="hint" style="background:var(--danger-bg);color:var(--danger);border-radius:6px;padding:8px 12px;margin-bottom:10px;">'
+          + '⚠ '+rec.conflits.length+' Farm ID partagé(s) par des producteurs manifestement différents (nom et code différents) — impossible de corriger automatiquement sans risquer de se tromper de personne. À vérifier avant import, idéalement en croisant avec le fichier de géolocalisation : '
+          + rec.conflits.map(c=>'« '+esc(c.farmId)+' » entre '+c.producteurs.map(p=>esc(p.nom)).join(' et ')).join(' · ')
           + '</div>'
         ) : '')
       + '<div class="preview-table">'
