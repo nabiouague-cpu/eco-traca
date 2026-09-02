@@ -888,7 +888,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-02-07';
+const APP_VERSION = '2026-09-02-08';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -2698,8 +2698,30 @@ async function confirmImport(){
     const { error } = await supabaseClient.from('producteurs').upsert(aEnregistrerUnique);
     if (error){ showToast('Échec de l\'enregistrement : '+error.message); }
   }
+
+  // Remplacement complet (optionnel, decoche par defaut) : supprime les producteurs
+  // de cette cooperative absents de ce fichier -- jamais silencieux, seulement si
+  // l'admin a explicitement coche la case dans la fenetre de confirmation.
+  const remplacerCheck = document.getElementById('import_remplacer_check');
+  let nbSupprimes = 0;
+  if (remplacerCheck && remplacerCheck.checked){
+    const idsDansFichier = new Set(pi.rows.map(r=>r.farm_id||r.code).filter(Boolean));
+    const producteursObsoletes = state.producteurs.filter(p=>p.cooperative_id===pi.cooperative_id && !idsDansFichier.has(p.farm_id||p.code));
+    if (producteursObsoletes.length>0){
+      const idsASupprimer = producteursObsoletes.map(p=>p.id);
+      const { error: delErr } = await supabaseClient.from('producteurs').delete().in('id', idsASupprimer);
+      if (delErr){
+        showToast('Import enregistré, mais échec de la suppression des producteurs obsolètes : '+delErr.message);
+      } else {
+        state.producteurs = state.producteurs.filter(p=>!idsASupprimer.includes(p.id));
+        nbSupprimes = producteursObsoletes.length;
+      }
+    }
+  }
+
   state.pendingImport = null;
   closeModal();
+  showToast(aEnregistrerUnique.length+' producteur(s) importé(s)/mis à jour'+(nbSupprimes>0?', '+nbSupprimes+' supprimé(s) (absents du fichier)':'')+'.', 'success');
 }
 function cancelImport(){ state.pendingImport = null; closeModal(); }
 
@@ -3756,6 +3778,8 @@ function render(){
     const pi = state.pendingImport;
     const coop = coopById(pi.cooperative_id);
     const rec = pi.reconciliation;
+    const idsDansFichier = new Set(pi.rows.map(r=>r.farm_id||r.code).filter(Boolean));
+    const producteursObsoletes = state.producteurs.filter(p=>p.cooperative_id===pi.cooperative_id && !idsDansFichier.has(p.farm_id||p.code));
     html += '<div class="modal-overlay"><div class="modal wide">'
       + '<h3>Confirmer l\'import — '+esc(coop?coop.nom:'')+'</h3>'
       + '<p style="font-size:13px;color:var(--ink-soft)">Fichier : '+esc(pi.fileName)+' — '+fmtNum(pi.rows.length)+' producteur(s) détecté(s)'+(pi.skipped>0?', '+fmtNum(pi.skipped)+' ligne(s) ignorée(s) (nom manquant)':'')+'.</p>'
@@ -3784,6 +3808,12 @@ function render(){
       + (pi.rows.length>8 ? '<div class="preview-row"><div class="hint">… et '+(pi.rows.length-8)+' autre(s) ligne(s)</div></div>' : '')
       + '</div>'
       + '<p class="hint">Les parcelles dont le Farm ID correspond déjà à une parcelle existante de cette coopérative seront mises à jour ; les autres seront créées. Un même producteur peut avoir plusieurs parcelles (plusieurs lignes).</p>'
+      + (producteursObsoletes.length>0 ? (
+          '<label style="display:flex;align-items:flex-start;gap:8px;background:var(--warn-bg);color:var(--warn);border-radius:6px;padding:10px 12px;margin-bottom:10px;cursor:pointer;font-size:13px;">'
+          + '<input type="checkbox" id="import_remplacer_check" style="margin-top:2px;">'
+          + '<span>Remplacer entièrement la liste de cette coopérative — supprime <b>'+producteursObsoletes.length+' producteur(s)</b> déjà enregistré(s) mais absent(s) de ce fichier ('+producteursObsoletes.slice(0,5).map(p=>esc(p.nom)).join(', ')+(producteursObsoletes.length>5?', …':'')+'). Décoché par défaut : les producteurs déjà enregistrés sont conservés, ce fichier ne fait qu\'ajouter ou mettre à jour.</span>'
+          + '</label>'
+        ) : '')
       + '<div class="actions"><button type="button" class="btn" onclick="cancelImport()">Annuler</button><button type="button" class="btn btn-primary" onclick="confirmImport()">Confirmer l\'import</button></div>'
       + '</div></div>';
   }
