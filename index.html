@@ -886,7 +886,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-01-05';
+const APP_VERSION = '2026-09-01-06';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1341,33 +1341,41 @@ async function refreshBaseDonnees(){
   render();
 }
 
-async function uploadBaseDonneesFichier(type){
+async function uploadBaseDonneesFichiers(){
   const coopSelect = document.querySelector('[name="basedonnees_coop_id"]');
   const coopId = coopSelect ? coopSelect.value : '';
   if (!coopId){ showToast('Choisis une coopérative.'); return; }
-  const input = document.getElementById('basedonnees_'+type+'_input');
-  const file = input && input.files[0];
-  if (!file){ showToast('Choisis un fichier.'); return; }
-  const btn = document.getElementById('basedonnees_'+type+'_btn');
+
+  const aEnvoyer = ['registre','geolocalisation'].map(type=>{
+    const input = document.getElementById('basedonnees_'+type+'_input');
+    const file = input && input.files[0];
+    return file ? { type, input, file } : null;
+  }).filter(Boolean);
+  if (aEnvoyer.length===0){ showToast('Choisis au moins un fichier (registre ou géolocalisation).'); return; }
+
+  const btn = document.getElementById('basedonnees_envoyer_btn');
   if (btn){ btn.disabled = true; btn.textContent = 'Envoi…'; }
 
-  const path = coopId + '/database/' + type + '_' + file.name;
-  const { error: upErr } = await supabaseClient.storage.from('documents-coop').upload(path, file, { upsert: true });
-  if (upErr){
-    showToast("Échec de l'envoi : "+upErr.message);
-    if (btn){ btn.disabled = false; btn.textContent = type==='registre' ? 'Téléverser le registre' : 'Téléverser la géolocalisation'; }
-    return;
+  let ok = 0; const echecs = [];
+  for (const { type, input, file } of aEnvoyer){
+    const path = coopId + '/database/' + type + '_' + file.name;
+    const { error: upErr } = await supabaseClient.storage.from('documents-coop').upload(path, file, { upsert: true });
+    if (upErr){ echecs.push(type+' : '+upErr.message); continue; }
+    const { error } = await supabaseClient.from('coop_database_files').upsert({
+      id: 'bdd_'+coopId+'_'+type,
+      cooperative_id: coopId,
+      type, path, nom: file.name,
+      campagne: '2026-2027',
+      uploaded_at: new Date().toISOString(),
+    });
+    if (error){ echecs.push(type+' : '+error.message); continue; }
+    input.value = '';
+    ok++;
   }
-  const { error } = await supabaseClient.from('coop_database_files').upsert({
-    id: 'bdd_'+coopId+'_'+type,
-    cooperative_id: coopId,
-    type, path, nom: file.name,
-    campagne: '2026-2027',
-    uploaded_at: new Date().toISOString(),
-  });
-  if (error){ showToast('Échec : '+error.message); }
-  else { showToast((type==='registre'?'Registre':'Géolocalisation')+' envoyé(e) avec succès.', 'success'); input.value=''; }
-  if (btn){ btn.disabled = false; btn.textContent = type==='registre' ? 'Téléverser le registre' : 'Téléverser la géolocalisation'; }
+
+  if (btn){ btn.disabled = false; btn.textContent = 'Téléverser'; }
+  if (ok>0) showToast(ok+' fichier(s) envoyé(s) avec succès.'+(echecs.length>0?' ⚠ Échec pour : '+echecs.join(', '):''), echecs.length===0?'success':undefined);
+  else showToast('Échec : '+echecs.join(', '));
   await refreshBaseDonnees();
 }
 
@@ -1388,10 +1396,10 @@ function renderBaseDonneesTab(){
     + state.cooperatives.slice().sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'})).map(c=>'<option value="'+c.id+'"'+(state.baseDonneesCoopSelected===c.id?' selected':'')+'>'+esc(c.nom)+'</option>').join('')
     + '</select></label>'
     + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:14px;">'
-    + '<div><label class="field">Registre des membres (.xlsx)<input type="file" id="basedonnees_registre_input" accept=".xlsx,.xls"></label>'
-    + '<button class="btn btn-primary" id="basedonnees_registre_btn" onclick="uploadBaseDonneesFichier(\'registre\')">Téléverser le registre</button></div>'
-    + '<div><label class="field">Données de géolocalisation (.geojson)<input type="file" id="basedonnees_geolocalisation_input" accept=".geojson,.json"></label>'
-    + '<button class="btn btn-primary" id="basedonnees_geolocalisation_btn" onclick="uploadBaseDonneesFichier(\'geolocalisation\')">Téléverser la géolocalisation</button></div>'
+    + '<div><label class="field">Registre des membres (.xlsx)<input type="file" id="basedonnees_registre_input" accept=".xlsx,.xls"></label></div>'
+    + '<div><label class="field">Données de géolocalisation (.geojson)<input type="file" id="basedonnees_geolocalisation_input" accept=".geojson,.json"></label></div>'
+    + '</div>'
+    + '<button class="btn btn-primary" id="basedonnees_envoyer_btn" style="margin-top:14px;" onclick="uploadBaseDonneesFichiers()">Téléverser</button>'
     + '</div>'
     + '</div></div>';
 
