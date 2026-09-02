@@ -213,6 +213,7 @@
 <script src="https://cdn.jsdelivr.net/npm/docx@8.5/build/index.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 const KEY_COOP = 'ecorigine_cooperatives';
@@ -886,7 +887,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-01-10';
+const APP_VERSION = '2026-09-01-11';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1356,7 +1357,7 @@ async function uploadBaseDonneesFichiers(){
   const btn = document.getElementById('basedonnees_envoyer_btn');
   if (btn){ btn.disabled = true; btn.textContent = 'Envoi…'; }
 
-  let ok = 0; const echecs = []; const fichiersEnvoyes = []; let registreInput = null;
+  let ok = 0; const echecs = []; const fichiersEnvoyes = []; let registreInput = null; let geojsonFile = null;
   for (const { type, input, file } of aEnvoyer){
     const path = coopId + '/database/' + type + '_' + file.name;
     const { error: upErr } = await supabaseClient.storage.from('documents-coop').upload(path, file, { upsert: true });
@@ -1371,9 +1372,8 @@ async function uploadBaseDonneesFichiers(){
     if (error){ echecs.push(type+' : '+error.message); continue; }
     ok++;
     fichiersEnvoyes.push({ type, file });
-    // Le registre efface son propre champ dans handleExcelFile plus bas -- on ne le
-    // vide pas ici pour que son fichier reste lisible le temps de l'analyser.
-    if (type==='registre') registreInput = input; else input.value = '';
+    if (type==='registre') registreInput = input;
+    else { geojsonFile = file; input.value = ''; }
   }
 
   if (btn){ btn.disabled = false; btn.textContent = 'Téléverser'; }
@@ -1389,7 +1389,7 @@ async function uploadBaseDonneesFichiers(){
   // carte coopérative -- ouvre la fenetre de previsualisation habituelle, pour que
   // le registre depose ici alimente aussi la liste des producteurs, sans dupliquer
   // la logique de lecture du fichier.
-  if (registreInput) await handleExcelFile(registreInput, coopId);
+  if (registreInput) await handleExcelFile(registreInput, coopId, geojsonFile);
 }
 
 async function creerDemandeBaseDonnees(coopId, fichiers){
@@ -2421,9 +2421,13 @@ async function confirmImportRapportCCC(){
 
 function cancelImportRapportCCC(){ state.pendingRapportCCC = null; closeModal(); }
 
-async function handleExcelFile(input, cooperativeId){
+async function handleExcelFile(input, cooperativeId, geojsonFile){
   const file = input.files && input.files[0];
   if (!file) return;
+  let polygones = null;
+  if (geojsonFile){
+    polygones = await analyserGeojson(geojsonFile);
+  }
   try{
     const data = await file.arrayBuffer();
     const wb = XLSX.read(data, {type:'array', cellDates:true});
@@ -2470,7 +2474,7 @@ async function handleExcelFile(input, cooperativeId){
     // soit la meme parcelle saisie deux fois (doublon reel, a supprimer), soit deux
     // parcelles distinctes ayant recu le meme identifiant par erreur de numerotation
     // (a corriger en renumerotant -P1/-P2/... dans l'ordre).
-    const reconciliation = reconcilierDoublonsFarmId(rows);
+    const reconciliation = reconcilierDoublonsFarmId(rows, polygones);
     state.pendingImport = { cooperative_id: cooperativeId, fileName: file.name, sheetUsed: sheetName, rows: reconciliation.rows, skipped, reconciliation };
     state.modal = { type: 'importPreview' };
     render();
@@ -2486,7 +2490,57 @@ async function handleExcelFile(input, cooperativeId){
 // en double -- on ne garde qu'une occurrence. Sinon, ce sont des parcelles distinctes
 // qui partagent le meme identifiant par erreur -- on renumerote en sequence (-P1, -P2...)
 // a partir de la base commune du Farm ID.
-function reconcilierDoublonsFarmId(rows){
+// Analyse un fichier GeoJSON : calcule pour chaque parcelle (feature) sa surface reelle
+// et son centroide par un calcul geodesique (Turf.js), plutot que de faire confiance a
+// des proprietes eventuellement presentes (souvent absentes ou peu fiables sur les
+// fichiers recus -- cf. note de la specification : "souvent juste {Name: ...}").
+async function analyserGeojson(file){
+  if (typeof turf === 'undefined') return null;
+  try{
+    const text = await file.text();
+    const geojson = JSON.parse(text);
+    const features = geojson.features || (geojson.type==='Feature' ? [geojson] : []);
+    return features.map((f, idx)=>{
+      try{
+        const aire_m2 = turf.area(f);
+        const centroid = turf.centroid(f);
+        const [lon, lat] = centroid.geometry.coordinates;
+        return { idx, surface_ha: aire_m2/10000, lat, lon, nomProp: f.properties && (f.properties.Name||f.properties.name||f.properties.PlotID||f.properties.FarmID||f.properties.farm_id) };
+      }catch(e){ return null; }
+    }).filter(Boolean);
+  }catch(e){ return null; }
+}
+
+// Distance geodesique en metres entre deux points GPS.
+function distanceMetres(lat1, lon1, lat2, lon2){
+  if (lat1===''||lon1===''||lat2===''||lon2===''||lat1==null||lon1==null||lat2==null||lon2==null) return Infinity;
+  if (typeof turf === 'undefined') return Infinity;
+  try{ return turf.distance([Number(lon1),Number(lat1)], [Number(lon2),Number(lat2)], {units:'meters'}); }
+  catch(e){ return Infinity; }
+}
+
+// Cherche, parmi les polygones du GeoJSON, celui dont le centroide est le plus proche
+// des coordonnees declarees dans la ligne du registre -- avec un niveau de confiance
+// par tranche de distance (reprend les seuils de la specification : <200m fiable,
+// <1km correcte, <5km moyenne, au-dela rejetee).
+function trouverMeilleurPolygone(row, polygones){
+  if (!polygones || polygones.length===0 || !row.lat || !row.lon) return null;
+  let meilleur = null, meilleureDistance = Infinity;
+  polygones.forEach(p=>{
+    const d = distanceMetres(row.lat, row.lon, p.lat, p.lon);
+    if (d < meilleureDistance){ meilleureDistance = d; meilleur = p; }
+  });
+  if (!meilleur || !isFinite(meilleureDistance)) return null;
+  let confiance;
+  if (meilleureDistance < 200) confiance = 'fiable';
+  else if (meilleureDistance < 1000) confiance = 'correcte';
+  else if (meilleureDistance < 5000) confiance = 'moyenne';
+  else confiance = 'rejetée';
+  const surfaceProche = Math.abs((Number(row.surface_ha)||0) - meilleur.surface_ha) < 0.3;
+  return { polygone: meilleur, distance_m: Math.round(meilleureDistance), confiance, surfaceProche };
+}
+
+function reconcilierDoublonsFarmId(rows, polygones){
   const parFarmId = {};
   rows.forEach((r,idx)=>{
     const fid = String(r.farm_id||'').trim();
@@ -2533,9 +2587,12 @@ function reconcilierDoublonsFarmId(rows){
       });
     } else {
       // Producteurs clairement differents partageant le meme Farm ID par erreur de
-      // saisie -- jamais de correction automatique ici, juste un signalement clair
-      // pour verification manuelle (voir la piste de croisement avec le GeoJSON).
-      conflits.push({ farmId, producteurs: idxs.map(i=>({ nom: rows[i].nom, code: rows[i].code })) });
+      // saisie -- jamais de correction automatique du Farm ID ici. Si un GeoJSON est
+      // disponible, on l'utilise pour renseigner l'admin sur la parcelle reelle de
+      // chacun (surface + coordonnees, cle de rapprochement fiable), sans jamais
+      // trancher automatiquement a sa place.
+      const analyseGeo = polygones ? idxs.map(i=>({ nom: rows[i].nom, match: trouverMeilleurPolygone(rows[i], polygones) })) : null;
+      conflits.push({ farmId, producteurs: idxs.map(i=>({ nom: rows[i].nom, code: rows[i].code })), analyseGeo });
     }
   });
 
@@ -3587,8 +3644,15 @@ function render(){
         ) : '')
       + (rec && rec.conflits.length>0 ? (
           '<div class="hint" style="background:var(--danger-bg);color:var(--danger);border-radius:6px;padding:8px 12px;margin-bottom:10px;">'
-          + '⚠ '+rec.conflits.length+' Farm ID partagé(s) par des producteurs manifestement différents (nom et code différents) — impossible de corriger automatiquement sans risquer de se tromper de personne. À vérifier avant import, idéalement en croisant avec le fichier de géolocalisation : '
-          + rec.conflits.map(c=>'« '+esc(c.farmId)+' » entre '+c.producteurs.map(p=>esc(p.nom)).join(' et ')).join(' · ')
+          + '⚠ '+rec.conflits.length+' Farm ID partagé(s) par des producteurs manifestement différents (nom et code différents) — impossible de corriger automatiquement sans risquer de se tromper de personne. À vérifier avant import.<br>'
+          + rec.conflits.map(c=>
+              '« '+esc(c.farmId)+' » entre '+c.producteurs.map(p=>esc(p.nom)).join(' et ')
+              + (c.analyseGeo ? '<br>'+c.analyseGeo.map(a=>
+                  '&nbsp;&nbsp;— '+esc(a.nom)+' : '+(a.match
+                    ? 'parcelle la plus proche à '+a.match.distance_m+' m (correspondance '+a.match.confiance+(a.match.surfaceProche?', surface cohérente':', surface différente')+')'
+                    : 'aucune correspondance géométrique trouvée')
+                ).join('<br>') : ' — dépose aussi le fichier de géolocalisation pour un rapprochement automatique par surface et coordonnées')
+            ).join('<br>')
           + '</div>'
         ) : '')
       + '<div class="preview-table">'
