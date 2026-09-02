@@ -886,7 +886,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-01-08';
+const APP_VERSION = '2026-09-01-09';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -2464,7 +2464,14 @@ async function handleExcelFile(input, cooperativeId){
         lon: String(pickFieldContains(r, LON_KEYS) ?? pickField(r, LON_KEYS) ?? '').trim()
       });
     });
-    state.pendingImport = { cooperative_id: cooperativeId, fileName: file.name, sheetUsed: sheetName, rows, skipped };
+    // Un meme producteur (meme code) peut legitimement avoir plusieurs parcelles
+    // (plusieurs lignes) -- ce n'est jamais un doublon en soi. Le vrai probleme,
+    // c'est un Farm ID (identifiant de PARCELLE) qui se retrouve sur deux lignes :
+    // soit la meme parcelle saisie deux fois (doublon reel, a supprimer), soit deux
+    // parcelles distinctes ayant recu le meme identifiant par erreur de numerotation
+    // (a corriger en renumerotant -P1/-P2/... dans l'ordre).
+    const reconciliation = reconcilierDoublonsFarmId(rows);
+    state.pendingImport = { cooperative_id: cooperativeId, fileName: file.name, sheetUsed: sheetName, rows: reconciliation.rows, skipped, reconciliation };
     state.modal = { type: 'importPreview' };
     render();
   }catch(err){
@@ -2473,12 +2480,67 @@ async function handleExcelFile(input, cooperativeId){
   input.value = '';
 }
 
+// Analyse les doublons de Farm ID (identifiant de parcelle) dans les lignes importees.
+// Pour chaque Farm ID qui apparait plusieurs fois : si la surface et les coordonnees
+// GPS sont identiques sur toutes les lignes concernees, c'est la meme parcelle saisie
+// en double -- on ne garde qu'une occurrence. Sinon, ce sont des parcelles distinctes
+// qui partagent le meme identifiant par erreur -- on renumerote en sequence (-P1, -P2...)
+// a partir de la base commune du Farm ID.
+function reconcilierDoublonsFarmId(rows){
+  const parFarmId = {};
+  rows.forEach((r,idx)=>{
+    const fid = String(r.farm_id||'').trim();
+    if (!fid) return;
+    if (!parFarmId[fid]) parFarmId[fid] = [];
+    parFarmId[fid].push(idx);
+  });
+
+  const aSupprimer = new Set();
+  const renumerotations = [];
+  let doublonsSupprimes = 0;
+
+  Object.entries(parFarmId).forEach(([farmId, idxs])=>{
+    if (idxs.length < 2) return;
+    const surfaceProche = (a,b)=> Math.abs((Number(a.surface_ha)||0) - (Number(b.surface_ha)||0)) < 0.01;
+    const gpsIdentiques = (a,b)=> String(a.lat||'').trim()===String(b.lat||'').trim() && String(a.lon||'').trim()===String(b.lon||'').trim();
+    const premiere = rows[idxs[0]];
+    const toutesIdentiques = idxs.every(i => surfaceProche(rows[i], premiere) && gpsIdentiques(rows[i], premiere));
+
+    if (toutesIdentiques){
+      idxs.slice(1).forEach(i=>{ aSupprimer.add(i); doublonsSupprimes++; });
+    } else {
+      const m = farmId.match(/^(.*?)[-_]?P\d+$/i);
+      const base = m ? m[1] : farmId;
+      idxs.forEach((i, n)=>{
+        const nouveauFarmId = base + '-P' + (n+1);
+        if (nouveauFarmId !== rows[i].farm_id){
+          renumerotations.push({ ancien: rows[i].farm_id, nouveau: nouveauFarmId, nom: rows[i].nom });
+          rows[i].farm_id = nouveauFarmId;
+        }
+      });
+    }
+  });
+
+  const cleanedRows = rows.filter((r,idx)=>!aSupprimer.has(idx));
+  return { rows: cleanedRows, doublonsSupprimes, renumerotations };
+}
+
 async function confirmImport(){
   const pi = state.pendingImport;
   if (!pi) return;
   const aEnregistrer = [];
   pi.rows.forEach(r=>{
-    let existing = r.code ? state.producteurs.find(p=>p.cooperative_id===pi.cooperative_id && p.code && p.code===r.code) : null;
+    // La correspondance se fait sur le Farm ID (identifiant de PARCELLE), jamais sur
+    // le seul code producteur -- un meme producteur peut avoir plusieurs parcelles
+    // (donc plusieurs lignes avec le meme code), et matcher par code ecraserait la
+    // premiere parcelle avec les donnees de la seconde. A defaut de Farm ID renseigne,
+    // on retombe sur le code, mais uniquement contre d'autres lignes sans Farm ID non plus.
+    let existing = null;
+    if (r.farm_id){
+      existing = state.producteurs.find(p=>p.cooperative_id===pi.cooperative_id && p.farm_id && p.farm_id===r.farm_id);
+    } else if (r.code){
+      existing = state.producteurs.find(p=>p.cooperative_id===pi.cooperative_id && !p.farm_id && p.code && p.code===r.code);
+    }
     const fields = ['nom','surface_ha','rendement_kg_ha','matricule_ccc','lat','lon','farm_id','pays','village_district','first_aggregator','polygon_filename','farm_mapping_date','volume_estime_kg'];
     if (existing){
       fields.forEach(f=>{ existing[f] = r[f]; });
@@ -3495,15 +3557,22 @@ function render(){
   if (state.modal && state.modal.type==='importPreview' && state.pendingImport){
     const pi = state.pendingImport;
     const coop = coopById(pi.cooperative_id);
+    const rec = pi.reconciliation;
     html += '<div class="modal-overlay"><div class="modal wide">'
       + '<h3>Confirmer l\'import — '+esc(coop?coop.nom:'')+'</h3>'
       + '<p style="font-size:13px;color:var(--ink-soft)">Fichier : '+esc(pi.fileName)+' — '+fmtNum(pi.rows.length)+' producteur(s) détecté(s)'+(pi.skipped>0?', '+fmtNum(pi.skipped)+' ligne(s) ignorée(s) (nom manquant)':'')+'.</p>'
+      + (rec && (rec.doublonsSupprimes>0 || rec.renumerotations.length>0) ? (
+          '<div class="hint" style="background:var(--warn-bg);color:var(--warn);border-radius:6px;padding:8px 12px;margin-bottom:10px;">'
+          + (rec.doublonsSupprimes>0 ? rec.doublonsSupprimes+' ligne(s) en double supprimée(s) automatiquement (même Farm ID, même surface, mêmes coordonnées GPS — parcelle saisie deux fois). ' : '')
+          + (rec.renumerotations.length>0 ? rec.renumerotations.length+' Farm ID renuméroté(s) automatiquement (même identifiant partagé par erreur entre parcelles distinctes) : '+rec.renumerotations.slice(0,5).map(r=>esc(r.ancien)+' → '+esc(r.nouveau)).join(', ')+(rec.renumerotations.length>5?', …':'')+'.' : '')
+          + '</div>'
+        ) : '')
       + '<div class="preview-table">'
       + '<div class="preview-row preview-head"><div>Nom</div><div>Village / Pays</div><div>Surface (ha)</div><div>Volume estime (kg)</div></div>'
       + pi.rows.slice(0,8).map(r=>'<div class="preview-row"><div>'+esc(r.nom)+(r.code?' <span class="hint">('+esc(r.code)+')</span>':'')+'</div><div>'+esc([r.village_district,r.pays].filter(Boolean).join(', ')||'—')+'</div><div class="num">'+esc(r.surface_ha||0)+'</div><div class="num">'+(r.volume_estime_kg?esc(r.volume_estime_kg):esc(Math.round((r.surface_ha||0)*(r.rendement_kg_ha||0))))+'</div></div>').join('')
       + (pi.rows.length>8 ? '<div class="preview-row"><div class="hint">… et '+(pi.rows.length-8)+' autre(s) ligne(s)</div></div>' : '')
       + '</div>'
-      + '<p class="hint">Les producteurs dont le code correspond déjà à un producteur existant de cette coopérative seront mis à jour ; les autres seront créés.</p>'
+      + '<p class="hint">Les parcelles dont le Farm ID correspond déjà à une parcelle existante de cette coopérative seront mises à jour ; les autres seront créées. Un même producteur peut avoir plusieurs parcelles (plusieurs lignes).</p>'
       + '<div class="actions"><button type="button" class="btn" onclick="cancelImport()">Annuler</button><button type="button" class="btn btn-primary" onclick="confirmImport()">Confirmer l\'import</button></div>'
       + '</div></div>';
   }
