@@ -888,7 +888,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-02-04';
+const APP_VERSION = '2026-09-02-05';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1644,41 +1644,38 @@ async function validerDemande(id){
     const { error } = await supabaseClient.from('demandes').update({statut:'acceptee', commentaire_ecorigine: null}).eq('id', id);
     if (error){ showToast('Échec : '+error.message); return; }
     showToast('Demande validée.', 'success');
-    if (demande && (demande.types||[]).includes('masterdata') && demande.fichier_path){
-      await extraireProducteursValides(demande);
+    if (demande && (demande.types||[]).includes('masterdata')){
+      await extraireProducteursDepuisMasterdata(demande);
     }
     await refreshDemandesTab();
   });
 }
 
-async function extraireProducteursValides(demande){
+// Quand une demande Masterdata est validee, propose d'importer le registre soumis
+// dans la table producteurs -- en reutilisant EXACTEMENT le meme pipeline que l'import
+// manuel et que "Base de donnees coop." (reconciliation des Farm ID, croisement avec
+// la geolocalisation jointe si disponible, fenetre de confirmation avant tout
+// enregistrement). Une seule source de verite pour les producteurs, quel que soit le
+// chemin par lequel le registre est arrive.
+async function extraireProducteursDepuisMasterdata(demande){
+  const fichiers = (state.demandeFichiers||[]).filter(f=>f.demande_id===demande.id);
+  const fichierRegistre = fichiers.find(f=>f.type==='registre');
+  const fichierGeoloc = fichiers.find(f=>f.type==='geolocalisation');
+  if (!fichierRegistre){ return; }
   try{
-    const { data: fileBlob, error: dlErr } = await supabaseClient.storage.from('documents-coop').download(demande.fichier_path);
-    if (dlErr){ showToast("Registre validé, mais échec de l'extraction des producteurs : "+dlErr.message); return; }
-    const buf = await fileBlob.arrayBuffer();
-    const wb = XLSX.read(buf, {type:'array'});
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
-    // Colonnes attendues (Template_registre_membres.xlsx) : ... 3=Farmer ID, 4=Farmer Name ...
-    const dataRows = rows.slice(1).filter(r=>r.some(c=>String(c||'').trim()!==''));
-    const producteurs = dataRows.map((r,i)=>{
-      const code = String(r[2]||'').trim();
-      const nomComplet = String(r[3]||'').trim();
-      const espace = nomComplet.indexOf(' ');
-      const prenom = espace>0 ? nomComplet.slice(0,espace) : '';
-      const nom = espace>0 ? nomComplet.slice(espace+1) : nomComplet;
-      return { id: 'pv_'+demande.cooperative_id+'_'+i, cooperative_id: demande.cooperative_id, code, nom, prenom };
-    }).filter(p=>p.code);
+    const { data: registreBlob, error: dlErr } = await supabaseClient.storage.from('documents-coop').download(fichierRegistre.path);
+    if (dlErr){ showToast("Demande validée, mais échec du téléchargement du registre : "+dlErr.message); return; }
+    const registreFile = new File([registreBlob], fichierRegistre.nom || 'registre.xlsx');
 
-    if (producteurs.length===0){ showToast('Registre validé, mais aucune ligne producteur exploitable trouvée dans le fichier.'); return; }
+    let geojsonFile = null;
+    if (fichierGeoloc){
+      const { data: geoBlob, error: geoErr } = await supabaseClient.storage.from('documents-coop').download(fichierGeoloc.path);
+      if (!geoErr) geojsonFile = new File([geoBlob], fichierGeoloc.nom || 'geolocalisation.geojson');
+    }
 
-    // remplace entierement la liste precedente par la nouvelle version validee
-    await supabaseClient.from('producteurs_valides').delete().eq('cooperative_id', demande.cooperative_id);
-    const { error: insErr } = await supabaseClient.from('producteurs_valides').insert(producteurs);
-    if (insErr){ showToast("Registre validé, mais échec de l'enregistrement des producteurs : "+insErr.message); return; }
-    showToast(producteurs.length+' producteur(s) validé(s) et enregistré(s) pour cette coopérative.', 'success');
+    await traiterFichierRegistreExcel(registreFile, demande.cooperative_id, geojsonFile);
   }catch(e){
-    showToast("Registre validé, mais échec de l'extraction : "+e.message);
+    showToast("Demande validée, mais échec de la préparation de l'import producteurs : "+e.message);
   }
 }
 
@@ -2440,6 +2437,17 @@ function cancelImportRapportCCC(){ state.pendingRapportCCC = null; closeModal();
 async function handleExcelFile(input, cooperativeId, geojsonFile){
   const file = input.files && input.files[0];
   if (!file) return;
+  await traiterFichierRegistreExcel(file, cooperativeId, geojsonFile);
+  input.value = '';
+}
+
+// Coeur reutilisable de l'import producteurs : accepte un fichier directement (File
+// ou Blob), qu'il vienne d'un champ <input> local (import manuel, depot "Base de
+// donnees coop.") ou d'un telechargement depuis le stockage (registre soumis par une
+// cooperative via une demande Masterdata, valide par ECORIGINE). Meme pipeline, meme
+// reconciliation Farm ID, meme fenetre de confirmation -- une seule source de verite
+// pour la table producteurs, quel que soit le chemin d'entree du registre.
+async function traiterFichierRegistreExcel(file, cooperativeId, geojsonFile){
   let polygones = null;
   if (geojsonFile){
     polygones = await analyserGeojson(geojsonFile);
@@ -2497,7 +2505,6 @@ async function handleExcelFile(input, cooperativeId, geojsonFile){
   }catch(err){
     showToast("Impossible de lire ce fichier. Vérifiez qu'il s'agit bien d'un fichier Excel (.xlsx ou .xls).");
   }
-  input.value = '';
 }
 
 // Analyse les doublons de Farm ID (identifiant de parcelle) dans les lignes importees.
