@@ -835,6 +835,10 @@ function fv(name){
   const el = document.querySelector('#modal-fields [name="'+name+'"]');
   return el ? el.value : '';
 }
+function fvRadio(name){
+  const el = document.querySelector('#modal-fields [name="'+name+'"]:checked');
+  return el ? el.value : '';
+}
 function askConfirm(message, onConfirm){
   state.confirmDialog = { message, onConfirm };
   render();
@@ -888,7 +892,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-03-08';
+const APP_VERSION = '2026-09-03-09';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1560,6 +1564,7 @@ function toggleDemandeType(type){
       demande_deadline: fv('demande_deadline'),
       demande_demandeur_nom: fv('demande_demandeur_nom'),
       demande_message: fv('demande_message'),
+      demande_doc_nature: fvRadio('demande_doc_nature'),
       fichierSource: fichierSelectionne,
     };
   }
@@ -1599,6 +1604,7 @@ async function creerDemande(){
   const deadline = fv('demande_deadline');
   const message = fv('demande_message').trim();
   const demandeurNom = fv('demande_demandeur_nom').trim();
+  const docNature = fvRadio('demande_doc_nature') || 'signer';
   // Sauvegarde immediate des champs dans le payload de la modale : si une validation
   // echoue plus bas, showToast() va redessiner la modale, et c'est ce payload qui
   // repeuple les champs -- sans ca, tout ce qui a ete tape disparait au premier echec.
@@ -1607,7 +1613,7 @@ async function creerDemande(){
     const fichierSelectionne = (fileInput && fileInput.files[0]) ? fileInput.files[0] : (state.modal.payload && state.modal.payload.fichierSource);
     state.modal.payload = {
       demande_name: name, demande_cooperative_id: coopId, demande_deadline: deadline,
-      demande_demandeur_nom: demandeurNom, demande_message: message,
+      demande_demandeur_nom: demandeurNom, demande_message: message, demande_doc_nature: docNature,
       fichierSource: fichierSelectionne,
     };
   }
@@ -1644,6 +1650,7 @@ async function creerDemande(){
       requested_at: new Date().toISOString().slice(0,10),
       demandeur_nom: demandeurNom || (state.session && state.session.user ? state.session.user.email : 'ECORIGINE'),
       message: message || null,
+      document_a_signer: fichierSource ? (docNature==='signer') : null,
       fichier_source_path, fichier_source_nom,
     };
     const { error } = await supabaseClient.from('demandes').insert(demandeObj);
@@ -1803,7 +1810,7 @@ function renderDemandeStatusPanel(title, list, mode){
         + '<div><span class="badge '+badgeClass+'">'+badgeLabel+'</span></div>'
         + '<div>'+(d.deadline?new Date(d.deadline+'T00:00:00').toLocaleDateString('fr-FR'):'—')+'</div>'
         + '<div>'
-        + (d.fichier_source_path ? '<button class="btn-ghost" onclick="telechargerFichierDemande(\''+d.fichier_source_path+'\',\''+esc(d.fichier_source_nom||'')+'\')">Document à signer</button>' : '')
+        + (d.fichier_source_path ? '<button class="btn-ghost" onclick="telechargerFichierDemande(\''+d.fichier_source_path+'\',\''+esc(d.fichier_source_nom||'')+'\')">'+(d.document_a_signer===false?'Document transmis':'Document à signer')+'</button>' : '')
         + (d.fichier_path ? '<button class="btn-ghost" onclick="telechargerFichierDemande(\''+d.fichier_path+'\',\''+esc(d.fichier_nom||'')+'\')">Télécharger</button>' : '')
         + (mode==='validation' ? '<button class="btn-primary" style="padding:6px 10px;font-size:12px;" onclick="validerDemande(\''+d.id+'\')">Valider</button><button class="btn-danger-text" onclick="ouvrirRejetDemande(\''+d.id+'\')">Rejeter</button>' : '')
         + ((mode==='acceptee') && d.fichier_path && (d.types||[]).includes('masterdata') ? '<button class="btn-ghost" onclick="lancerAnalyseWhisp(\''+d.id+'\')" id="whisp-btn-'+d.id+'">Lancer l\'analyse Whisp</button>' : '')
@@ -4102,8 +4109,11 @@ function render(){
       + '</div></div>'
       + '<label class="field">Échéance<input type="date" name="demande_deadline" value="'+esc(nd.demande_deadline||'')+'"></label>'
       + (state.newDemandeTypes.has('autres')
-          ? '<label class="field">Document à faire signer par la coopérative (optionnel)<input type="file" id="demande_fichier_source_input"></label>'
-            + '<div class="hint" style="margin:4px 0 14px;">Si la coopérative doit vous retourner une version signée (contrat, code de conduite...), joins ici le document à lui transmettre. Elle pourra le télécharger, le signer, puis te soumettre la version signée en retour depuis cette même demande.</div>'
+          ? '<label class="field">Document à joindre (optionnel)<input type="file" id="demande_fichier_source_input"></label>'
+            + '<div class="field" style="margin:4px 0 14px;"><label style="font-weight:600;font-size:13px;display:block;margin-bottom:6px;">Nature du document joint</label>'
+            + '<label style="display:flex;align-items:flex-start;gap:8px;font-weight:400;margin-bottom:6px;cursor:pointer;"><input type="radio" name="demande_doc_nature" value="signer" '+((nd.demande_doc_nature||'signer')==='signer'?'checked':'')+' style="margin-top:3px;"><span>À signer et retourner — la coopérative doit le télécharger, le signer, puis soumettre la version signée en retour (contrat, code de conduite...).</span></label>'
+            + '<label style="display:flex;align-items:flex-start;gap:8px;font-weight:400;cursor:pointer;"><input type="radio" name="demande_doc_nature" value="transmettre" '+(nd.demande_doc_nature==='transmettre'?'checked':'')+' style="margin-top:3px;"><span>À transmettre simplement — la coopérative le télécharge pour information, aucun retour n\'est nécessaire.</span></label>'
+            + '</div>'
           : '')
       + '<label class="field">Ton nom (affiché à la coopérative)<input type="text" name="demande_demandeur_nom" value="'+esc(nd.demande_demandeur_nom||'')+'" placeholder="ex : Nabi Ouague"></label>'
       + '<label class="field">Message pour la coopérative<textarea name="demande_message" rows="3" placeholder="'+esc(placeholderMessageDemande(state.newDemandeTypes))+'">'+esc(nd.demande_message||'')+'</textarea></label>'
