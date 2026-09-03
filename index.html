@@ -888,7 +888,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-03-02';
+const APP_VERSION = '2026-09-03-03';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1477,10 +1477,12 @@ function renderBaseDonneesTab(){
     state.cooperatives.slice().sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'})).forEach(c=>{
       const f = filesByCoop[c.id] || {};
       const okReg = !!f.registre, okGeo = !!f.geolocalisation;
+      const nbProdCoop = state.producteurs.filter(p=>p.cooperative_id===c.id).length;
       html += '<div class="achat-item"><span>'+esc(c.nom)+'</span>'
         + '<span style="display:flex;align-items:center;gap:10px;">'
         + '<span class="hint">'+(okReg?'✓ Registre':'— Registre')+' · '+(okGeo?'✓ Géolocalisation':'— Géolocalisation')+'</span>'
         + (okReg ? '<button class="btn-ghost" onclick="importerProducteursDepuisBaseDonnees(\''+c.id+'\')">Importer vers producteurs</button>' : '')
+        + (nbProdCoop>0 ? '<button class="btn-danger-text" onclick="viderProducteursCooperative(\''+c.id+'\')">Vider la liste ('+nbProdCoop+')</button>' : '')
         + '</span></div>';
     });
     html += '</div>';
@@ -2078,6 +2080,38 @@ function toggleExpandCoop(id){
   if (state.expandedCoop.has(id)) state.expandedCoop.delete(id);
   else state.expandedCoop.add(id);
   render();
+}
+
+// Vide entierement la liste des producteurs d'une cooperative, sans toucher a la
+// fiche de la cooperative elle-meme. Verifie d'abord si des achats sont deja lies
+// a ces producteurs (par leur identifiant interne) -- si c'est le cas, le message
+// de confirmation le signale explicitement : supprimer la liste romprait le lien
+// de tracabilite vers ces livraisons deja enregistrees (elles resteraient en base,
+// mais orphelines, et un reimport ulterieur creerait de nouveaux identifiants sans
+// lien avec elles).
+async function viderProducteursCooperative(coopId){
+  const coop = coopById(coopId);
+  const producteursCoop = state.producteurs.filter(p=>p.cooperative_id===coopId);
+  if (producteursCoop.length===0){ showToast('Aucun producteur enregistré pour cette coopérative.'); return; }
+  const idsProducteurs = new Set(producteursCoop.map(p=>p.id));
+  const nbAchatsLies = state.achats.filter(a=>idsProducteurs.has(a.producteur_id)).length;
+
+  const msg = nbAchatsLies>0
+    ? '⚠ '+nbAchatsLies+' achat(s) sont déjà enregistré(s) pour des producteurs de cette liste. Les supprimer romprait leur lien de traçabilité : ces achats resteraient en base mais orphelins, et un futur réimport créerait de nouveaux producteurs sans lien avec eux. Vider quand même la liste de '+esc(coop?coop.nom:'')+' ('+producteursCoop.length+' producteur(s)) ?'
+    : 'Vider la liste des '+producteursCoop.length+' producteur(s) de '+esc(coop?coop.nom:'')+' ? La fiche de la coopérative elle-même n\'est pas touchée. Aucun achat n\'y est actuellement lié.';
+
+  askConfirm(msg, async ()=>{
+    const idsASupprimer = producteursCoop.map(p=>p.id);
+    try{
+      const { error } = await supabaseClient.from('producteurs').delete().in('id', idsASupprimer);
+      if (error){ showToast('Échec de la suppression : '+error.message); return; }
+      state.producteurs = state.producteurs.filter(p=>p.cooperative_id!==coopId);
+      showToast(idsASupprimer.length+' producteur(s) supprimé(s) pour '+(coop?coop.nom:coopId)+'.', 'success');
+      render();
+    }catch(e){
+      showToast('Échec de la suppression : '+e.message);
+    }
+  });
 }
 
 async function deleteProducteur(id){
