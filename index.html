@@ -888,7 +888,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-03-03';
+const APP_VERSION = '2026-09-03-04';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1909,7 +1909,12 @@ function coopById(id){ return state.cooperatives.find(c=>c.id===id) || null; }
 function coopStats(coopId){
   const list = state.producteurs.filter(p=>p.cooperative_id===coopId);
   const pot = list.reduce((s,p)=> s + potentiel(p), 0);
-  const achete = list.reduce((s,p)=> s + cumulAchats(p.id, 'all', 'all'), 0);
+  // Les achats sont lies au CODE du producteur (stable, jamais regenere lors d'un
+  // reimport), pas a l'identifiant interne d'une ligne-parcelle. Un producteur avec
+  // plusieurs parcelles partage le meme code sur plusieurs lignes -- on deduplique
+  // par code avant de sommer, sinon ses achats seraient comptes une fois par parcelle.
+  const codesUniques = Array.from(new Set(list.map(p=>p.code).filter(Boolean)));
+  const achete = codesUniques.reduce((s,code)=> s + cumulAchats(code, 'all', 'all'), 0);
   const pct = pot>0 ? (achete/pot*100) : null;
   const connList = state.achats.filter(a=>!a.producteur_id && a.cooperative_id===coopId);
   const netProduit = connList.reduce((s,a)=>s+(Number(a.poids_net_produit)||0),0);
@@ -1969,7 +1974,7 @@ function computeRows(){
     .map(p=>{
       const pot = potentiel(p);
       const ceiling = effectiveCeiling(p, state.campagneFilter, periode);
-      const cumul = cumulAchats(p.id, state.campagneFilter, periode);
+      const cumul = cumulAchats(p.code, state.campagneFilter, periode);
       const st = statusFor(pot, ceiling, cumul, seuil, state.campagneFilter!=='all' ? periode : null);
       const restant = ceiling>0 ? Math.max(ceiling - cumul, 0) : null;
       return { p, pot, ceiling, cumul, restant, st, periode: state.campagneFilter!=='all' ? periode : null };
@@ -2054,18 +2059,18 @@ async function deleteCooperative(id){
     ? 'Cette coopérative a ' + linked.length + ' producteur(s) enregistré(s). Les supprimer également avec leurs achats et supprimer la coopérative ?'
     : 'Supprimer cette coopérative ?';
   askConfirm(msg, async ()=>{
-    const linkedIds = Array.from(new Set(linked.map(p=>p.id)));
     state.cooperatives = state.cooperatives.filter(c=>c.id!==id);
     state.producteurs = state.producteurs.filter(p=>p.cooperative_id!==id);
-    state.achats = state.achats.filter(a=>!linkedIds.includes(a.producteur_id));
+    state.achats = state.achats.filter(a=>a.cooperative_id!==id);
     state.docCheck = state.docCheck.filter(d=>d.cooperative_id!==id);
     state.nonconformites = state.nonconformites.filter(n=>n.cooperative_id!==id);
     // Suppressions ciblees uniquement -- jamais de resynchronisation globale d'une
     // table entiere, pour ne jamais risquer d'effacer par erreur les donnees d'une
     // AUTRE cooperative (c'est ce mecanisme, via saveKey, qui a cause la perte de
-    // donnees sur doc_check).
+    // donnees sur doc_check). Achats et non-conformites ont leur propre
+    // cooperative_id -- plus besoin de passer par le producteur pour les cibler.
     try{
-      if (linkedIds.length>0) await supabaseClient.from('achats').delete().in('producteur_id', linkedIds);
+      await supabaseClient.from('achats').delete().eq('cooperative_id', id);
       await supabaseClient.from('producteurs').delete().eq('cooperative_id', id);
       await supabaseClient.from('doc_check').delete().eq('cooperative_id', id);
       await supabaseClient.from('nonconformites').delete().eq('cooperative_id', id);
@@ -2093,14 +2098,8 @@ async function viderProducteursCooperative(coopId){
   const coop = coopById(coopId);
   const producteursCoop = state.producteurs.filter(p=>p.cooperative_id===coopId);
   if (producteursCoop.length===0){ showToast('Aucun producteur enregistré pour cette coopérative.'); return; }
-  const idsProducteurs = new Set(producteursCoop.map(p=>p.id));
-  const nbAchatsLies = state.achats.filter(a=>idsProducteurs.has(a.producteur_id)).length;
 
-  const msg = nbAchatsLies>0
-    ? '⚠ '+nbAchatsLies+' achat(s) sont déjà enregistré(s) pour des producteurs de cette liste. Les supprimer romprait leur lien de traçabilité : ces achats resteraient en base mais orphelins, et un futur réimport créerait de nouveaux producteurs sans lien avec eux. Vider quand même la liste de '+esc(coop?coop.nom:'')+' ('+producteursCoop.length+' producteur(s)) ?'
-    : 'Vider la liste des '+producteursCoop.length+' producteur(s) de '+esc(coop?coop.nom:'')+' ? La fiche de la coopérative elle-même n\'est pas touchée. Aucun achat n\'y est actuellement lié.';
-
-  askConfirm(msg, async ()=>{
+  askConfirm('Vider la liste des '+producteursCoop.length+' producteur(s) de '+esc(coop?coop.nom:'')+' ? La fiche de la coopérative elle-même n\'est pas touchée. Les achats déjà enregistrés restent identifiés par le code producteur — un futur réimport avec les mêmes codes les reconnectera automatiquement.', async ()=>{
     const idsASupprimer = producteursCoop.map(p=>p.id);
     try{
       const { error } = await supabaseClient.from('producteurs').delete().in('id', idsASupprimer);
@@ -2115,11 +2114,9 @@ async function viderProducteursCooperative(coopId){
 }
 
 async function deleteProducteur(id){
-  askConfirm('Supprimer ce producteur et ses achats enregistrés ?', async ()=>{
+  askConfirm('Supprimer cette parcelle ? Les achats liés à ce producteur (par son code) ne sont pas affectés — ils restent identifiés même si toutes ses parcelles sont retirées.', async ()=>{
     state.producteurs = state.producteurs.filter(p=>p.id!==id);
-    state.achats = state.achats.filter(a=>a.producteur_id!==id);
     try{
-      await supabaseClient.from('achats').delete().eq('producteur_id', id);
       await supabaseClient.from('producteurs').delete().eq('id', id);
       showToast('Producteur supprimé.', 'success');
     }catch(e){ showToast('Échec de la suppression : '+e.message); }
@@ -3232,7 +3229,7 @@ function renderConformiteTab(){
         const coop = coopById(g.p.cooperative_id);
         html += '<div class="achat-item"><span>'+esc(g.p.nom)+' — '+esc(coop?coop.nom:'—')+' <span class="hint">('+esc(g.motif)+')</span></span>'
           + '<span class="row-actions"><button class="btn-ghost" onclick="jumpToProducteur(\''+g.p.id+'\')">Corriger</button>'
-          + '<button class="btn-ghost" onclick="prefillNonConfFromGap(\''+g.p.id+'\',\''+g.p.cooperative_id+'\')">Créer une non-conformité</button></span></div>';
+          + '<button class="btn-ghost" onclick="prefillNonConfFromGap(\''+g.p.code+'\',\''+g.p.cooperative_id+'\')">Créer une non-conformité</button></span></div>';
       });
     }
     html += '</div>';
@@ -3246,7 +3243,7 @@ function renderConformiteTab(){
       html += '<div style="padding-top:14px;">';
       nonconfs.forEach(n=>{
         const coop = coopById(n.cooperative_id);
-        const prod = n.producteur_id ? state.producteurs.find(p=>p.id===n.producteur_id) : null;
+        const prod = n.producteur_id ? state.producteurs.find(p=>p.code===n.producteur_id && p.cooperative_id===n.cooperative_id) : null;
         const statutBadge = n.statut==='resolue' ? '<span class="badge ok">Résolue</span>' : n.statut==='en_traitement' ? '<span class="badge warn">En traitement</span>' : '<span class="badge danger">Ouverte</span>';
         html += '<div class="nc-item"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">'
           + '<div><div class="name" style="font-weight:500">'+esc(n.type)+'</div><div class="hint">'+esc(coop?coop.nom:'—')+(prod?' · '+esc(prod.nom):'')+' · '+esc(n.date_creation)+'</div>'
@@ -3420,7 +3417,7 @@ function achatsFiltered(){
       if (periode==='principale' && a.periode!=='principale') return false;
       if (periode==='intermediaire' && !(a.periode==='principale' || a.periode==='intermediaire')) return false;
     }
-    const prod = a.producteur_id ? state.producteurs.find(p=>p.id===a.producteur_id) : null;
+    const prod = a.producteur_id ? state.producteurs.find(p=>p.code===a.producteur_id && p.cooperative_id===a.cooperative_id) : null;
     const acoopId = prod ? prod.cooperative_id : a.cooperative_id;
     if (coopId!=='all' && acoopId!==coopId) return false;
     return true;
@@ -3576,7 +3573,7 @@ function renderDashboardTab(){
         + '<div class="row-actions">'+((r.st.key==='danger'||r.st.key==='warn')?'<button class="btn-ghost" onclick="alerterCooperative(\''+r.p.id+'\')">Alerter la coopérative</button>':'')+'<button class="btn-ghost" onclick="toggleExpand(\''+r.p.id+'\')">'+(state.expanded.has(r.p.id)?'Fermer':'Détail')+'</button></div>'
         + '</div>';
       if (state.expanded.has(r.p.id)){
-        const list = achatsProducteur(r.p.id, state.campagneFilter, state.periodeFilter)
+        const list = achatsProducteur(r.p.code, state.campagneFilter, state.periodeFilter)
           .sort((a,b)=> a.date.localeCompare(b.date));
         html += '<div class="detail"><div class="detail-grid">'
           + '<div><div class="hint" style="margin-bottom:8px;">Livraisons (issues du fichier de traçabilité)</div><div class="achat-list">'
@@ -4003,7 +4000,14 @@ function render(){
       + '</select></label>'
       + '<label class="field">Producteur concerné (optionnel)<select name="producteur_id">'
       + '<option value="">—</option>'
-      + state.producteurs.map(p=>{ const coop=coopById(p.cooperative_id); return '<option value="'+p.id+'"'+(p.id===pre.producteur_id?' selected':'')+'>'+esc(p.nom)+' ('+esc(coop?coop.nom:'—')+')</option>'; }).join('')
+      + (()=>{
+          const vus = new Set();
+          return state.producteurs.filter(p=>{
+            const cle = p.cooperative_id+'::'+p.code;
+            if (!p.code || vus.has(cle)) return false;
+            vus.add(cle); return true;
+          }).map(p=>{ const coop=coopById(p.cooperative_id); return '<option value="'+esc(p.code)+'"'+(p.code===pre.producteur_id?' selected':'')+'>'+esc(p.nom)+' ('+esc(coop?coop.nom:'—')+')</option>'; }).join('');
+        })()
       + '</select></label>'
       + '<label class="field">Type<input list="nctypes" name="type" value="'+esc(pre.type||'')+'"><datalist id="nctypes">'
       + NONCONF_TYPES.map(t=>'<option value="'+esc(t)+'">').join('')
