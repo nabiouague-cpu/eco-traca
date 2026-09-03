@@ -892,7 +892,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-03-10';
+const APP_VERSION = '2026-09-03-11';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1756,8 +1756,8 @@ async function extraireProducteursDepuisMasterdata(demande){
   }
 }
 
-function ouvrirRejetDemande(id){
-  openModal('rejeterDemande', {id});
+function ouvrirRejetDemande(id, motifPrefill){
+  openModal('rejeterDemande', {id, motifPrefill: motifPrefill||''});
 }
 
 async function rejeterDemande(){
@@ -1816,6 +1816,7 @@ function renderDemandeStatusPanel(title, list, mode){
         + (d.fichier_source_path ? '<button class="btn-ghost" onclick="telechargerFichierDemande(\''+d.fichier_source_path+'\',\''+esc(d.fichier_source_nom||'')+'\')">'+(d.document_a_signer===false?'Document transmis':'Document à signer')+'</button>' : '')
         + (d.fichier_path ? '<button class="btn-ghost" onclick="telechargerFichierDemande(\''+d.fichier_path+'\',\''+esc(d.fichier_nom||'')+'\')">Télécharger</button>' : '')
         + (mode==='validation' ? '<button class="btn-primary" style="padding:6px 10px;font-size:12px;" onclick="validerDemande(\''+d.id+'\')">Valider</button><button class="btn-danger-text" onclick="ouvrirRejetDemande(\''+d.id+'\')">Rejeter</button>' : '')
+        + (mode==='validation' && (d.types||[]).includes('product_movements') ? '<button class="btn-ghost" onclick="verifierLimitesFicheTracabilite(\''+d.id+'\')">Vérifier les limites</button>' : '')
         + ((mode==='acceptee') && d.fichier_path && (d.types||[]).includes('masterdata') ? '<button class="btn-ghost" onclick="lancerAnalyseWhisp(\''+d.id+'\')" id="whisp-btn-'+d.id+'">Lancer l\'analyse Whisp</button>' : '')
         + (mode==='attente' ? '<button class="btn-danger-text" onclick="annulerDemande(\''+d.id+'\')">Annuler</button>' : '')
         + (d.commentaire_ecorigine ? '<div class="hint" style="width:100%;margin-top:4px;">Motif : '+esc(d.commentaire_ecorigine)+'</div>' : '')
@@ -2983,6 +2984,63 @@ async function extraireDonneesTracabilite(coopId, typeKey){
   showToast(lignes.length+' ligne(s) de livraison extraite(s).', 'success');
 }
 
+// Verifie, pour une demande de traçabilite en attente de validation, si les
+// quantites qu'elle contient feraient depasser le plafond de la periode principale
+// (70% du potentiel) a une ou plusieurs parcelles -- en tenant compte de ce qui est
+// deja enregistre comme achete pour ce Farm ID. Produit un rapport (pas un blocage
+// automatique dans le fichier lui-meme, qui serait contournable) : les depassements
+// sont signales avec un motif de rejet pre-rempli, prêt a valider ; les parcelles
+// qui atteindraient 50% ou plus sans depasser sont listees separement, comme rappel
+// de surveillance en complement du mail d'alerte existant.
+async function verifierLimitesFicheTracabilite(demandeId){
+  const demande = (state.demandesCoop||[]).find(d=>d.id===demandeId);
+  if (!demande){ showToast('Demande introuvable.'); return; }
+  const fichierTracabilite = (state.demandeFichiers||[]).find(f=>f.demande_id===demandeId && f.type==='product_movements');
+  if (!fichierTracabilite){ showToast('Aucun fichier de traçabilité trouvé pour cette demande.'); return; }
+
+  try{
+    const { data: fileBlob, error: dlErr } = await supabaseClient.storage.from('documents-coop').download(fichierTracabilite.path);
+    if (dlErr){ showToast('Échec du téléchargement : '+dlErr.message); return; }
+    const buf = await fileBlob.arrayBuffer();
+    const wb = XLSX.read(buf, {type:'array', cellDates:true});
+    const sheetName = wb.SheetNames.includes('Delivery Data') ? 'Delivery Data' : wb.SheetNames[0];
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], {header:1, defval:''});
+
+    // Regroupe par Farm ID : plusieurs lignes pour la meme parcelle dans un seul
+    // fichier sont sommees ensemble avant comparaison au plafond.
+    const quantitesParFarmId = {};
+    for (let r=13; r<rows.length; r++){
+      const row = rows[r] || [];
+      const farmId = String(row[6]||'').trim();
+      const qte = Number(row[8])||0;
+      if (!farmId) continue;
+      quantitesParFarmId[farmId] = (quantitesParFarmId[farmId]||0) + qte;
+    }
+    if (Object.keys(quantitesParFarmId).length===0){ showToast('Aucune ligne de livraison exploitable trouvée dans ce fichier.'); return; }
+
+    const campagneId = state.campagneFilter!=='all' ? state.campagneFilter : (state.campagnes[0] ? state.campagnes[0].id : 'all');
+    const periode = state.periodeFilter || 'principale';
+
+    const depassements = [], surveillances = [];
+    Object.entries(quantitesParFarmId).forEach(([farmId, qteNouvelle])=>{
+      const p = state.producteurs.find(x=>x.farm_id===farmId && x.cooperative_id===demande.cooperative_id);
+      if (!p){ depassements.push({ farmId, nom:null, code:null, introuvable:true, qteNouvelle }); return; }
+      const ceiling = effectiveCeiling(p, campagneId, periode);
+      const cumulActuel = cumulAchats(farmId, campagneId, periode);
+      const nouveauCumul = cumulActuel + qteNouvelle;
+      const pct = ceiling>0 ? (nouveauCumul/ceiling*100) : null;
+      const item = { farmId, nom:p.nom, code:p.code, cumulActuel, qteNouvelle, nouveauCumul, ceiling, pct };
+      if (ceiling>0 && nouveauCumul>ceiling) depassements.push(item);
+      else if (ceiling>0 && pct>=50) surveillances.push(item);
+    });
+
+    state.modal = { type:'rapportLimitesTracabilite', payload:{ demandeId, campagneId, periode, depassements, surveillances, fichierNom: fichierTracabilite.nom } };
+    render();
+  }catch(e){
+    showToast('Échec de la vérification : '+e.message);
+  }
+}
+
 async function telechargerDossierDemandesZip(coopId, typeKey){
   const coop = coopById(coopId);
   const demandeById = {};
@@ -4074,11 +4132,42 @@ function render(){
   }
 
   if (state.modal && state.modal.type==='rejeterDemande'){
+    const motifPrefill = (state.modal.payload && state.modal.payload.motifPrefill) || '';
     html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
       + '<h3>Rejeter cette demande</h3>'
       + '<div class="hint" style="margin-bottom:12px;">Le motif sera visible par la coopérative, pour qu\'elle sache quoi corriger avant de soumettre à nouveau.</div>'
-      + '<div id="modal-fields"><label class="field">Motif du rejet<textarea name="rejet_motif" rows="3" placeholder="ex : GeoJSON incomplet, il manque les parcelles de la zone nord."></textarea></label></div>'
+      + '<div id="modal-fields"><label class="field">Motif du rejet<textarea name="rejet_motif" rows="5" placeholder="ex : GeoJSON incomplet, il manque les parcelles de la zone nord.">'+esc(motifPrefill)+'</textarea></label></div>'
       + '<div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="rejeterDemande()">Confirmer le rejet</button></div>'
+      + '</div></div>';
+  }
+
+  if (state.modal && state.modal.type==='rapportLimitesTracabilite'){
+    const p = state.modal.payload;
+    const fmtPct = v => v==null ? '—' : Math.round(v)+'%';
+    const ligneItem = (it, estDepassement) => {
+      if (it.introuvable){
+        return '<div class="achat-item"><span>Farm ID <b>'+esc(it.farmId)+'</b> — introuvable dans le registre de cette coopérative</span><span class="num">'+fmtKg(it.qteNouvelle)+'</span></div>';
+      }
+      return '<div class="achat-item"><span>'+esc(it.nom)+' <span class="hint">('+esc(it.code)+' — Parcelle '+esc(it.farmId)+')</span></span>'
+        + '<span class="num">'+fmtKg(it.cumulActuel)+' + '+fmtKg(it.qteNouvelle)+' → '+fmtKg(it.nouveauCumul)+' / '+fmtKg(it.ceiling)+' ('+fmtPct(it.pct)+')</span></div>';
+    };
+    let motifAuto = 'Le fichier « '+p.fichierNom+' » ferait dépasser le plafond de la période principale (70%) pour :\n'
+      + p.depassements.map(it=> it.introuvable ? '- Farm ID '+it.farmId+' (introuvable dans le registre)' : '- '+it.nom+' ('+it.code+', parcelle '+it.farmId+') : '+Math.round(it.nouveauCumul)+' kg / '+Math.round(it.ceiling)+' kg autorisés').join('\n')
+      + '\n\nMerci de corriger les quantités ou de vérifier ces parcelles avant de soumettre à nouveau.';
+    html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal wide">'
+      + '<h3>Vérification des limites — '+esc(p.fichierNom)+'</h3>'
+      + '<p class="hint" style="margin-bottom:14px;">Comparaison au plafond de la période '+(p.periode==='principale'?'principale (70%)':p.periode)+', en tenant compte des achats déjà enregistrés pour chaque parcelle.</p>'
+      + (p.depassements.length>0
+          ? '<h4 style="color:var(--danger);margin-bottom:8px;">⚠ Dépasserait le plafond ('+p.depassements.length+')</h4>'
+            + '<div class="checklist-grid" style="margin-bottom:16px;">' + p.depassements.map(it=>ligneItem(it,true)).join('') + '</div>'
+            + '<button class="btn btn-primary" style="background:var(--danger);border-color:var(--danger);margin-bottom:20px;" onclick="closeModal();ouvrirRejetDemande(\''+p.demandeId+'\','+esc(JSON.stringify(motifAuto))+')">Rejeter la demande avec ce motif</button>'
+          : '<p style="color:var(--ok);margin-bottom:16px;">✓ Aucune parcelle ne dépasserait le plafond.</p>')
+      + (p.surveillances.length>0
+          ? '<h4 style="color:var(--warn);margin-bottom:8px;">🔶 À surveiller — 50% ou plus du plafond ('+p.surveillances.length+')</h4>'
+            + '<div class="checklist-grid" style="margin-bottom:16px;">' + p.surveillances.map(it=>ligneItem(it,false)).join('') + '</div>'
+            + '<p class="hint">Ces parcelles n\'empêchent pas la validation, mais pense à utiliser « Alerter la coopérative » (Tableau de bord) si ce n\'est pas déjà fait.</p>'
+          : '')
+      + '<div class="actions"><button class="btn" onclick="closeModal()">Fermer</button></div>'
       + '</div></div>';
   }
 
