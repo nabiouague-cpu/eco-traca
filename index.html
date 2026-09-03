@@ -888,7 +888,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-03-06';
+const APP_VERSION = '2026-09-03-07';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1046,6 +1046,21 @@ async function importerSauvegardeJSON(input){
     showToast("Le fichier n'a pas pu être lu : "+e.message);
   }
   input.value = '';
+}
+
+// Supprime une liste d'identifiants en plusieurs petits lots plutot qu'en un seul
+// .delete().in(...) -- avec des milliers de lignes (30 000+ parcelles au total), une
+// seule requete avec tous les identifiants peut depasser la limite de taille d'URL
+// et echouer, parfois sans erreur claire remontee au navigateur. Retourne la premiere
+// erreur rencontree (ou null si tout s'est bien passe).
+async function deleteByIdsBatched(table, ids, batchSize){
+  batchSize = batchSize || 200;
+  for (let i=0; i<ids.length; i+=batchSize){
+    const lot = ids.slice(i, i+batchSize);
+    const { error } = await supabaseClient.from(table).delete().in('id', lot);
+    if (error) return error;
+  }
+  return null;
 }
 
 async function safeGet(key, fallback){
@@ -2102,7 +2117,7 @@ async function viderProducteursCooperative(coopId){
   askConfirm('Vider la liste des '+producteursCoop.length+' producteur(s) de '+esc(coop?coop.nom:'')+' ? La fiche de la coopérative elle-même n\'est pas touchée. Les achats déjà enregistrés restent identifiés par le code producteur — un futur réimport avec les mêmes codes les reconnectera automatiquement.', async ()=>{
     const idsASupprimer = producteursCoop.map(p=>p.id);
     try{
-      const { error } = await supabaseClient.from('producteurs').delete().in('id', idsASupprimer);
+      const error = await deleteByIdsBatched('producteurs', idsASupprimer);
       if (error){ showToast('Échec de la suppression : '+error.message); return; }
       state.producteurs = state.producteurs.filter(p=>p.cooperative_id!==coopId);
       showToast(idsASupprimer.length+' producteur(s) supprimé(s) pour '+(coop?coop.nom:coopId)+'.', 'success');
@@ -2760,7 +2775,7 @@ async function confirmImport(){
     const producteursObsoletes = state.producteurs.filter(p=>p.cooperative_id===pi.cooperative_id && !idsDansFichier.has(p.farm_id||p.code));
     if (producteursObsoletes.length>0){
       const idsASupprimer = producteursObsoletes.map(p=>p.id);
-      const { error: delErr } = await supabaseClient.from('producteurs').delete().in('id', idsASupprimer);
+      const delErr = await deleteByIdsBatched('producteurs', idsASupprimer);
       if (delErr){
         showToast('Import enregistré, mais échec de la suppression des producteurs obsolètes : '+delErr.message);
       } else {
