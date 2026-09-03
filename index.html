@@ -888,7 +888,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-03-04';
+const APP_VERSION = '2026-09-03-05';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1909,12 +1909,12 @@ function coopById(id){ return state.cooperatives.find(c=>c.id===id) || null; }
 function coopStats(coopId){
   const list = state.producteurs.filter(p=>p.cooperative_id===coopId);
   const pot = list.reduce((s,p)=> s + potentiel(p), 0);
-  // Les achats sont lies au CODE du producteur (stable, jamais regenere lors d'un
-  // reimport), pas a l'identifiant interne d'une ligne-parcelle. Un producteur avec
-  // plusieurs parcelles partage le meme code sur plusieurs lignes -- on deduplique
-  // par code avant de sommer, sinon ses achats seraient comptes une fois par parcelle.
-  const codesUniques = Array.from(new Set(list.map(p=>p.code).filter(Boolean)));
-  const achete = codesUniques.reduce((s,code)=> s + cumulAchats(code, 'all', 'all'), 0);
+  // Les achats sont lies au Farm ID (identifiant de PARCELLE, stable grace a la
+  // reconciliation deja en place) -- chaque parcelle suit son propre plafond
+  // independamment, meme quand plusieurs parcelles appartiennent au meme producteur.
+  // Chaque ligne a son propre Farm ID distinct : pas de deduplication necessaire ici,
+  // sommer ligne par ligne ne compte jamais deux fois le meme achat.
+  const achete = list.reduce((s,p)=> s + cumulAchats(p.farm_id, 'all', 'all'), 0);
   const pct = pot>0 ? (achete/pot*100) : null;
   const connList = state.achats.filter(a=>!a.producteur_id && a.cooperative_id===coopId);
   const netProduit = connList.reduce((s,a)=>s+(Number(a.poids_net_produit)||0),0);
@@ -1974,7 +1974,7 @@ function computeRows(){
     .map(p=>{
       const pot = potentiel(p);
       const ceiling = effectiveCeiling(p, state.campagneFilter, periode);
-      const cumul = cumulAchats(p.code, state.campagneFilter, periode);
+      const cumul = cumulAchats(p.farm_id, state.campagneFilter, periode);
       const st = statusFor(pot, ceiling, cumul, seuil, state.campagneFilter!=='all' ? periode : null);
       const restant = ceiling>0 ? Math.max(ceiling - cumul, 0) : null;
       return { p, pot, ceiling, cumul, restant, st, periode: state.campagneFilter!=='all' ? periode : null };
@@ -3229,7 +3229,7 @@ function renderConformiteTab(){
         const coop = coopById(g.p.cooperative_id);
         html += '<div class="achat-item"><span>'+esc(g.p.nom)+' — '+esc(coop?coop.nom:'—')+' <span class="hint">('+esc(g.motif)+')</span></span>'
           + '<span class="row-actions"><button class="btn-ghost" onclick="jumpToProducteur(\''+g.p.id+'\')">Corriger</button>'
-          + '<button class="btn-ghost" onclick="prefillNonConfFromGap(\''+g.p.code+'\',\''+g.p.cooperative_id+'\')">Créer une non-conformité</button></span></div>';
+          + '<button class="btn-ghost" onclick="prefillNonConfFromGap(\''+g.p.farm_id+'\',\''+g.p.cooperative_id+'\')">Créer une non-conformité</button></span></div>';
       });
     }
     html += '</div>';
@@ -3243,7 +3243,7 @@ function renderConformiteTab(){
       html += '<div style="padding-top:14px;">';
       nonconfs.forEach(n=>{
         const coop = coopById(n.cooperative_id);
-        const prod = n.producteur_id ? state.producteurs.find(p=>p.code===n.producteur_id && p.cooperative_id===n.cooperative_id) : null;
+        const prod = n.producteur_id ? state.producteurs.find(p=>p.farm_id===n.producteur_id && p.cooperative_id===n.cooperative_id) : null;
         const statutBadge = n.statut==='resolue' ? '<span class="badge ok">Résolue</span>' : n.statut==='en_traitement' ? '<span class="badge warn">En traitement</span>' : '<span class="badge danger">Ouverte</span>';
         html += '<div class="nc-item"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">'
           + '<div><div class="name" style="font-weight:500">'+esc(n.type)+'</div><div class="hint">'+esc(coop?coop.nom:'—')+(prod?' · '+esc(prod.nom):'')+' · '+esc(n.date_creation)+'</div>'
@@ -3417,7 +3417,7 @@ function achatsFiltered(){
       if (periode==='principale' && a.periode!=='principale') return false;
       if (periode==='intermediaire' && !(a.periode==='principale' || a.periode==='intermediaire')) return false;
     }
-    const prod = a.producteur_id ? state.producteurs.find(p=>p.code===a.producteur_id && p.cooperative_id===a.cooperative_id) : null;
+    const prod = a.producteur_id ? state.producteurs.find(p=>p.farm_id===a.producteur_id && p.cooperative_id===a.cooperative_id) : null;
     const acoopId = prod ? prod.cooperative_id : a.cooperative_id;
     if (coopId!=='all' && acoopId!==coopId) return false;
     return true;
@@ -3573,7 +3573,7 @@ function renderDashboardTab(){
         + '<div class="row-actions">'+((r.st.key==='danger'||r.st.key==='warn')?'<button class="btn-ghost" onclick="alerterCooperative(\''+r.p.id+'\')">Alerter la coopérative</button>':'')+'<button class="btn-ghost" onclick="toggleExpand(\''+r.p.id+'\')">'+(state.expanded.has(r.p.id)?'Fermer':'Détail')+'</button></div>'
         + '</div>';
       if (state.expanded.has(r.p.id)){
-        const list = achatsProducteur(r.p.code, state.campagneFilter, state.periodeFilter)
+        const list = achatsProducteur(r.p.farm_id, state.campagneFilter, state.periodeFilter)
           .sort((a,b)=> a.date.localeCompare(b.date));
         html += '<div class="detail"><div class="detail-grid">'
           + '<div><div class="hint" style="margin-bottom:8px;">Livraisons (issues du fichier de traçabilité)</div><div class="achat-list">'
@@ -4000,14 +4000,7 @@ function render(){
       + '</select></label>'
       + '<label class="field">Producteur concerné (optionnel)<select name="producteur_id">'
       + '<option value="">—</option>'
-      + (()=>{
-          const vus = new Set();
-          return state.producteurs.filter(p=>{
-            const cle = p.cooperative_id+'::'+p.code;
-            if (!p.code || vus.has(cle)) return false;
-            vus.add(cle); return true;
-          }).map(p=>{ const coop=coopById(p.cooperative_id); return '<option value="'+esc(p.code)+'"'+(p.code===pre.producteur_id?' selected':'')+'>'+esc(p.nom)+' ('+esc(coop?coop.nom:'—')+')</option>'; }).join('');
-        })()
+      + state.producteurs.filter(p=>p.farm_id).map(p=>{ const coop=coopById(p.cooperative_id); return '<option value="'+esc(p.farm_id)+'"'+(p.farm_id===pre.producteur_id?' selected':'')+'>'+esc(p.nom)+' — '+esc(p.farm_id)+' ('+esc(coop?coop.nom:'—')+')</option>'; }).join('')
       + '</select></label>'
       + '<label class="field">Type<input list="nctypes" name="type" value="'+esc(pre.type||'')+'"><datalist id="nctypes">'
       + NONCONF_TYPES.map(t=>'<option value="'+esc(t)+'">').join('')
