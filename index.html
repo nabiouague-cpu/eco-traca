@@ -873,7 +873,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-04-08';
+const APP_VERSION = '2026-09-04-09';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1896,7 +1896,7 @@ async function loadAll(){
     state.campagnes = await safeGet(KEY_CAMPAGNES, []);
     state.messagesCoop = await safeGet(KEY_MESSAGES, []);
     state.envoisCoop = await safeGet(KEY_ENVOIS, []);
-    state.settings = await safeGet(KEY_SETTINGS, { seuil: 50, prime_ra: 0, prime_ft: 0 });
+    state.settings = await safeGet(KEY_SETTINGS, { seuil: 50, prime_ra: 0, prime_ft: 0, prix_entree_usine: 0, taux_bic: 0 });
     state.error = null;
   }catch(e){
     state.error = "Impossible de charger les données. Vérifiez la connexion et réessayez.";
@@ -2166,6 +2166,7 @@ async function submitAchat(){
     lieu_origine: fv('lieu_origine').trim() || null,
     usine_dechargement: fv('usine_dechargement').trim() || null,
     tkm: Number(fv('tkm'))||null,
+    commission: Number(fv('commission'))||0,
   };
   let achatId;
   if (editId){
@@ -3489,6 +3490,38 @@ async function savePrimes(){
   closeModal();
 }
 
+async function saveParametresPaiement(){
+  state.settings.prix_entree_usine = Number(document.getElementById('prix-entree-usine-input').value)||0;
+  state.settings.taux_bic = Number(document.getElementById('taux-bic-input').value)||0;
+  await saveKey(KEY_SETTINGS, state.settings);
+  showToast('Paramètres de paiement enregistrés.', 'success');
+  closeModal();
+}
+
+// Coop a-t-elle fourni son document BIC ? Si oui, la retenue ne s'applique pas.
+function coopABic(coopId){
+  return (state.docCheck||[]).some(d=>d.cooperative_id===coopId && d.doc==='BIC (si disponible)' && d.disponible);
+}
+
+// Calcule le montant a payer a la cooperative pour un achat, selon la formule :
+// Montant = ((Prix entree usine + TKM + Commission) x Poids) - Retenue BIC
+// Le poids utilise est le poids net PAYE (apres analyse/refraction a l'usine)
+// une fois connu -- jamais le poids declare au connaissement, qui ne sert qu'a
+// un cout de transport theorique, pas au paiement final (poidsBaseForPrime
+// applique deja cette priorite, reutilisee ici pour rester coherent avec les primes).
+function calcMontantPaiement(a){
+  const poids = poidsBaseForPrime(a);
+  if (poids<=0) return null;
+  const prixEntreeUsine = Number(state.settings.prix_entree_usine)||0;
+  const tkm = Number(a.tkm)||0;
+  const commission = Number(a.commission)||0;
+  const tauxBic = Number(state.settings.taux_bic)||0;
+  const aBic = coopABic(a.cooperative_id);
+  const retenueBic = aBic ? 0 : Math.round(tauxBic*poids);
+  const montant = Math.round(((prixEntreeUsine+tkm+commission)*poids) - retenueBic);
+  return { poids, prixEntreeUsine, tkm, commission, tauxBic, retenueBic, aBic, montant };
+}
+
 function achatsFiltered(){
   const coopId = state.coopFilter;
   const campId = state.campagneFilter;
@@ -3540,6 +3573,7 @@ function renderAchatsConnaissementPanel(){
         const coop = coopById(a.cooperative_id);
         const hasAccepte = a.poids_net_produit || a.poids_brut_accepte || a.nombre_sacs_accepte;
         const prime = calcPrime(a);
+        const montantPaiement = calcMontantPaiement(a);
         const fld = (label, val, unit)=> '<div class="achat-field"><span class="lbl">'+label+'</span><span class="val'+(val?'':' empty')+'">'+(val?(fmtNum(val)+(unit?' '+unit:'')):'à saisir')+'</span></div>';
         const verifBadge = a.verification_tracabilite==='concordant' ? '<span class="badge ok" title="La quantité déclarée concorde avec la fiche de traçabilité soumise pour ce connaissement">✓ Concordant</span>'
           : a.verification_tracabilite==='ecart' ? '<span class="badge warn" title="Écart entre le poids déclaré et le total de la fiche de traçabilité pour ce connaissement">⚠ Écart '+(a.ecart_kg>0?'+':'')+fmtKg(a.ecart_kg)+'</span>'
@@ -3560,6 +3594,7 @@ function renderAchatsConnaissementPanel(){
             + fld('Sacs acceptés', a.nombre_sacs_accepte, '')
             + fld('Poids net livré', a.poids_brut_accepte, 'kg')
             + fld('Poids net payé', a.poids_net_produit, 'kg')
+            + (montantPaiement ? '<div class="achat-field" style="border-top:1px dashed var(--border);margin-top:6px;padding-top:8px;"><span class="lbl">Montant à payer'+(montantPaiement.aBic?'':' (retenue BIC appliquée)')+'</span><span class="val">'+fmtNum(montantPaiement.montant)+' FCFA</span></div>' : '')
           + '</div>'
           + '</div>'
           + '</div>';
@@ -3622,6 +3657,7 @@ function renderDashboardTab(){
     + '</select></label>'
     + '<button class="btn" onclick="openModal(\'campagnes\')">Gérer les campagnes</button>'
     + '<button class="btn" onclick="openModal(\'primes\')">Gérer les primes</button>'
+    + '<button class="btn" onclick="openModal(\'parametresPaiement\')">Paramètres de paiement</button>'
     + '<div style="display:flex;align-items:flex-end;gap:6px;">'
     + '<label class="field">Seuil d\'alerte (%)<input type="number" id="seuil-input" min="1" max="200" value="'+esc(state.settings.seuil)+'" style="width:70px"></label>'
     + '<button class="btn" type="button" onclick="saveSeuil()">OK</button>'
@@ -4011,6 +4047,7 @@ function render(){
       + '<label class="field">Lieu d\'origine du produit<input type="text" name="lieu_origine" value="'+esc(a.lieu_origine||'')+'" placeholder="ex : MAHAPLEU"></label>'
       + '<label class="field">Usine de déchargement<input type="text" name="usine_dechargement" value="'+esc(a.usine_dechargement||'')+'" placeholder="ex : TRANSCAO"></label>'
       + '<label class="field">TKM (coût au kilomètre)<input type="number" step="0.01" min="0" name="tkm" value="'+esc(a.tkm||'')+'"></label>'
+      + '<label class="field">Commission (FCFA/kg — rare, laisser à 0 sauf cas particulier)<input type="number" step="0.1" name="commission" value="'+esc(a.commission||0)+'"></label>'
       + '</fieldset>'
       + '<fieldset style="margin-top:12px;"><legend>Accepté / produit à l\'usine (après pesée)</legend>'
       + '<label class="field">Nombre de sacs acceptés<input type="number" step="1" min="0" name="sacs_accepte" value="'+esc(a.nombre_sacs_accepte||'')+'"></label>'
@@ -4087,6 +4124,17 @@ function render(){
         + '<div class="actions"><button type="button" class="btn" onclick="cancelImportRapportCCC()">Annuler</button><button type="button" class="btn btn-primary" onclick="confirmImportRapportCCC()">Confirmer l\'import</button></div>';
     }
     html += '</div></div>';
+  }
+
+  if (state.modal && state.modal.type==='parametresPaiement'){
+    html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
+      + '<h3>Paramètres de paiement</h3>'
+      + '<p class="hint" style="margin-bottom:10px;">Utilisés pour calculer automatiquement le montant à payer à la coopérative pour chaque achat (attestation de paiement). Le prix entrée usine est celui publié par le Conseil Café-Cacao ; il change à chaque nouvelle traite ou campagne.</p>'
+      + '<label class="field">Prix entrée usine (FCFA/kg)<input type="number" step="1" min="0" id="prix-entree-usine-input" value="'+esc(state.settings.prix_entree_usine||0)+'"></label>'
+      + '<label class="field">Taux de retenue BIC (FCFA/kg)<input type="number" step="0.1" min="0" id="taux-bic-input" value="'+esc(state.settings.taux_bic||0)+'"></label>'
+      + '<p class="hint" style="margin-top:4px;">La retenue BIC n\'est appliquée que si la coopérative n\'a pas fourni son document BIC dans sa checklist de conformité.</p>'
+      + '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Annuler</button><button type="button" class="btn btn-primary" onclick="saveParametresPaiement()">Enregistrer</button></div>'
+      + '</div></div>';
   }
 
   if (state.modal && state.modal.type==='primes'){
