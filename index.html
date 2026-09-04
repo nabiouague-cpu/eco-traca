@@ -489,6 +489,11 @@ function construireContratDocxBlob(coop, campagne_label, periode_label, dateDebu
 
   const INK="1A1A1A", ACCENT="42693C", SOFT_GRAY="5A5A5A", BORDER="A9BBA3", HEAD_FILL="42693C", FONT="Times New Roman";
   function run(text, opts){ opts=opts||{}; return new TextRun({ text:String(text==null?'':text), font:FONT, size:22, bold:!!opts.bold, italics:!!opts.italics, color: opts.color||INK }); }
+  // Uniformise "COOP CA" (espace) en "COOP-CA" (tiret) a l'affichage dans le contrat,
+  // sans modifier la donnee source -- certaines fiches utilisent l'un ou l'autre.
+  function nomAffiche(nom){ return String(nom||'').replace(/COOP\s+CA\b/gi, 'COOP-CA'); }
+  const nomCoopAffiche = nomAffiche(coop.nom);
+  const nomCompletCoopAffiche = coop.nom_complet ? nomAffiche(coop.nom_complet) : '';
   function p(children, opts){ opts=opts||{}; return new Paragraph({ spacing:Object.assign({after:160, line:300}, opts.spacing||{}), alignment: opts.align || AlignmentType.JUSTIFIED, children }); }
   function artTitle(num, title){ return new Paragraph({ spacing:{before:340, after:180}, children:[ new TextRun({ text:'Article '+num+' — '+title, font:FONT, size:24, bold:true, color:ACCENT }) ] }); }
   function subArt(text){ return new Paragraph({ spacing:{before:140, after:120}, children:[ new TextRun({ text, font:FONT, size:22, bold:true, color:INK }) ] }); }
@@ -536,27 +541,26 @@ function construireContratDocxBlob(coop, campagne_label, periode_label, dateDebu
     ]})]});
   }
 
-  // decode le logo (base64) en bytes pour l'image du contrat
+  // decode le logo (base64) en bytes -- utilise dans l'en-tete de page (repete sur
+  // chaque page, comme dans le modele fourni), pas dans le corps du document.
   const logoBinary = atob(ECORIGINE_LOGO_B64);
   const logoBytes = new Uint8Array(logoBinary.length);
   for (let i=0;i<logoBinary.length;i++) logoBytes[i] = logoBinary.charCodeAt(i);
 
   const children = [];
-  const letterhead = new Table({ width:{size:9350, type:WidthType.DXA}, columnWidths:[1250,8100], rows:[new TableRow({children:[
-    new TableCell({width:{size:1250,type:WidthType.DXA}, verticalAlign:VerticalAlign.CENTER, borders:{top:{style:BorderStyle.NONE},bottom:{style:BorderStyle.NONE},left:{style:BorderStyle.NONE},right:{style:BorderStyle.NONE}}, children:[new Paragraph({alignment:AlignmentType.CENTER, children:[new ImageRun({data:logoBytes, transformation:{width:60,height:60}, type:"png"})]})]}),
-    new TableCell({width:{size:8100,type:WidthType.DXA}, verticalAlign:VerticalAlign.CENTER, borders:{top:{style:BorderStyle.NONE},bottom:{style:BorderStyle.NONE},left:{style:BorderStyle.NONE},right:{style:BorderStyle.NONE}}, children:[
-      new Paragraph({alignment:AlignmentType.CENTER, spacing:{after:20}, children:[new TextRun({text:"ECORIGINE", bold:true, size:26, color:ACCENT, font:FONT})]}),
-      new Paragraph({alignment:AlignmentType.CENTER, children:[new TextRun({text:"Contrat de commercialisation de cacao certifié "+(coop.certifications||'Rainforest Alliance'), size:17, italics:true, color:SOFT_GRAY, font:FONT})]}),
-    ]}),
-  ]})], borders:{top:{style:BorderStyle.NONE},bottom:{style:BorderStyle.NONE},left:{style:BorderStyle.NONE},right:{style:BorderStyle.NONE},insideHorizontal:{style:BorderStyle.NONE},insideVertical:{style:BorderStyle.NONE}} });
-  children.push(letterhead);
-  children.push(new Paragraph({spacing:{after:200}, children:[]}));
 
-  children.push(
-    new Paragraph({alignment:AlignmentType.CENTER, spacing:{after:80}, children:[new TextRun({text:"CONTRAT DE COMMERCIALISATION", bold:true, size:32, color:INK, font:FONT})]}),
-    new Paragraph({alignment:AlignmentType.CENTER, spacing:{after:80}, children:[new TextRun({text:"DE CACAO CERTIFIÉ "+(coop.certifications||'RAINFOREST ALLIANCE').toUpperCase(), bold:true, size:32, color:INK, font:FONT})]}),
-    new Paragraph({alignment:AlignmentType.CENTER, spacing:{after:300}, children:[new TextRun({text:"Campagne "+campagne_label, size:22, italics:true, color:SOFT_GRAY, font:FONT})]}),
-  );
+  // Titre dans un encadre a bordure verte (table 1x1), pour reproduire le cadre du
+  // modele plutot que du texte centre nu.
+  children.push(new Table({ width:{size:8200, type:WidthType.DXA}, alignment:AlignmentType.CENTER, columnWidths:[8200], rows:[new TableRow({children:[
+    new TableCell({width:{size:8200,type:WidthType.DXA}, margins:{top:180,bottom:180,left:200,right:200},
+      borders:{top:{style:BorderStyle.SINGLE,size:6,color:BORDER}, bottom:{style:BorderStyle.SINGLE,size:6,color:BORDER}, left:{style:BorderStyle.SINGLE,size:6,color:BORDER}, right:{style:BorderStyle.SINGLE,size:6,color:BORDER}},
+      children:[
+        new Paragraph({alignment:AlignmentType.CENTER, spacing:{after:80}, children:[new TextRun({text:"CONTRAT DE COMMERCIALISATION", bold:true, size:32, color:INK, font:FONT})]}),
+        new Paragraph({alignment:AlignmentType.CENTER, spacing:{after:80}, children:[new TextRun({text:"DE CACAO CERTIFIÉ "+(coop.certifications||'RAINFOREST ALLIANCE').toUpperCase(), bold:true, size:32, color:INK, font:FONT})]}),
+        new Paragraph({alignment:AlignmentType.CENTER, children:[new TextRun({text:"Campagne "+campagne_label, size:22, italics:true, color:SOFT_GRAY, font:FONT})]}),
+      ]}),
+  ]})] }));
+  children.push(new Paragraph({spacing:{after:300}, children:[]}));
 
   children.push(p([run("Entre les soussignés :")]));
   children.push(spacer(100));
@@ -568,7 +572,7 @@ function construireContratDocxBlob(coop, campagne_label, periode_label, dateDebu
   children.push(p([run("ET", {bold:true})], {align:AlignmentType.CENTER}));
   children.push(spacer(60));
   children.push(p([
-    run(coop.nom_complet ? (coop.nom_complet+" ("+coop.nom+")") : coop.nom, {bold:true}), run(" du numéro d'agrément du CCC "), run(coop.ccc_num, {bold:true}),
+    run(nomCompletCoopAffiche ? (nomCompletCoopAffiche+" ("+nomCoopAffiche+")") : nomCoopAffiche, {bold:true}), run(" du numéro d'agrément du CCC "), run(coop.ccc_num, {bold:true}),
     run(", du numéro d'identifiant "+(coop.certifications||'Rainforest Alliance')+" "), run(coop.identifiant_certification, {bold:true}),
     run(", immatriculée au RCCM sous le numéro "), run(coop.rccm, {bold:true}),
     run(", dont le siège social est sis à "), run(coop.siege_social||coop.ville||'—', {bold:true}), run(coop.adresse_postale?(", "+coop.adresse_postale):""),
@@ -581,7 +585,7 @@ function construireContratDocxBlob(coop, campagne_label, periode_label, dateDebu
   children.push(new Paragraph({alignment:AlignmentType.CENTER, spacing:{after:260}, children:[new TextRun({text:"IL A ÉTÉ CONVENU ET ARRÊTÉ CE QUI SUIT :", bold:true, size:23, font:FONT, color:ACCENT})]}));
 
   children.push(artTitle(1, "Objet"));
-  children.push(p([run("Le présent accord a pour objet de fixer les modalités de la commercialisation du cacao certifié "+(coop.certifications||'Rainforest Alliance')+", de "+coop.nom+" à ECORIGINE.")]));
+  children.push(p([run("Le présent accord a pour objet de fixer les modalités de la commercialisation du cacao certifié "+(coop.certifications||'Rainforest Alliance')+", de "+nomCoopAffiche+" à ECORIGINE.")]));
 
   children.push(artTitle(2, "Obligations des parties"));
   children.push(subArt("2.1 Obligations de ECORIGINE"));
@@ -616,7 +620,7 @@ function construireContratDocxBlob(coop, campagne_label, periode_label, dateDebu
   children.push(spacer(100));
   children.push(new Paragraph({spacing:{before:100,after:160}, children:[new TextRun({text:"Plan d'approvisionnement de la campagne", bold:true, size:22, color:ACCENT, font:FONT})]}));
   children.push(planTable([
-    ["Fournisseur", coop.nom.toUpperCase()],
+    ["Fournisseur", nomCoopAffiche.toUpperCase()],
     ["Période", periode_label],
     ["Volume conforme RDUE", volume+" kg"],
     ["Capacité totale fournisseur", capaciteTotale+" kg"],
@@ -669,7 +673,12 @@ function construireContratDocxBlob(coop, campagne_label, periode_label, dateDebu
     numbering:{config:[{reference:"main-bullets", levels:[{level:0, format:LevelFormat.BULLET, text:"—", alignment:AlignmentType.LEFT, style:{paragraph:{indent:{left:500, hanging:280}}}}]}]},
     styles:{default:{document:{run:{font:FONT, size:22, color:INK}}}},
     sections:[{properties:{page:{size:{width:12240,height:15840}, margin:{top:1300, bottom:1000, left:1100, right:1100}}},
-      headers:{default:new Header({children:[new Paragraph({alignment:AlignmentType.RIGHT, indent:{right:567}, children:[new TextRun({text:"ECORIGINE — "+coop.nom+" - "+campagne_label, size:14, color:SOFT_GRAY, font:FONT})]})]})},
+      headers:{default:new Header({children:[
+        new Table({ width:{size:9350,type:WidthType.DXA}, columnWidths:[1000,8350], rows:[new TableRow({children:[
+          new TableCell({width:{size:1000,type:WidthType.DXA}, verticalAlign:VerticalAlign.CENTER, borders:{top:{style:BorderStyle.NONE},bottom:{style:BorderStyle.NONE},left:{style:BorderStyle.NONE},right:{style:BorderStyle.NONE}}, children:[new Paragraph({children:[new ImageRun({data:logoBytes, transformation:{width:46,height:46}, type:"png"})]})]}),
+          new TableCell({width:{size:8350,type:WidthType.DXA}, verticalAlign:VerticalAlign.CENTER, borders:{top:{style:BorderStyle.NONE},bottom:{style:BorderStyle.NONE},left:{style:BorderStyle.NONE},right:{style:BorderStyle.NONE}}, children:[new Paragraph({alignment:AlignmentType.RIGHT, indent:{right:567}, children:[new TextRun({text:"ECORIGINE — "+nomCoopAffiche+" - "+campagne_label, size:14, color:SOFT_GRAY, font:FONT})]})]}),
+        ]})], borders:{top:{style:BorderStyle.NONE},bottom:{style:BorderStyle.NONE},left:{style:BorderStyle.NONE},right:{style:BorderStyle.NONE},insideHorizontal:{style:BorderStyle.NONE},insideVertical:{style:BorderStyle.NONE}} }),
+      ]})},
       footers:{default:new Footer({children:[
         new Paragraph({alignment:AlignmentType.LEFT, spacing:{after:20}, border:{top:{style:BorderStyle.SINGLE,size:4,color:BORDER,space:6}}, children:[new TextRun({text:"Ecorigine SA", size:14, bold:true, color:ACCENT, font:FONT})]}),
         new Paragraph({alignment:AlignmentType.LEFT, spacing:{after:0}, children:[new TextRun({text:"Rue Rachelle Piot - Treichville", size:13, color:SOFT_GRAY, font:FONT})]}),
@@ -911,7 +920,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-04-01';
+const APP_VERSION = '2026-09-04-02';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
