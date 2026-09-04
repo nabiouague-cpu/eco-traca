@@ -434,19 +434,20 @@ function openContratRAModal(coopId){
   if (!coop.rccm) missing.push('N° RCCM');
   if (!coop.ccc_num) missing.push('N° agrément CCC');
   if (!coop.identifiant_certification) missing.push('Identifiant de certification');
+  if (!coop.volume_certificat) missing.push('Volume certificat');
   if (!coop.representant_legal_nom) missing.push('Nom du représentant légal');
   if (!coop.siege_social && !coop.ville) missing.push('Ville ou Siège social');
   if (missing.length>0){
     showToast('Champs manquants pour générer le contrat : '+missing.join(', ')+'. Complète la fiche coopérative (Modifier) avant de continuer.');
     return;
   }
-  state.modal = {type:'contratRA', payload:{coopId, campagne_label:'2026-2027', periode_label:'Septembre 2026 à août 2027', date_debut:'2026-09-01', volume:''}};
+  state.modal = {type:'contratRA', payload:{coopId, campagne_label:'2026-2027', periode_label:'Septembre 2026 à août 2027', date_debut:'2026-09-01'}};
   render();
 }
 
 function fonctionRepresentantFor(nom){
   const n = String(nom||'').trim().toUpperCase();
-  if (n.startsWith('COOP-CA') || n.includes('COOP-CA')) return 'Président du Conseil d\'Administration';
+  if (n.includes('COOP-CA') || n.includes('COOP CA')) return 'Président du Conseil d\'Administration';
   if (n.startsWith('SCOOPS') || n.includes('SCOOPS')) return 'Président du Comité de gestion';
   return 'Représentant légal';
 }
@@ -459,13 +460,15 @@ function genererContratRA(){
   const campagne_label = fv('campagne_label').trim() || '—';
   const periode_label = fv('periode_label').trim() || '—';
   const date_debut_raw = fv('date_debut');
-  const volume = fv('volume').trim();
-  if (!volume){ showToast('Indique le volume contractuel.'); return; }
   if (typeof docx === 'undefined'){ showToast("La bibliothèque de génération Word n'a pas pu se charger (connexion internet requise). Réessaie dans un instant."); return; }
   const dateDebut = date_debut_raw ? new Date(date_debut_raw+'T00:00:00').toLocaleDateString('fr-FR') : '—';
-  const capaciteTotale = fmtNum(Math.round(coopStats(coop.id).potentiel)) + ' kg (potentiel estimé cumulé)';
+  // Volume conforme RDUE = potentiel cumule du registre (base sur laquelle portent
+  // les alertes a 50% et le blocage a 70%). Capacite totale fournisseur = volume
+  // inscrit sur le certificat de la cooperative, renseigne sur sa fiche.
+  const volumeRDUE = fmtNum(Math.round(coopStats(coop.id).potentiel));
+  const capaciteTotale = fmtNum(Math.round(coop.volume_certificat||0));
   const fonctionRepresentant = fonctionRepresentantFor(coop.nom);
-  construireContratDocxBlob(coop, campagne_label, periode_label, dateDebut, volume, capaciteTotale, fonctionRepresentant).then(blob=>{
+  construireContratDocxBlob(coop, campagne_label, periode_label, dateDebut, volumeRDUE, capaciteTotale, fonctionRepresentant).then(blob=>{
     const url = URL.createObjectURL(blob);
     const aTag = document.createElement('a');
     aTag.href = url;
@@ -501,9 +504,15 @@ function construireContratDocxBlob(coop, campagne_label, periode_label, dateDebu
       borders:{top:{style:BorderStyle.SINGLE,size:4,color:BORDER}, bottom:{style:BorderStyle.SINGLE,size:4,color:BORDER}, left:{style:BorderStyle.SINGLE,size:4,color:BORDER}, right:{style:BorderStyle.SINGLE,size:4,color:BORDER}, insideHorizontal:{style:BorderStyle.SINGLE,size:4,color:BORDER}, insideVertical:{style:BorderStyle.SINGLE,size:4,color:BORDER}}});
   }
   function qCell(text, w, opts){ opts=opts||{}; return new TableCell({width:{size:w,type:WidthType.DXA}, shading: opts.head?{type:ShadingType.CLEAR,fill:HEAD_FILL}:(opts.label?{type:ShadingType.CLEAR,fill:"ECF1EA"}:undefined), verticalAlign:VerticalAlign.CENTER, margins:{top:90,bottom:90,left:100,right:100}, children:[new Paragraph({alignment:AlignmentType.CENTER, children:[new TextRun({text, font:FONT, size:19, bold: !!(opts.head||opts.label), color: opts.head?"FFFFFF":INK})]})]}); }
-  function qualityTable(){
+  function qualityTable(anneeDebut, anneeFin){
     const w=[2400,3450,3450];
-    const header = new TableRow({children:[ qCell("", w[0], {head:true}), qCell("Campagne principale\n(du 1er octobre au 31 mars)", w[1], {head:true}), qCell("Campagne intermédiaire\n(du 1er avril au 30 septembre)", w[2], {head:true}) ]});
+    const labelPrincipale = anneeDebut && anneeFin
+      ? "Campagne principale\n(du 1er septembre "+anneeDebut+" au 28 février "+anneeFin+")"
+      : "Campagne principale\n(du 1er septembre au 28 février)";
+    const labelIntermediaire = anneeFin
+      ? "Campagne intermédiaire\n(du 1er mars au 31 août "+anneeFin+")"
+      : "Campagne intermédiaire\n(du 1er mars au 31 août)";
+    const header = new TableRow({children:[ qCell("", w[0], {head:true}), qCell(labelPrincipale, w[1], {head:true}), qCell(labelIntermediaire, w[2], {head:true}) ]});
     const data = [
       ["Humidité","inférieur ou égal à 8%","inférieur ou égal à 8%"],
       ["Grainage","inférieur ou égal à 100","inférieur ou égal à 110"],
@@ -551,7 +560,7 @@ function construireContratDocxBlob(coop, campagne_label, periode_label, dateDebu
 
   children.push(p([run("Entre les soussignés :")]));
   children.push(spacer(100));
-  children.push(p([ run("ECORIGINE", {bold:true}), run(", Société Anonyme au capital de 200 000 000 CFA (deux cents millions) FCFA, immatriculée au RCCM sous le numéro "), run("CI-ABJ-03-2021-B15-00026", {bold:true}), run(", dont le siège social est sis à Treichville, Rue des Galions, 17 BP 749 Abidjan 17, représentée aux fins des présentes par Monsieur KONE Ismael, son Administrateur Général,") ]));
+  children.push(p([ run("ECORIGINE", {bold:true}), run(", Société Anonyme au capital de 350 000 000 CFA (trois cent cinquante millions) FCFA, immatriculée au RCCM sous le numéro "), run("CI-ABJ-03-2021-B15-00026", {bold:true}), run(", dont le siège social est sis à Treichville, Rue Rachelle Piot, 17 BP 749 Abidjan 17, représentée aux fins des présentes par Monsieur KONE Ismael, son Administrateur Général,") ]));
   children.push(p([run("Ci-après dénommée « ECORIGINE »,")]));
   children.push(spacer(60));
   children.push(p([run("D'UNE PART,", {bold:true})], {align:AlignmentType.CENTER}));
@@ -577,7 +586,7 @@ function construireContratDocxBlob(coop, campagne_label, periode_label, dateDebu
   children.push(artTitle(2, "Obligations des parties"));
   children.push(subArt("2.1 Obligations de ECORIGINE"));
   children.push(p([run("ECORIGINE s'engage à :")]));
-  children.push(bullet("Accepter, au prix fixé par la réglementation en vigueur, les livraisons de cacao certifié faites par la coopérative, dans la limite du volume contractuel de "+volume+" Tonnes convenu entre les Parties, et en conformité avec les critères de qualité définis dans le plan d'approvisionnement ci-dessous."));
+  children.push(bullet("Accepter, au prix fixé par la réglementation en vigueur, les livraisons de cacao certifié faites par la coopérative, dans la limite du volume convenu entre les Parties, et en conformité avec les critères de qualité définis ci-dessous."));
   children.push(bullet("Remettre au Fournisseur le différentiel de durabilité proportionnellement au tonnage de cacao certifié livré et accepté."));
   children.push(bullet("Remettre au Fournisseur la part revenant à l'investissement de durabilité proportionnellement au tonnage livré et accepté, après validation du plan d'investissement fourni par Le Fournisseur."));
   children.push(subArt("2.2 Obligations du Fournisseur"));
@@ -589,7 +598,9 @@ function construireContratDocxBlob(coop, campagne_label, periode_label, dateDebu
   children.push(bullet("Payer la totalité du différentiel de durabilité aux producteurs ayant livré du cacao certifié."));
   children.push(bullet("Investir la totalité du différentiel d'investissement dans le plan d'investissement validé d'accord-partie."));
   children.push(bullet("Fournir 100% des polygones pour toutes les parcelles dont la superficie est supérieure ou égale à 4 hectares, et s'assurer que les polygones respectent les exigences RDUE en vigueur."));
-  children.push(bullet("Fournir la version actualisée du registre des membres du groupe."));
+  children.push(bullet("Recenser l'ensemble de ses producteurs et œuvrer pour l'obtention de leurs cartes producteurs auprès du conseil Café-Cacao"));
+  children.push(bullet("Fournir la version actualisée du registre des membres du groupe en y intégrant le numéro de carte producteur."));
+  children.push(bullet("Fournir les fiches d'accompagnements pour toutes les livraisons de fèves à Ecorigine (version Excel) à transmettre à l'adresse suivante nabi.ouague@ecorigine.ci, avant tout déchargement du produit."));
   children.push(bullet("S'assurer du respect des normes et lois relatives au travail des enfants, au travail forcé, à l'égalité de genre et au respect des droits humains."));
   children.push(bullet("Veiller à ce que toute transaction de volume certifié le concernant soit enregistrée sur la plateforme de traçabilité dans un délai maximum de deux (2) semaines suivant la fin du trimestre au cours duquel la transaction a eu lieu."));
 
@@ -607,14 +618,14 @@ function construireContratDocxBlob(coop, campagne_label, periode_label, dateDebu
   children.push(planTable([
     ["Fournisseur", coop.nom.toUpperCase()],
     ["Période", periode_label],
-    ["Volume contractuel", volume+" Tonnes"],
-    ["Capacité totale fournisseur", capaciteTotale],
+    ["Volume conforme RDUE", volume+" kg"],
+    ["Capacité totale fournisseur", capaciteTotale+" kg"],
     ["Prix d'achat", "Conformément au prix unique fixé par les autorités compétentes ivoiriennes"],
   ]));
   children.push(spacer(140));
-  children.push(p([run("Le volume contractuel de "+volume+" Tonnes constitue un plafond indicatif d'achat et ne saurait être interprété comme une obligation d'achat ferme pour ECORIGINE. Les livraisons effectivement acceptées demeurent subordonnées au respect des critères de qualité et de traçabilité définis au présent contrat.", {italics:true})]));
+  children.push(p([run("Nous ne pourrons acheter que dans la limite du volume conforme RDUE.", {italics:true})]));
 
-  children.push(artTitle(4, "Paiement du différentiel de durabilité"));
+  children.push(artTitle(4, "Paiement de la prime Rainforest Alliance"));
   children.push(p([run("4.1 ", {bold:true}), run("La prime octroyée est de "), run("70 F/kg", {bold:true}), run(" (soixante-dix francs par kilogramme) de cacao livré et accepté par ECORIGINE.")]));
   children.push(p([run("4.2 ", {bold:true}), run("Le paiement du différentiel de durabilité se fera exclusivement pour les volumes déclarés et confirmés dans le portail de traçabilité. Le différentiel de durabilité est fixé à "), run("35 F/kg", {bold:true}), run(", payé par ECORIGINE chaque semestre au prorata du volume des livraisons.")]));
   children.push(p([run("4.3 ", {bold:true}), run("Le paiement de l'investissement de durabilité est fixé à "), run("35 F/kg", {bold:true}), run(", payé chaque semestre au prorata du volume des livraisons.")]));
@@ -642,8 +653,14 @@ function construireContratDocxBlob(coop, campagne_label, periode_label, dateDebu
   children.push(new Paragraph({keepNext:true, alignment:AlignmentType.CENTER, spacing:{after:200}, children:[run("En deux (2) exemplaires originaux.")]}));
   children.push(signatureBlock(coop.representant_legal_nom, fonctionRepresentant));
 
-  children.push(new Paragraph({pageBreakBefore:true, alignment:AlignmentType.CENTER, spacing:{after:340}, children:[new TextRun({text:"Critères de qualité à l'achat", bold:true, size:28, color:INK, font:FONT})]}));
-  children.push(qualityTable());
+  children.push(new Paragraph({pageBreakBefore:true, alignment:AlignmentType.CENTER, spacing:{after:340}, children:[new TextRun({text:"Critères Qualité", bold:true, size:28, color:INK, font:FONT})]}));
+  // La campagne principale (1er sept. -> 28 fevrier) et intermediaire (1er mars -> 31 aout)
+  // sont datees avec les annees reelles de la campagne, extraites de son libelle
+  // "AAAA-AAAA" (ex : "2026-2027" -> debut 2026, fin 2027).
+  const anneesCampagne = String(campagne_label||'').match(/(\d{4}).*?(\d{4})/);
+  const anneeDebutCampagne = anneesCampagne ? anneesCampagne[1] : null;
+  const anneeFinCampagne = anneesCampagne ? anneesCampagne[2] : null;
+  children.push(qualityTable(anneeDebutCampagne, anneeFinCampagne));
   children.push(new Paragraph({keepNext:true, spacing:{before:160, after:400}, children:[new TextRun({text:"Critères fixés conformément à la réglementation du Conseil du Café-Cacao (CCC).", italics:true, size:18, color:SOFT_GRAY, font:FONT})]}));
   children.push(new Paragraph({keepNext:true, alignment:AlignmentType.CENTER, spacing:{after:200}, children:[run("Fait à Abidjan, le "+dateDebut, {bold:true})]}));
   children.push(signatureBlock(coop.representant_legal_nom, fonctionRepresentant));
@@ -655,7 +672,7 @@ function construireContratDocxBlob(coop, campagne_label, periode_label, dateDebu
       headers:{default:new Header({children:[new Paragraph({alignment:AlignmentType.RIGHT, indent:{right:567}, children:[new TextRun({text:"ECORIGINE — "+coop.nom+" - "+campagne_label, size:14, color:SOFT_GRAY, font:FONT})]})]})},
       footers:{default:new Footer({children:[
         new Paragraph({alignment:AlignmentType.LEFT, spacing:{after:20}, border:{top:{style:BorderStyle.SINGLE,size:4,color:BORDER,space:6}}, children:[new TextRun({text:"Ecorigine SA", size:14, bold:true, color:ACCENT, font:FONT})]}),
-        new Paragraph({alignment:AlignmentType.LEFT, spacing:{after:0}, children:[new TextRun({text:"Rue des Galions - Treichville", size:13, color:SOFT_GRAY, font:FONT})]}),
+        new Paragraph({alignment:AlignmentType.LEFT, spacing:{after:0}, children:[new TextRun({text:"Rue Rachelle Piot - Treichville", size:13, color:SOFT_GRAY, font:FONT})]}),
         new Paragraph({alignment:AlignmentType.LEFT, spacing:{after:0}, children:[new TextRun({text:"17 BP 749 Abidjan 17  ·  Tel. 27 24 30 70 70", size:13, color:SOFT_GRAY, font:FONT})]}),
         new Paragraph({alignment:AlignmentType.LEFT, spacing:{after:0}, children:[new TextRun({text:"RCCM : CI-ABJ-03-2021-B15-00026  ·  CC : 2157554 U", size:13, color:SOFT_GRAY, font:FONT})]}),
         new Paragraph({alignment:AlignmentType.LEFT, spacing:{after:40}, children:[new TextRun({text:"www.ecorigine.ci", size:13, color:SOFT_GRAY, font:FONT})]}),
@@ -733,7 +750,7 @@ function ouvrirGenerationContratsGroupe(){
   if (certifiees.length===0){ showToast('Aucune coopérative certifiée pour le moment.'); return; }
   state.modal = {type:'contratsGroupe', payload:{
     campagne_label:'2026-2027', periode_label:'Septembre 2026 à août 2027', date_debut:'2026-09-01',
-    coops: certifiees.map(c=>({ id:c.id, nom:c.nom, inclus:true, volume: fmtNum(Math.round(coopStats(c.id).potentiel)) })),
+    coops: certifiees.map(c=>({ id:c.id, nom:c.nom, inclus:true })),
   }};
   render();
 }
@@ -760,12 +777,10 @@ async function genererContratsGroupe(){
   for (const ligne of lignes){
     const coop = coopById(ligne.id);
     if (!coop) continue;
-    const volumeInput = document.getElementById('grp_volume_'+ligne.id);
-    const volume = (volumeInput ? volumeInput.value : ligne.volume || '').trim();
     if (btn) btn.textContent = 'Génération… ('+(ok+ignorees.length+1)+'/'+lignes.length+') — '+coop.nom;
 
     const missing = [];
-    if (!volume) missing.push('volume contractuel');
+    if (!coop.volume_certificat) missing.push('volume certificat');
     if (!coop.rccm) missing.push('N° RCCM');
     if (!coop.ccc_num) missing.push('N° agrément CCC');
     if (!coop.identifiant_certification) missing.push('Identifiant de certification');
@@ -774,9 +789,12 @@ async function genererContratsGroupe(){
     if (missing.length>0){ ignorees.push(coop.nom+' ('+missing.join(', ')+')'); continue; }
 
     try{
-      const capaciteTotale = fmtNum(Math.round(coopStats(coop.id).potentiel)) + ' kg (potentiel estimé cumulé)';
+      // Volume conforme RDUE = potentiel cumule du registre ; Capacite totale
+      // fournisseur = volume du certificat renseigne sur la fiche coop.
+      const volumeRDUE = fmtNum(Math.round(coopStats(coop.id).potentiel));
+      const capaciteTotale = fmtNum(Math.round(coop.volume_certificat||0));
       const fonctionRepresentant = fonctionRepresentantFor(coop.nom);
-      const blob = await construireContratDocxBlob(coop, campagne_label, periode_label, dateDebut, volume, capaciteTotale, fonctionRepresentant);
+      const blob = await construireContratDocxBlob(coop, campagne_label, periode_label, dateDebut, volumeRDUE, capaciteTotale, fonctionRepresentant);
       const fileName = 'Contrat_'+(coop.certifications==='Fairtrade'?'FT':coop.certifications==='Cocoa Horizon'?'CH':'RA')+'_'+coop.nom.replace(/[^a-z0-9]+/gi,'_')+'_'+campagne_label.replace(/[^a-z0-9]+/gi,'_')+'.docx';
       const file = new File([blob], fileName, { type: blob.type });
 
@@ -791,6 +809,7 @@ async function genererContratsGroupe(){
         deadline: null, requested_at: new Date().toISOString().slice(0,10),
         demandeur_nom: (state.session && state.session.user ? state.session.user.email : 'ECORIGINE'),
         message: 'Merci de télécharger votre contrat, de le signer, puis de nous retourner la version signée.',
+        document_a_signer: true,
         fichier_source_path: path, fichier_source_nom: fileName,
       };
       const { error } = await supabaseClient.from('demandes').insert(demandeObj);
@@ -892,7 +911,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-03-11';
+const APP_VERSION = '2026-09-04-01';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4253,6 +4272,7 @@ function render(){
   if (state.modal && state.modal.type==='contratRA'){
     const pl = state.modal.payload;
     const coop = coopById(pl.coopId);
+    const volumeRDUEApercu = coop ? fmtNum(Math.round(coopStats(coop.id).potentiel)) : '—';
     html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
       + '<h3>Générer le contrat RA — '+esc(coop?coop.nom:'')+'</h3>'
       + '<div class="hint" style="margin-bottom:10px;">Ces informations sont reprises automatiquement depuis la fiche de la coopérative. Vérifie qu\'elles sont correctes avant de générer :</div>'
@@ -4262,12 +4282,13 @@ function render(){
       + '<div><span>Identifiant de certification :</span> '+esc(coop&&coop.identifiant_certification?coop.identifiant_certification:'⚠ VIDE')+'</div>'
       + '<div><span>Représentant légal :</span> '+esc(coop&&coop.representant_legal_nom?coop.representant_legal_nom:'⚠ VIDE')+'</div>'
       + '<div><span>Ville / Siège social :</span> '+esc(coop?(coop.siege_social||coop.ville||'⚠ VIDE'):'⚠ VIDE')+'</div>'
+      + '<div><span>Volume conforme RDUE (potentiel registre) :</span> '+volumeRDUEApercu+' kg</div>'
+      + '<div><span>Capacité totale fournisseur (certificat) :</span> '+esc(coop&&coop.volume_certificat?fmtNum(Math.round(coop.volume_certificat))+' kg':'⚠ VIDE')+'</div>'
       + '</div>'
       + '<div id="modal-fields">'
       + '<label class="field">Campagne (libellé court)<input type="text" name="campagne_label" value="'+esc(pl.campagne_label)+'" placeholder="ex : 2026-2027"></label>'
       + '<label class="field">Période (texte affiché)<input type="text" name="periode_label" value="'+esc(pl.periode_label)+'" placeholder="ex : Septembre 2026 à août 2027"></label>'
       + '<label class="field">Date de début du contrat<input type="date" name="date_debut" value="'+esc(pl.date_debut)+'"></label>'
-      + '<label class="field">Volume contractuel (Tonnes)<input type="number" step="1" min="0" name="volume" value="'+esc(pl.volume)+'" placeholder="ex : 400"></label>'
       + '</div>'
       + '<div class="actions">'
       + '<button type="button" class="btn" onclick="closeModal()">Annuler</button>'
@@ -4286,14 +4307,18 @@ function render(){
       + '<label class="field">Date de début du contrat<input type="date" name="grp_date_debut" value="'+esc(pl.date_debut)+'"></label>'
       + '</div>'
       + '<div style="max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;">'
-      + '<div class="row" style="grid-template-columns:40px 1fr 200px;font-size:11px;text-transform:uppercase;color:var(--ink-faint);font-weight:600;padding:8px 14px;border-bottom:1px solid var(--border);"><div></div><div>Coopérative</div><div>Volume contractuel (kg)</div></div>'
-      + pl.coops.map(c=>
-          '<div class="row" style="grid-template-columns:40px 1fr 200px;padding:8px 14px;">'
+      + '<div class="row" style="grid-template-columns:40px 1fr 170px 170px;font-size:11px;text-transform:uppercase;color:var(--ink-faint);font-weight:600;padding:8px 14px;border-bottom:1px solid var(--border);"><div></div><div>Coopérative</div><div>Volume RDUE (kg)</div><div>Capacité certificat (kg)</div></div>'
+      + pl.coops.map(c=>{
+          const coopC = coopById(c.id);
+          const volRDUE = fmtNum(Math.round(coopStats(c.id).potentiel));
+          const capaCert = coopC&&coopC.volume_certificat ? fmtNum(Math.round(coopC.volume_certificat)) : '⚠ manquant';
+          return '<div class="row" style="grid-template-columns:40px 1fr 170px 170px;padding:8px 14px;">'
           + '<div><input type="checkbox" id="grp_inclus_'+c.id+'" '+(c.inclus?'checked':'')+'></div>'
           + '<div>'+esc(c.nom)+'</div>'
-          + '<div><input type="number" step="1" min="0" id="grp_volume_'+c.id+'" value="'+esc(c.volume)+'" style="width:140px;"></div>'
-          + '</div>'
-        ).join('')
+          + '<div class="hint">'+volRDUE+'</div>'
+          + '<div class="hint">'+esc(capaCert)+'</div>'
+          + '</div>';
+        }).join('')
       + '</div>'
       + '<div class="actions" style="margin-top:16px;">'
       + '<button type="button" class="btn" onclick="closeModal()">Annuler</button>'
