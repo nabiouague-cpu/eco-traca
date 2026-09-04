@@ -224,6 +224,7 @@ const KEY_DOCCHECK = 'ecorigine_doc_checklist';
 const KEY_NONCONF = 'ecorigine_nonconformites';
 const KEY_CAMPAGNES = 'ecorigine_campagnes';
 const KEY_MESSAGES = 'ecorigine_messages_coop';
+const KEY_ENVOIS = 'ecorigine_envois_coop';
 
 // Colonnes alignées sur le modele fourni (feuille "3. Farm-Farmer Data")
 const NOM_KEYS = ['farmer name','nom du producteur','nom producteur','producteur','nom','name'];
@@ -570,6 +571,72 @@ function proposerNomComplet(coop){
   return determinant + ' ' + core;
 }
 
+function ouvrirEnvoiDocuments(coopId){
+  state.modal = {type:'envoyerDocuments', payload:{coopId: coopId||'toutes', fichiers: []}};
+  render();
+}
+
+function ajouterFichiersEnvoi(input){
+  const pl = state.modal.payload;
+  Array.from(input.files||[]).forEach(f => pl.fichiers.push(f));
+  input.value = '';
+  render();
+}
+
+function retirerFichierEnvoi(idx){
+  state.modal.payload.fichiers.splice(idx,1);
+  render();
+}
+
+async function envoyerDocumentsCoop(){
+  const coopId = fv('doc_destinataire');
+  const titre = fv('doc_titre').trim();
+  const message = fv('doc_message').trim();
+  const fichiers = state.modal.payload.fichiers;
+  if (!titre){ showToast('Indique un titre pour cet envoi.'); return; }
+  if (fichiers.length===0){ showToast('Ajoute au moins un fichier.'); return; }
+
+  const cibles = coopId==='toutes' ? state.cooperatives.slice() : [coopById(coopId)].filter(Boolean);
+  if (cibles.length===0){ showToast('Aucune coopérative à cibler.'); return; }
+
+  const btn = document.querySelector('.modal .actions .btn-primary');
+  if (btn){ btn.disabled = true; btn.textContent = 'Envoi en cours…'; }
+
+  const expediteur = (state.session && state.session.user ? state.session.user.email : 'ECORIGINE');
+  const envois = [];
+  for (const c of cibles){
+    const envoiId = 'env_'+Date.now()+'_'+c.id+'_'+Math.random().toString(36).slice(2,7);
+    const fichiersUploades = [];
+    for (const f of fichiers){
+      const path = c.id + '/envois/' + envoiId + '/' + f.name;
+      const { error: upErr } = await supabaseClient.storage.from('documents-coop').upload(path, f, { upsert: true });
+      if (upErr){ showToast("Échec de l'envoi de "+f.name+" pour "+c.nom+" : "+upErr.message); continue; }
+      fichiersUploades.push({ path, nom: f.name });
+    }
+    if (fichiersUploades.length===0) continue;
+    envois.push({
+      id: envoiId, cooperative_id: c.id, titre, message: message||null,
+      fichiers: fichiersUploades, envoye_par: expediteur, lu: false,
+    });
+  }
+
+  if (envois.length===0){ showToast('Aucun envoi n\'a pu être créé.'); if(btn){btn.disabled=false;btn.textContent='Envoyer';} return; }
+
+  try{
+    const { error } = await supabaseClient.from('envois_coop').insert(envois);
+    if (error){ showToast('Fichiers envoyés mais échec de l\'enregistrement : '+error.message); return; }
+    state.envoisCoop = (state.envoisCoop||[]).concat(envois);
+    envois.forEach(e=>{
+      supabaseClient.functions.invoke('email-envoi-documents', { body: { envoi_id: e.id } }).catch(()=>{});
+    });
+    showToast(fichiers.length+' fichier(s) envoyé(s) à '+envois.length+' coopérative(s).', 'success');
+    closeModal();
+  }catch(e){
+    showToast('Échec de l\'envoi : '+e.message);
+    if (btn){ btn.disabled=false; btn.textContent='Envoyer'; }
+  }
+}
+
 function ouvrirEnvoiMessage(coopId){
   state.modal = {type:'envoyerMessage', payload:{coopId: coopId||'toutes'}};
   render();
@@ -806,7 +873,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-04-06';
+const APP_VERSION = '2026-09-04-07';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -879,6 +946,7 @@ const KEY_TO_TABLE = {
   'ecorigine_nonconformites': 'nonconformites',
   'ecorigine_campagnes': 'campagnes',
   'ecorigine_messages_coop': 'messages_coop',
+  'ecorigine_envois_coop': 'envois_coop',
 };
 
 async function recupererDonneesLocales(){
@@ -1827,6 +1895,7 @@ async function loadAll(){
     state.nonconformites = await safeGet(KEY_NONCONF, []);
     state.campagnes = await safeGet(KEY_CAMPAGNES, []);
     state.messagesCoop = await safeGet(KEY_MESSAGES, []);
+    state.envoisCoop = await safeGet(KEY_ENVOIS, []);
     state.settings = await safeGet(KEY_SETTINGS, { seuil: 50, prime_ra: 0, prime_ft: 0 });
     state.error = null;
   }catch(e){
@@ -3296,6 +3365,7 @@ function renderCoopCard(c){
     + '<button class="btn" onclick="document.getElementById(\'file-'+c.id+'\').click()">Importer (Excel)</button>'
     + '<button class="btn" onclick="openCoopDashboard(\''+c.id+'\')">Tableau de bord</button>'
     + '<button class="btn-ghost" onclick="ouvrirEnvoiMessage(\''+c.id+'\')">✉ Message</button>'
+    + '<button class="btn-ghost" onclick="ouvrirEnvoiDocuments(\''+c.id+'\')">📎 Documents</button>'
     + '<button class="btn-ghost" onclick="openModal(\'cooperative\', '+esc(JSON.stringify(c)).replace(/&#39;/g,"&apos;")+')">Modifier</button>'
     + (c.statut!=='Non certifiée' ? '<button class="btn-ghost" onclick="openContratRAModal(\''+c.id+'\')">Générer le contrat</button>' : '')
     + '<button class="btn-ghost" onclick="toggleExpandCoop(\''+c.id+'\')">'+(state.expandedCoop.has(c.id)?'Fermer':'Détail')+'</button>'
@@ -3365,6 +3435,7 @@ function renderCooperativesTab(){
   if (state.cooperatives.length>0){
     html += '<div class="controls">'
       + '<button class="btn btn-primary" onclick="ouvrirEnvoiMessage()">✉ Envoyer un message</button>'
+      + '<button class="btn btn-primary" onclick="ouvrirEnvoiDocuments()">📎 Envoyer des documents</button>'
       + (nCertifieesTotal>0 ? '<button class="btn btn-primary" onclick="ouvrirGenerationContratsGroupe()">Générer des contrats en masse</button>' : '')
       + '<button class="btn" onclick="ouvrirCompletionNomsComplets()">Compléter les noms complets</button>'
       + '</div>';
@@ -4082,6 +4153,25 @@ function render(){
       + '<h3>Rejeter cette demande de mise à jour</h3>'
       + '<div id="modal-fields"><label class="field">Motif du rejet<textarea name="rejet_identite_motif" rows="3"></textarea></label></div>'
       + '<div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="rejeterDemandeIdentite()">Confirmer le rejet</button></div>'
+      + '</div></div>';
+  }
+
+  if (state.modal && state.modal.type==='envoyerDocuments'){
+    const pl = state.modal.payload;
+    html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
+      + '<h3>Envoyer des documents</h3>'
+      + '<div class="hint" style="margin-bottom:12px;">Pour transmettre un document à une coopérative sans attendre de réponse (ex : registre et polygones consolidés d\'une campagne). Ceci n\'est PAS une demande de données — la coopérative n\'aura rien à soumettre en retour.</div>'
+      + '<div id="modal-fields">'
+      + '<label class="field">Destinataire<select name="doc_destinataire">'
+      + '<option value="toutes"'+(pl.coopId==='toutes'?' selected':'')+'>— Toutes les coopératives ('+state.cooperatives.length+') —</option>'
+      + state.cooperatives.slice().sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'})).map(c=>'<option value="'+c.id+'"'+(pl.coopId===c.id?' selected':'')+'>'+esc(c.nom)+'</option>').join('')
+      + '</select></label>'
+      + '<label class="field">Titre<input type="text" name="doc_titre" placeholder="ex : Registre et polygones — Campagne 2026-2027"></label>'
+      + '<label class="field">Message (optionnel)<textarea name="doc_message" rows="3" placeholder="Contexte ou précisions utiles..."></textarea></label>'
+      + '<label class="field">Fichiers<input type="file" multiple onchange="ajouterFichiersEnvoi(this)"></label>'
+      + (pl.fichiers.length>0 ? '<div style="margin-top:8px;">' + pl.fichiers.map((f,i)=>'<div class="achat-item"><span>📎 '+esc(f.name)+'</span><button type="button" class="btn-danger-text" onclick="retirerFichierEnvoi('+i+')">Retirer</button></div>').join('') + '</div>' : '')
+      + '</div>'
+      + '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Annuler</button><button type="button" class="btn btn-primary" onclick="envoyerDocumentsCoop()">Envoyer</button></div>'
       + '</div></div>';
   }
 
