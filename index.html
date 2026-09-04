@@ -806,7 +806,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-04-05';
+const APP_VERSION = '2026-09-04-06';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3496,6 +3496,23 @@ function renderAchatsConnaissementPanel(){
   return html;
 }
 
+// Fiches de tracabilite envoyees (avec connaissement extrait et enregistre a
+// l'envoi) dont aucun achat correspondant n'existe encore -- purement
+// comparaison de donnees deja en memoire, aucun re-telechargement necessaire.
+function fichesEnAttenteAchat(){
+  const achatsConnaissements = new Set((state.achats||[]).map(a=>String(a.connaissement||'').toUpperCase()).filter(Boolean));
+  const demandeById = {};
+  (state.demandesCoop||[]).forEach(d=>{ demandeById[d.id]=d; });
+  return (state.demandeFichiers||[])
+    .filter(f=>f.type==='product_movements' && f.connaissement && !achatsConnaissements.has(String(f.connaissement).toUpperCase()))
+    .map(f=>{
+      const d = demandeById[f.demande_id];
+      const coop = d ? coopById(d.cooperative_id) : null;
+      return Object.assign({}, f, { coopId: coop?coop.id:null, coopNom: coop?coop.nom:'—' });
+    })
+    .filter(f=>f.coopId);
+}
+
 function renderDashboardTab(){
   const rows = computeRows();
   const nAlert = rows.filter(r=>r.st.key==='warn'||r.st.key==='danger').length;
@@ -3546,6 +3563,21 @@ function renderDashboardTab(){
     + '<div class="card"><div class="label">Acheté ('+esc(campLabel)+esc(periodeLabel)+')</div><div class="value">'+fmtKg(achTotal)+'</div></div>'
     + '<div class="card'+(nAlert>0?' alert':'')+'"><div class="label">En alerte</div><div class="value">'+fmtNum(nAlert)+'</div></div>'
     + '</div>';
+
+  const enAttenteAchat = fichesEnAttenteAchat();
+  if (enAttenteAchat.length>0){
+    html += '<div class="panel" style="border-color:var(--warn-line);margin-bottom:20px;">'
+      + '<div class="panel-head"><h2>⚠ Fiches envoyées sans achat enregistré ('+enAttenteAchat.length+')</h2></div>'
+      + '<div class="hint" style="padding:0 18px 10px;">Ces coopératives ont envoyé une fiche de traçabilité, mais n\'ont pas encore complété l\'enregistrement de l\'achat correspondant sur leur portail.</div>'
+      + enAttenteAchat.map(f=>{
+          const joursEcoules = f.uploaded_at ? Math.floor((Date.now()-new Date(f.uploaded_at).getTime())/86400000) : null;
+          return '<div class="checklist-item-v2"><div class="checklist-row"><div style="flex:1;">'
+            + '<div style="font-weight:600;">'+esc(f.coopNom)+' — connaissement '+esc(f.connaissement)+'</div>'
+            + '<div class="hint">Fiche envoyée '+(joursEcoules===null?'':(joursEcoules===0?'aujourd\'hui':joursEcoules+' jour(s)')+' — '+esc(f.nom))+'</div>'
+            + '</div><button class="btn-ghost" onclick="ouvrirEnvoiMessage(\''+f.coopId+'\')">✉ Relancer</button></div></div>';
+        }).join('')
+      + '</div>';
+  }
 
   const DASHBOARD_GROUPS = [
     ['achats', 'Achats'],
