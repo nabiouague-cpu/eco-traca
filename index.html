@@ -225,6 +225,7 @@ const KEY_NONCONF = 'ecorigine_nonconformites';
 const KEY_CAMPAGNES = 'ecorigine_campagnes';
 const KEY_MESSAGES = 'ecorigine_messages_coop';
 const KEY_ENVOIS = 'ecorigine_envois_coop';
+const KEY_PAIEMENTS = 'ecorigine_paiements';
 
 // Colonnes alignées sur le modele fourni (feuille "3. Farm-Farmer Data")
 const NOM_KEYS = ['farmer name','nom du producteur','nom producteur','producteur','nom','name'];
@@ -873,7 +874,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-04-11';
+const APP_VERSION = '2026-09-04-12';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -947,6 +948,7 @@ const KEY_TO_TABLE = {
   'ecorigine_campagnes': 'campagnes',
   'ecorigine_messages_coop': 'messages_coop',
   'ecorigine_envois_coop': 'envois_coop',
+  'ecorigine_paiements': 'paiements',
 };
 
 async function recupererDonneesLocales(){
@@ -1896,6 +1898,7 @@ async function loadAll(){
     state.campagnes = await safeGet(KEY_CAMPAGNES, []);
     state.messagesCoop = await safeGet(KEY_MESSAGES, []);
     state.envoisCoop = await safeGet(KEY_ENVOIS, []);
+    state.paiements = await safeGet(KEY_PAIEMENTS, []);
     state.settings = await safeGet(KEY_SETTINGS, { seuil: 50, prime_ra: 0, prime_ft: 0, prix_entree_usine: 0, taux_bic: 0 });
     state.error = null;
   }catch(e){
@@ -2040,7 +2043,10 @@ async function submitCooperative(){
     volume_certificat: Number(fv('volume_certificat'))||0,
     email1: fv('email1').trim(),
     email2: fv('email2').trim(),
-    email3: fv('email3').trim()
+    email3: fv('email3').trim(),
+    libelle1: fv('libelle1').trim() || null,
+    libelle2: fv('libelle2').trim() || null,
+    libelle3: fv('libelle3').trim() || null,
   };
   let coopId;
   if (editId){
@@ -3528,40 +3534,87 @@ function calcMontantPaiement(a){
 }
 
 function ouvrirFinalisationPaiement(achatId){
+  if (!achatId){
+    const premier = state.achats.slice().sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')))[0];
+    achatId = premier ? premier.id : null;
+  }
+  if (!achatId){ showToast('Aucun achat à finaliser pour le moment.'); return; }
   const a = state.achats.find(x=>x.id===achatId);
   if (!a) return;
   state.modal = { type:'finaliserPaiement', payload:{ achatId } };
   render();
 }
 
-async function enregistrerFinalisationPaiement(){
+function paiementsPourAchat(achatId){
+  return (state.paiements||[]).filter(p=>p.achat_id===achatId).sort((a,b)=>String(a.date_paiement||'').localeCompare(String(b.date_paiement||'')));
+}
+function totalDejaPaye(achatId){
+  return paiementsPourAchat(achatId).reduce((s,p)=>s+(Number(p.montant_paye)||0),0);
+}
+
+// Enregistre les parametres de calcul (poids net paye, sacs acceptes, prix
+// entree usine, TKM deja fige, commission, taux BIC) -- determine le montant a
+// payer UNE FOIS ; ne concerne pas encore le paiement effectif (cheques), gere
+// separement pour supporter les versements partiels.
+async function enregistrerCalculPaiement(){
   const pl = state.modal.payload;
   const a = state.achats.find(x=>x.id===pl.achatId);
   if (!a) return;
+  const dateLivraison = fv('fp_date_livraison');
   const poidsNetPaye = Number(fv('fp_poids_net_paye'))||0;
+  const sacsAcceptes = Number(fv('fp_sacs_acceptes'))||0;
   const prixEntreeUsine = Number(fv('fp_prix_entree_usine'))||0;
+  const commission = Number(fv('fp_commission'))||0;
+  const tauxBic = Number(fv('fp_taux_bic'))||0;
   if (!poidsNetPaye || poidsNetPaye<=0){ showToast('Indique le poids net payé.'); return; }
 
   const data = {
+    date: dateLivraison || a.date,
     poids_net_produit: poidsNetPaye,
-    banque: fv('fp_banque').trim() || null,
-    numero_cheque: fv('fp_numero_cheque').trim() || null,
-    libelle_cheque: fv('fp_libelle_cheque').trim() || null,
+    poids_brut_accepte: poidsNetPaye,
+    nombre_sacs_accepte: sacsAcceptes || null,
+    commission: commission,
   };
-  // Le prix entree usine confirme ici devient le reglage global par defaut pour
-  // les achats suivants, tout en s'appliquant immediatement a celui-ci -- evite
-  // d'avoir a rouvrir "Parametres de paiement" separement a chaque changement
-  // de prix publie par le CCC.
-  if (prixEntreeUsine>0 && prixEntreeUsine!==Number(state.settings.prix_entree_usine)){
-    state.settings.prix_entree_usine = prixEntreeUsine;
-    await saveKey(KEY_SETTINGS, state.settings);
-  }
+  // Prix entree usine et taux BIC confirmes ici deviennent le reglage global
+  // par defaut, tout en s'appliquant immediatement a cet achat -- evite de
+  // rouvrir "Parametres de paiement" separement a chaque changement publie
+  // par le CCC.
+  let settingsChanges = false;
+  if (prixEntreeUsine>0 && prixEntreeUsine!==Number(state.settings.prix_entree_usine)){ state.settings.prix_entree_usine = prixEntreeUsine; settingsChanges = true; }
+  if (tauxBic>=0 && tauxBic!==Number(state.settings.taux_bic)){ state.settings.taux_bic = tauxBic; settingsChanges = true; }
+  if (settingsChanges) await saveKey(KEY_SETTINGS, state.settings);
 
   Object.assign(a, data);
   const { error } = await supabaseClient.from('achats').upsert(a);
   if (error){ showToast('Échec de l\'enregistrement : '+error.message); return; }
-  showToast('Paiement finalisé.', 'success');
-  closeModal();
+  showToast('Calcul du montant enregistré.', 'success');
+  render();
+}
+
+// Ajoute UN versement (cheque) pour cet achat, sans ecraser les versements
+// precedents -- permet un paiement partiel suivi plus tard du solde, chacun
+// avec sa propre banque/cheque.
+async function ajouterPaiement(){
+  const pl = state.modal.payload;
+  const a = state.achats.find(x=>x.id===pl.achatId);
+  if (!a) return;
+  const montantPaye = Number(fv('fp_montant_paye'))||0;
+  if (!montantPaye || montantPaye<=0){ showToast('Indique le montant payé pour ce versement.'); return; }
+
+  const paiement = {
+    id: 'pai_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
+    achat_id: a.id,
+    date_paiement: fv('fp_date_paiement') || new Date().toISOString().slice(0,10),
+    montant_paye: montantPaye,
+    banque: fv('fp_banque').trim() || null,
+    libelle_cheque: fv('fp_libelle_cheque').trim() || null,
+    numero_cheque: fv('fp_numero_cheque').trim() || null,
+  };
+  const { error } = await supabaseClient.from('paiements').insert(paiement);
+  if (error){ showToast('Échec de l\'enregistrement du versement : '+error.message); return; }
+  state.paiements = (state.paiements||[]).concat(paiement);
+  showToast('Versement de '+fmtNum(montantPaye)+' FCFA enregistré.', 'success');
+  render();
 }
 
 function achatsFiltered(){
@@ -4021,6 +4074,9 @@ function render(){
       + '<label class="field">Email 1<input type="email" name="email1" value="'+esc(c.email1||'')+'"></label>'
       + '<label class="field">Email 2<input type="email" name="email2" value="'+esc(c.email2||'')+'"></label>'
       + '<label class="field">Email 3<input type="email" name="email3" value="'+esc(c.email3||'')+'"></label>'
+      + '<label class="field">Libellé de chèque possible 1 (personne mandatée)<input type="text" name="libelle1" value="'+esc(c.libelle1||'')+'"></label>'
+      + '<label class="field">Libellé de chèque possible 2<input type="text" name="libelle2" value="'+esc(c.libelle2||'')+'"></label>'
+      + '<label class="field">Libellé de chèque possible 3<input type="text" name="libelle3" value="'+esc(c.libelle3||'')+'"></label>'
       + '</fieldset>'
       + '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Annuler</button><button type="button" class="btn btn-primary" onclick="submitCooperative()">Enregistrer</button></div>'
       + '</div></div></div>';
@@ -4186,21 +4242,52 @@ function render(){
     else {
       const coop = coopById(a.cooperative_id);
       const aBic = coopABic(a.cooperative_id);
-      const tauxBic = Number(state.settings.taux_bic)||0;
-      html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
-        + '<h3>Finaliser le paiement — '+esc(coop?coop.nom:'')+' ('+esc(a.connaissement||'—')+')</h3>'
-        + '<div class="info-grid" style="margin-bottom:14px;background:var(--surface-2);padding:10px;border-radius:8px;">'
-        + '<div><span>TKM (repris de la fiche de vente) :</span> '+(a.tkm?fmtNum(a.tkm):'—')+'</div>'
-        + '<div><span>Retenue BIC (taux fixe '+fmtNum(tauxBic)+' FCFA/kg) :</span> '+(aBic?'aucune (BIC fourni)':'s\'applique — document BIC non fourni')+'</div>'
-        + '</div>'
+      const montantInfo = calcMontantPaiement(a);
+      const dejaPaye = totalDejaPaye(a.id);
+      const solde = montantInfo ? montantInfo.montant - dejaPaye : null;
+      const historique = paiementsPourAchat(a.id);
+      const libellesOptions = [coop?.libelle1, coop?.libelle2, coop?.libelle3].filter(Boolean);
+
+      const achatsTries = state.achats.slice().sort((a1,a2)=>String(a2.date||'').localeCompare(String(a1.date||'')));
+
+      html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal wide">'
+        + '<h3>Finaliser le paiement — '+esc(coop?coop.nom:'')+'</h3>'
+        + '<label class="field">Numéro de connaissement<select onchange="ouvrirFinalisationPaiement(this.value)">'
+        + achatsTries.map(a2=>{ const c2=coopById(a2.cooperative_id); return '<option value="'+a2.id+'"'+(a2.id===a.id?' selected':'')+'>'+esc(a2.connaissement||'(sans numéro)')+' — '+esc(c2?c2.nom:'')+(a2.date?' — '+esc(a2.date):'')+'</option>'; }).join('')
+        + '</select></label>'
+
+        + '<h4 style="margin:16px 0 8px;">Calcul du montant</h4>'
         + '<div id="modal-fields">'
+        + '<label class="field">Date de livraison<input type="date" name="fp_date_livraison" value="'+esc(a.date||'')+'"></label>'
         + '<label class="field">Poids net payé (kg)<input type="number" step="1" min="0" name="fp_poids_net_paye" value="'+esc(a.poids_net_produit||'')+'"></label>'
-        + '<label class="field">Prix entrée usine (FCFA/kg)<input type="number" step="1" min="0" name="fp_prix_entree_usine" value="'+esc(state.settings.prix_entree_usine||0)+'"></label>'
-        + '<label class="field">Banque (émettrice du chèque)<input type="text" name="fp_banque" value="'+esc(a.banque||'')+'"></label>'
-        + '<label class="field">Numéro de chèque<input type="text" name="fp_numero_cheque" value="'+esc(a.numero_cheque||'')+'"></label>'
-        + '<label class="field">Libellé du chèque (à l\'ordre de...)<input type="text" name="fp_libelle_cheque" value="'+esc(a.libelle_cheque||'')+'" placeholder="ex : SCOOPS UNITE, ou nom du mandataire"></label>'
+        + '<label class="field">Nombre de sacs (acceptés)<input type="number" step="1" min="0" name="fp_sacs_acceptes" value="'+esc(a.nombre_sacs_accepte||'')+'"></label>'
+        + '<label class="field">Prix entrée usine (FCFA/kg)<input type="number" step="1" min="0" name="fp_prix_entree_usine" value="'+esc(state.settings.prix_entree_usine||1300)+'"></label>'
+        + '<label class="field">TKM (repris de la fiche de vente, figé)<input type="text" value="'+(a.tkm?fmtNum(a.tkm):'—')+'" disabled></label>'
+        + '<label class="field">Commission (FCFA/kg)<input type="number" step="0.1" name="fp_commission" value="'+esc(a.commission||0)+'"></label>'
+        + '<label class="field">Taux BIC (FCFA/kg)<input type="number" step="0.1" name="fp_taux_bic" value="'+esc(state.settings.taux_bic!=null?state.settings.taux_bic:2.5)+'"></label>'
+        + '<div class="hint" style="margin-top:-4px;">'+(aBic?'BIC fourni par la coopérative — retenue non appliquée.':'BIC non fourni — retenue appliquée sur ce calcul.')+'</div>'
         + '</div>'
-        + '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Annuler</button><button type="button" class="btn btn-primary" onclick="enregistrerFinalisationPaiement()">Enregistrer</button></div>'
+        + '<div class="actions" style="margin-bottom:16px;"><button type="button" class="btn btn-primary" onclick="enregistrerCalculPaiement()">Enregistrer le calcul</button></div>'
+
+        + (montantInfo ? '<div class="info-grid" style="margin-bottom:16px;background:var(--surface-2);padding:10px;border-radius:8px;">'
+            + '<div><span>Montant à payer :</span> '+fmtNum(montantInfo.montant)+' FCFA</div>'
+            + '<div><span>Déjà payé :</span> '+fmtNum(dejaPaye)+' FCFA</div>'
+            + '<div><span>Solde restant :</span> '+fmtNum(solde)+' FCFA</div>'
+            + '</div>' : '<p class="hint">Enregistre le calcul ci-dessus pour voir le montant à payer.</p>')
+
+        + '<h4 style="margin:16px 0 8px;">Versements</h4>'
+        + (historique.length>0 ? historique.map(p=>'<div class="achat-item"><span>'+esc(p.date_paiement||'')+' — '+esc(p.banque||'—')+' · chèque '+esc(p.numero_cheque||'—')+' · '+esc(p.libelle_cheque||'—')+'</span><span class="num">'+fmtNum(p.montant_paye)+' FCFA</span></div>').join('') : '<p class="hint">Aucun versement enregistré pour le moment.</p>')
+        + '<div id="modal-fields" style="margin-top:10px;">'
+        + '<label class="field">Date du versement<input type="date" name="fp_date_paiement" value="'+esc(new Date().toISOString().slice(0,10))+'"></label>'
+        + '<label class="field">Montant payé pour ce versement (FCFA)<input type="number" step="1" min="0" name="fp_montant_paye" placeholder="peut être partiel — le solde restera à verser plus tard"></label>'
+        + '<label class="field">Banque (émettrice du chèque)<input type="text" name="fp_banque"></label>'
+        + '<label class="field">Libellé du chèque<select name="fp_libelle_cheque"><option value="">— Choisir —</option>'
+        + libellesOptions.map(l=>'<option value="'+esc(l)+'">'+esc(l)+'</option>').join('')
+        + '<option value="'+esc(coop?coop.nom:'')+'">'+esc(coop?coop.nom:'')+' (la coopérative elle-même)</option>'
+        + '</select></label>'
+        + '<label class="field">Numéro de chèque<input type="text" name="fp_numero_cheque"></label>'
+        + '</div>'
+        + '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Fermer</button><button type="button" class="btn btn-primary" onclick="ajouterPaiement()">Enregistrer ce versement</button></div>'
         + '</div></div>';
     }
   }
