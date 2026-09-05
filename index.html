@@ -92,6 +92,12 @@
   .group-header{padding:9px 18px;font-size:12.5px;font-weight:600;color:var(--accent);background:var(--accent-soft);border-bottom:1px solid var(--border);}
 
   .row{display:grid;grid-template-columns:2fr 1fr 1fr 1.4fr 1fr auto;gap:14px;align-items:center;padding:14px 18px;border-bottom:1px solid var(--border);}
+  .row-demandes{display:grid;grid-template-columns:1.7fr 1.2fr 1.6fr .9fr 1.8fr;gap:12px;align-items:start;padding:11px 16px;border-bottom:1px solid var(--border);font-size:12.5px;}
+  .row-demandes.row-head{align-items:center;padding:9px 16px;}
+  .row-demandes .dem-nom{font-size:13.5px;color:var(--ink);}
+  .row-demandes .dem-fichiers{grid-column:1/-1;margin-top:8px;display:flex;flex-direction:column;gap:3px;border-top:1px dashed var(--border);padding-top:8px;}
+  .row-demandes .dem-fichier-ligne{display:flex;align-items:center;gap:8px;font-size:12px;}
+  .row-demandes .btn-ghost, .row-demandes .btn-primary, .row-demandes .btn-danger-text{font-size:11.5px;padding:4px 8px;}
   .row.coop-row{grid-template-columns:2fr 1fr 1fr 1fr auto;}
   .coop-columns{display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start;}
   .coop-card-list{padding:14px 16px;}
@@ -901,7 +907,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-04-18';
+const APP_VERSION = '2026-09-04-19';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1996,31 +2002,32 @@ function renderDemandeStatusPanel(title, list, mode){
   if (list.length===0){
     html += '<div class="empty">Aucune demande dans cette catégorie.</div>';
   } else {
-    html += '<div class="row row-head" style="grid-template-columns:1.6fr 1.4fr 1.6fr 1fr 1fr 1.4fr;">'
-      + '<div>Nom</div><div>Coopérative</div><div>Type(s)</div><div>Statut</div><div>Échéance</div><div></div></div>';
+    html += '<div class="row-demandes row-head">'
+      + '<div>Nom</div><div>Coopérative</div><div>Type(s)</div><div>Échéance</div><div>Actions</div></div>';
     list.forEach(d=>{
       const coop = coopById(d.cooperative_id);
       const types = (d.types||[]).map(t=>'<span class="badge neutral" style="margin:1px 3px 1px 0;">'+esc(DEMANDE_TYPE_LABELS[t]||t)+'</span>').join('');
-      const [badgeClass, badgeLabel] = STATUT_BADGE[d.statut] || ['neutral', d.statut];
       const fichiersDemande = (state.demandeFichiers||[]).filter(f=>f.demande_id===d.id);
-      html += '<div class="row" style="grid-template-columns:1.6fr 1.4fr 1.6fr 1fr 1fr 1.4fr;">'
-        + '<div>'+esc(d.name)+'</div>'
+      html += '<div class="row-demandes">'
+        + '<div class="dem-nom">'+esc(d.name)+'</div>'
         + '<div>'+esc(coop?coop.nom:'—')+'</div>'
         + '<div>'+types+'</div>'
-        + '<div><span class="badge '+badgeClass+'">'+badgeLabel+'</span></div>'
         + '<div>'+(d.deadline?new Date(d.deadline+'T00:00:00').toLocaleDateString('fr-FR'):'—')+'</div>'
         + '<div>'
-        + (d.fichier_source_path ? '<button class="btn-ghost" onclick="apercuFichier(\''+d.fichier_source_path+'\',\''+esc(d.fichier_source_nom||'').replace(/'/g,"\\'")+'\')">👁 Aperçu</button><button class="btn-ghost" onclick="telechargerFichierDemande(\''+d.fichier_source_path+'\',\''+esc(d.fichier_source_nom||'')+'\')">'+(d.document_a_signer===false?'Document transmis':'Document à signer')+'</button>' : '')
+        // Document envoye par ECORIGINE (contrat, etc.) -- pas d'apercu, admin
+        // sait deja ce qu'il contient puisqu'il l'a lui-meme joint.
+        + (d.fichier_source_path ? '<button class="btn-ghost" onclick="telechargerFichierDemande(\''+d.fichier_source_path+'\',\''+esc(d.fichier_source_nom||'')+'\')">'+(d.document_a_signer===false?'Document transmis':'Document à signer')+'</button>' : '')
         + (d.fichier_path ? '<button class="btn-ghost" onclick="apercuFichier(\''+d.fichier_path+'\',\''+esc(d.fichier_nom||'').replace(/'/g,"\\'")+'\')">👁 Aperçu</button><button class="btn-ghost" onclick="telechargerFichierDemande(\''+d.fichier_path+'\',\''+esc(d.fichier_nom||'')+'\')">Télécharger</button>' : '')
-        + (mode==='validation' ? '<button class="btn-primary" style="padding:6px 10px;font-size:12px;" onclick="validerDemande(\''+d.id+'\')">Valider</button><button class="btn-danger-text" onclick="ouvrirRejetDemande(\''+d.id+'\')">Rejeter</button>' : '')
+        + (mode==='validation' ? '<button class="btn-primary" onclick="validerDemande(\''+d.id+'\')">Valider</button><button class="btn-danger-text" onclick="ouvrirRejetDemande(\''+d.id+'\')">Rejeter</button>' : '')
         + (mode==='validation' && (d.types||[]).includes('product_movements') ? '<button class="btn-ghost" onclick="verifierLimitesFicheTracabilite(\''+d.id+'\')">Vérifier les limites</button>' : '')
         + ((mode==='acceptee') && d.fichier_path && (d.types||[]).includes('masterdata') ? '<button class="btn-ghost" onclick="lancerAnalyseWhisp(\''+d.id+'\')" id="whisp-btn-'+d.id+'">Lancer l\'analyse Whisp</button>' : '')
         + (mode==='attente' ? '<button class="btn-danger-text" onclick="annulerDemande(\''+d.id+'\')">Annuler</button>' : '')
         + (d.commentaire_ecorigine ? '<div class="hint" style="width:100%;margin-top:4px;">Motif : '+esc(d.commentaire_ecorigine)+'</div>' : '')
-        + (fichiersDemande.length>0 ? '<div style="width:100%;margin-top:6px;display:flex;flex-direction:column;gap:3px;">'
-            + fichiersDemande.map(f=>'<div style="display:flex;align-items:center;gap:8px;font-size:12.5px;"><span style="flex:1;color:var(--ink-soft);">📄 '+esc(f.nom||f.path.split('/').pop())+'</span><button class="btn-ghost" style="padding:2px 8px;font-size:12px;" onclick="apercuFichier(\''+f.path+'\',\''+esc(f.nom||'').replace(/'/g,"\\'")+'\')">👁 Aperçu</button><button class="btn-ghost" style="padding:2px 8px;font-size:12px;" onclick="telechargerFichierDemande(\''+f.path+'\',\''+esc(f.nom||'').replace(/'/g,"\\'")+'\')">Télécharger</button></div>').join('')
+        + '</div>'
+        + (fichiersDemande.length>0 ? '<div class="dem-fichiers">'
+            + fichiersDemande.map(f=>'<div class="dem-fichier-ligne"><span style="flex:1;color:var(--ink-soft);">📄 '+esc(f.nom||f.path.split('/').pop())+'</span><button class="btn-ghost" onclick="apercuFichier(\''+f.path+'\',\''+esc(f.nom||'').replace(/'/g,"\\'")+'\')">👁 Aperçu</button><button class="btn-ghost" onclick="telechargerFichierDemande(\''+f.path+'\',\''+esc(f.nom||'').replace(/'/g,"\\'")+'\')">Télécharger</button></div>').join('')
             + '</div>' : '')
-        + '</div></div>';
+        + '</div>';
     });
   }
   html += '</div>';
@@ -2041,7 +2048,10 @@ function renderDemandesTab(){
   ];
 
   html += '<div class="tabs">'
-    + DEMANDE_GROUPS.map(([type,label])=>'<button class="tab-btn '+(state.demandesSousOnglet===type?'active':'')+'" onclick="setDemandesSousOnglet(\''+type+'\')">'+label+'</button>').join('')
+    + DEMANDE_GROUPS.map(([type,label])=>{
+        const aTraiter = state.demandesCoop.filter(d=>(d.types||[]).includes(type) && (d.statut==='demandee'||d.statut==='en_validation')).length;
+        return '<button class="tab-btn '+(state.demandesSousOnglet===type?'active':'')+'" onclick="setDemandesSousOnglet(\''+type+'\')">'+label+(aTraiter>0?' <span class="badge warn" style="margin-left:4px;">'+aTraiter+'</span>':'')+'</button>';
+      }).join('')
     + '</div>';
 
   const typeActif = state.demandesSousOnglet || DEMANDE_GROUPS[0][0];
