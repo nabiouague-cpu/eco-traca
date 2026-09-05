@@ -907,7 +907,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-04-28';
+const APP_VERSION = '2026-09-04-29';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -2124,6 +2124,16 @@ async function loadAll(){
     state.messagesCoop = await safeGet(KEY_MESSAGES, []);
     state.envoisCoop = await safeGet(KEY_ENVOIS, []);
     state.paiements = await safeGet(KEY_PAIEMENTS, []);
+    // Necessaires des le demarrage pour que l'onglet Stockage puisse retrouver
+    // les fichiers soumis par les cooperatives, meme si l'onglet "Demandes
+    // coopératives" n'a encore jamais ete visite dans cette session.
+    state.demandesCoop = await loadDemandes();
+    { const ids = state.demandesCoop.map(d=>d.id);
+      if (ids.length>0){
+        const { data, error } = await supabaseClient.from('demande_fichiers').select('*').in('demande_id', ids);
+        state.demandeFichiers = error ? [] : (data || []);
+      } else { state.demandeFichiers = []; }
+    }
     state.settings = await safeGet(KEY_SETTINGS, { seuil: 50, prime_ra: 0, prime_ft: 0, prix_entree_usine: 0, taux_bic: 0 });
     state.error = null;
   }catch(e){
