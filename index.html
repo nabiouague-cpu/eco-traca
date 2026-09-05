@@ -427,6 +427,7 @@ const ICON_CONFORMITE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentCol
 const ICON_ACCES = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="3.2"/><path d="M10.3 12.7 19 4"/><path d="M15.5 7.5 18 10"/><path d="M17.2 5.8 19.5 8"/></svg>';
 const ICON_SAUVEGARDES = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 19h16"/></svg>';
 const ICON_BASEDONNEES = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg>';
+const ICON_STOCKAGE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>';
 const ICON_DEMANDES = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7"/><path d="M8 7h9v9"/></svg>';
 
 function openContratRAModal(coopId){
@@ -874,7 +875,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-04-13';
+const APP_VERSION = '2026-09-04-14';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1447,6 +1448,72 @@ async function creerDemandeBaseDonnees(coopId, fichiers){
   }catch(e){
     showToast("Fichiers déposés, mais la notification de demande a échoué : "+e.message);
   }
+}
+
+// Regroupe tous les fichiers stockes pour une cooperative -- demandes (par
+// type) et documents envoyes par ECORIGINE -- en "dossiers" par type d'element,
+// sans dupliquer aucune donnee : simple reorganisation de ce qui est deja
+// charge (state.demandeFichiers, state.envoisCoop).
+function fichiersParTypePourCoop(coopId){
+  const demandeIdsCoop = new Set((state.demandesCoop||[]).filter(d=>d.cooperative_id===coopId).map(d=>d.id));
+  const dossiers = {};
+  Object.keys(DEMANDE_TYPE_LABELS).forEach(t=>{ dossiers[t] = { label: DEMANDE_TYPE_LABELS[t], fichiers: [] }; });
+  (state.demandeFichiers||[]).forEach(f=>{
+    if (!demandeIdsCoop.has(f.demande_id)) return;
+    if (!dossiers[f.type]) dossiers[f.type] = { label: f.type, fichiers: [] };
+    dossiers[f.type].fichiers.push({ path:f.path, nom:f.nom||f.path.split('/').pop(), date:f.uploaded_at });
+  });
+  dossiers['envois'] = { label: 'Documents envoyés par ECORIGINE', fichiers: [] };
+  (state.envoisCoop||[]).filter(e=>e.cooperative_id===coopId).forEach(e=>{
+    (e.fichiers||[]).forEach(f=>{
+      dossiers['envois'].fichiers.push({ path:f.path, nom:f.nom, date:e.created_at, titre:e.titre });
+    });
+  });
+  return dossiers;
+}
+
+function toggleDossierStockage(cle){
+  if (!state.dossiersOuverts) state.dossiersOuverts = new Set();
+  if (state.dossiersOuverts.has(cle)) state.dossiersOuverts.delete(cle); else state.dossiersOuverts.add(cle);
+  render();
+}
+
+function renderStockageTab(){
+  if (state.cooperatives.length===0){
+    return '<div class="panel"><div class="empty">Aucune coopérative enregistrée pour le moment.</div></div>';
+  }
+  const coopId = state.stockageCoopFilter || state.cooperatives[0].id;
+  const coop = coopById(coopId);
+  const dossiers = fichiersParTypePourCoop(coopId);
+  const totalFichiers = Object.values(dossiers).reduce((s,d)=>s+d.fichiers.length,0);
+
+  let html = '<div class="controls">'
+    + '<label class="field">Coopérative<select onchange="state.stockageCoopFilter=this.value;render();">'
+    + state.cooperatives.slice().sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'})).map(c=>'<option value="'+c.id+'"'+(coopId===c.id?' selected':'')+'>'+esc(c.nom)+'</option>').join('')
+    + '</select></label>'
+    + '</div>';
+
+  html += '<div class="panel"><div class="panel-head"><h2>📁 '+esc(coop?coop.nom:'')+' ('+fmtNum(totalFichiers)+' fichier(s))</h2></div>';
+  Object.entries(dossiers).forEach(([cle,d])=>{
+    if (d.fichiers.length===0 && cle==='envois') return; // pas de dossier vide pour "envois" si rien
+    const ouvert = state.dossiersOuverts && state.dossiersOuverts.has(coopId+'_'+cle);
+    html += '<div class="checklist-item-v2"><div class="checklist-row" style="cursor:pointer;" onclick="toggleDossierStockage(\''+coopId+'_'+cle+'\')">'
+      + '<span style="flex:1;font-weight:600;">📁 '+esc(d.label)+'</span><span class="hint">'+d.fichiers.length+' fichier(s) '+(ouvert?'▲':'▼')+'</span>'
+      + '</div>';
+    if (ouvert){
+      if (d.fichiers.length===0){
+        html += '<div class="hint" style="padding:4px 0 8px 24px;">Aucun fichier dans ce dossier.</div>';
+      } else {
+        d.fichiers.forEach(f=>{
+          html += '<div class="achat-item" style="padding-left:24px;"><span>📄 '+esc(f.nom)+(f.titre?' — '+esc(f.titre):'')+(f.date?' <span class="hint">('+esc(new Date(f.date).toLocaleDateString('fr-FR'))+')</span>':'')+'</span>'
+            + '<button class="btn-ghost" onclick="event.stopPropagation();telechargerFichierDemande(\''+f.path+'\',\''+esc(f.nom).replace(/'/g,"\\'")+'\')">Télécharger</button></div>';
+        });
+      }
+    }
+    html += '</div>';
+  });
+  html += '</div>';
+  return html;
 }
 
 function renderBaseDonneesTab(){
@@ -3970,6 +4037,7 @@ function render(){
     + '<button class="sidebar-nav-item '+(!dashActive&&state.tab==='acces'?'active':'')+'" onclick="setTab(\'acces\')">'+ICON_ACCES+'<span>Accès<br>coopératives</span></button>'
     + '<button class="sidebar-nav-item '+(!dashActive&&state.tab==='sauvegardes'?'active':'')+'" onclick="setTab(\'sauvegardes\')">'+ICON_SAUVEGARDES+'<span>Sauvegardes</span></button>'
     + '<button class="sidebar-nav-item '+(!dashActive&&state.tab==='basedonnees'?'active':'')+'" onclick="setTab(\'basedonnees\')">'+ICON_BASEDONNEES+'<span>Base de<br>données coop.</span></button>'
+    + '<button class="sidebar-nav-item '+(!dashActive&&state.tab==='stockage'?'active':'')+'" onclick="setTab(\'stockage\')">'+ICON_STOCKAGE+'<span>Stockage</span></button>'
     + '</div></nav>'
     + '<div class="main-area">';
 
@@ -4022,6 +4090,7 @@ function render(){
     else if (state.tab==='acces') html += renderAccesTab();
     else if (state.tab==='sauvegardes') html += renderSauvegardesTab();
     else if (state.tab==='basedonnees') html += renderBaseDonneesTab();
+    else if (state.tab==='stockage') html += renderStockageTab();
     else if (state.tab==='demandes') html += renderDemandesTab();
     else html += renderDashboardTab();
   }
