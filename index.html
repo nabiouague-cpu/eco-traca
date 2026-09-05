@@ -901,7 +901,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-04-17';
+const APP_VERSION = '2026-09-04-18';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1962,6 +1962,30 @@ async function telechargerFichierDemande(path, nom){
   }catch(e){ showToast('Erreur : '+e.message); }
 }
 
+const APERCU_MIME = {
+  pdf:'application/pdf', jpg:'image/jpeg', jpeg:'image/jpeg', png:'image/png', gif:'image/gif', webp:'image/webp',
+};
+
+// Ouvre un apercu du fichier AVANT de decider de valider ou rejeter -- PDF et
+// images s'affichent directement ; les autres formats (Excel, Word...) n'ont
+// pas d'apercu fiable dans un navigateur, on propose alors le telechargement
+// direct plutot qu'un apercu casse ou trompeur.
+async function apercuFichier(path, nom){
+  const ext = String(nom||path||'').split('.').pop().toLowerCase();
+  state.modal = { type:'apercuFichier', payload:{ path, nom, chargement:true, url:null, mime:APERCU_MIME[ext]||null } };
+  render();
+  try{
+    const { data, error } = await supabaseClient.storage.from('documents-coop').download(path);
+    if (error){ state.modal.payload.chargement=false; state.modal.payload.erreur=error.message; render(); return; }
+    const url = URL.createObjectURL(data);
+    state.modal.payload.chargement = false;
+    state.modal.payload.url = url;
+    render();
+  }catch(e){
+    state.modal.payload.chargement=false; state.modal.payload.erreur = e.message; render();
+  }
+}
+
 const STATUT_BADGE = { demandee:['warn','Requête'], en_validation:['info','En cours de validation'], acceptee:['ok','Accepté'], rejetee:['danger','Rejeté'], annulee:['neutral','Annulé'] };
 
 function focusDemandeStatus(key){ state.demandesFocusStatus = key; render(); }
@@ -1978,6 +2002,7 @@ function renderDemandeStatusPanel(title, list, mode){
       const coop = coopById(d.cooperative_id);
       const types = (d.types||[]).map(t=>'<span class="badge neutral" style="margin:1px 3px 1px 0;">'+esc(DEMANDE_TYPE_LABELS[t]||t)+'</span>').join('');
       const [badgeClass, badgeLabel] = STATUT_BADGE[d.statut] || ['neutral', d.statut];
+      const fichiersDemande = (state.demandeFichiers||[]).filter(f=>f.demande_id===d.id);
       html += '<div class="row" style="grid-template-columns:1.6fr 1.4fr 1.6fr 1fr 1fr 1.4fr;">'
         + '<div>'+esc(d.name)+'</div>'
         + '<div>'+esc(coop?coop.nom:'—')+'</div>'
@@ -1985,13 +2010,16 @@ function renderDemandeStatusPanel(title, list, mode){
         + '<div><span class="badge '+badgeClass+'">'+badgeLabel+'</span></div>'
         + '<div>'+(d.deadline?new Date(d.deadline+'T00:00:00').toLocaleDateString('fr-FR'):'—')+'</div>'
         + '<div>'
-        + (d.fichier_source_path ? '<button class="btn-ghost" onclick="telechargerFichierDemande(\''+d.fichier_source_path+'\',\''+esc(d.fichier_source_nom||'')+'\')">'+(d.document_a_signer===false?'Document transmis':'Document à signer')+'</button>' : '')
-        + (d.fichier_path ? '<button class="btn-ghost" onclick="telechargerFichierDemande(\''+d.fichier_path+'\',\''+esc(d.fichier_nom||'')+'\')">Télécharger</button>' : '')
+        + (d.fichier_source_path ? '<button class="btn-ghost" onclick="apercuFichier(\''+d.fichier_source_path+'\',\''+esc(d.fichier_source_nom||'').replace(/'/g,"\\'")+'\')">👁 Aperçu</button><button class="btn-ghost" onclick="telechargerFichierDemande(\''+d.fichier_source_path+'\',\''+esc(d.fichier_source_nom||'')+'\')">'+(d.document_a_signer===false?'Document transmis':'Document à signer')+'</button>' : '')
+        + (d.fichier_path ? '<button class="btn-ghost" onclick="apercuFichier(\''+d.fichier_path+'\',\''+esc(d.fichier_nom||'').replace(/'/g,"\\'")+'\')">👁 Aperçu</button><button class="btn-ghost" onclick="telechargerFichierDemande(\''+d.fichier_path+'\',\''+esc(d.fichier_nom||'')+'\')">Télécharger</button>' : '')
         + (mode==='validation' ? '<button class="btn-primary" style="padding:6px 10px;font-size:12px;" onclick="validerDemande(\''+d.id+'\')">Valider</button><button class="btn-danger-text" onclick="ouvrirRejetDemande(\''+d.id+'\')">Rejeter</button>' : '')
         + (mode==='validation' && (d.types||[]).includes('product_movements') ? '<button class="btn-ghost" onclick="verifierLimitesFicheTracabilite(\''+d.id+'\')">Vérifier les limites</button>' : '')
         + ((mode==='acceptee') && d.fichier_path && (d.types||[]).includes('masterdata') ? '<button class="btn-ghost" onclick="lancerAnalyseWhisp(\''+d.id+'\')" id="whisp-btn-'+d.id+'">Lancer l\'analyse Whisp</button>' : '')
         + (mode==='attente' ? '<button class="btn-danger-text" onclick="annulerDemande(\''+d.id+'\')">Annuler</button>' : '')
         + (d.commentaire_ecorigine ? '<div class="hint" style="width:100%;margin-top:4px;">Motif : '+esc(d.commentaire_ecorigine)+'</div>' : '')
+        + (fichiersDemande.length>0 ? '<div style="width:100%;margin-top:6px;display:flex;flex-direction:column;gap:3px;">'
+            + fichiersDemande.map(f=>'<div style="display:flex;align-items:center;gap:8px;font-size:12.5px;"><span style="flex:1;color:var(--ink-soft);">📄 '+esc(f.nom||f.path.split('/').pop())+'</span><button class="btn-ghost" style="padding:2px 8px;font-size:12px;" onclick="apercuFichier(\''+f.path+'\',\''+esc(f.nom||'').replace(/'/g,"\\'")+'\')">👁 Aperçu</button><button class="btn-ghost" style="padding:2px 8px;font-size:12px;" onclick="telechargerFichierDemande(\''+f.path+'\',\''+esc(f.nom||'').replace(/'/g,"\\'")+'\')">Télécharger</button></div>').join('')
+            + '</div>' : '')
         + '</div></div>';
     });
   }
@@ -4553,6 +4581,27 @@ function render(){
       + '<label class="field">Message<textarea name="msg_texte" rows="5" placeholder="ex : La collecte des connaissements pour la campagne 2026-2027 débute le 1er septembre. Merci de vous assurer que vos livraisons sont bien accompagnées de leur fiche de traçabilité."></textarea></label>'
       + '</div>'
       + '<div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="envoyerMessageCoop()">Envoyer</button></div>'
+      + '</div></div>';
+  }
+
+  if (state.modal && state.modal.type==='apercuFichier'){
+    const pl = state.modal.payload;
+    let corps;
+    if (pl.chargement){
+      corps = '<div style="padding:60px 20px;text-align:center;color:var(--ink-faint);">Chargement de l\'aperçu…</div>';
+    } else if (pl.erreur){
+      corps = '<div style="padding:40px 20px;text-align:center;color:var(--danger);">Échec du chargement : '+esc(pl.erreur)+'</div>';
+    } else if (pl.mime==='application/pdf'){
+      corps = '<iframe src="'+pl.url+'" style="width:100%;height:72vh;border:1px solid var(--border);border-radius:8px;"></iframe>';
+    } else if (pl.mime && pl.mime.startsWith('image/')){
+      corps = '<div style="text-align:center;"><img src="'+pl.url+'" style="max-width:100%;max-height:72vh;border-radius:8px;"></div>';
+    } else {
+      corps = '<div style="padding:50px 20px;text-align:center;color:var(--ink-soft);">Aperçu non disponible pour ce type de fichier — télécharge-le pour le consulter.</div>';
+    }
+    html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal wide" style="max-width:800px;">'
+      + '<h3>👁 '+esc(pl.nom||'Aperçu')+'</h3>'
+      + corps
+      + '<div class="actions"><button class="btn" onclick="closeModal()">Fermer</button><button class="btn btn-primary" onclick="telechargerFichierDemande(\''+pl.path+'\',\''+esc(pl.nom||'').replace(/'/g,"\\'")+'\')">Télécharger</button></div>'
       + '</div></div>';
   }
 
