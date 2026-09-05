@@ -909,7 +909,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-04-23';
+const APP_VERSION = '2026-09-04-24';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3760,6 +3760,37 @@ function calcMontantPaiement(a){
   return { poids, prixEntreeUsine, tkm, commission, tauxBic, retenueBic, aBic, montant };
 }
 
+// Appelle la fonction edge qui lit le certificat via l'API Claude et en
+// extrait le volume certifie. N'ecrit jamais directement dans la fiche --
+// affiche le resultat pour verification, l'admin garde la main pour
+// confirmer ou corriger avant d'enregistrer, le format des certificats
+// variant selon l'organisme certificateur.
+async function extraireVolumeCertificat(path){
+  const btn = document.getElementById('btn-extraire-volume');
+  const zone = document.getElementById('extraction-volume-resultat');
+  if (btn){ btn.disabled = true; btn.textContent = 'Lecture du document en cours…'; }
+  if (zone) zone.innerHTML = '';
+  try{
+    const { data, error } = await supabaseClient.functions.invoke('extraire-volume-certificat', { body: { path } });
+    if (error || !data || data.error){
+      if (zone) zone.innerHTML = '<div class="hint" style="color:var(--danger);margin-top:6px;">Échec de la lecture : '+esc((data&&data.error)||error.message)+'</div>';
+      return;
+    }
+    if (data.volume_kg==null){
+      if (zone) zone.innerHTML = '<div class="hint" style="margin-top:6px;">Aucun volume certifié trouvé dans ce document — vérifie-le manuellement.</div>';
+      return;
+    }
+    if (zone) zone.innerHTML = '<div class="hint" style="margin-top:6px;background:var(--surface-2);padding:8px;border-radius:6px;">'
+      + '<b>'+fmtNum(data.volume_kg)+' kg</b> trouvé (confiance '+esc(data.confiance||'—')+')'
+      + (data.texte_source ? '<br><i>"'+esc(data.texte_source)+'"</i>' : '')
+      + '<br><button type="button" class="btn-ghost" style="margin-top:4px;" onclick="document.getElementById(\'volume-certificat-input\').value='+Math.round(data.volume_kg)+'">Utiliser cette valeur</button>'
+      + '</div>';
+  }catch(e){
+    if (zone) zone.innerHTML = '<div class="hint" style="color:var(--danger);margin-top:6px;">Erreur : '+esc(e.message)+'</div>';
+  }
+  if (btn){ btn.disabled = false; btn.textContent = '🔎 Extraire automatiquement depuis le certificat fourni'; }
+}
+
 function ouvrirFinalisationPaiement(achatId){
   if (!achatId){
     const premier = state.achats.slice().sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')))[0];
@@ -4259,6 +4290,7 @@ function render(){
 
   if (state.modal && state.modal.type==='cooperative'){
     const c = state.modal.payload || {};
+    const certificatFichier = (state.docCheck||[]).find(d=>d.cooperative_id===c.id && d.doc==='Certificat(s) (si disponible(s))' && d.disponible && d.fichier_path);
     html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
       + '<h3>'+(c.id?'Modifier la coopérative':'Ajouter une coopérative')+'</h3>'
       + '<div id="modal-fields">'
@@ -4282,7 +4314,8 @@ function render(){
       + '</select></label>'
       + '<label class="field">Identifiant de certification<input type="text" name="identifiant_certification" value="'+esc(c.identifiant_certification||'')+'" placeholder="Identifiant RA, ID FLOCERT..."></label>'
       + '<label class="field">Date de fin de licence RA / Fairtrade<input type="date" name="date_fin_licence" value="'+esc(c.date_fin_licence||'')+'"></label>'
-      + '<label class="field">Volume certificat (kg)<input type="number" name="volume_certificat" value="'+esc(c.volume_certificat||'')+'"></label>'
+      + '<label class="field">Volume certificat (kg)<input type="number" id="volume-certificat-input" name="volume_certificat" value="'+esc(c.volume_certificat||'')+'"></label>'
+      + (certificatFichier ? '<button type="button" class="btn-ghost" onclick="extraireVolumeCertificat(\''+certificatFichier.fichier_path+'\')" id="btn-extraire-volume">🔎 Extraire automatiquement depuis le certificat fourni</button><div id="extraction-volume-resultat"></div>' : '<div class="hint">Aucun certificat téléversé par la coopérative pour le moment — l\'extraction automatique sera possible dès qu\'elle en fournira un (checklist de conformité, « Certificat(s) »).</div>')
       + '</div>'
       + '<fieldset><legend>Représentant légal (signataire des contrats)</legend>'
       + '<label class="field">Nom<input type="text" name="representant_legal_nom" value="'+esc(c.representant_legal_nom||'')+'"></label>'
