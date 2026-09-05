@@ -201,6 +201,22 @@
     .info-grid{grid-template-columns:1fr;}
     .preview-row{grid-template-columns:1fr 1fr;}
   }
+  .stock-layout{display:grid;grid-template-columns:260px 1fr;gap:0;border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--surface);min-height:420px;}
+  .stock-folders{border-right:1px solid var(--border);background:var(--surface-2);}
+  .stock-folder{display:flex;align-items:center;gap:10px;padding:11px 16px;cursor:pointer;border-bottom:1px solid var(--border);font-size:14px;}
+  .stock-folder:hover{background:var(--accent-soft);}
+  .stock-folder.active{background:var(--accent-soft);border-left:3px solid var(--accent);padding-left:13px;font-weight:600;}
+  .stock-folder .stock-folder-name{flex:1;color:var(--ink);}
+  .stock-folder .stock-folder-count{font-size:12px;color:var(--ink-faint);background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:1px 8px;}
+  .stock-files-head{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--border);}
+  .stock-search{flex:1;padding:7px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;}
+  .stock-sort-btn{background:none;border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:12px;color:var(--ink-soft);cursor:pointer;white-space:nowrap;}
+  .stock-file-row{display:flex;align-items:center;gap:12px;padding:10px 18px;border-bottom:1px solid var(--border);}
+  .stock-file-row:hover{background:var(--surface-2);}
+  .stock-file-icon{width:34px;height:34px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0;background:var(--accent-soft);color:var(--accent);font-weight:700;letter-spacing:.2px;}
+  .stock-file-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-size:14px;}
+  .stock-file-meta{font-size:12px;color:var(--ink-faint);white-space:nowrap;}
+  .stock-empty{padding:40px 20px;text-align:center;color:var(--ink-faint);font-size:14px;}
 </style>
 </head>
 <body>
@@ -875,7 +891,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-04-14';
+const APP_VERSION = '2026-09-04-15';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1472,9 +1488,15 @@ function fichiersParTypePourCoop(coopId){
   return dossiers;
 }
 
+function extensionIcone(nom){
+  const ext = String(nom||'').split('.').pop().toUpperCase();
+  return ext.length<=4 ? ext : ext.slice(0,3);
+}
+
 function toggleDossierStockage(cle){
-  if (!state.dossiersOuverts) state.dossiersOuverts = new Set();
-  if (state.dossiersOuverts.has(cle)) state.dossiersOuverts.delete(cle); else state.dossiersOuverts.add(cle);
+  // Selection simple (un seul dossier actif a la fois) plutot qu'un
+  // accordeon multi-ouvert -- plus lisible des qu'il y a beaucoup de fichiers.
+  state.dossierStockageActif = cle;
   render();
 }
 
@@ -1485,34 +1507,55 @@ function renderStockageTab(){
   const coopId = state.stockageCoopFilter || state.cooperatives[0].id;
   const coop = coopById(coopId);
   const dossiers = fichiersParTypePourCoop(coopId);
+  const clesDossiers = Object.keys(dossiers);
   const totalFichiers = Object.values(dossiers).reduce((s,d)=>s+d.fichiers.length,0);
 
+  let cleActive = state.dossierStockageActif;
+  if (!cleActive || !dossiers[cleActive]) cleActive = clesDossiers.find(c=>dossiers[c].fichiers.length>0) || clesDossiers[0];
+  const dossierActif = dossiers[cleActive] || { label:'', fichiers:[] };
+
+  const recherche = (state.stockageRecherche||'').toLowerCase();
+  const tri = state.stockageTri || 'date';
+  let fichiersAffiches = dossierActif.fichiers.filter(f=>!recherche || f.nom.toLowerCase().includes(recherche));
+  fichiersAffiches = fichiersAffiches.slice().sort((a,b)=>{
+    if (tri==='nom') return a.nom.localeCompare(b.nom,'fr',{sensitivity:'base'});
+    return String(b.date||'').localeCompare(String(a.date||'')); // date desc par defaut
+  });
+
   let html = '<div class="controls">'
-    + '<label class="field">Coopérative<select onchange="state.stockageCoopFilter=this.value;render();">'
+    + '<label class="field">Coopérative<select onchange="state.stockageCoopFilter=this.value;state.dossierStockageActif=null;state.stockageRecherche=\'\';render();">'
     + state.cooperatives.slice().sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'})).map(c=>'<option value="'+c.id+'"'+(coopId===c.id?' selected':'')+'>'+esc(c.nom)+'</option>').join('')
     + '</select></label>'
     + '</div>';
 
-  html += '<div class="panel"><div class="panel-head"><h2>📁 '+esc(coop?coop.nom:'')+' ('+fmtNum(totalFichiers)+' fichier(s))</h2></div>';
-  Object.entries(dossiers).forEach(([cle,d])=>{
-    if (d.fichiers.length===0 && cle==='envois') return; // pas de dossier vide pour "envois" si rien
-    const ouvert = state.dossiersOuverts && state.dossiersOuverts.has(coopId+'_'+cle);
-    html += '<div class="checklist-item-v2"><div class="checklist-row" style="cursor:pointer;" onclick="toggleDossierStockage(\''+coopId+'_'+cle+'\')">'
-      + '<span style="flex:1;font-weight:600;">📁 '+esc(d.label)+'</span><span class="hint">'+d.fichiers.length+' fichier(s) '+(ouvert?'▲':'▼')+'</span>'
-      + '</div>';
-    if (ouvert){
-      if (d.fichiers.length===0){
-        html += '<div class="hint" style="padding:4px 0 8px 24px;">Aucun fichier dans ce dossier.</div>';
-      } else {
-        d.fichiers.forEach(f=>{
-          html += '<div class="achat-item" style="padding-left:24px;"><span>📄 '+esc(f.nom)+(f.titre?' — '+esc(f.titre):'')+(f.date?' <span class="hint">('+esc(new Date(f.date).toLocaleDateString('fr-FR'))+')</span>':'')+'</span>'
-            + '<button class="btn-ghost" onclick="event.stopPropagation();telechargerFichierDemande(\''+f.path+'\',\''+esc(f.nom).replace(/'/g,"\\'")+'\')">Télécharger</button></div>';
-        });
-      }
-    }
-    html += '</div>';
-  });
-  html += '</div>';
+  html += '<div class="panel"><div class="panel-head"><h2>'+esc(coop?coop.nom:'')+' — '+fmtNum(totalFichiers)+' fichier(s) au total</h2></div>'
+    + '<div class="stock-layout">'
+    + '<div class="stock-folders">'
+    + clesDossiers.map(cle=>{
+        const d = dossiers[cle];
+        return '<div class="stock-folder'+(cle===cleActive?' active':'')+'" onclick="toggleDossierStockage(\''+cle+'\')">'
+          + '<span class="stock-folder-name">'+esc(d.label)+'</span>'
+          + '<span class="stock-folder-count">'+d.fichiers.length+'</span>'
+          + '</div>';
+      }).join('')
+    + '</div>'
+    + '<div>'
+    + '<div class="stock-files-head">'
+    + '<input class="stock-search" type="text" placeholder="Rechercher un fichier dans ce dossier..." value="'+esc(state.stockageRecherche||'')+'" oninput="state.stockageRecherche=this.value;render();document.querySelector(\'.stock-search\').focus();document.querySelector(\'.stock-search\').setSelectionRange(this.value.length,this.value.length);">'
+    + '<button class="stock-sort-btn" onclick="state.stockageTri=\''+(tri==='date'?'nom':'date')+'\';render();">Trier par '+(tri==='date'?'nom':'date')+'</button>'
+    + '</div>'
+    + (fichiersAffiches.length===0
+        ? '<div class="stock-empty">'+(dossierActif.fichiers.length===0?'Aucun fichier dans ce dossier.':'Aucun fichier ne correspond à la recherche.')+'</div>'
+        : fichiersAffiches.map(f=>'<div class="stock-file-row">'
+            + '<div class="stock-file-icon">'+esc(extensionIcone(f.nom))+'</div>'
+            + '<div class="stock-file-name" title="'+esc(f.nom)+(f.titre?' — '+esc(f.titre):'')+'">'+esc(f.nom)+(f.titre?' <span class="hint">— '+esc(f.titre)+'</span>':'')+'</div>'
+            + '<div class="stock-file-meta">'+(f.date?esc(new Date(f.date).toLocaleDateString('fr-FR')):'')+'</div>'
+            + '<button class="btn-ghost" onclick="telechargerFichierDemande(\''+f.path+'\',\''+esc(f.nom).replace(/'/g,"\\'")+'\')">Télécharger</button>'
+            + '</div>').join('')
+      )
+    + '</div>'
+    + '</div>'
+    + '</div>';
   return html;
 }
 
