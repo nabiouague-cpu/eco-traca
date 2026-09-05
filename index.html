@@ -873,7 +873,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-04-10';
+const APP_VERSION = '2026-09-04-11';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3527,6 +3527,43 @@ function calcMontantPaiement(a){
   return { poids, prixEntreeUsine, tkm, commission, tauxBic, retenueBic, aBic, montant };
 }
 
+function ouvrirFinalisationPaiement(achatId){
+  const a = state.achats.find(x=>x.id===achatId);
+  if (!a) return;
+  state.modal = { type:'finaliserPaiement', payload:{ achatId } };
+  render();
+}
+
+async function enregistrerFinalisationPaiement(){
+  const pl = state.modal.payload;
+  const a = state.achats.find(x=>x.id===pl.achatId);
+  if (!a) return;
+  const poidsNetPaye = Number(fv('fp_poids_net_paye'))||0;
+  const prixEntreeUsine = Number(fv('fp_prix_entree_usine'))||0;
+  if (!poidsNetPaye || poidsNetPaye<=0){ showToast('Indique le poids net payé.'); return; }
+
+  const data = {
+    poids_net_produit: poidsNetPaye,
+    banque: fv('fp_banque').trim() || null,
+    numero_cheque: fv('fp_numero_cheque').trim() || null,
+    libelle_cheque: fv('fp_libelle_cheque').trim() || null,
+  };
+  // Le prix entree usine confirme ici devient le reglage global par defaut pour
+  // les achats suivants, tout en s'appliquant immediatement a celui-ci -- evite
+  // d'avoir a rouvrir "Parametres de paiement" separement a chaque changement
+  // de prix publie par le CCC.
+  if (prixEntreeUsine>0 && prixEntreeUsine!==Number(state.settings.prix_entree_usine)){
+    state.settings.prix_entree_usine = prixEntreeUsine;
+    await saveKey(KEY_SETTINGS, state.settings);
+  }
+
+  Object.assign(a, data);
+  const { error } = await supabaseClient.from('achats').upsert(a);
+  if (error){ showToast('Échec de l\'enregistrement : '+error.message); return; }
+  showToast('Paiement finalisé.', 'success');
+  closeModal();
+}
+
 function achatsFiltered(){
   const coopId = state.coopFilter;
   const campId = state.campagneFilter;
@@ -3587,7 +3624,7 @@ function renderAchatsConnaissementPanel(){
         html += '<div class="achat-card">'
           + '<div class="achat-card-head">'
           + '<div><div class="name">'+esc(a.connaissement||'(sans numéro)')+(a.type_cacao?' <span class="badge neutral">'+esc(a.type_cacao)+'</span>':'')+(a.declare_par_coop?' <span class="badge neutral" title="Cette vente a été déclarée directement par la coopérative depuis son portail">Déclaré par la coop.</span>':'')+(verifBadge?' '+verifBadge:'')+'</div><div class="coop">'+esc(coop?coop.nom:'—')+' · '+esc(a.date)+(a.periode?' · '+(a.periode==='principale'?'principale':'intermédiaire'):'')+(prime>0?' · <span class="num">prime '+fmtNum(prime)+' FCFA</span>':'')+(a.lieu_origine?' · origine '+esc(a.lieu_origine):'')+(a.usine_dechargement?' · usine '+esc(a.usine_dechargement):'')+(a.tkm?' · TKM '+fmtNum(a.tkm):'')+'</div></div>'
-          + '<div class="row-actions"><button class="btn-ghost" onclick="openModal(\'achat\','+esc(JSON.stringify(a)).replace(/&#39;/g,"&apos;")+')">Modifier</button><button class="btn-danger-text" onclick="deleteAchat(\''+a.id+'\')">Supprimer</button></div>'
+          + '<div class="row-actions"><button class="btn-primary" style="padding:4px 10px;font-size:12px;" onclick="ouvrirFinalisationPaiement(\''+a.id+'\')">Finaliser le paiement</button><button class="btn-ghost" onclick="openModal(\'achat\','+esc(JSON.stringify(a)).replace(/&#39;/g,"&apos;")+')">Modifier</button><button class="btn-danger-text" onclick="deleteAchat(\''+a.id+'\')">Supprimer</button></div>'
           + '</div>'
           + '<div class="achat-compare">'
           + '<div class="achat-compare-col"><h4>Déclaré à l\'émission</h4>'
@@ -4140,6 +4177,32 @@ function render(){
       + '<p class="hint" style="margin-top:4px;">La retenue BIC n\'est appliquée que si la coopérative n\'a pas fourni son document BIC dans sa checklist de conformité.</p>'
       + '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Annuler</button><button type="button" class="btn btn-primary" onclick="saveParametresPaiement()">Enregistrer</button></div>'
       + '</div></div>';
+  }
+
+  if (state.modal && state.modal.type==='finaliserPaiement'){
+    const pl = state.modal.payload;
+    const a = state.achats.find(x=>x.id===pl.achatId);
+    if (!a){ closeModal(); }
+    else {
+      const coop = coopById(a.cooperative_id);
+      const aBic = coopABic(a.cooperative_id);
+      const tauxBic = Number(state.settings.taux_bic)||0;
+      html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
+        + '<h3>Finaliser le paiement — '+esc(coop?coop.nom:'')+' ('+esc(a.connaissement||'—')+')</h3>'
+        + '<div class="info-grid" style="margin-bottom:14px;background:var(--surface-2);padding:10px;border-radius:8px;">'
+        + '<div><span>TKM (repris de la fiche de vente) :</span> '+(a.tkm?fmtNum(a.tkm):'—')+'</div>'
+        + '<div><span>Retenue BIC (taux fixe '+fmtNum(tauxBic)+' FCFA/kg) :</span> '+(aBic?'aucune (BIC fourni)':'s\'applique — document BIC non fourni')+'</div>'
+        + '</div>'
+        + '<div id="modal-fields">'
+        + '<label class="field">Poids net payé (kg)<input type="number" step="1" min="0" name="fp_poids_net_paye" value="'+esc(a.poids_net_produit||'')+'"></label>'
+        + '<label class="field">Prix entrée usine (FCFA/kg)<input type="number" step="1" min="0" name="fp_prix_entree_usine" value="'+esc(state.settings.prix_entree_usine||0)+'"></label>'
+        + '<label class="field">Banque (émettrice du chèque)<input type="text" name="fp_banque" value="'+esc(a.banque||'')+'"></label>'
+        + '<label class="field">Numéro de chèque<input type="text" name="fp_numero_cheque" value="'+esc(a.numero_cheque||'')+'"></label>'
+        + '<label class="field">Libellé du chèque (à l\'ordre de...)<input type="text" name="fp_libelle_cheque" value="'+esc(a.libelle_cheque||'')+'" placeholder="ex : SCOOPS UNITE, ou nom du mandataire"></label>'
+        + '</div>'
+        + '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Annuler</button><button type="button" class="btn btn-primary" onclick="enregistrerFinalisationPaiement()">Enregistrer</button></div>'
+        + '</div></div>';
+    }
   }
 
   if (state.modal && state.modal.type==='primes'){
