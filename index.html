@@ -891,7 +891,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-04-15';
+const APP_VERSION = '2026-09-04-16';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1500,6 +1500,66 @@ function toggleDossierStockage(cle){
   render();
 }
 
+function toggleSelectionDossierStockage(cle){
+  const coopId = state.stockageCoopFilter || state.cooperatives[0].id;
+  if (!state.stockageSelection) state.stockageSelection = {};
+  if (!state.stockageSelection[coopId]) state.stockageSelection[coopId] = [];
+  const sel = state.stockageSelection[coopId];
+  const idx = sel.indexOf(cle);
+  if (idx>=0) sel.splice(idx,1); else sel.push(cle);
+  render();
+}
+
+// Exporte un ou plusieurs dossiers (ou tous, si cles est null) d'une
+// cooperative en une seule archive ZIP, chaque dossier devenant un
+// sous-dossier dans l'archive.
+async function exporterDossiersStockage(coopId, cles){
+  const coop = coopById(coopId);
+  const dossiers = fichiersParTypePourCoop(coopId);
+  const clesAExporter = cles || Object.keys(dossiers);
+  if (typeof JSZip === 'undefined'){ showToast("La bibliothèque de compression n'a pas pu se charger (connexion internet requise). Réessaie dans un instant."); return; }
+
+  const totalFichiers = clesAExporter.reduce((s,c)=>s+((dossiers[c]&&dossiers[c].fichiers.length)||0),0);
+  if (totalFichiers===0){ showToast('Aucun fichier à exporter pour cette sélection.'); return; }
+
+  const btn = document.getElementById(cles ? 'stock-export-selection-btn' : 'stock-export-tout-btn');
+  if (btn){ btn.disabled = true; btn.textContent = 'Préparation…'; }
+  try{
+    const zip = new JSZip();
+    let ok = 0;
+    for (const cle of clesAExporter){
+      const d = dossiers[cle];
+      if (!d || d.fichiers.length===0) continue;
+      const nomSousDossier = d.label.replace(/[^a-z0-9]+/gi,'_');
+      const usedNames = new Set();
+      for (const f of d.fichiers){
+        const { data, error } = await supabaseClient.storage.from('documents-coop').download(f.path);
+        if (error){ showToast("Échec du téléchargement de "+f.nom+" : "+error.message); continue; }
+        let name = f.nom;
+        if (usedNames.has(name)){
+          const parts = name.split('.');
+          const ext = parts.length>1 ? '.'+parts.pop() : '';
+          name = parts.join('.') + '_' + Math.random().toString(36).slice(2,7) + ext;
+        }
+        usedNames.add(name);
+        zip.file(nomSousDossier+'/'+name, data);
+        ok++;
+      }
+    }
+    if (ok===0){ showToast("Aucun fichier n'a pu être récupéré."); if(btn){btn.disabled=false;render();} return; }
+    const blob = await zip.generateAsync({type:'blob'});
+    const url = URL.createObjectURL(blob);
+    const suffixe = cles ? '_selection' : '_complet';
+    const a = document.createElement('a'); a.href = url; a.download = 'stockage_'+(coop?coop.nom.replace(/[^a-z0-9]+/gi,'_'):coopId)+suffixe+'.zip';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast(ok+' fichier(s) exporté(s).', 'success');
+  }catch(e){
+    showToast('Échec de l\'export : '+e.message);
+  }
+  if (btn){ btn.disabled=false; render(); }
+}
+
 function renderStockageTab(){
   if (state.cooperatives.length===0){
     return '<div class="panel"><div class="empty">Aucune coopérative enregistrée pour le moment.</div></div>';
@@ -1513,6 +1573,7 @@ function renderStockageTab(){
   let cleActive = state.dossierStockageActif;
   if (!cleActive || !dossiers[cleActive]) cleActive = clesDossiers.find(c=>dossiers[c].fichiers.length>0) || clesDossiers[0];
   const dossierActif = dossiers[cleActive] || { label:'', fichiers:[] };
+  const selection = (state.stockageSelection && state.stockageSelection[coopId]) || [];
 
   const recherche = (state.stockageRecherche||'').toLowerCase();
   const tri = state.stockageTri || 'date';
@@ -1528,13 +1589,19 @@ function renderStockageTab(){
     + '</select></label>'
     + '</div>';
 
-  html += '<div class="panel"><div class="panel-head"><h2>'+esc(coop?coop.nom:'')+' — '+fmtNum(totalFichiers)+' fichier(s) au total</h2></div>'
+  html += '<div class="panel"><div class="panel-head"><h2>'+esc(coop?coop.nom:'')+' — '+fmtNum(totalFichiers)+' fichier(s) au total</h2>'
+    + '<div style="display:flex;gap:8px;">'
+    + '<button class="btn" id="stock-export-selection-btn" '+(selection.length>0?'onclick="exporterDossiersStockage(\''+coopId+'\', ['+selection.map(c=>"'"+c+"'").join(',')+'])"':'disabled')+'>Exporter la sélection ('+selection.length+')</button>'
+    + '<button class="btn btn-primary" id="stock-export-tout-btn" '+(totalFichiers>0?'onclick="exporterDossiersStockage(\''+coopId+'\', null)"':'disabled')+'>Tout exporter (ZIP)</button>'
+    + '</div></div>'
     + '<div class="stock-layout">'
     + '<div class="stock-folders">'
     + clesDossiers.map(cle=>{
         const d = dossiers[cle];
-        return '<div class="stock-folder'+(cle===cleActive?' active':'')+'" onclick="toggleDossierStockage(\''+cle+'\')">'
-          + '<span class="stock-folder-name">'+esc(d.label)+'</span>'
+        const coche = selection.includes(cle);
+        return '<div class="stock-folder'+(cle===cleActive?' active':'')+'">'
+          + '<input type="checkbox" '+(coche?'checked':'')+' '+(d.fichiers.length===0?'disabled':'')+' onclick="event.stopPropagation();toggleSelectionDossierStockage(\''+cle+'\')">'
+          + '<span class="stock-folder-name" onclick="toggleDossierStockage(\''+cle+'\')">'+esc(d.label)+'</span>'
           + '<span class="stock-folder-count">'+d.fichiers.length+'</span>'
           + '</div>';
       }).join('')
