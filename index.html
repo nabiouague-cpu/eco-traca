@@ -907,7 +907,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-04-31';
+const APP_VERSION = '2026-09-04-32';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1753,6 +1753,27 @@ function placeholderMessageDemande(typesSet){
   return 'ex : Merci de transmettre les éléments demandés ci-dessus avant la date limite.';
 }
 
+// Sauvegarde l'etat courant du formulaire "nouvelle demande" dans le payload
+// puis redessine -- necessaire pour que le nom genere automatiquement
+// (code court + connaissement) se recalcule des que la cooperative ou le
+// connaissement change, sans perdre le reste de la saisie en cours.
+function majNomDemandeTracabilite(){
+  if (!(state.modal && state.modal.type==='nouvelleDemande')) return;
+  const fileInput = document.getElementById('demande_fichier_source_input');
+  const fichierSelectionne = (fileInput && fileInput.files[0]) ? fileInput.files[0] : (state.modal.payload && state.modal.payload.fichierSource);
+  state.modal.payload = {
+    demande_name: fv('demande_name'),
+    demande_cooperative_id: fv('demande_cooperative_id'),
+    demande_deadline: fv('demande_deadline'),
+    demande_demandeur_nom: fv('demande_demandeur_nom'),
+    demande_message: fv('demande_message'),
+    demande_doc_nature: fvRadio('demande_doc_nature'),
+    demande_connaissement: fv('demande_connaissement'),
+    fichierSource: fichierSelectionne,
+  };
+  render();
+}
+
 function toggleDemandeType(type){
   if (state.modal && state.modal.type==='nouvelleDemande'){
     const fileInput = document.getElementById('demande_fichier_source_input');
@@ -1764,6 +1785,7 @@ function toggleDemandeType(type){
       demande_demandeur_nom: fv('demande_demandeur_nom'),
       demande_message: fv('demande_message'),
       demande_doc_nature: fvRadio('demande_doc_nature'),
+      demande_connaissement: fv('demande_connaissement'),
       fichierSource: fichierSelectionne,
     };
   }
@@ -1801,6 +1823,13 @@ async function creerDemande(){
   const name = fv('demande_name').trim();
   const coopId = fv('demande_cooperative_id');
   const deadline = fv('demande_deadline');
+  const estTracabiliteSeuleCreation = state.newDemandeTypes.size===1 && state.newDemandeTypes.has('product_movements');
+  if (estTracabiliteSeuleCreation){
+    const connaissementSaisi = fv('demande_connaissement').trim();
+    if (!connaissementSaisi){ showToast('Indique le numéro de connaissement.'); return; }
+    const coopPourNom = coopId && coopId!=='__all__' ? coopById(coopId) : null;
+    if (coopPourNom && !coopPourNom.code_court){ showToast('Cette coopérative n\'a pas de code court renseigné — ajoute-le sur sa fiche avant de créer cette demande.'); return; }
+  }
   const message = fv('demande_message').trim();
   const demandeurNom = fv('demande_demandeur_nom').trim();
   const docNature = fvRadio('demande_doc_nature') || 'signer';
@@ -1851,6 +1880,7 @@ async function creerDemande(){
       message: message || null,
       document_a_signer: fichierSource ? (docNature==='signer') : null,
       fichier_source_path, fichier_source_nom,
+      connaissement: estTracabiliteSeuleCreation ? fv('demande_connaissement').trim().toUpperCase() : null,
     };
     const { error } = await supabaseClient.from('demandes').insert(demandeObj);
     if (error){ showToast('Échec de la création pour '+coop.nom+' : '+error.message); continue; }
@@ -2286,6 +2316,7 @@ async function submitCooperative(){
   const data = {
     nom: nom,
     nom_complet: fv('nom_complet').trim(),
+    code_court: fv('code_court').trim().toUpperCase() || null,
     statut: fv('statut'),
     certifications: fv('certifications').trim(),
     representant_legal_nom: fv('representant_legal_nom').trim(),
@@ -2522,6 +2553,61 @@ async function deleteAchat(id){
     await supabaseClient.from('achats').delete().eq('id', id);
   }catch(e){ showToast('Échec de la suppression : '+e.message); }
   render();
+}
+
+// Camion refoule / connaissement finalement rejete au CCC : la livraison n'a
+// plus lieu d'etre. Retire l'achat (remet a zero le cumul des producteurs
+// concernes pour le plafond des 70%), la fiche de tracabilite associee (entree
+// et fichier physique), et annule la demande d'origine avec un motif clair --
+// plutot qu'une simple suppression d'achat qui laisserait la fiche et la
+// demande trainer comme si de rien n'etait.
+async function annulerConnaissementRefoule(achatId){
+  const a = state.achats.find(x=>x.id===achatId);
+  if (!a) return;
+  const conn = a.connaissement;
+  const confirmation = window.confirm(
+    'Confirmer que le camion / connaissement '+(conn||achatId)+' a ete refoule ou rejete ?\n\n'
+    + 'Cette action va :\n'
+    + '- Supprimer l\'achat enregistre ('+fmtKg(a.quantite_kg)+')\n'
+    + '- Supprimer la fiche de tracabilite associee (fichier compris)\n'
+    + '- Remettre a zero le cumul des producteurs concernes pour le plafond des 70%\n'
+    + '- Annuler la demande d\'origine\n\n'
+    + 'Cette action est irreversible.'
+  );
+  if (!confirmation) return;
+
+  try{
+    // 1) Retire l'achat -- son exclusion des futurs cumuls (cumulAchats) suffit
+    //    a "remettre a zero le compteur" du ou des producteurs concernes.
+    await supabaseClient.from('achats').delete().eq('id', achatId);
+    state.achats = state.achats.filter(x=>x.id!==achatId);
+
+    if (conn){
+      // 2) Retrouve la fiche de tracabilite (fichier + entree) portant ce
+      //    connaissement, et la demande d'origine associee.
+      const { data: fichiers } = await supabaseClient.from('demande_fichiers').select('id,path,demande_id').eq('type','product_movements').eq('connaissement', conn);
+      if (fichiers && fichiers.length>0){
+        await supabaseClient.storage.from('documents-coop').remove(fichiers.map(f=>f.path));
+        await supabaseClient.from('demande_fichiers').delete().in('id', fichiers.map(f=>f.id));
+        const demandeIds = [...new Set(fichiers.map(f=>f.demande_id))];
+        await supabaseClient.from('demandes').update({
+          statut: 'annulee',
+          commentaire_ecorigine: 'Connaissement refoulé/rejeté — livraison annulée.',
+        }).in('id', demandeIds);
+      }
+      // Meme demande sans fiche encore deposee (annulee avant tout depot),
+      // retrouvee directement par son numero de connaissement.
+      await supabaseClient.from('demandes').update({
+        statut: 'annulee',
+        commentaire_ecorigine: 'Connaissement refoulé/rejeté — livraison annulée.',
+      }).eq('connaissement', conn).eq('statut', 'demandee');
+    }
+
+    showToast('Connaissement '+(conn||'')+' annulé, cumul remis à zéro.', 'success');
+    await actualiserDonnees();
+  }catch(e){
+    showToast('Échec de l\'annulation : '+e.message);
+  }
 }
 
 function toggleExpand(id){
@@ -3957,7 +4043,7 @@ function renderAchatsConnaissementPanel(){
         html += '<div class="achat-card">'
           + '<div class="achat-card-head">'
           + '<div><div class="name">'+esc(a.connaissement||'(sans numéro)')+(a.type_cacao?' <span class="badge neutral">'+esc(a.type_cacao)+'</span>':'')+(a.declare_par_coop?' <span class="badge neutral" title="Cette vente a été déclarée directement par la coopérative depuis son portail">Déclaré par la coop.</span>':'')+(verifBadge?' '+verifBadge:'')+'</div><div class="coop">'+esc(coop?coop.nom:'—')+' · '+esc(a.date)+(a.periode?' · '+(a.periode==='principale'?'principale':'intermédiaire'):'')+(prime>0?' · <span class="num">prime '+fmtNum(prime)+' FCFA</span>':'')+(a.lieu_origine?' · origine '+esc(a.lieu_origine):'')+(a.usine_dechargement?' · usine '+esc(a.usine_dechargement):'')+(a.tkm?' · TKM '+fmtNum(a.tkm):'')+'</div></div>'
-          + '<div class="row-actions"><button class="btn-primary" style="padding:4px 10px;font-size:12px;" onclick="ouvrirFinalisationPaiement(\''+a.id+'\')">Réception à l\'usine</button><button class="btn-ghost" onclick="openModal(\'achat\','+esc(JSON.stringify(a)).replace(/&#39;/g,"&apos;")+')">Modifier</button><button class="btn-danger-text" onclick="deleteAchat(\''+a.id+'\')">Supprimer</button></div>'
+          + '<div class="row-actions"><button class="btn-primary" style="padding:4px 10px;font-size:12px;" onclick="ouvrirFinalisationPaiement(\''+a.id+'\')">Réception à l\'usine</button><button class="btn-ghost" onclick="openModal(\'achat\','+esc(JSON.stringify(a)).replace(/&#39;/g,"&apos;")+')">Modifier</button><button class="btn-danger-text" onclick="'+(a.connaissement?'annulerConnaissementRefoule':'deleteAchat')+'(\''+a.id+'\')">'+(a.connaissement?'Camion refoulé / annuler':'Supprimer')+'</button></div>'
           + '</div>'
           + '<div class="achat-compare">'
           + '<div class="achat-compare-col"><h4>Déclaré à l\'émission</h4>'
@@ -4330,6 +4416,8 @@ function render(){
       + '<label class="field">Nom (sigle)<input type="text" name="nom" value="'+esc(c.nom||'')+'" placeholder="ex : SCOOPS BEHIRA"></label>'
       + '<label class="field">Nom complet<input type="text" name="nom_complet" value="'+esc(c.nom_complet||'')+'" placeholder="ex : La Société Coopérative BEHIRA"></label>'
       + '<div class="hint" style="margin:-10px 0 14px;">Utilisé dans les contrats : « Nom complet (Sigle) ». Laisse vide pour n\'afficher que le sigle.</div>'
+      + '<label class="field">Code court<input type="text" name="code_court" value="'+esc(c.code_court||'')+'" placeholder="ex : PADOU" style="text-transform:uppercase;"></label>'
+      + '<div class="hint" style="margin:-10px 0 14px;">Génère automatiquement le nom des demandes de fiche de traçabilité et le nom du fichier téléchargé par la coopérative : {code court}_{numéro de connaissement}.</div>'
       + '<fieldset><legend>Identité légale</legend>'
       + '<label class="field">N° RCCM<input type="text" name="rccm" value="'+esc(c.rccm||'')+'"></label>'
       + '<label class="field">N° agrément CCC<input type="text" name="ccc_num" value="'+esc(c.ccc_num||'')+'" placeholder="ex : SC101416"></label>'
@@ -4735,11 +4823,19 @@ function render(){
 
   if (state.modal && state.modal.type==='nouvelleDemande'){
     const nd = state.modal.payload || {};
+    const estTracabiliteSeule = state.newDemandeTypes.size===1 && state.newDemandeTypes.has('product_movements');
+    const coopChoisie = nd.demande_cooperative_id && nd.demande_cooperative_id!=='__all__' ? coopById(nd.demande_cooperative_id) : null;
+    const nomGenere = (estTracabiliteSeule && coopChoisie && coopChoisie.code_court && nd.demande_connaissement)
+      ? coopChoisie.code_court+'_'+nd.demande_connaissement.trim().toUpperCase() : '';
     html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
       + '<h3>Nouvelle demande de données</h3>'
       + '<div id="modal-fields">'
-      + '<label class="field">Nom de la demande<input type="text" name="demande_name" value="'+esc(nd.demande_name||'')+'" placeholder="ex : Mise à jour des parcelles — campagne 2026-2027"></label>'
-      + '<label class="field">Coopérative<select name="demande_cooperative_id"><option value="">— Choisir —</option>'
+      + (estTracabiliteSeule
+          ? '<label class="field">Numéro de connaissement<input type="text" name="demande_connaissement" value="'+esc(nd.demande_connaissement||'')+'" placeholder="ex : SC070454-2026-2-3" oninput="majNomDemandeTracabilite()"></label>'
+            + '<label class="field">Nom de la demande (généré automatiquement)<input type="text" name="demande_name" value="'+esc(nomGenere||nd.demande_name||'')+'" readonly style="background:var(--surface-2);color:var(--ink-soft);"></label>'
+            + (coopChoisie && !coopChoisie.code_court ? '<div class="hint" style="color:var(--danger);margin:-10px 0 10px;">Cette coopérative n\'a pas de code court renseigné sur sa fiche — impossible de générer le nom automatiquement.</div>' : '')
+          : '<label class="field">Nom de la demande<input type="text" name="demande_name" value="'+esc(nd.demande_name||'')+'" placeholder="ex : Mise à jour des parcelles — campagne 2026-2027"></label>')
+      + '<label class="field">Coopérative<select name="demande_cooperative_id" onchange="majNomDemandeTracabilite()"><option value="">— Choisir —</option>'
       + '<option value="__all__"'+(nd.demande_cooperative_id==='__all__'?' selected':'')+'>— Toutes les coopératives ('+state.cooperatives.length+') —</option>'
       + state.cooperatives.map(c=>'<option value="'+esc(c.id)+'"'+(nd.demande_cooperative_id===c.id?' selected':'')+'>'+esc(c.nom)+'</option>').join('')
       + '</select></label>'
