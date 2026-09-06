@@ -907,7 +907,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-04-33';
+const APP_VERSION = '2026-09-04-34';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1770,6 +1770,10 @@ function prefixeConnaissementPourCoop(coop){
   return coop.ccc_num+'-'+anneeDebutCampagne+'-2-';
 }
 
+// Le champ "numero de livraison" utilise sa PROPRE fonction (majNumeroLivraison,
+// ci-dessous) qui ne redessine jamais la modale -- un render() a chaque frappe
+// recreerait l'input et lui ferait perdre le focus, empechant de taper un
+// numero a plusieurs chiffres (ex: "10") sans recliquer entre chaque touche.
 function majNomDemandeTracabilite(){
   if (!(state.modal && state.modal.type==='nouvelleDemande')) return;
   const fileInput = document.getElementById('demande_fichier_source_input');
@@ -1785,6 +1789,24 @@ function majNomDemandeTracabilite(){
     fichierSource: fichierSelectionne,
   };
   render();
+}
+
+// Recalcule uniquement le nom genere et l'ecrit directement dans le champ
+// readonly correspondant -- aucun render(), donc le focus reste dans la case
+// "numero de livraison" pendant toute la saisie, chiffre apres chiffre.
+function majNumeroLivraison(){
+  if (!(state.modal && state.modal.type==='nouvelleDemande')) return;
+  state.modal.payload = state.modal.payload || {};
+  state.modal.payload.demande_numero_livraison = fv('demande_numero_livraison');
+  const coopId = fv('demande_cooperative_id');
+  const coop = coopId && coopId!=='__all__' ? coopById(coopId) : null;
+  const prefixe = prefixeConnaissementPourCoop(coop);
+  const numero = fv('demande_numero_livraison').trim();
+  const nomInput = document.querySelector('#modal-fields [name="demande_name"]');
+  if (nomInput){
+    nomInput.value = (coop && coop.code_court && prefixe && numero) ? coop.code_court+'_'+prefixe+numero : '';
+    state.modal.payload.demande_name = nomInput.value;
+  }
 }
 
 function toggleDemandeType(type){
@@ -4852,7 +4874,7 @@ function render(){
       + '<div id="modal-fields">'
       + (estTracabiliteSeule
           ? (coopChoisie
-              ? '<label class="field">Numéro de connaissement<div style="display:flex;align-items:center;gap:0;"><span style="padding:10px 0 10px 12px;background:var(--surface-2);border:1px solid var(--border);border-right:none;border-radius:8px 0 0 8px;color:var(--ink-soft);white-space:nowrap;font-size:14px;">'+esc(prefixeConnaissement||'—')+'</span><input type="text" name="demande_numero_livraison" value="'+esc(numeroLivraison)+'" placeholder="3" style="border-radius:0 8px 8px 0;border-left:none;width:70px;flex:none;" oninput="majNomDemandeTracabilite()"></div></label>'
+              ? '<label class="field">Numéro de connaissement<div style="display:flex;align-items:center;gap:0;"><span style="padding:10px 0 10px 12px;background:var(--surface-2);border:1px solid var(--border);border-right:none;border-radius:8px 0 0 8px;color:var(--ink-soft);white-space:nowrap;font-size:14px;">'+esc(prefixeConnaissement||'—')+'</span><input type="text" name="demande_numero_livraison" value="'+esc(numeroLivraison)+'" placeholder="3" style="border-radius:0 8px 8px 0;border-left:none;width:70px;flex:none;" oninput="majNumeroLivraison()"></div></label>'
               : '<div class="hint" style="margin-bottom:14px;">Choisis d\'abord la coopérative ci-dessous pour composer le numéro de connaissement.</div>')
             + '<label class="field">Nom de la demande (généré automatiquement)<input type="text" name="demande_name" value="'+esc(nomGenere||nd.demande_name||'')+'" readonly style="background:var(--surface-2);color:var(--ink-soft);"></label>'
             + (coopChoisie && !coopChoisie.code_court ? '<div class="hint" style="color:var(--danger);margin:-10px 0 10px;">Cette coopérative n\'a pas de code court renseigné sur sa fiche — impossible de générer le nom automatiquement.</div>' : '')
