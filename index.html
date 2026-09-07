@@ -642,7 +642,7 @@ async function envoyerDocumentsCoop(){
     const envoiId = 'env_'+Date.now()+'_'+c.id+'_'+Math.random().toString(36).slice(2,7);
     const fichiersUploades = [];
     for (const f of fichiers){
-      const path = c.id + '/envois/' + envoiId + '/' + f.name;
+      const path = c.id + '/envois/' + envoiId + '/' + assainirNomFichier(f.name);
       const { error: upErr } = await supabaseClient.storage.from('documents-coop').upload(path, f, { upsert: true });
       if (upErr){ showToast("Échec de l'envoi de "+f.name+" pour "+c.nom+" : "+upErr.message); continue; }
       fichiersUploades.push({ path, nom: f.name });
@@ -859,6 +859,16 @@ function sectionToggleHtml(key, count){
 function sectionIsOpen(key, count){
   return count < COLLAPSE_THRESHOLD || state.expandedSections.has(key);
 }
+// Assainit un nom de fichier pour l'utiliser dans un CHEMIN de stockage Supabase
+// -- retire les accents et tout caractere que la validation cote serveur
+// rejette (erreur "Invalid key" confirmee sur les caracteres accentues comme
+// e, e, a...). Le nom original reste affiche tel quel a l'ecran ; seul le
+// CHEMIN physique est nettoye.
+function assainirNomFichier(nom){
+  const sansAccents = String(nom||'').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return sansAccents.replace(/[^\w.\-() ]/g, '_');
+}
+
 function fv(name){
   const el = document.querySelector('#modal-fields [name="'+name+'"]');
   return el ? el.value : '';
@@ -920,7 +930,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-04-37';
+const APP_VERSION = '2026-09-04-38';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1430,7 +1440,7 @@ async function uploadBaseDonneesFichiers(){
 
   let ok = 0; const echecs = []; const fichiersEnvoyes = []; let registreInput = null; let geojsonFile = null;
   for (const { type, input, file } of aEnvoyer){
-    const path = coopId + '/database/' + type + '_' + file.name;
+    const path = coopId + '/database/' + type + '_' + assainirNomFichier(file.name);
     const { error: upErr } = await supabaseClient.storage.from('documents-coop').upload(path, file, { upsert: true });
     if (upErr){ echecs.push(type+' : '+upErr.message); continue; }
     const { error } = await supabaseClient.from('coop_database_files').upsert({
@@ -1926,7 +1936,7 @@ async function creerDemande(){
     const newId = 'req_'+Date.now()+'_'+coop.id;
     let fichier_source_path = null, fichier_source_nom = null;
     if (fichierSource){
-      const path = coop.id + '/demandes/' + newId + '/source/' + fichierSource.name;
+      const path = coop.id + '/demandes/' + newId + '/source/' + assainirNomFichier(fichierSource.name);
       const { error: upErr } = await supabaseClient.storage.from('documents-coop').upload(path, fichierSource, { upsert: true });
       if (upErr){ showToast("Échec de l'envoi du document pour "+coop.nom+" : "+upErr.message); continue; }
       fichier_source_path = path;
