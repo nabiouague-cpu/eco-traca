@@ -352,6 +352,16 @@ function genId(prefix){
 function esc(str){
   return String(str==null?'':str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+// Pour un texte injecte entre apostrophes simples DANS un attribut onclick=""
+// (ex: onclick="uneFonction('...')") : il faut echapper l'apostrophe pour la
+// syntaxe JavaScript (\') AVANT d'appliquer esc() pour le HTML -- dans l'autre
+// ordre, esc() transforme deja l'apostrophe en entite &#39;, que le navigateur
+// redecode en vraie apostrophe avant d'executer le JS, ce qui casse la chaine
+// et fait echouer l'action au clic, silencieusement (bug reellement rencontre
+// sur un nom de fichier contenant une apostrophe, ex: "Contrat d'achat...").
+function escJs(str){
+  return esc(String(str==null?'':str).replace(/'/g, "\\'"));
+}
 function showEmailPreview(to, subject, body){
   state.modal = {type:'emailPreview', payload:{to, subject, body}};
   render();
@@ -930,7 +940,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-04-38';
+const APP_VERSION = '2026-09-04-39';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1677,7 +1687,7 @@ function renderStockageTab(){
             + '<div class="stock-file-icon">'+esc(extensionIcone(f.nom))+'</div>'
             + '<div class="stock-file-name" title="'+esc(f.nom)+(f.titre?' — '+esc(f.titre):'')+'">'+esc(f.nom)+(f.titre?' <span class="hint">— '+esc(f.titre)+'</span>':'')+'</div>'
             + '<div class="stock-file-meta">'+(f.date?esc(new Date(f.date).toLocaleDateString('fr-FR')):'')+'</div>'
-            + '<button class="btn-ghost" onclick="telechargerFichierDemande(\''+f.path+'\',\''+esc(f.nom).replace(/'/g,"\\'")+'\')">Télécharger</button>'
+            + '<button class="btn-ghost" onclick="telechargerFichierDemande(\''+f.path+'\',\''+escJs(f.nom)+'\')">Télécharger</button>'
             + '</div>').join('')
       )
     + '</div>'
@@ -2143,7 +2153,7 @@ function renderDemandeStatusPanel(title, list, mode){
         // Document envoye par ECORIGINE (contrat, etc.) -- pas d'apercu, admin
         // sait deja ce qu'il contient puisqu'il l'a lui-meme joint.
         + (d.fichier_source_path ? '<button class="btn-ghost" onclick="telechargerFichierDemande(\''+d.fichier_source_path+'\',\''+esc(d.fichier_source_nom||'')+'\')">'+(d.document_a_signer===false?'Document transmis':'Document à signer')+'</button>' : '')
-        + (d.fichier_path ? '<button class="btn-ghost" onclick="apercuFichier(\''+d.fichier_path+'\',\''+esc(d.fichier_nom||'').replace(/'/g,"\\'")+'\')">👁 Aperçu</button><button class="btn-ghost" onclick="telechargerFichierDemande(\''+d.fichier_path+'\',\''+esc(d.fichier_nom||'')+'\')">Télécharger</button>' : '')
+        + (d.fichier_path ? '<button class="btn-ghost" onclick="apercuFichier(\''+d.fichier_path+'\',\''+escJs(d.fichier_nom||'')+'\')">👁 Aperçu</button><button class="btn-ghost" onclick="telechargerFichierDemande(\''+d.fichier_path+'\',\''+escJs(d.fichier_nom||'')+'\')">Télécharger</button>' : '')
         + (mode==='validation' ? '<button class="btn-primary" onclick="validerDemande(\''+d.id+'\')">Valider</button><button class="btn-danger-text" onclick="ouvrirRejetDemande(\''+d.id+'\')">Rejeter</button>' : '')
         + (mode==='validation' && (d.types||[]).includes('product_movements') ? '<button class="btn-ghost" onclick="verifierLimitesFicheTracabilite(\''+d.id+'\')">Vérifier les limites</button>' : '')
         + ((mode==='acceptee') && d.fichier_path && (d.types||[]).includes('masterdata') ? '<button class="btn-ghost" onclick="lancerAnalyseWhisp(\''+d.id+'\')" id="whisp-btn-'+d.id+'">Lancer l\'analyse Whisp</button>' : '')
@@ -2151,7 +2161,7 @@ function renderDemandeStatusPanel(title, list, mode){
         + (d.commentaire_ecorigine ? '<div class="hint" style="width:100%;margin-top:4px;">Motif : '+esc(d.commentaire_ecorigine)+'</div>' : '')
         + '</div>'
         + (fichiersDemande.length>0 ? '<div class="dem-fichiers">'
-            + fichiersDemande.map(f=>'<div class="dem-fichier-ligne"><span style="flex:1;color:var(--ink-soft);">📄 '+esc(f.nom||f.path.split('/').pop())+'</span><button class="btn-ghost" onclick="apercuFichier(\''+f.path+'\',\''+esc(f.nom||'').replace(/'/g,"\\'")+'\')">👁 Aperçu</button><button class="btn-ghost" onclick="telechargerFichierDemande(\''+f.path+'\',\''+esc(f.nom||'').replace(/'/g,"\\'")+'\')">Télécharger</button></div>').join('')
+            + fichiersDemande.map(f=>'<div class="dem-fichier-ligne"><span style="flex:1;color:var(--ink-soft);">📄 '+esc(f.nom||f.path.split('/').pop())+'</span><button class="btn-ghost" onclick="apercuFichier(\''+f.path+'\',\''+escJs(f.nom||'')+'\')">👁 Aperçu</button><button class="btn-ghost" onclick="telechargerFichierDemande(\''+f.path+'\',\''+escJs(f.nom||'')+'\')">Télécharger</button></div>').join('')
             + '</div>' : '')
         + '</div>';
     });
@@ -4839,7 +4849,7 @@ function render(){
     html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal wide" style="max-width:800px;">'
       + '<h3>👁 '+esc(pl.nom||'Aperçu')+'</h3>'
       + corps
-      + '<div class="actions"><button class="btn" onclick="closeModal()">Fermer</button><button class="btn btn-primary" onclick="telechargerFichierDemande(\''+pl.path+'\',\''+esc(pl.nom||'').replace(/'/g,"\\'")+'\')">Télécharger</button></div>'
+      + '<div class="actions"><button class="btn" onclick="closeModal()">Fermer</button><button class="btn btn-primary" onclick="telechargerFichierDemande(\''+pl.path+'\',\''+escJs(pl.nom||'')+'\')">Télécharger</button></div>'
       + '</div></div>';
   }
 
