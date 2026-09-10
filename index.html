@@ -972,7 +972,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-04-58';
+const APP_VERSION = '2026-09-04-59';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1669,34 +1669,34 @@ async function supprimerFichierEnBase(f){
 async function supprimerUnFichierStockage(coopId, cleFichier){
   const f = trouverFichierParCle(coopId, cleFichier);
   if (!f) return;
-  const confirmation = window.confirm('Supprimer définitivement « '+f.nom+' » ?\n\nCette action est irréversible.');
-  if (!confirmation) return;
-  try{
-    await supprimerFichierEnBase(f);
-    if (state.stockageSelectionFichiers && state.stockageSelectionFichiers[coopId]){
-      state.stockageSelectionFichiers[coopId] = state.stockageSelectionFichiers[coopId].filter(c=>c!==cleFichier);
+  askConfirm('Supprimer définitivement « '+f.nom+' » ?\n\nCette action est irréversible.', async () => {
+    try{
+      await supprimerFichierEnBase(f);
+      if (state.stockageSelectionFichiers && state.stockageSelectionFichiers[coopId]){
+        state.stockageSelectionFichiers[coopId] = state.stockageSelectionFichiers[coopId].filter(c=>c!==cleFichier);
+      }
+      showToast('Fichier supprimé.', 'success');
+      await actualiserDonnees();
+    }catch(e){
+      showToast("Échec de la suppression : "+e.message);
     }
-    showToast('Fichier supprimé.', 'success');
-    await actualiserDonnees();
-  }catch(e){
-    showToast("Échec de la suppression : "+e.message);
-  }
+  });
 }
 
 async function supprimerFichiersStockageSelection(coopId){
   const cles = (state.stockageSelectionFichiers && state.stockageSelectionFichiers[coopId]) || [];
   if (cles.length===0) return;
-  const confirmation = window.confirm('Supprimer définitivement ces '+cles.length+' fichier(s) ?\n\nCette action est irréversible.');
-  if (!confirmation) return;
-  let ok = 0;
-  for (const cle of cles){
-    const f = trouverFichierParCle(coopId, cle);
-    if (!f) continue;
-    try{ await supprimerFichierEnBase(f); ok++; }catch(e){ /* on continue les autres, le total affiche le vrai compte */ }
-  }
-  state.stockageSelectionFichiers[coopId] = [];
-  showToast(ok+' fichier(s) supprimé(s).', 'success');
-  await actualiserDonnees();
+  askConfirm('Supprimer définitivement ces '+cles.length+' fichier(s) ?\n\nCette action est irréversible.', async () => {
+    let ok = 0;
+    for (const cle of cles){
+      const f = trouverFichierParCle(coopId, cle);
+      if (!f) continue;
+      try{ await supprimerFichierEnBase(f); ok++; }catch(e){ /* on continue les autres, le total affiche le vrai compte */ }
+    }
+    state.stockageSelectionFichiers[coopId] = [];
+    showToast(ok+' fichier(s) supprimé(s).', 'success');
+    await actualiserDonnees();
+  });
 }
 
 // Exporte un ou plusieurs dossiers (ou tous, si cles est null) d'une
@@ -2775,49 +2775,49 @@ async function annulerConnaissementRefoule(achatId){
   const a = state.achats.find(x=>x.id===achatId);
   if (!a) return;
   const conn = a.connaissement;
-  const confirmation = window.confirm(
+  askConfirm(
     'Confirmer que le camion / connaissement '+(conn||achatId)+' a ete refoule ou rejete ?\n\n'
     + 'Cette action va :\n'
     + '- Supprimer l\'achat enregistre ('+fmtKg(a.quantite_kg)+')\n'
     + '- Supprimer la fiche de tracabilite associee (fichier compris)\n'
     + '- Remettre a zero le cumul des producteurs concernes pour le plafond des 70%\n'
     + '- Annuler la demande d\'origine\n\n'
-    + 'Cette action est irreversible.'
-  );
-  if (!confirmation) return;
+    + 'Cette action est irreversible.',
+    async () => {
+      try{
+        // 1) Retire l'achat -- son exclusion des futurs cumuls (cumulAchats) suffit
+        //    a "remettre a zero le compteur" du ou des producteurs concernes.
+        await supabaseClient.from('achats').delete().eq('id', achatId);
+        state.achats = state.achats.filter(x=>x.id!==achatId);
 
-  try{
-    // 1) Retire l'achat -- son exclusion des futurs cumuls (cumulAchats) suffit
-    //    a "remettre a zero le compteur" du ou des producteurs concernes.
-    await supabaseClient.from('achats').delete().eq('id', achatId);
-    state.achats = state.achats.filter(x=>x.id!==achatId);
+        if (conn){
+          // 2) Retrouve la fiche de tracabilite (fichier + entree) portant ce
+          //    connaissement, et la demande d'origine associee.
+          const { data: fichiers } = await supabaseClient.from('demande_fichiers').select('id,path,demande_id').eq('type','product_movements').eq('connaissement', conn);
+          if (fichiers && fichiers.length>0){
+            await supabaseClient.storage.from('documents-coop').remove(fichiers.map(f=>f.path));
+            await supabaseClient.from('demande_fichiers').delete().in('id', fichiers.map(f=>f.id));
+            const demandeIds = [...new Set(fichiers.map(f=>f.demande_id))];
+            await supabaseClient.from('demandes').update({
+              statut: 'annulee',
+              commentaire_ecorigine: 'Connaissement refoulé/rejeté — livraison annulée.',
+            }).in('id', demandeIds);
+          }
+          // Meme demande sans fiche encore deposee (annulee avant tout depot),
+          // retrouvee directement par son numero de connaissement.
+          await supabaseClient.from('demandes').update({
+            statut: 'annulee',
+            commentaire_ecorigine: 'Connaissement refoulé/rejeté — livraison annulée.',
+          }).eq('connaissement', conn).eq('statut', 'demandee');
+        }
 
-    if (conn){
-      // 2) Retrouve la fiche de tracabilite (fichier + entree) portant ce
-      //    connaissement, et la demande d'origine associee.
-      const { data: fichiers } = await supabaseClient.from('demande_fichiers').select('id,path,demande_id').eq('type','product_movements').eq('connaissement', conn);
-      if (fichiers && fichiers.length>0){
-        await supabaseClient.storage.from('documents-coop').remove(fichiers.map(f=>f.path));
-        await supabaseClient.from('demande_fichiers').delete().in('id', fichiers.map(f=>f.id));
-        const demandeIds = [...new Set(fichiers.map(f=>f.demande_id))];
-        await supabaseClient.from('demandes').update({
-          statut: 'annulee',
-          commentaire_ecorigine: 'Connaissement refoulé/rejeté — livraison annulée.',
-        }).in('id', demandeIds);
+        showToast('Connaissement '+(conn||'')+' annulé, cumul remis à zéro.', 'success');
+        await actualiserDonnees();
+      }catch(e){
+        showToast('Échec de l\'annulation : '+e.message);
       }
-      // Meme demande sans fiche encore deposee (annulee avant tout depot),
-      // retrouvee directement par son numero de connaissement.
-      await supabaseClient.from('demandes').update({
-        statut: 'annulee',
-        commentaire_ecorigine: 'Connaissement refoulé/rejeté — livraison annulée.',
-      }).eq('connaissement', conn).eq('statut', 'demandee');
     }
-
-    showToast('Connaissement '+(conn||'')+' annulé, cumul remis à zéro.', 'success');
-    await actualiserDonnees();
-  }catch(e){
-    showToast('Échec de l\'annulation : '+e.message);
-  }
+  );
 }
 
 function toggleExpand(id){
