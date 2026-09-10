@@ -972,7 +972,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-04-59';
+const APP_VERSION = '2026-09-04-60';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1649,12 +1649,18 @@ function trouverFichierParCle(coopId, cleFichier){
 async function supprimerFichierEnBase(f){
   if (f.source==='demande_fichiers'){
     await supabaseClient.from('demande_fichiers').delete().eq('id', f.sourceId);
+    state.demandeFichiers = (state.demandeFichiers||[]).filter(x=>x.id!==f.sourceId);
   } else if (f.source==='doc_check'){
     await supabaseClient.from('doc_check').update({ disponible:false, fichier_path:null, fichier_nom:null }).eq('id', f.sourceId);
+    const dc = (state.docCheck||[]).find(x=>x.id===f.sourceId);
+    if (dc){ dc.disponible = false; dc.fichier_path = null; dc.fichier_nom = null; }
   } else if (f.source==='coop_database_files'){
     await supabaseClient.from('coop_database_files').delete().eq('id', f.sourceId);
+    state.coopDatabaseFiles = (state.coopDatabaseFiles||[]).filter(x=>x.id!==f.sourceId);
   } else if (f.source==='demande_source'){
     await supabaseClient.from('demandes').update({ fichier_source_path:null, fichier_source_nom:null }).eq('id', f.sourceId);
+    const d = (state.demandesCoop||[]).find(x=>x.id===f.sourceId);
+    if (d){ d.fichier_source_path = null; d.fichier_source_nom = null; }
   } else if (f.source==='envois_coop'){
     const envoi = (state.envoisCoop||[]).find(e=>e.id===f.sourceId);
     if (envoi){
@@ -1676,7 +1682,7 @@ async function supprimerUnFichierStockage(coopId, cleFichier){
         state.stockageSelectionFichiers[coopId] = state.stockageSelectionFichiers[coopId].filter(c=>c!==cleFichier);
       }
       showToast('Fichier supprimé.', 'success');
-      await actualiserDonnees();
+      render(); // le state local est deja a jour (supprimerFichierEnBase) -- pas besoin de tout recharger depuis le serveur
     }catch(e){
       showToast("Échec de la suppression : "+e.message);
     }
@@ -1695,7 +1701,7 @@ async function supprimerFichiersStockageSelection(coopId){
     }
     state.stockageSelectionFichiers[coopId] = [];
     showToast(ok+' fichier(s) supprimé(s).', 'success');
-    await actualiserDonnees();
+    render(); // idem -- state local deja a jour fichier par fichier
   });
 }
 
@@ -2794,10 +2800,14 @@ async function annulerConnaissementRefoule(achatId){
           // 2) Retrouve la fiche de tracabilite (fichier + entree) portant ce
           //    connaissement, et la demande d'origine associee.
           const { data: fichiers } = await supabaseClient.from('demande_fichiers').select('id,path,demande_id').eq('type','product_movements').eq('connaissement', conn);
+          let demandeIdsAnnulees = [];
           if (fichiers && fichiers.length>0){
             await supabaseClient.storage.from('documents-coop').remove(fichiers.map(f=>f.path));
-            await supabaseClient.from('demande_fichiers').delete().in('id', fichiers.map(f=>f.id));
+            const idsASupprimer = fichiers.map(f=>f.id);
+            await supabaseClient.from('demande_fichiers').delete().in('id', idsASupprimer);
+            state.demandeFichiers = (state.demandeFichiers||[]).filter(x=>!idsASupprimer.includes(x.id));
             const demandeIds = [...new Set(fichiers.map(f=>f.demande_id))];
+            demandeIdsAnnulees = demandeIds;
             await supabaseClient.from('demandes').update({
               statut: 'annulee',
               commentaire_ecorigine: 'Connaissement refoulé/rejeté — livraison annulée.',
@@ -2805,14 +2815,18 @@ async function annulerConnaissementRefoule(achatId){
           }
           // Meme demande sans fiche encore deposee (annulee avant tout depot),
           // retrouvee directement par son numero de connaissement.
-          await supabaseClient.from('demandes').update({
+          const { data: demandesSansFichier } = await supabaseClient.from('demandes').update({
             statut: 'annulee',
             commentaire_ecorigine: 'Connaissement refoulé/rejeté — livraison annulée.',
-          }).eq('connaissement', conn).eq('statut', 'demandee');
+          }).eq('connaissement', conn).eq('statut', 'demandee').select('id');
+          const idsAnnuleesTotal = new Set([...demandeIdsAnnulees, ...((demandesSansFichier||[]).map(d=>d.id))]);
+          (state.demandesCoop||[]).forEach(d=>{
+            if (idsAnnuleesTotal.has(d.id)){ d.statut = 'annulee'; d.commentaire_ecorigine = 'Connaissement refoulé/rejeté — livraison annulée.'; }
+          });
         }
 
         showToast('Connaissement '+(conn||'')+' annulé, cumul remis à zéro.', 'success');
-        await actualiserDonnees();
+        render(); // le state local est deja a jour -- pas besoin de tout recharger depuis le serveur
       }catch(e){
         showToast('Échec de l\'annulation : '+e.message);
       }
