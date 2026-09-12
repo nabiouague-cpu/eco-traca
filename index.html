@@ -104,6 +104,8 @@
   .row.coop-row{grid-template-columns:2fr 1fr 1fr 1fr auto;}
   .coop-columns{display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start;}
   .coop-card-list{padding:14px 16px;}
+  .coop-nouvelles-label{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--accent);margin:0 0 8px 2px;}
+  .coop-nouvelles-separateur{border-top:1px dashed var(--border);margin:4px 0 16px;}
   .coop-card{background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;margin-bottom:12px;}
   .coop-card:last-child{margin-bottom:0;}
   .coop-card.unverified{border-color:var(--warn-line);}
@@ -947,7 +949,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-04-63';
+const APP_VERSION = '2026-09-04-64';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3980,8 +3982,21 @@ function renderCoopGroup(sectionKey, title, list){
   } else if (!isOpen){
     html += '<div class="empty">Liste repliée ('+fmtNum(sorted.length)+' coopératives) — clique sur « Dérouler » ci-dessus pour l\'afficher.</div>';
   } else {
+    // Distingue les coopératives enregistrées il y a moins de 7 jours --
+    // affichees dans un sous-groupe "Nouvelles" en tete de liste, toujours
+    // triees par ordre alphabetique entre elles. Passe une semaine, une
+    // cooperative rejoint simplement le tri alphabetique normal du reste,
+    // sans action manuelle necessaire.
+    const seuilRecent = Date.now() - 7*24*3600*1000;
+    const recentes = sorted.filter(c => c.created_at && new Date(c.created_at).getTime() >= seuilRecent);
+    const anciennes = sorted.filter(c => !(c.created_at && new Date(c.created_at).getTime() >= seuilRecent));
     html += '<div class="coop-card-list">';
-    sorted.forEach(c=>{ html += renderCoopCard(c); });
+    if (recentes.length>0){
+      html += '<div class="coop-nouvelles-label">🆕 Récemment enregistrées</div>';
+      recentes.forEach(c=>{ html += renderCoopCard(c); });
+      if (anciennes.length>0) html += '<div class="coop-nouvelles-separateur"></div>';
+    }
+    anciennes.forEach(c=>{ html += renderCoopCard(c); });
     html += '</div>';
   }
   html += '</div>';
