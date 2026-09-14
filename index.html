@@ -960,7 +960,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-04-76';
+const APP_VERSION = '2026-09-04-77';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -2952,6 +2952,45 @@ function exportCsv(){
   XLSX.writeFile(wb, 'suivi_achats_potentiel_' + (state.campagneFilter==='all'?'toutes_campagnes':state.campagneFilter) + '.xlsx');
 }
 
+// Exporte la fiche complete de TOUTES les cooperatives (tous les champs de la
+// table cooperatives) en un seul classeur Excel -- une ligne par cooperative,
+// pour un usage administratif/archive plutot que le detail carte-par-carte
+// deja visible dans l'onglet Cooperatives.
+function exporterFichesCooperatives(){
+  const header = [
+    'Nom (sigle)','Nom complet','Statut','Vérifiée','Code court',
+    'Représentant légal','Représentant légal — Contact','ADG','ADG — Contact',
+    'Personne contact','Personne contact — Contact',
+    'RCCM','N° agrément CCC','Identifiant de certification','Certifications',
+    'Date de fin de licence','Volume certificat (kg)',
+    'Siège social','Ville','Adresse postale',
+    'Email 1','Email 2','Email 3',
+    'Libellé 1','Libellé 2','Libellé 3',
+    'Créée le',
+  ];
+  const wsData = [header];
+  const coopsTriees = state.cooperatives.slice().sort((a,b)=> String(a.nom||'').localeCompare(String(b.nom||''), 'fr', {sensitivity:'base'}));
+  coopsTriees.forEach(c=>{
+    wsData.push([
+      c.nom||'', c.nom_complet||'', c.statut||'', c.verifiee?'Oui':'Non', c.code_court||'',
+      c.representant_legal_nom||'', c.representant_legal_contact||'', c.adg_nom||'', c.adg_contact||'',
+      c.contact_nom||'', c.contact_contact||'',
+      c.rccm||'', c.ccc_num||'', c.identifiant_certification||'', c.certifications||'',
+      c.date_fin_licence||'', c.volume_certificat!=null?c.volume_certificat:'',
+      c.siege_social||'', c.ville||'', c.adresse_postale||'',
+      c.email1||'', c.email2||'', c.email3||'',
+      c.libelle1||'', c.libelle2||'', c.libelle3||'',
+      c.created_at ? String(c.created_at).slice(0,10) : '',
+    ]);
+  });
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+  ws['!cols'] = header.map(h => ({wch: Math.max(14, Math.min(28, h.length+4))}));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Fiches coopératives');
+  XLSX.writeFile(wb, 'fiches_cooperatives_ORIGEN_' + new Date().toISOString().slice(0,10) + '.xlsx');
+  showToast(coopsTriees.length+' fiche(s) coopérative(s) exportée(s).', 'success');
+}
+
 
 /* ============================================================
    Import du rapport de réception CCC (Conseil Café-Cacao)
@@ -4043,6 +4082,7 @@ function renderCooperativesTab(){
       + '<button class="btn btn-primary" onclick="ouvrirEnvoiDocuments()">📎 Envoyer des documents</button>'
       + (nCertifieesTotal>0 ? '<button class="btn btn-primary" onclick="ouvrirGenerationContratsGroupe()">Générer des contrats en masse</button>' : '')
       + '<button class="btn" onclick="ouvrirCompletionNomsComplets()">Compléter les noms complets</button>'
+      + '<button class="btn" onclick="exporterFichesCooperatives()">⬇ Télécharger les fiches (Excel)</button>'
       + '</div>';
   }
 
