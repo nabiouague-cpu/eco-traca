@@ -181,6 +181,20 @@
   .loading-logo{width:180px;height:180px;margin:0 auto 20px;}
 
   /* ========== MODULE ORICERT ========== */
+  .oc-shell{min-height:100vh;background:var(--surface-2);}
+  .oc-appbar{background:#fff;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:12px 22px;gap:16px;}
+  .oc-appbar-brand{display:flex;align-items:center;gap:10px;font-family:Cambria,Georgia,serif;font-weight:600;font-size:16px;color:var(--ink);}
+  .oc-appbar-logo{width:26px;height:26px;flex:none;}
+  .oc-appbar-user{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--ink-soft);}
+  .oc-appbar-av{width:24px;height:24px;border-radius:50%;background:var(--surface-2);color:var(--ink);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;}
+  .oc-tabstrip{background:#15493B;display:flex;overflow-x:auto;position:sticky;top:0;z-index:50;}
+  .oc-tabstrip button{flex:none;background:none;border:none;color:#A9C2B4;font-size:12.5px;font-weight:500;padding:11px 16px;border-bottom:2.5px solid transparent;white-space:nowrap;cursor:pointer;font-family:inherit;}
+  .oc-tabstrip button:hover{color:#fff;}
+  .oc-tabstrip button.active{color:#fff;font-weight:700;border-bottom-color:#B8860B;background:rgba(255,255,255,.08);}
+  .oc-wrap{max-width:1180px;margin:0 auto;padding:24px 22px 60px;}
+  .oc-subtabs{display:flex;gap:6px;flex-wrap:wrap;margin:14px 0 18px;border-bottom:1px solid var(--border);padding-bottom:10px;}
+  .oc-subtabs button{border:1px solid var(--border);background:#fff;color:var(--ink-soft);font-size:12.5px;font-weight:500;padding:6px 14px;border-radius:20px;cursor:pointer;font-family:inherit;}
+  .oc-subtabs button.active{background:#15493B;color:#fff;border-color:#15493B;}
   .oc-hero{background:#fff;border:1px solid var(--border);border-radius:var(--radius,10px);padding:26px;margin-bottom:20px;}
   .oc-eyebrow{font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);font-weight:600;}
   .oc-h1{font-family:Cambria,Georgia,serif;font-size:26px;font-weight:700;margin:6px 0 0;color:var(--ink);}
@@ -1082,7 +1096,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-04-79';
+const APP_VERSION = '2026-09-04-80';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -2644,11 +2658,13 @@ function choisirEspace(espace){
 }
 async function chargerDonneesOricert(){
   try{
-    const [exigences, interlocuteurs, sites, partenaires, documents, audits, nc] = await Promise.all([
+    const [exigences, interlocuteurs, sites, partenaires, clients, prestataires, documents, audits, nc] = await Promise.all([
       supabaseClient.from('cert_exigences_statuts').select('*'),
       supabaseClient.from('cert_interlocuteurs').select('*').order('created_at'),
       supabaseClient.from('cert_sites').select('*').order('created_at'),
       supabaseClient.from('cert_partenaires').select('*').order('created_at'),
+      supabaseClient.from('cert_clients').select('*').order('created_at'),
+      supabaseClient.from('cert_prestataires').select('*').order('created_at'),
       supabaseClient.from('cert_documents').select('*').order('created_at'),
       supabaseClient.from('cert_audits').select('*').order('created_at'),
       supabaseClient.from('cert_non_conformites').select('*').order('created_at'),
@@ -2657,6 +2673,8 @@ async function chargerDonneesOricert(){
     state.oc_interlocuteurs = interlocuteurs.data || [];
     state.oc_sites = sites.data || [];
     state.oc_partenaires = partenaires.data || [];
+    state.oc_clients = clients.data || [];
+    state.oc_prestataires = prestataires.data || [];
     // "documents" alimente aussi le lien certificat et les supports de formation,
     // stockes dans la meme table avec une reference dediee -- on les separe ici
     // pour ne montrer dans l'onglet Documents que les vraies procedures.
@@ -2680,10 +2698,9 @@ const ORICERT_TABS = [
   { id:'portail', label:'Portail', icon:ICON_OC_PORTAIL },
   { id:'donnees', label:'Données<br>principales', icon:ICON_OC_DONNEES },
   { id:'interlocuteurs', label:'Interlocuteurs', icon:ICON_OC_INTERLOCUTEURS },
-  { id:'sites', label:'Sites &<br>Sous-traitants', icon:ICON_OC_SITES },
   { id:'exigences', label:'Suivi des<br>exigences', icon:ICON_OC_EXIGENCES },
   { id:'certificat', label:'Certificat', icon:ICON_OC_CERTIFICAT },
-  { id:'partenaires', label:'Coopératives<br>partenaires', icon:ICON_OC_PARTENAIRES },
+  { id:'partenaires', label:'Partenaires', icon:ICON_OC_PARTENAIRES },
   { id:'nc', label:'Non-<br>conformités', icon:ICON_OC_NC },
   { id:'documents', label:'Documents', icon:ICON_OC_DOCUMENTS },
   { id:'audits', label:'Audits', icon:ICON_OC_AUDITS },
@@ -2701,28 +2718,25 @@ function renderOricert(){
   if (tab==='portail') contenu = renderOcPortail();
   else if (tab==='donnees') contenu = renderOcDonnees();
   else if (tab==='interlocuteurs') contenu = renderOcTableSimple('interlocuteurs');
-  else if (tab==='sites') contenu = renderOcTableSimple('sites');
   else if (tab==='exigences') contenu = renderOcExigences();
   else if (tab==='certificat') contenu = renderOcCertificat();
-  else if (tab==='partenaires') contenu = renderOcTableSimple('partenaires');
+  else if (tab==='partenaires') contenu = renderOcPartenaires();
   else if (tab==='nc') contenu = renderOcNonConformites();
   else if (tab==='documents') contenu = renderOcTableSimple('documents');
   else if (tab==='audits') contenu = renderOcAudits();
   else if (tab==='formation') contenu = renderOcFormation();
   else contenu = '';
 
-  return '<div class="app-shell">'
-    + '<nav class="sidebar">'
-    + '<div class="logo-badge" style="background:transparent;">'+ORICERT_LOGO+'</div>'
-    + '<div class="brand-name">ORICERT</div>'
-    + '<div class="sidebar-nav">'
-    + ORICERT_TABS.map(t=>'<button class="sidebar-nav-item '+(tab===t.id?'active':'')+'" onclick="setOricertTab(\''+t.id+'\')">'+t.icon+'<span>'+t.label+'</span></button>').join('')
+  return '<div class="oc-shell">'
+    + '<div class="oc-appbar">'
+    + '<div class="oc-appbar-brand"><div class="oc-appbar-logo">'+ORICERT_LOGO+'</div> ORICERT · Suivi de certification ECORIGINE</div>'
+    + '<div class="oc-appbar-user"><button class="btn-ghost" onclick="changerEspace()">⇄ Changer d\'espace</button><span class="oc-appbar-av">'+esc((state.session.user.email||'?').charAt(0).toUpperCase())+'</span><span>'+esc(state.session.user.email)+'</span></div>'
     + '</div>'
+    + '<nav class="oc-tabstrip">'
+    + ORICERT_TABS.map(t=>'<button class="'+(tab===t.id?'active':'')+'" onclick="setOricertTab(\''+t.id+'\')">'+t.label.replace('<br>',' ')+'</button>').join('')
     + '</nav>'
-    + '<main class="content">'
-    + '<div class="top-utility"><button class="btn-ghost" onclick="changerEspace()">⇄ Changer d\'espace</button></div>'
-    + '<div class="wrap">' + contenu + '</div>'
-    + '</main></div>';
+    + '<div class="oc-wrap">' + contenu + '</div>'
+    + '</div>';
 }
 
 /* ========================================================================
@@ -3182,9 +3196,19 @@ const OC_TABLES = {
     cols:[['Site / Sous-traitant','nom'],['Type','type'],['Statut','statut'],['Commentaire','commentaire']],
   },
   partenaires: {
-    table:'cert_partenaires', titre:'Coopératives partenaires',
+    table:'cert_partenaires', titre:'Coopératives',
     intro:'Coopératives sous contrat pour la campagne, et statut de signature du Code de Conduite et du contrat de prime. Une coopérative rejoint automatiquement cette liste dès sa première livraison enregistrée sur le portail — l\'ajout manuel reste possible en complément.',
     cols:[['Coopérative','cooperative_nom'],['Volume (T)','volume_tonnes'],['Code de Conduite','code_conduite'],['Contrat de prime','contrat_prime']],
+  },
+  clients: {
+    table:'cert_clients', titre:'Clients',
+    intro:'Acheteurs sous contrat auxquels ECORIGINE vend du cacao certifié.',
+    cols:[['Client','nom'],['Pays','pays'],['Contrat','contrat'],['Contact','contact']],
+  },
+  prestataires: {
+    table:'cert_prestataires', titre:'Prestataires',
+    intro:'Prestataires externes intervenant dans la chaîne (transport, contrôle qualité, etc.).',
+    cols:[['Prestataire','nom'],['Prestation','prestation'],['Contrat','contrat'],['Contact','contact']],
   },
   documents: {
     table:'cert_documents', titre:'Documents',
@@ -3197,6 +3221,25 @@ const OC_TABLES = {
     cols:[['Type','type'],['Date','date_audit'],['Résultat','resultat'],['Référence','reference']],
   },
 };
+
+// Les 4 sous-onglets internes de "Coopératives partenaires" -- chacun pointe
+// vers une entree distincte de OC_TABLES (meme moteur de rendu generique).
+const OC_PARTENAIRES_SOUS_ONGLETS = [
+  { id:'clients', label:'Clients' },
+  { id:'partenaires', label:'Coopératives' },
+  { id:'sites', label:'Sites' },
+  { id:'prestataires', label:'Prestataires' },
+];
+function ocSetPartenairesSousOnglet(id){ state.ocPartenairesSousOnglet = id; render(); }
+function renderOcPartenaires(){
+  const actif = state.ocPartenairesSousOnglet || 'clients';
+  let html = '<div class="panel-head"><h2>Coopératives partenaires</h2><p>Vue d\'ensemble de vos partenaires commerciaux et opérationnels : clients, coopératives, sites et prestataires.</p></div>';
+  html += '<div class="oc-subtabs">'
+    + OC_PARTENAIRES_SOUS_ONGLETS.map(s=>'<button class="'+(actif===s.id?'active':'')+'" onclick="ocSetPartenairesSousOnglet(\''+s.id+'\')">'+esc(s.label)+'</button>').join('')
+    + '</div>';
+  html += renderOcTableSimple(actif);
+  return html;
+}
 
 function ocTableRows(tableId){ return state['oc_'+tableId] || []; }
 
