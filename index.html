@@ -1096,7 +1096,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-04-83';
+const APP_VERSION = '2026-09-04-84';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -2127,6 +2127,7 @@ function toggleDemandeType(type){
       demande_message: fv('demande_message'),
       demande_doc_nature: fvRadio('demande_doc_nature'),
       demande_numero_livraison: fv('demande_numero_livraison'),
+      demande_masterdata_scope: fvRadio('demande_masterdata_scope'),
       fichierSource: fichierSelectionne,
     };
   }
@@ -2175,6 +2176,7 @@ async function creerDemande(){
   const message = fv('demande_message').trim();
   const demandeurNom = fv('demande_demandeur_nom').trim();
   const docNature = fvRadio('demande_doc_nature') || 'signer';
+  const masterdataScope = state.newDemandeTypes.has('masterdata') ? (fvRadio('demande_masterdata_scope') || 'les-deux') : null;
   // Sauvegarde immediate des champs dans le payload de la modale : si une validation
   // echoue plus bas, showToast() va redessiner la modale, et c'est ce payload qui
   // repeuple les champs -- sans ca, tout ce qui a ete tape disparait au premier echec.
@@ -2223,6 +2225,7 @@ async function creerDemande(){
       document_a_signer: fichierSource ? (docNature==='signer') : null,
       fichier_source_path, fichier_source_nom,
       connaissement: connaissementComplet,
+      masterdata_scope: masterdataScope,
     };
     const { error } = await supabaseClient.from('demandes').insert(demandeObj);
     if (error){ showToast('Échec de la création pour '+coop.nom+' : '+error.message); continue; }
@@ -6161,6 +6164,15 @@ function render(){
           return '<div onclick="toggleDemandeType(\''+k+'\')" style="cursor:pointer;padding:14px 12px;border-radius:9px;text-align:center;font-size:13px;border:2px solid '+(active?'var(--accent)':'var(--border)')+';background:'+(active?'var(--accent-soft)':'var(--surface)')+';color:'+(active?'var(--accent)':'var(--ink)')+';font-weight:'+(active?'600':'400')+';">'+esc(label)+'</div>';
         }).join('')
       + '</div></div>'
+      + (state.newDemandeTypes.has('masterdata')
+          ? '<div class="field"><label>Masterdata — quels fichiers demander ?</label>'
+            + '<div style="display:flex;flex-direction:column;gap:6px;margin-top:6px;">'
+            + [['les-deux','Registre des membres ET géolocalisation (les deux obligatoires)'],['registre','Uniquement le registre des membres'],['geolocalisation','Uniquement les données de géolocalisation']].map(([val,lbl])=>{
+                const checked = (nd.demande_masterdata_scope||'les-deux')===val;
+                return '<label style="display:flex;align-items:flex-start;gap:8px;font-weight:400;cursor:pointer;"><input type="radio" name="demande_masterdata_scope" value="'+val+'" '+(checked?'checked':'')+' style="margin-top:3px;"><span>'+esc(lbl)+'</span></label>';
+              }).join('')
+            + '</div></div>'
+          : '')
       + '<label class="field">Échéance<input type="date" name="demande_deadline" value="'+esc(nd.demande_deadline||'')+'"></label>'
       + (state.newDemandeTypes.has('autres')
           ? '<label class="field">Document à joindre (optionnel)<input type="file" id="demande_fichier_source_input"></label>'
