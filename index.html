@@ -1189,7 +1189,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-19-93';
+const APP_VERSION = '2026-09-19-94';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -2483,9 +2483,9 @@ const APERCU_MIME = {
 // images s'affichent directement ; les autres formats (Excel, Word...) n'ont
 // pas d'apercu fiable dans un navigateur, on propose alors le telechargement
 // direct plutot qu'un apercu casse ou trompeur.
-async function apercuFichier(path, nom){
+async function apercuFichier(path, nom, titre){
   const ext = String(nom||path||'').split('.').pop().toLowerCase();
-  state.modal = { type:'apercuFichier', payload:{ path, nom, chargement:true, url:null, mime:APERCU_MIME[ext]||null } };
+  state.modal = { type:'apercuFichier', payload:{ path, nom, titre: titre||'', chargement:true, url:null, mime:APERCU_MIME[ext]||null } };
   render();
   try{
     const { data, error } = await supabaseClient.storage.from('documents-coop').download(path);
@@ -3856,7 +3856,12 @@ function renderOcNonConformites(){
 function ocNcApercuExigence(code){ state.ocNcNewExigenceApercu = code; render(); }
 
 function openModal(type, payload){ state.modal = {type, payload: payload||{}}; render(); }
-function closeModal(){ state.modal = null; state.pendingImport = null; state.pendingRapportCCC = null; render(); }
+function closeModal(){
+  // libere le fichier charge pour l'apercu (sinon il reste en memoire tant que la page est ouverte)
+  const p = state.modal && state.modal.payload;
+  if (p && typeof p.url === 'string' && p.url.startsWith('blob:')){ try{ URL.revokeObjectURL(p.url); }catch(e){} }
+  state.modal = null; state.pendingImport = null; state.pendingRapportCCC = null; render();
+}
 
 function toggleCertifFields(){
   const statutEl = document.querySelector('select[name="statut"]');
@@ -5180,7 +5185,7 @@ function renderChecklistForCoop(coopId){
     + '<button class="btn btn-primary" onclick="genererEmailManquants(\''+coopId+'\')">Générer l\'email (documents manquants)</button>'
     + '<button class="btn-ghost" onclick="retourChecklistToutes()">← Toutes les coopératives</button>'
     + '</div>';
-  html += '<div class="panel-note">Coche les documents disponibles. Le bouton ci-dessus liste automatiquement les cases non cochées et ouvre un email pré-rempli vers les adresses de la fiche coopérative.</div>';
+  html += '<div class="panel-note">Coche les documents disponibles ; « 👁 Aperçu » ouvre le document envoyé par la coopérative sans le télécharger. Le bouton ci-dessus liste automatiquement les cases non cochées et ouvre un email pré-rempli vers les adresses de la fiche coopérative.</div>';
   html += '<div class="checklist-grid">';
   DOCS_REQUIS.forEach((doc,i)=>{
     const rec = getDocCheck(coopId, doc);
@@ -5189,7 +5194,8 @@ function renderChecklistForCoop(coopId){
     html += '<div class="check-item"><label>'
       + '<input type="checkbox" '+(checked?'checked':'')+' onchange="toggleDocCheck(\''+coopId+'\','+i+')">'
       + '<span>'+esc(doc)+'</span></label>'
-      + (rec && rec.fichier_path ? '<button class="btn-ghost" onclick="telechargerFichierDemande(\''+esc(rec.fichier_path)+'\',\''+esc(rec.fichier_nom||'')+'\')">'+esc(rec.fichier_nom||'Télécharger')+'</button>' : '')
+      + (rec && rec.fichier_path ? '<button class="btn-ghost" title="Voir le document sans le télécharger" onclick="apercuFichier(\''+escJs(rec.fichier_path)+'\',\''+escJs(rec.fichier_nom||'')+'\',\''+escJs(doc+' — '+coop.nom)+'\')">👁 Aperçu</button>'
+        + '<button class="btn-ghost" onclick="telechargerFichierDemande(\''+esc(rec.fichier_path)+'\',\''+esc(rec.fichier_nom||'')+'\')">'+esc(rec.fichier_nom||'Télécharger')+'</button>' : '')
       + (rappelsCount>0 ? '<span class="hint">'+rappelsCount+' relance(s) — dernière le '+esc(rec.rappels[rec.rappels.length-1])+'</span>' : '')
       + '</div>';
   });
@@ -6418,7 +6424,8 @@ function _renderBrut(){
       corps = '<div style="padding:50px 20px;text-align:center;color:var(--ink-soft);">Aperçu non disponible pour ce type de fichier — télécharge-le pour le consulter.</div>';
     }
     html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal wide" style="max-width:800px;">'
-      + '<h3>👁 '+esc(pl.nom||'Aperçu')+'</h3>'
+      + '<h3>👁 '+esc(pl.titre||pl.nom||'Aperçu')+'</h3>'
+      + (pl.titre && pl.nom ? '<div class="hint" style="margin:-6px 0 10px;">Fichier envoyé : '+esc(pl.nom)+'</div>' : '')
       + corps
       + '<div class="actions"><button class="btn" onclick="closeModal()">Fermer</button><button class="btn btn-primary" onclick="telechargerFichierDemande(\''+pl.path+'\',\''+escJs(pl.nom||'')+'\')">Télécharger</button></div>'
       + '</div></div>';
