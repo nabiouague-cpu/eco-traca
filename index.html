@@ -1107,7 +1107,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-04-91';
+const APP_VERSION = '2026-09-19-92';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1694,8 +1694,17 @@ function fichiersParTypePourCoop(coopId){
   Object.keys(DEMANDE_TYPE_LABELS).forEach(t=>{ dossiers[t] = { label: DEMANDE_TYPE_LABELS[t], fichiers: [] }; });
   (state.demandeFichiers||[]).forEach(f=>{
     if (!demandeIdsCoop.has(f.demande_id)) return;
-    if (!dossiers[f.type]) dossiers[f.type] = { label: f.type, fichiers: [] };
-    dossiers[f.type].fichiers.push({ path:f.path, nom:f.nom||f.path.split('/').pop(), date:f.uploaded_at, source:'demande_fichiers', sourceId:f.id });
+    // Les depots de la cooperative pour le registre / la geolocalisation sont enregistres
+    // avec le type « registre » / « geolocalisation » : on les range dans le dossier
+    // Masterdata (et non dans un dossier brut nomme « registre »), avec un titre qui
+    // les distingue de ce qu'ECORIGINE a transmis a la cooperative.
+    let cleType = f.type, titreType;
+    if (cleType==='registre' || cleType==='geolocalisation'){
+      titreType = (cleType==='registre' ? 'Registre des membres' : 'Données de géolocalisation') + ' — renvoyé par la coopérative';
+      cleType = 'masterdata';
+    }
+    if (!dossiers[cleType]) dossiers[cleType] = { label: cleType, fichiers: [] };
+    dossiers[cleType].fichiers.push({ path:f.path, nom:f.nom||f.path.split('/').pop(), date:f.uploaded_at, titre:titreType, source:'demande_fichiers', sourceId:f.id });
   });
   // Documents de conformite (checklist doc_check) -- source distincte de
   // demande_fichiers, oubliee jusqu'ici : ces fichiers sont deposes directement
