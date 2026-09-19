@@ -290,7 +290,7 @@
   .oc-nc-plan{margin-top:14px;padding-top:14px;border-top:1px dashed var(--border);display:flex;flex-direction:column;gap:14px;}
   .oc-nc-step-label{font-size:12.5px;font-weight:700;color:var(--ink);margin-bottom:4px;}
   .oc-nc-step-hint{font-size:11.5px;color:var(--ink-faint);margin-bottom:6px;}
-  .oc-nc-exigence-box{background:var(--surface-2);border-radius:6px;padding:8px 12px;font-size:12px;color:var(--ink-soft);margin-bottom:8px;}
+  .oc-nc-exigence-box{background:var(--surface-2);border-radius:6px;padding:8px 12px;font-size:12px;color:var(--ink-soft);margin-bottom:8px;white-space:pre-wrap;}
   .oc-nc-step textarea{width:100%;min-height:60px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:12.5px;font-family:inherit;resize:vertical;}
   .oc-nc-step select{padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:12.5px;}
   .oc-nc-save-row{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--ink-soft);}
@@ -1107,7 +1107,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-04-89';
+const APP_VERSION = '2026-09-04-90';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3512,10 +3512,19 @@ function ocSupprimerFormation(id){
 /* ---- Non-conformites — plan d'action correctif guide ---- */
 function ocNcExigenceOptions(selected){
   let html = '<option value="">— Aucune exigence liée —</option>';
-  const exigencesTriees = REQUIREMENTS.filter(r=>!r.quarterly)
+  // Ne propose QUE les vrais codes du referentiel Rainforest Alliance -- exclut
+  // les subdivisions internes (ex: 1.1.1-FLUX, 1.1.1-PROC, 1.1.1-RESP) qui sont
+  // notre propre decoupage de travail pour Suivi des exigences, pas de vraies
+  // exigences RA distinctes. Une non-conformite doit se referer a l'exigence
+  // RA telle quelle (ex: 1.1.1), jamais a une de ses subdivisions internes.
+  const dejaVus = new Set();
+  const exigencesTriees = REQUIREMENTS
+    .filter(r=>!r.quarterly && !/-/.test(r.code))
     .slice()
     .sort((a,b)=> String(a.code).localeCompare(String(b.code), 'fr', {numeric:true, sensitivity:'base'}));
   exigencesTriees.forEach(r=>{
+    if (dejaVus.has(r.code)) return;
+    dejaVus.add(r.code);
     html += '<option value="'+esc(r.code)+'"'+(r.code===selected?' selected':'')+'>'+esc(r.code)+'</option>';
   });
   return html;
@@ -3620,7 +3629,7 @@ function ocNcJoindreFichiers(id, files){
 function ocNcPlanHTML(n){
   const linkedReq = REQUIREMENTS.find(r=>r.code===n.exigence_code);
   const exigenceBox = linkedReq
-    ? '<div class="oc-nc-exigence-box">📘 <b>'+esc(linkedReq.code)+'</b> — '+esc(linkedReq.detail)+'</div>'
+    ? '<div class="oc-nc-exigence-box">📘 <b>'+esc(linkedReq.code)+'</b>'+(linkedReq.enonce?'<br><br>'+esc(linkedReq.enonce):' — '+esc(linkedReq.detail))+'</div>'
     : '<div class="oc-nc-exigence-box">Aucune exigence liée pour l\'instant — sélectionnez-en une ci-dessous pour afficher automatiquement de quoi il s\'agit.</div>';
   return '<div class="oc-nc-plan">'
     + '<div class="oc-nc-step"><div class="oc-nc-step-label">1️⃣ Comprendre l\'exigence</div>'+exigenceBox
@@ -3723,7 +3732,7 @@ function renderOcNonConformites(){
     + '<input type="date" id="ocNcNewRecu" title="Reçu le">'
     + '<input type="date" id="ocNcNewDu" title="Dû le">'
     + '</div>'
-    + (reqApercu ? '<div class="oc-nc-exigence-box" style="margin:0 0 12px;">📘 <b>'+esc(reqApercu.code)+'</b> — '+esc(reqApercu.title)+(reqApercu.enonce?'<br><br>'+esc(reqApercu.enonce):'')+'</div>' : '')
+    + (reqApercu ? '<div class="oc-nc-exigence-box" style="margin:0 0 12px;">📘 <b>'+esc(reqApercu.code)+'</b>'+(reqApercu.enonce?'<br><br>'+esc(reqApercu.enonce):' — '+esc(reqApercu.detail))+'</div>' : '')
     + '<textarea id="ocNcNewCommentaireAuditeur" placeholder="Commentaire de l\'auditeur concernant cette non-conformité…" style="width:100%;min-height:60px;margin-bottom:12px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:inherit;resize:vertical;"></textarea>'
     + '<button class="btn btn-primary" onclick="ocNcAjouter()">+ Ajouter une non-conformité</button></div>';
   if (records.length===0){
