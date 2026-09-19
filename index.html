@@ -292,6 +292,15 @@
   .oc-nc-step textarea{width:100%;min-height:60px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:12.5px;font-family:inherit;resize:vertical;}
   .oc-nc-step select{padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:12.5px;}
   .oc-nc-save-row{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--ink-soft);}
+  .oc-nc-dialogue{background:var(--surface-2);border-radius:8px;padding:12px;margin:4px 0 8px;}
+  .oc-nc-dialogue-fil{display:flex;flex-direction:column;gap:8px;margin-top:8px;max-height:280px;overflow-y:auto;}
+  .oc-nc-bulle{padding:8px 12px;border-radius:10px;font-size:12.5px;max-width:85%;line-height:1.4;}
+  .oc-nc-bulle-ia{background:#fff;border:1px solid var(--border);align-self:flex-start;}
+  .oc-nc-bulle-user{background:var(--accent);color:#fff;align-self:flex-end;}
+  .oc-nc-bulle-chargement{color:var(--ink-faint);font-style:italic;}
+  .oc-nc-dialogue-reponse{display:flex;gap:8px;margin-top:10px;}
+  .oc-nc-dialogue-reponse textarea{flex:1;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:12.5px;font-family:inherit;resize:vertical;}
+  .oc-nc-fichiers-liste{font-size:11.5px;color:var(--ink-soft);margin-top:6px;line-height:1.6;}
 
   .nom-origen .part-ori{color:var(--ink);}
   .nom-origen .part-gen{color:#B8860B;text-shadow:0 0 3px rgba(184,134,11,0.35),0 0 6px rgba(184,134,11,0.2);animation:pulseNeonOr 2.4s ease-in-out infinite;}
@@ -1096,7 +1105,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-04-84';
+const APP_VERSION = '2026-09-04-85';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3409,6 +3418,103 @@ function ocNcExigenceOptions(selected){
   });
   return html;
 }
+/* ---- Dialogue guide avec Claude pour construire le plan d'action ---- */
+function ocNcDialogueHTML(n){
+  const dlg = state.ocNcDialogueEnCours && state.ocNcDialogueEnCours[n.id];
+  const historique = (n.dialogue_ia && n.dialogue_ia.length) ? n.dialogue_ia : (dlg ? dlg.historique : []);
+  const enCharge = dlg && dlg.chargement;
+  let html = '<div class="oc-nc-dialogue">';
+  html += '<div class="oc-nc-step-label">💬 Dialogue guidé (assistant)</div>';
+  if (!n.commentaire_auditeur || !n.commentaire_auditeur.trim()){
+    html += '<div class="oc-nc-step-hint">Renseigne d\'abord le commentaire de l\'auditeur ci-dessus, puis lance le dialogue guidé — il posera des questions ciblées pour construire les 4 sections ci-dessous à ta place.</div>';
+    return html+'</div>';
+  }
+  if (historique.length===0 && !enCharge){
+    html += '<button class="btn btn-primary" onclick="ocNcLancerDialogue('+n.id+')">💬 Lancer le dialogue guidé</button>';
+  } else {
+    html += '<div class="oc-nc-dialogue-fil">';
+    historique.forEach(h=>{
+      html += '<div class="oc-nc-bulle oc-nc-bulle-'+(h.role==='assistant'?'ia':'user')+'">'+esc(h.contenu)+'</div>';
+    });
+    if (enCharge) html += '<div class="oc-nc-bulle oc-nc-bulle-ia oc-nc-bulle-chargement">…</div>';
+    html += '</div>';
+    const derniereEstQuestion = historique.length>0 && historique[historique.length-1].role==='assistant';
+    if (derniereEstQuestion && !enCharge){
+      html += '<div class="oc-nc-dialogue-reponse">'
+        + '<textarea id="oc-nc-reponse-'+n.id+'" placeholder="Ta réponse…" rows="2"></textarea>'
+        + '<button class="btn btn-primary" onclick="ocNcEnvoyerReponse('+n.id+')">Envoyer</button>'
+        + '</div>';
+    }
+  }
+  html += '</div>';
+  return html;
+}
+async function ocNcLancerDialogue(id){
+  const n = (state.certNonConformites||[]).find(x=>x.id===id);
+  if (!n) return;
+  state.ocNcDialogueEnCours = state.ocNcDialogueEnCours || {};
+  state.ocNcDialogueEnCours[id] = { historique: [], chargement: true };
+  render();
+  await ocNcAppelDialogue(n, []);
+}
+async function ocNcEnvoyerReponse(id){
+  const n = (state.certNonConformites||[]).find(x=>x.id===id);
+  const zone = document.getElementById('oc-nc-reponse-'+id);
+  const reponse = zone ? zone.value.trim() : '';
+  if (!n || !reponse) return;
+  const dlg = state.ocNcDialogueEnCours[id];
+  const historiqueMaj = (dlg.historique||[]).concat([{ role:'user', contenu:reponse }]);
+  state.ocNcDialogueEnCours[id] = { historique: historiqueMaj, chargement: true };
+  render();
+  await ocNcAppelDialogue(n, historiqueMaj);
+}
+async function ocNcAppelDialogue(n, historiqueMaj){
+  const linkedReq = REQUIREMENTS.find(r=>r.code===n.exigence_code);
+  try{
+    const { data: sessionData } = await supabaseClient.auth.getSession();
+    const resp = await fetch(SUPABASE_URL+'/functions/v1/nc-dialogue-ia', {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', 'Authorization':'Bearer '+(sessionData&&sessionData.session?sessionData.session.access_token:SUPABASE_ANON_KEY) },
+      body: JSON.stringify({
+        description: n.description,
+        commentaire_auditeur: n.commentaire_auditeur,
+        exigence_titre: linkedReq ? linkedReq.code+' — '+linkedReq.title : '',
+        exigence_detail: linkedReq ? linkedReq.detail : '',
+        historique: historiqueMaj,
+      }),
+    });
+    const data = await resp.json();
+    if (!resp.ok || data.error){ showToast('Échec du dialogue : '+(data.error||resp.status), 'error'); state.ocNcDialogueEnCours[n.id].chargement=false; render(); return; }
+    if (data.termine){
+      // Synthese finale : remplit les 4 champs directement, et cloture le dialogue
+      const patch = {
+        cause_profonde: data.cause_profonde||'', mesures_correctives: data.action_corrective||'',
+        analyse_etendue: data.analyse_etendue||'', preuves_suggerees: data.preuves_suggerees||'',
+        dialogue_ia: historiqueMaj, updated_at: new Date().toISOString(),
+      };
+      await supabaseClient.from('cert_non_conformites').update(patch).eq('id', n.id);
+      Object.assign(n, patch);
+      delete state.ocNcDialogueEnCours[n.id];
+      showToast('Synthèse générée — vérifie et ajuste les 4 sections si besoin.', 'success');
+    } else {
+      const historiqueFinal = historiqueMaj.concat([{ role:'assistant', contenu:data.question }]);
+      state.ocNcDialogueEnCours[n.id] = { historique: historiqueFinal, chargement:false };
+      await supabaseClient.from('cert_non_conformites').update({ dialogue_ia: historiqueFinal }).eq('id', n.id);
+    }
+    render();
+  }catch(e){
+    showToast('Échec du dialogue : '+e.message, 'error');
+    if (state.ocNcDialogueEnCours[n.id]) state.ocNcDialogueEnCours[n.id].chargement=false;
+    render();
+  }
+}
+function ocNcJoindreFichiers(id, files){
+  const n = (state.certNonConformites||[]).find(x=>x.id===id);
+  if (!n) return;
+  n._fichiersLocaux = (n._fichiersLocaux||[]).concat(Array.from(files));
+  render();
+}
+
 function ocNcPlanHTML(n){
   const linkedReq = REQUIREMENTS.find(r=>r.code===n.exigence_code);
   const exigenceBox = linkedReq
@@ -3417,15 +3523,26 @@ function ocNcPlanHTML(n){
   return '<div class="oc-nc-plan">'
     + '<div class="oc-nc-step"><div class="oc-nc-step-label">1️⃣ Comprendre l\'exigence</div>'+exigenceBox
     + '<select onchange="ocNcMajChamp('+n.id+',\'exigence_code\',this.value)">'+ocNcExigenceOptions(n.exigence_code)+'</select></div>'
-    + '<div class="oc-nc-step"><div class="oc-nc-step-label">2️⃣ Causes profondes</div>'
+    + '<div class="oc-nc-step"><div class="oc-nc-step-label">Commentaire de l\'auditeur</div>'
+    + '<div class="oc-nc-step-hint">Ce que l\'auditeur a précisément constaté/écrit — sert de point de départ au dialogue guidé ci-dessous.</div>'
+    + '<textarea onblur="ocNcMajChamp('+n.id+',\'commentaire_auditeur\',this.value)" placeholder="Ex : Non-conformité relevée lors de l\'audit interne du 12/09/2026 : le stockage du cacao ne respecte pas les conditions d\'hygiène minimales requises par l\'exigence 4.3.2.">'+esc(n.commentaire_auditeur||'')+'</textarea></div>'
+    + ocNcDialogueHTML(n)
+    + '<div class="oc-nc-step"><div class="oc-nc-step-label">1️⃣ Causes profondes</div>'
     + '<div class="oc-nc-step-hint">Méthode des « 5 Pourquoi » : partez du constat, demandez « pourquoi ? », puis reposez la question sur chaque réponse, 4 à 5 fois, jusqu\'à atteindre la cause réelle.</div>'
     + '<textarea onblur="ocNcMajChamp('+n.id+',\'cause_profonde\',this.value)" placeholder="Ex : Pourquoi le site stockait le cacao à même le sol ? → Pas de palettes disponibles. Pourquoi ? → ...">'+esc(n.cause_profonde||'')+'</textarea></div>'
-    + '<div class="oc-nc-step"><div class="oc-nc-step-label">3️⃣ Mesures correctives</div>'
+    + '<div class="oc-nc-step"><div class="oc-nc-step-label">2️⃣ Action corrective</div>'
     + '<div class="oc-nc-step-hint">Ce qui corrige CE cas précis, maintenant.</div>'
     + '<textarea onblur="ocNcMajChamp('+n.id+',\'mesures_correctives\',this.value)" placeholder="Ex : Achat immédiat de 20 palettes, formation flash de l\'équipe sur site.">'+esc(n.mesures_correctives||'')+'</textarea></div>'
-    + '<div class="oc-nc-step"><div class="oc-nc-step-label">4️⃣ Mesures préventives — pour que ça ne se reproduise plus</div>'
-    + '<div class="oc-nc-step-hint">Ce qui s\'attaque à la cause profonde identifiée en 2, pas juste au symptôme.</div>'
-    + '<textarea onblur="ocNcMajChamp('+n.id+',\'mesures_preventives\',this.value)" placeholder="Ex : Ajouter « palettes disponibles » à la Fiche d\'évaluation des sites, contrôlé à chaque inspection.">'+esc(n.mesures_preventives||'')+'</textarea></div>'
+    + '<div class="oc-nc-step"><div class="oc-nc-step-label">3️⃣ Analyse d\'étendue — pour que ça ne se reproduise jamais</div>'
+    + '<div class="oc-nc-step-hint">Ce problème existe-t-il ailleurs (autres sites, autres coopératives, exigences similaires) ? Quelles actions mener pour l\'éviter durablement ?</div>'
+    + '<textarea onblur="ocNcMajChamp('+n.id+',\'analyse_etendue\',this.value)" placeholder="Ex : Ajouter « palettes disponibles » à la Fiche d\'évaluation des sites, contrôlé à chaque inspection sur tous les sites.">'+esc(n.analyse_etendue||'')+'</textarea></div>'
+    + '<div class="oc-nc-step"><div class="oc-nc-step-label">4️⃣ Preuves matérielles à réunir</div>'
+    + '<div class="oc-nc-step-hint">Documents/justificatifs qui démontreront que tout ceci a bien été fait — à joindre ensuite en pièce jointe.</div>'
+    + '<textarea onblur="ocNcMajChamp('+n.id+',\'preuves_suggerees\',this.value)" placeholder="Ex : Facture d\'achat des palettes, photo du nouveau stockage, Fiche d\'évaluation des sites mise à jour.">'+esc(n.preuves_suggerees||'')+'</textarea>'
+    + '<button class="btn-ghost" onclick="document.getElementById(\'oc-nc-fichiers-'+n.id+'\').click()">📎 Joindre un fichier</button>'
+    + '<input type="file" id="oc-nc-fichiers-'+n.id+'" style="display:none;" multiple onchange="ocNcJoindreFichiers('+n.id+',this.files)">'
+    + (n._fichiersLocaux&&n._fichiersLocaux.length ? '<div class="oc-nc-fichiers-liste">'+n._fichiersLocaux.map(f=>'📄 '+esc(f.name)).join('<br>')+'</div>' : '')
+    + '</div>'
     + '<div class="oc-nc-save-row"><label>Statut du plan :</label>'
     + '<select onchange="ocNcMajChamp('+n.id+',\'statut\',this.value)">'
     + ['ouverte','en_cours','fermee'].map(s=>'<option value="'+s+'"'+(n.statut===s?' selected':'')+'>'+({ouverte:'Ouverte',en_cours:'En cours',fermee:'Fermée'})[s]+'</option>').join('')
