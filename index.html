@@ -1189,7 +1189,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-19-94';
+const APP_VERSION = '2026-09-19-95';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4802,17 +4802,33 @@ function getDocCheck(coopId, doc){
 async function toggleDocCheck(coopId, idx){
   const doc = DOCS_REQUIS[idx];
   let rec = getDocCheck(coopId, doc);
+  let nouvelle = false;
   if (!rec){
     rec = { id: genId('dc'), cooperative_id: coopId, doc, disponible:false, rappels:[] };
     state.docCheck.push(rec);
+    nouvelle = true;
   }
   rec.disponible = !rec.disponible;
-  // Ecriture ciblee sur cette seule ligne (jamais de resynchronisation globale ici) --
-  // une session admin dont l'etat local n'est pas a jour ne doit jamais pouvoir
-  // supprimer des documents soumis entre-temps par une cooperative.
-  const { error } = await supabaseClient.from('doc_check').upsert(rec);
+  // Ecriture ciblee sur la seule colonne « disponible » de cette ligne. Avant, toute la ligne etait reecrite
+  // depuis l'etat local : si une cooperative avait depose un nouveau fichier entre-temps, l'ancienne
+  // reference au fichier (fichier_path) revenait et le nouveau depot devenait invisible.
+  const error = await majDocCheck(rec, ['disponible'], nouvelle);
   if (error){ showToast('Échec de la mise à jour : '+error.message); rec.disponible = !rec.disponible; }
   render();
+}
+// Ecrit UNIQUEMENT les colonnes voulues d'une ligne existante de doc_check (jamais la ligne entiere : les autres
+// colonnes, fichier_path en tete, ont pu changer si une cooperative a depose un fichier depuis le chargement
+// de la page). Une ligne nouvelle est creee en entier.
+async function majDocCheck(rec, colonnes, nouvelle){
+  if (!nouvelle){
+    const patch = {};
+    colonnes.forEach(c=>{ patch[c] = rec[c]; });
+    const r = await supabaseClient.from('doc_check').update(patch).eq('id', rec.id).select('id');
+    if (r.error) return r.error;
+    if (r.data && r.data.length > 0) return null;
+  }
+  const r2 = await supabaseClient.from('doc_check').upsert(rec);
+  return r2.error || null;
 }
 function missingDocs(coopId){
   return DOCS_REQUIS.filter(doc=>{
@@ -5063,13 +5079,15 @@ async function genererEmailManquants(coopId){
   const recsAMaj = [];
   missing.forEach(doc=>{
     let rec = getDocCheck(coopId, doc);
-    if (!rec){ rec = { id: genId('dc'), cooperative_id: coopId, doc, disponible:false, rappels:[] }; state.docCheck.push(rec); }
+    let nouvelle = false;
+    if (!rec){ rec = { id: genId('dc'), cooperative_id: coopId, doc, disponible:false, rappels:[] }; state.docCheck.push(rec); nouvelle = true; }
     rec.rappels.push(new Date().toISOString().slice(0,10));
-    recsAMaj.push(rec);
+    recsAMaj.push({ rec, nouvelle });
   });
-  // Ecriture ciblee sur les seules lignes concernees par ce rappel, jamais une
-  // resynchronisation de toute la table.
-  const { error } = await supabaseClient.from('doc_check').upsert(recsAMaj);
+  // Ecriture ciblee sur la seule colonne « rappels » des lignes concernees : reecrire les lignes entieres depuis
+  // un etat local pas a jour pouvait effacer un document qu'une cooperative venait de deposer.
+  const erreurs = await Promise.all(recsAMaj.map(({rec, nouvelle})=>majDocCheck(rec, ['rappels'], nouvelle)));
+  const error = erreurs.find(e=>e);
   if (error){ showToast('Échec de l\'enregistrement du rappel : '+error.message); }
 }
 
