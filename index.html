@@ -339,6 +339,10 @@
   .checklist-grid > *:nth-child(even){border-left:1px solid var(--border);}
   @media (max-width:820px){ .checklist-grid{grid-template-columns:1fr;} .checklist-grid > *:nth-child(even){border-left:none;} }
   .check-item:last-child{border-bottom:none;}
+  .check-item{flex-wrap:wrap;}
+  .versions-doc{flex:0 0 100%;margin:2px 0 4px 28px;padding:8px 12px;background:var(--surface-2);border:1px dashed var(--border);border-radius:8px;}
+  .version-ligne{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:5px 0;border-top:1px solid var(--border);}
+  .versions-doc > .version-ligne:first-of-type{border-top:none;}
   .check-item label{display:flex;align-items:center;gap:10px;cursor:pointer;flex:1;}
   .check-item input[type=checkbox]{width:16px;height:16px;accent-color:var(--accent);}
 
@@ -462,6 +466,8 @@ let state = {
   changesSinceExport: 0,
   toast: null,
   confirmDialog: null,
+  docVersions: [],          // anciennes versions archivées des documents de conformité
+  versionsOuvertes: {},     // documents dont la liste des anciennes versions est dépliée
   tab: 'cooperatives',
   cooperatives: [],
   producteurs: [],
@@ -1189,7 +1195,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-19-95';
+const APP_VERSION = '2026-09-19-96';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -2630,7 +2636,7 @@ async function loadAll(){
     // demande_fichiers reste a part car elle depend des ids de demandesCoop.
     const [
       producteurs, achats, docCheck, nonconformites, campagnes,
-      messagesCoop, envoisCoop, paiements, demandesCoop, coopDatabaseFilesResult, settings,
+      messagesCoop, envoisCoop, paiements, demandesCoop, coopDatabaseFilesResult, settings, versionsResult,
     ] = await Promise.all([
       safeGet(KEY_PROD, []),
       safeGet(KEY_ACHATS, []),
@@ -2646,6 +2652,7 @@ async function loadAll(){
       loadDemandes(),
       supabaseClient.from('coop_database_files').select('*').order('uploaded_at', {ascending:false}),
       safeGet(KEY_SETTINGS, { seuil: 50, prime_ra: 0, prime_ft: 0, prix_entree_usine: 0, taux_bic: 0 }),
+      supabaseClient.from('doc_check_versions').select('*').order('archive_le', {ascending:false}),
     ]);
     state.producteurs = producteurs;
     state.achats = achats;
@@ -2658,6 +2665,7 @@ async function loadAll(){
     state.demandesCoop = demandesCoop;
     state.coopDatabaseFiles = coopDatabaseFilesResult.error ? [] : (coopDatabaseFilesResult.data || []);
     state.settings = settings;
+    state.docVersions = (versionsResult && !versionsResult.error) ? (versionsResult.data || []) : [];
 
     { const ids = state.demandesCoop.map(d=>d.id);
       if (ids.length>0){
@@ -5195,6 +5203,79 @@ function renderGeoPanel(){
   return html;
 }
 
+/* --- Anciennes versions archivées des documents de conformité ---
+   Quand une coopérative remplace un document, l'ancien fichier n'est plus supprimé ni « perdu » : la base
+   l'archive automatiquement (table doc_check_versions). Rien n'est effacé sans la confirmation d'ECORIGINE. */
+function fmtMo(octets){
+  if (octets==null || isNaN(octets)) return '—';
+  const mo = Number(octets)/1048576;
+  return (mo>=10 ? Math.round(mo) : Math.round(mo*10)/10).toLocaleString('fr-FR')+' Mo';
+}
+function versionsDeCoop(coopId){ return (state.docVersions||[]).filter(v=>v.cooperative_id===coopId); }
+function versionsDeDoc(coopId, doc){ return (state.docVersions||[]).filter(v=>v.cooperative_id===coopId && v.doc===doc); }
+function tailleVersions(liste){ return liste.reduce((s,v)=>s+(Number(v.taille)||0),0); }
+function libelleOrigineVersion(v){ return v.origine==='remplacement' ? 'remplacée par un nouveau dépôt' : 'ancien dépôt, plus rattaché à la liste'; }
+function basculerVersionsDoc(cle){
+  if (!state.versionsOuvertes) state.versionsOuvertes = {};
+  state.versionsOuvertes[cle] = !state.versionsOuvertes[cle];
+  render();
+}
+function ligneVersionHtml(v, titre){
+  const date = v.depose_le ? new Date(v.depose_le).toLocaleDateString('fr-FR') : 'date inconnue';
+  return '<div class="version-ligne"><span class="hint" style="flex:1;min-width:200px;">'+esc(v.fichier_nom||String(v.fichier_path).split('/').pop())+' — déposée le '+esc(date)+' · '+esc(fmtMo(v.taille))+' · '+esc(libelleOrigineVersion(v))+'</span>'
+    + '<button class="btn-ghost" onclick="apercuFichier(\''+escJs(v.fichier_path)+'\',\''+escJs(v.fichier_nom||'')+'\',\''+escJs('Ancienne version — '+titre)+'\')">👁 Aperçu</button>'
+    + '<button class="btn-ghost" onclick="telechargerFichierDemande(\''+escJs(v.fichier_path)+'\',\''+escJs(v.fichier_nom||'')+'\')">Télécharger</button>'
+    + '<button class="btn-danger-text" onclick="supprimerVersionDoc(\''+escJs(v.id)+'\')">🗑 Supprimer définitivement</button></div>';
+}
+// Supprime DEFINITIVEMENT des anciennes versions (fichier + ligne d'archive), apres confirmation. Ne touche jamais
+// un fichier encore rattache a un document de la liste (verifie en base au moment de la suppression).
+async function supprimerVersionsArchivees(liste){
+  if (liste.length===0) return true;
+  const { data: encoreUtilises, error: errVerif } = await supabaseClient.from('doc_check').select('fichier_path').in('fichier_path', liste.map(v=>v.fichier_path));
+  if (errVerif){ showToast("Vérification impossible, rien n'a été supprimé : "+errVerif.message); return false; }
+  const interdits = new Set((encoreUtilises||[]).map(r=>r.fichier_path));
+  const aSupprimer = liste.filter(v=>!interdits.has(v.fichier_path));
+  if (aSupprimer.length===0){ showToast("Ces fichiers sont utilisés par la liste des documents : rien n'a été supprimé."); return false; }
+  const { error: errStock } = await supabaseClient.storage.from('documents-coop').remove(aSupprimer.map(v=>v.fichier_path));
+  if (errStock){ showToast('Suppression impossible : '+errStock.message); return false; }
+  const { error } = await supabaseClient.from('doc_check_versions').delete().in('id', aSupprimer.map(v=>v.id));
+  if (error){ showToast("Fichiers supprimés, mais l'archive n'a pas pu être mise à jour : "+error.message); }
+  const ids = new Set(aSupprimer.map(v=>v.id));
+  state.docVersions = (state.docVersions||[]).filter(v=>!ids.has(v.id));
+  return true;
+}
+function supprimerVersionDoc(id){
+  const v = (state.docVersions||[]).find(x=>x.id===id); if (!v) return;
+  const coop = coopById(v.cooperative_id);
+  askConfirm('Supprimer définitivement cette ancienne version ?\n\n« '+(v.fichier_nom||v.fichier_path)+' » — '+(v.doc||'document')+' ('+(coop?coop.nom:'coopérative supprimée')+')\n\nCette action est irréversible. Le document actuel de la liste n\'est pas touché.', async ()=>{
+    if (await supprimerVersionsArchivees([v])) showToast('Ancienne version supprimée.', 'success');
+  });
+}
+function supprimerVersionsCoop(coopId){
+  const liste = versionsDeCoop(coopId); if (liste.length===0) return;
+  const coop = coopById(coopId);
+  askConfirm('Supprimer définitivement les '+liste.length+' anciennes versions archivées de « '+(coop?coop.nom:'coopérative supprimée')+' » ('+fmtMo(tailleVersions(liste))+') ?\n\nVérifiez-les d\'abord avec « Aperçu ». Cette action est irréversible. Les documents actuels de la liste ne sont pas touchés.', async ()=>{
+    if (await supprimerVersionsArchivees(liste)) showToast(liste.length+' ancienne(s) version(s) supprimée(s).', 'success');
+  });
+}
+function renderVersionsSummary(){
+  const toutes = state.docVersions||[];
+  if (toutes.length===0) return '';
+  const parCoop = {};
+  toutes.forEach(v=>{ (parCoop[v.cooperative_id] = parCoop[v.cooperative_id] || []).push(v); });
+  const nomDe = cid => { const c = coopById(cid); return c ? c.nom : 'Coopérative supprimée ('+cid+')'; };
+  let html = '<div class="panel"><div class="panel-head"><h2>🗂 Anciennes versions archivées — '+toutes.length+' fichier(s), '+fmtMo(tailleVersions(toutes))+'</h2></div>'
+    + '<div class="panel-note">Ces fichiers ne sont plus rattachés à la liste des documents : ils ont été remplacés par un nouveau dépôt, ou ce sont d\'anciens dépôts. Ils sont conservés le temps que vous les vérifiiez : ouvrez la checklist d\'une coopérative, consultez-les avec « 👁 Aperçu », puis supprimez-les quand vous êtes sûr. Rien n\'est supprimé sans votre confirmation.</div>';
+  Object.keys(parCoop).sort((a,b)=>nomDe(a).localeCompare(nomDe(b),'fr',{sensitivity:'base'})).forEach(cid=>{
+    const l = parCoop[cid]; const existe = !!coopById(cid);
+    html += '<div class="achat-item"><span>'+esc(nomDe(cid))+' — <span class="num">'+l.length+' fichier(s), '+esc(fmtMo(tailleVersions(l)))+'</span></span>'
+      + '<span class="row-actions">'
+      + (existe ? '<button class="btn-ghost" onclick="voirChecklistCoop(\''+escJs(cid)+'\')">Vérifier</button>' : '')
+      + '<button class="btn-danger-text" onclick="supprimerVersionsCoop(\''+escJs(cid)+'\')">Supprimer…</button></span></div>';
+  });
+  return html+'</div>';
+}
+
 function renderChecklistForCoop(coopId){
   const coop = coopById(coopId);
   if (!coop) return '';
@@ -5204,17 +5285,29 @@ function renderChecklistForCoop(coopId){
     + '<button class="btn-ghost" onclick="retourChecklistToutes()">← Toutes les coopératives</button>'
     + '</div>';
   html += '<div class="panel-note">Coche les documents disponibles ; « 👁 Aperçu » ouvre le document envoyé par la coopérative sans le télécharger. Le bouton ci-dessus liste automatiquement les cases non cochées et ouvre un email pré-rempli vers les adresses de la fiche coopérative.</div>';
+  const versionsCoop = versionsDeCoop(coopId);
+  if (versionsCoop.length>0){
+    html += '<div class="panel-note">🗂 '+versionsCoop.length+' ancienne(s) version(s) archivée(s) pour cette coopérative ('+fmtMo(tailleVersions(versionsCoop))+'), rangées sous le document concerné. Vérifiez-les avec « Aperçu », puis supprimez-les quand vous êtes sûr. '
+      + '<button class="btn" onclick="supprimerVersionsCoop(\''+escJs(coopId)+'\')">Supprimer les '+versionsCoop.length+' anciennes versions…</button></div>';
+  }
   html += '<div class="checklist-grid">';
   DOCS_REQUIS.forEach((doc,i)=>{
     const rec = getDocCheck(coopId, doc);
     const checked = rec && rec.disponible;
     const rappelsCount = rec ? rec.rappels.length : 0;
+    const versions = versionsDeDoc(coopId, doc);
+    const cleV = coopId+'|'+i;
+    const ouvertV = !!(state.versionsOuvertes && state.versionsOuvertes[cleV]);
+    const blocVersions = versions.length===0 ? '' :
+      '<div class="versions-doc"><button class="btn-ghost" onclick="basculerVersionsDoc(\''+escJs(cleV)+'\')">🗂 '+versions.length+' ancienne(s) version(s) archivée(s) '+(ouvertV?'▲':'▼')+'</button>'
+      + (ouvertV ? versions.map(v=>ligneVersionHtml(v, doc+' — '+coop.nom)).join('') : '') + '</div>';
     html += '<div class="check-item"><label>'
       + '<input type="checkbox" '+(checked?'checked':'')+' onchange="toggleDocCheck(\''+coopId+'\','+i+')">'
       + '<span>'+esc(doc)+'</span></label>'
       + (rec && rec.fichier_path ? '<button class="btn-ghost" title="Voir le document sans le télécharger" onclick="apercuFichier(\''+escJs(rec.fichier_path)+'\',\''+escJs(rec.fichier_nom||'')+'\',\''+escJs(doc+' — '+coop.nom)+'\')">👁 Aperçu</button>'
         + '<button class="btn-ghost" onclick="telechargerFichierDemande(\''+esc(rec.fichier_path)+'\',\''+esc(rec.fichier_nom||'')+'\')">'+esc(rec.fichier_nom||'Télécharger')+'</button>' : '')
       + (rappelsCount>0 ? '<span class="hint">'+rappelsCount+' relance(s) — dernière le '+esc(rec.rappels[rec.rappels.length-1])+'</span>' : '')
+      + blocVersions
       + '</div>';
   });
   html += '</div>';
@@ -5284,7 +5377,7 @@ function renderConformiteTab(){
     + '</div>';
 
   if (sousOnglet==='documents'){
-    html += filterCoop==='all' ? renderChecklistSummary() : renderChecklistForCoop(filterCoop);
+    html += filterCoop==='all' ? renderVersionsSummary() + renderChecklistSummary() : renderChecklistForCoop(filterCoop);
     html += renderZipDownloadPanel();
   } else if (sousOnglet==='parcelles'){
     html += renderGeoPanel();
