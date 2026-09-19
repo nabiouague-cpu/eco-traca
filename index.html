@@ -1003,25 +1003,107 @@ async function genererContratsGroupe(){
   showToast(msg, ok>0 ? 'success' : 'error');
 }
 
+/* ============================================================
+   Redessin « prudent » -- garde ce que l'utilisateur est en train de faire.
+   Tout l'ecran est reconstruit a chaque render() : ce qui etait tape dans un champ (un message a une
+   cooperative, par exemple), la position de defilement et le champ actif etaient perdus des qu'un
+   redessin survenait sans que l'utilisateur l'ait demande (message temporaire qui disparait, retour sur
+   la page...). renderPrudent() memorise ces elements avant de redessiner et les remet apres.
+   ============================================================ */
+function contexteEcran(){
+  return JSON.stringify([state.modal ? state.modal.type : null, state.tab || null, state.view || null,
+    state.detailId || null, state.espaceChoisi || null, state.coopDashboardId || null]);
+}
+function selecteurChamp(el){
+  if (el.name) return '[name="'+String(el.name).replace(/"/g,'\\"')+'"]';
+  if (el.id) return '[id="'+String(el.id).replace(/"/g,'\\"')+'"]';
+  return null;
+}
+function capturerSaisies(){
+  const app = document.getElementById('app');
+  if (!app) return null;
+  const champs = [];
+  app.querySelectorAll('input, textarea, select').forEach(el=>{
+    const type = String(el.type||'').toLowerCase();
+    if (['file','button','submit','reset','checkbox','radio','hidden'].includes(type)) return;
+    const sel = selecteurChamp(el);
+    if (!sel) return;
+    let modifie;
+    if (el.tagName === 'SELECT'){
+      const defaut = Array.from(el.options).findIndex(o=>o.defaultSelected);
+      modifie = el.selectedIndex !== (defaut < 0 ? 0 : defaut);
+    } else {
+      modifie = el.value !== el.defaultValue;
+    }
+    if (modifie) champs.push({ sel, valeur: el.value });
+  });
+  const actif = document.activeElement;
+  let focus = null;
+  if (actif && app.contains(actif)){
+    const sel = selecteurChamp(actif);
+    if (sel) focus = { sel, debut: actif.selectionStart, fin: actif.selectionEnd };
+  }
+  return { contexte: app.dataset.ctx || null, champs, focus,
+           y: window.scrollY, modals: Array.from(app.querySelectorAll('.modal')).map(m=>m.scrollTop) };
+}
+function restaurerSaisies(s){
+  const app = document.getElementById('app');
+  if (!s || !app) return;
+  // On ne remet les saisies que si l'utilisateur est toujours sur le meme ecran / la meme fenetre.
+  if (s.contexte !== null && s.contexte === contexteEcran()){
+    s.champs.forEach(c=>{
+      const el = app.querySelector(c.sel);
+      if (el && el.value !== c.valeur) el.value = c.valeur;
+    });
+    if (s.focus){
+      const el = app.querySelector(s.focus.sel);
+      if (el){
+        try{
+          el.focus({ preventScroll: true });
+          if (s.focus.debut != null && typeof el.setSelectionRange === 'function') el.setSelectionRange(s.focus.debut, s.focus.fin);
+        }catch(e){ /* certains types de champ n'ont pas de curseur */ }
+      }
+    }
+    app.querySelectorAll('.modal').forEach((m,i)=>{ if (s.modals[i] != null) m.scrollTop = s.modals[i]; });
+  }
+  if (window.scrollY !== s.y) window.scrollTo(0, s.y);
+}
+function renderPrudent(){
+  const s = capturerSaisies();
+  render();
+  restaurerSaisies(s);
+}
+// Retire le message temporaire SANS redessiner l'ecran (avant : un redessin complet 2 secondes apres
+// chaque message de succes, qui effacait ce qui etait en cours de saisie).
+function retirerToast(){
+  const t = document.querySelector('.toast');
+  if (t) t.remove();
+}
+
+// Enveloppe de render() : memorise l'ecran affiche (sert a savoir si des saisies peuvent etre remises).
+function render(){
+  _renderBrut();
+  const app = document.getElementById('app');
+  if (app) app.dataset.ctx = contexteEcran();
+}
 let toastAutoDismissId = 0;
 function showToast(message, type){
   state.toast = { message, type: type||'error' };
-  render();
+  renderPrudent();
   // Succes : disparait automatiquement apres 2s.
-  // Erreur : reste affichee tant que l'utilisateur (ECORIGINE ou la
-  // cooperative) ne la ferme pas elle-meme (bouton ✕), pour ne jamais
+  // Erreur : reste affichee tant que l'utilisateur ne la ferme pas elle-meme (bouton ✕), pour ne jamais
   // rater un message d'echec important.
   if (type==='success'){
     const idCourant = ++toastAutoDismissId;
     setTimeout(()=>{
       if (toastAutoDismissId===idCourant && state.toast && state.toast.message===message){
         state.toast = null;
-        render();
+        retirerToast(); // simple retrait du message : l'ecran n'est PAS redessine
       }
     }, 2000);
   }
 }
-function dismissToast(){ state.toast = null; render(); }
+function dismissToast(){ state.toast = null; retirerToast(); }
 const COLLAPSE_THRESHOLD = 10;
 function toggleSection(key){
   if (state.expandedSections.has(key)) state.expandedSections.delete(key);
@@ -1107,7 +1189,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-19-92';
+const APP_VERSION = '2026-09-19-93';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1134,7 +1216,16 @@ async function initAuth(){
   state.session = data && data.session ? data.session : null;
   state.authLoading = false;
   supabaseClient.auth.onAuthStateChange((event, session)=>{
+    // Le chargement de depart est deja fait plus bas : on ignore cet evenement d'initialisation.
+    if (event === 'INITIAL_SESSION') return;
+    const ancienId = state.session && state.session.user ? state.session.user.id : null;
+    const nouvelId = session && session.user ? session.user.id : null;
     state.session = session;
+    // Retour sur la page, jeton renouvele... : c'est la MEME personne, l'ecran est deja affiche. Avant, chacun de
+    // ces evenements redessinait tout et relancait le chargement complet (ecran « Chargement… »), ce qui effacait
+    // un message en cours de saisie. On ne recharge desormais que sur une vraie connexion, ou pour reessayer
+    // apres une erreur de chargement. Le bouton « Actualiser les données » reste la commande du rafraichissement.
+    if (session && ancienId && ancienId === nouvelId && !state.error) return;
     render();
     if (session) loadAll();
   });
@@ -5834,7 +5925,7 @@ function renderCoopDashboard(){
   return html;
 }
 
-function render(){
+function _renderBrut(){
   const app = document.getElementById('app');
   if (state.authLoading){
     app.innerHTML = ecranChargement('Vérification de la connexion…');
