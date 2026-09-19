@@ -1086,11 +1086,18 @@ function retirerToast(){
   if (t) t.remove();
 }
 
-// Enveloppe de render() : memorise l'ecran affiche (sert a savoir si des saisies peuvent etre remises).
+// Enveloppe de render() : memorise l'ecran affiche (sert a savoir si des saisies peuvent etre remises),
+// et protege TOUJOURS les saisies en cours (texte tape dans un champ, position du curseur) contre un
+// redessin declenche par autre chose que l'utilisateur lui-meme (ex: actualisation en tache de fond,
+// retour sur l'onglet) -- avant, seuls 2-3 appels utilisaient cette protection (renderPrudent), alors que
+// render() brut, utilise partout ailleurs, effacait silencieusement tout champ en cours de saisie a
+// chaque rafraichissement.
 function render(){
+  const s = capturerSaisies();
   _renderBrut();
   const app = document.getElementById('app');
   if (app) app.dataset.ctx = contexteEcran();
+  restaurerSaisies(s);
 }
 let toastAutoDismissId = 0;
 function showToast(message, type){
@@ -2617,8 +2624,8 @@ async function checkStorage(){
   }
 }
 
-async function loadAll(){
-  state.loading = true; render();
+async function loadAll(silencieux){
+  if (!silencieux){ state.loading = true; render(); }
   state.storageOk = await checkStorage();
   try{
     state.cooperatives = await safeGet(KEY_COOP, []);
@@ -2677,21 +2684,34 @@ async function loadAll(){
   }catch(e){
     state.error = "Impossible de charger les données. Vérifiez la connexion et réessayez.";
   }
+  // Meme en mode silencieux (rafraichissement de fond), il faut redessiner l'ecran pour que
+  // les nouvelles donnees soient realmente visibles -- render() est deja protegee contre toute
+  // perte de saisie en cours, donc rien n'est perturbe pour l'utilisateur. Seul l'ecran de
+  // chargement plein ecran (state.loading) est evite en mode silencieux.
   state.loading = false;
   render();
 }
 
-async function actualiserDonnees(){
-  await loadAll();
+async function actualiserDonnees(silencieux){
+  await loadAll(silencieux);
   // Recharge aussi les onglets a chargement differe, seulement s'ils ont deja ete visites,
   // pour que le contenu affiche a l'ecran soit lui aussi remis a jour.
   if (state.demandesCoop !== null) await refreshDemandesTab();
   if (state.coopDatabaseFiles !== null) await refreshBaseDonnees();
   if (state.coopUsers !== null) await refreshAccesTab();
   if (state.demandesIdentite !== null) await refreshDemandesIdentite();
-  showToast('Données actualisées.', 'success');
+  if (!silencieux) showToast('Données actualisées.', 'success');
 }
-
+// Rafraichissement automatique en arriere-plan (toutes les 2 minutes) -- pour que les
+// documents/messages/demandes soumis par une cooperative pendant qu'une session admin reste
+// ouverte apparaissent sans qu'il faille penser a cliquer sur "Actualiser". Sans danger pour
+// une saisie en cours : render() protege desormais systematiquement les champs en train d'etre
+// remplis (voir capturerSaisies/restaurerSaisies). On evite quand meme de rafraichir pendant
+// qu'une modale est ouverte, pour ne pas perturber visuellement une action en cours (upload en
+// cours, etc.), et on reste silencieux (pas de bannière a chaque cycle).
+setInterval(()=>{
+  if (state.session && !state.modal) actualiserDonnees(true);
+}, 2*60*1000);
 function coopById(id){ return state.cooperatives.find(c=>c.id===id) || null; }
 function coopStats(coopId){
   const list = state.producteurs.filter(p=>p.cooperative_id===coopId);
@@ -6496,7 +6516,7 @@ function _renderBrut(){
       + state.cooperatives.slice().sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'})).map(c=>'<option value="'+c.id+'"'+(pl.coopId===c.id?' selected':'')+'>'+esc(c.nom)+'</option>').join('')
       + '</select></label>'
       + '<label class="field">Titre<input type="text" name="doc_titre" placeholder="ex : Registre et polygones — Campagne 2026-2027"></label>'
-      + '<label class="field">Message (optionnel)<textarea name="doc_message" rows="3" placeholder="Contexte ou précisions utiles..."></textarea></label>'
+      + '<label class="field">Message (optionnel)<textarea name="doc_message" rows="3" oninput="state.modal.payload.doc_message=this.value;" placeholder="Contexte ou précisions utiles...">'+esc(pl.doc_message||'')+'</textarea></label>'
       + '<label class="field">Fichiers<input type="file" multiple onchange="ajouterFichiersEnvoi(this)"></label>'
       + (pl.fichiers.length>0 ? '<div style="margin-top:8px;">' + pl.fichiers.map((f,i)=>'<div class="achat-item"><span>📎 '+esc(f.name)+'</span><button type="button" class="btn-danger-text" onclick="retirerFichierEnvoi('+i+')">Retirer</button></div>').join('') + '</div>' : '')
       + '</div>'
@@ -6514,7 +6534,7 @@ function _renderBrut(){
       + '<option value="toutes"'+(pl.coopId==='toutes'?' selected':'')+'>— Toutes les coopératives ('+state.cooperatives.length+') —</option>'
       + state.cooperatives.slice().sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'})).map(c=>'<option value="'+c.id+'"'+(pl.coopId===c.id?' selected':'')+'>'+esc(c.nom)+'</option>').join('')
       + '</select></label>'
-      + '<label class="field">Message<textarea name="msg_texte" rows="5" placeholder="ex : La collecte des connaissements pour la campagne 2026-2027 débute le 1er septembre. Merci de vous assurer que vos livraisons sont bien accompagnées de leur fiche de traçabilité."></textarea></label>'
+      + '<label class="field">Message<textarea name="msg_texte" rows="5" oninput="state.modal.payload.msg_texte=this.value;" placeholder="ex : La collecte des connaissements pour la campagne 2026-2027 débute le 1er septembre. Merci de vous assurer que vos livraisons sont bien accompagnées de leur fiche de traçabilité.">'+esc(pl.msg_texte||'')+'</textarea></label>'
       + '</div>'
       + '<div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="envoyerMessageCoop()">Envoyer</button></div>'
       + '</div></div>';
