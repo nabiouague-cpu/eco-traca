@@ -1107,7 +1107,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-04-90';
+const APP_VERSION = '2026-09-04-91';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3701,13 +3701,15 @@ function ocNcSupprimer(id){
 async function ocNcAjouter(){
   const description = (document.getElementById('ocNcNewDesc')||{}).value || '';
   if (!description.trim()){ showToast('Décris la non-conformité avant de l\'ajouter.'); return; }
+  const exigenceCode = (document.getElementById('ocNcNewExigence')||{}).value || '';
+  const commentaireAuditeur = (document.getElementById('ocNcNewCommentaireAuditeur')||{}).value || '';
   const row = {
     description: description.trim(),
-    exigence_code: (document.getElementById('ocNcNewExigence')||{}).value || '',
+    exigence_code: exigenceCode,
     responsable: (document.getElementById('ocNcNewResp')||{}).value || '',
     recu_le: (document.getElementById('ocNcNewRecu')||{}).value || '',
     du_le: (document.getElementById('ocNcNewDu')||{}).value || '',
-    commentaire_auditeur: (document.getElementById('ocNcNewCommentaireAuditeur')||{}).value || '',
+    commentaire_auditeur: commentaireAuditeur,
     statut: 'ouverte',
   };
   try{
@@ -3716,7 +3718,16 @@ async function ocNcAjouter(){
     state.certNonConformites = (state.certNonConformites||[]).concat(data);
     state.ocNcNewExigenceApercu = null;
     showToast('Non-conformité ajoutée.', 'success');
-    render();
+    // Si l'exigence ET le commentaire de l'auditeur sont deja renseignes, le
+    // dossier est pret a etre instruit -- on ouvre directement son plan
+    // d'action et on enchaine sur le dialogue guide, sans etape intermediaire.
+    if (exigenceCode.trim() && commentaireAuditeur.trim()){
+      state.ocNcOuverte = data.id;
+      render();
+      await ocNcLancerDialogue(data.id);
+    } else {
+      render();
+    }
   }catch(e){ showToast("Échec de l'ajout : "+e.message); }
 }
 function renderOcNonConformites(){
