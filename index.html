@@ -853,17 +853,40 @@ async function envoyerDocumentsCoop(){
   }
 }
 
+// Fonctions generiques de selection multiple de cooperatives par cases a cocher, reutilisees
+// par les differentes modales d'envoi groupe (message, demande...) -- chaque modale garde sa
+// propre liste dans state.modal.payload.coopsSelectionnees.
+function toggleCoopSelectionnee(typeModal, coopId, coche){
+  if (!state.modal || state.modal.type!==typeModal) return;
+  const pl = state.modal.payload;
+  const s = new Set(pl.coopsSelectionnees||[]);
+  if (coche) s.add(coopId); else s.delete(coopId);
+  pl.coopsSelectionnees = Array.from(s);
+  render();
+}
+function toggleToutesCoopsSelection(typeModal){
+  if (!state.modal || state.modal.type!==typeModal) return;
+  const pl = state.modal.payload;
+  const toutesCochees = state.cooperatives.length>0 && state.cooperatives.every(c=>(pl.coopsSelectionnees||[]).includes(c.id));
+  pl.coopsSelectionnees = toutesCochees ? [] : state.cooperatives.map(c=>c.id);
+  render();
+}
+
 function ouvrirEnvoiMessage(coopId){
-  state.modal = {type:'envoyerMessage', payload:{coopId: coopId||'toutes'}};
+  // Prefiltre : si on ouvre depuis une fiche coop precise, seule celle-ci est cochee au depart ;
+  // sinon (bouton general "Envoyer un message"), aucune n'est cochee -- l'utilisateur choisit
+  // librement plutot que de partir avec "toutes" par defaut (evite les envois groupes non voulus).
+  state.modal = {type:'envoyerMessage', payload:{coopsSelectionnees: coopId ? [coopId] : []}};
   render();
 }
 
 async function envoyerMessageCoop(){
-  const coopId = fv('msg_destinataire');
+  const coopIds = (state.modal && state.modal.payload && state.modal.payload.coopsSelectionnees) || [];
   const message = fv('msg_texte').trim();
   if (!message){ showToast('Écris un message avant d\'envoyer.'); return; }
+  if (coopIds.length===0){ showToast('Coche au moins une coopérative destinataire.'); return; }
 
-  const cibles = coopId==='toutes' ? state.cooperatives.slice() : [coopById(coopId)].filter(Boolean);
+  const cibles = coopIds.map(id=>coopById(id)).filter(Boolean);
   if (cibles.length===0){ showToast('Aucune coopérative à cibler.'); return; }
 
   const expediteur = (state.session && state.session.user ? state.session.user.email : 'ECORIGINE');
@@ -1206,7 +1229,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-19-99';
+const APP_VERSION = '2026-09-19-100';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -6553,14 +6576,20 @@ function _renderBrut(){
 
   if (state.modal && state.modal.type==='envoyerMessage'){
     const pl = state.modal.payload;
+    const selectionnees = new Set(pl.coopsSelectionnees||[]);
+    const coopsTriees = state.cooperatives.slice().sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'}));
+    const toutesCochees = coopsTriees.length>0 && coopsTriees.every(c=>selectionnees.has(c.id));
     html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
       + '<h3>Envoyer un message</h3>'
-      + '<div class="hint" style="margin-bottom:12px;">Le message sera visible sur le portail de la coopérative, et un email de notification sera envoyé immédiatement.</div>'
+      + '<div class="hint" style="margin-bottom:12px;">Le message sera visible sur le portail de la/des coopérative(s) cochée(s), et un email de notification sera envoyé immédiatement à chacune.</div>'
       + '<div id="modal-fields">'
-      + '<label class="field">Destinataire<select name="msg_destinataire">'
-      + '<option value="toutes"'+(pl.coopId==='toutes'?' selected':'')+'>— Toutes les coopératives ('+state.cooperatives.length+') —</option>'
-      + state.cooperatives.slice().sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'})).map(c=>'<option value="'+c.id+'"'+(pl.coopId===c.id?' selected':'')+'>'+esc(c.nom)+'</option>').join('')
-      + '</select></label>'
+      + '<label class="field">Destinataires ('+selectionnees.size+' sélectionnée(s))'
+      + '<div style="display:flex;justify-content:space-between;align-items:center;margin:4px 0 6px;">'
+      + '<button type="button" class="btn-ghost" onclick="toggleToutesCoopsSelection(\'envoyerMessage\')">'+(toutesCochees?'Tout décocher':'Tout cocher')+' ('+coopsTriees.length+')</button>'
+      + '</div>'
+      + '<div style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px 10px;">'
+      + coopsTriees.map(c=>'<label style="display:flex;align-items:center;gap:8px;padding:4px 0;font-weight:400;cursor:pointer;"><input type="checkbox" '+(selectionnees.has(c.id)?'checked':'')+' onchange="toggleCoopSelectionnee(\'envoyerMessage\',\''+c.id+'\',this.checked)"><span>'+esc(c.nom)+'</span></label>').join('')
+      + '</div></label>'
       + '<label class="field">Message<textarea name="msg_texte" rows="5" oninput="state.modal.payload.msg_texte=this.value;" placeholder="ex : La collecte des connaissements pour la campagne 2026-2027 débute le 1er septembre. Merci de vous assurer que vos livraisons sont bien accompagnées de leur fiche de traçabilité.">'+esc(pl.msg_texte||'')+'</textarea></label>'
       + '</div>'
       + '<div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="envoyerMessageCoop()">Envoyer</button></div>'
