@@ -1206,7 +1206,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-19-98';
+const APP_VERSION = '2026-09-19-99';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -2556,6 +2556,7 @@ function renderDemandeStatusPanel(title, list, mode){
         + (mode==='validation' && (d.types||[]).includes('product_movements') ? '<button class="btn-ghost" onclick="verifierLimitesFicheTracabilite(\''+d.id+'\')">Vérifier les limites</button>' : '')
         + ((mode==='acceptee') && d.fichier_path && (d.types||[]).includes('masterdata') ? '<button class="btn-ghost" onclick="lancerAnalyseWhisp(\''+d.id+'\')" id="whisp-btn-'+d.id+'">Lancer l\'analyse Whisp</button>' : '')
         + (mode==='attente' ? '<button class="btn-danger-text" onclick="annulerDemande(\''+d.id+'\')">Annuler</button>' : '')
+        + (mode==='attente' ? '<button class="btn-ghost" onclick="renvoyerEmailDemande(\''+d.id+'\', this)">✉ Renvoyer l\'email</button>' : '')
         + (d.commentaire_ecorigine ? '<div class="hint" style="width:100%;margin-top:4px;">Motif : '+esc(d.commentaire_ecorigine)+'</div>' : '')
         + '</div>'
         + (fichiersDemande.length>0 ? '<div class="dem-fichiers">'
@@ -2623,6 +2624,20 @@ function renderDemandesTab(){
 }
 
 function setDemandesSousOnglet(type){ state.demandesSousOnglet = type; render(); }
+
+// Renvoie l'email de notification d'une demande deja creee, avec un vrai retour visuel en cas
+// d'echec (voir aussi la correction de creerDemande() : l'envoi initial est desormais lui-meme
+// verifie, mais ce bouton reste utile pour les demandes plus anciennes ou en cas de nouvel echec,
+// par ex. une adresse bloquee cote Resend le temps qu'elle soit debloquee).
+async function renvoyerEmailDemande(demandeId, btn){
+  if (btn){ btn.disabled = true; btn.textContent = 'Envoi…'; }
+  try{
+    const { error } = await supabaseClient.functions.invoke('email-nouvelle-demande', { body: { demande_id: demandeId } });
+    if (error){ showToast("Échec de l'envoi : "+error.message); }
+    else { showToast('Email renvoyé.', 'success'); }
+  }catch(e){ showToast("Échec de l'envoi : "+e.message); }
+  if (btn){ btn.disabled = false; btn.textContent = "✉ Renvoyer l'email"; }
+}
 
 async function checkStorage(){
   try{
