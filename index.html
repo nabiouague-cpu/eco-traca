@@ -1229,7 +1229,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-19-101';
+const APP_VERSION = '2026-09-19-102';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -2678,7 +2678,14 @@ async function loadAll(silencieux){
   if (!silencieux){ state.loading = true; render(); }
   state.storageOk = await checkStorage();
   try{
-    state.cooperatives = await safeGet(KEY_COOP, []);
+    const toutesLesFiches = await safeGet(KEY_COOP, []);
+    // Un acheteur prive (portail semblable a ORIGEN, gere son propre reseau de
+    // cooperatives) n'est PAS une coopérative pour ECORIGINE -- ce sont les
+    // cooperatives qui dechargent pour lui. On l'exclut donc de state.cooperatives
+    // (utilisee partout cote admin comme LA liste des cooperatives), et on le garde
+    // a part dans state.acheteursPrives pour un usage dedie eventuel.
+    state.cooperatives = toutesLesFiches.filter(c=>c.type!=='acheteur_prive');
+    state.acheteursPrives = toutesLesFiches.filter(c=>c.type==='acheteur_prive');
     { // Migration : l'ancien champ "code" faisait office de N° agrément CCC — on le reporte automatiquement
       const aMigrer = [];
       state.cooperatives.forEach(c=>{
