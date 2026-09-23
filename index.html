@@ -1240,7 +1240,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-23-5';
+const APP_VERSION = '2026-09-23-6';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -2890,7 +2890,7 @@ function choisirEspace(espace){
 }
 async function chargerDonneesOricert(){
   try{
-    const [exigences, interlocuteurs, sites, partenaires, clients, prestataires, documents, audits, nc, exigenceFichiers] = await Promise.all([
+    const [exigences, interlocuteurs, sites, partenaires, clients, prestataires, documents, audits, nc, exigenceFichiers, certificats] = await Promise.all([
       supabaseClient.from('cert_exigences_statuts').select('*'),
       supabaseClient.from('cert_interlocuteurs').select('*').order('created_at'),
       supabaseClient.from('cert_sites').select('*').order('created_at'),
@@ -2901,6 +2901,7 @@ async function chargerDonneesOricert(){
       supabaseClient.from('cert_audits').select('*').order('created_at'),
       supabaseClient.from('cert_non_conformites').select('*').order('created_at'),
       supabaseClient.from('cert_exigence_fichiers').select('*').order('created_at'),
+      supabaseClient.from('cert_certificats').select('*').order('created_at', {ascending:false}),
     ]);
     state.certExigencesStatuts = exigences.data || [];
     state.oc_interlocuteurs = interlocuteurs.data || [];
@@ -2919,6 +2920,7 @@ async function chargerDonneesOricert(){
     state.oc_audits = audits.data || [];
     state.certNonConformites = nc.data || [];
     state.oc_exigenceFichiers = exigenceFichiers.data || [];
+    state.oc_certificats = certificats.data || [];
     state.oricertCharge = true;
     render();
   }catch(e){
@@ -2939,7 +2941,7 @@ const ORICERT_TABS = [
   { id:'donnees', label:'Données<br>principales', icon:ICON_OC_DONNEES },
   { id:'interlocuteurs', label:'Responsabilités', icon:ICON_OC_INTERLOCUTEURS },
   { id:'exigences', label:'Suivi des<br>exigences', icon:ICON_OC_EXIGENCES },
-  { id:'certificat', label:'Certificat', icon:ICON_OC_CERTIFICAT },
+  { id:'certificat', label:'Certificats', icon:ICON_OC_CERTIFICAT },
   { id:'partenaires', label:'Partenaires', icon:ICON_OC_PARTENAIRES },
   { id:'nc', label:'Non-<br>conformités', icon:ICON_OC_NC },
   { id:'documents', label:'Documents', icon:ICON_OC_DOCUMENTS },
@@ -3787,20 +3789,104 @@ function renderOcAudits(){
 }
 
 /* ---- Certificat (lien unique vers le PDF hébergé) ---- */
+const OC_CERT_DOSSIERS = [
+  { cle:'ecorigine', label:'ECORIGINE', avecRattachement:false },
+  { cle:'sites', label:'Sites', avecRattachement:true, source:'oc_sites', champNom:'nom' },
+  { cle:'cooperatives', label:'Coopératives', avecRattachement:true, source:'oc_partenaires', champNom:'cooperative_nom' },
+];
 function renderOcCertificat(){
-  const lien = state.ocCertificatLien || '';
-  let html = '<div class="panel-head"><h2>Certificat</h2><p>Conservez ici le lien vers votre certificat Rainforest Alliance en cours de validité (PDF hébergé sur votre Drive ou votre serveur).</p></div>';
-  html += '<div class="panel" style="padding:20px;">';
-  if (lien){
-    html += '<p><a href="'+esc(lien)+'" target="_blank" rel="noopener">📄 Ouvrir le certificat actuel</a></p>';
-  } else {
-    html += '<p class="oc-table-empty">Aucun lien enregistré pour l\'instant.</p>';
+  if (state.ocCertDossierOuvert){
+    return renderOcCertDossierDetail(state.ocCertDossierOuvert);
   }
-  html += '<div class="oc-table-add" style="margin-top:12px;">'
-    + '<input type="text" id="ocCertificatInput" placeholder="Lien vers le certificat (URL)" style="flex:1;" value="'+esc(lien)+'">'
-    + '<button class="btn btn-primary" onclick="ocEnregistrerCertificat()">Enregistrer</button>'
-    + '</div></div>';
+  let html = '<div class="panel-head"><h2>Certificats</h2><p>Certificats RA, Fairtrade et autres — d\'ECORIGINE, de ses sites, et de ses coopératives partenaires.</p></div>';
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px;">';
+  OC_CERT_DOSSIERS.forEach(d=>{
+    const n = (state.oc_certificats||[]).filter(c=>c.dossier===d.cle).length;
+    html += '<button class="doc-cible-tuile" onclick="ocOuvrirCertDossier(\''+d.cle+'\')">'
+      + '<div class="doc-cible-nom">📁 '+esc(d.label)+'</div>'
+      + '<div class="doc-cible-compte">'+n+' certificat'+(n>1?'s':'')+'</div>'
+      + '</button>';
+  });
+  html += '</div>';
   return html;
+}
+function ocOuvrirCertDossier(cle){
+  state.ocCertDossierOuvert = cle;
+  render();
+}
+function ocFermerCertDossier(){
+  state.ocCertDossierOuvert = null;
+  render();
+}
+function renderOcCertDossierDetail(cle){
+  const conf = OC_CERT_DOSSIERS.find(d=>d.cle===cle);
+  const certs = (state.oc_certificats||[]).filter(c=>c.dossier===cle).sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
+  let html = '<div class="panel-head"><button class="btn-ghost" onclick="ocFermerCertDossier()" style="margin-bottom:10px;">← Retour aux certificats</button><h2>'+esc(conf.label)+'</h2></div>';
+  html += '<div class="panel" style="padding:18px;">';
+  html += '<div class="oc-table-add" style="flex-wrap:wrap;">';
+  if (conf.avecRattachement){
+    const options = (state[conf.source]||[]);
+    html += '<select id="ocCertRattachement" style="min-width:200px;"><option value="">— Non rattaché à '+(cle==='sites'?'un site':'une coopérative')+' précis —</option>'
+      + options.map(o=>'<option value="'+o.id+'">'+esc(o[conf.champNom]||'(sans nom)')+'</option>').join('')
+      + '</select>';
+  }
+  html += '<input type="date" id="ocCertDateExpiration" title="Date d\'expiration (optionnel)">'
+    + '<input type="file" id="ocCertFileInput" style="display:none;" onchange="ocDeposerCertificat(this,\''+cle+'\')">'
+    + '<button class="btn btn-primary" onclick="document.getElementById(\'ocCertFileInput\').click()">+ Ajouter un certificat</button>'
+    + '</div>';
+  if (certs.length===0){
+    html += '<p class="oc-table-empty" style="margin-top:14px;">Aucun certificat déposé pour l\'instant.</p>';
+  } else {
+    html += '<div class="oc-exigence-fichiers-liste" style="margin-top:14px;">'
+      + certs.map(c=>{
+          const expire = c.date_expiration ? (new Date(c.date_expiration) < new Date() ? ' <span style="color:var(--danger,#c0392b);">(expiré le '+esc(c.date_expiration)+')</span>' : ' <span class="hint">(expire le '+esc(c.date_expiration)+')</span>') : '';
+          return '<div class="oc-exigence-fichier-item">📄 <span onclick="telechargerFichierDemande(\''+c.path+'\',\''+esc(c.nom).replace(/'/g,"\\'")+'\')" style="cursor:pointer;text-decoration:underline;flex:1;">'+esc(c.nom)+(c.rattachement_nom?' — '+esc(c.rattachement_nom):'')+'</span>'+expire+'<button class="oc-exigence-fichier-suppr" title="Supprimer" onclick="ocSupprimerCertificat('+c.id+',\''+c.path+'\')">🗑</button></div>';
+        }).join('')
+      + '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+async function ocDeposerCertificat(input, cle){
+  const file = input.files[0];
+  if (!file) return;
+  const conf = OC_CERT_DOSSIERS.find(d=>d.cle===cle);
+  let rattachementId = null, rattachementNom = null;
+  if (conf.avecRattachement){
+    const select = document.getElementById('ocCertRattachement');
+    const val = select ? select.value : '';
+    if (val){
+      const item = (state[conf.source]||[]).find(o=>String(o.id)===String(val));
+      rattachementId = val;
+      rattachementNom = item ? item[conf.champNom] : null;
+    }
+  }
+  const dateExpiration = (document.getElementById('ocCertDateExpiration')||{}).value || null;
+  try{
+    const path = 'oricert/certificats/'+cle+'/'+Date.now()+'_'+assainirNomFichierOc(file.name);
+    const { error: upErr } = await supabaseClient.storage.from('documents-coop').upload(path, file, { upsert: true });
+    if (upErr){ showToast("Échec de l'envoi : "+upErr.message); return; }
+    const { data, error } = await supabaseClient.from('cert_certificats').insert({
+      dossier: cle, rattachement_id: rattachementId, rattachement_nom: rattachementNom,
+      nom: file.name, path, date_expiration: dateExpiration, uploaded_by: state.session.user.id,
+    }).select().single();
+    if (error){ showToast("Échec de l'enregistrement : "+error.message); return; }
+    state.oc_certificats = (state.oc_certificats||[]).concat(data);
+    showToast('Certificat ajouté.', 'success');
+    render();
+  }catch(e){ showToast('Erreur : '+e.message); }
+  input.value = '';
+}
+function ocSupprimerCertificat(id, path){
+  askConfirm('Supprimer définitivement ce certificat ?\n\nCette action est irréversible.', async () => {
+    try{
+      await supabaseClient.storage.from('documents-coop').remove([path]);
+      await supabaseClient.from('cert_certificats').delete().eq('id', id);
+      state.oc_certificats = (state.oc_certificats||[]).filter(c=>c.id!==id);
+      showToast('Certificat supprimé.', 'success');
+      render();
+    }catch(e){ showToast('Erreur : '+e.message); }
+  });
 }
 async function ocEnregistrerCertificat(){
   const val = (document.getElementById('ocCertificatInput')||{}).value || '';
