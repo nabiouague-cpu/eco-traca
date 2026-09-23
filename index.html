@@ -251,7 +251,9 @@
   .oc-card-foot{margin-top:6px;}
   .oc-exigence-fichiers{margin-top:10px;padding-top:10px;border-top:1px dashed var(--border);}
   .oc-exigence-fichiers-liste{display:flex;flex-direction:column;gap:4px;margin-bottom:8px;}
-  .oc-exigence-fichier-item{font-size:12px;color:var(--ink-soft);}
+  .oc-exigence-fichier-item{font-size:13px;color:var(--ink-soft);display:flex;align-items:center;gap:8px;padding:4px 0;}
+  .oc-exigence-fichier-suppr{font-size:18px;padding:4px 8px;line-height:1;border-radius:6px;background:transparent;border:none;cursor:pointer;color:var(--danger, #c0392b);}
+  .oc-exigence-fichier-suppr:hover{background:var(--danger-bg, #fdecea);}
   .oc-suggestion-conformite{display:flex;gap:10px;margin-top:10px;padding:10px 12px;border-radius:8px;font-size:12.5px;}
   .oc-suggestion-conformite.positive{background:var(--ok-bg);border:1px solid var(--ok-line);}
   .oc-suggestion-conformite.negative{background:var(--warn-bg);border:1px solid var(--warn-line);}
@@ -1237,7 +1239,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-23-3';
+const APP_VERSION = '2026-09-23-4';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -2964,7 +2966,7 @@ function renderOricert(){
   else if (tab==='formation') contenu = renderOcFormation();
   else contenu = '';
 
-  return '<div class="oc-shell">'
+  let html = '<div class="oc-shell">'
     + '<div class="oc-appbar">'
     + '<div class="oc-appbar-brand"><div class="oc-appbar-logo">'+ORICERT_LOGO+'</div> ORICERT · Suivi de certification ECORIGINE</div>'
     + '<div class="oc-appbar-user"><button class="btn-ghost" onclick="changerEspace()">⇄ Changer d\'espace</button><span class="oc-appbar-av">'+esc((state.session.user.email||'?').charAt(0).toUpperCase())+'</span><span>'+esc(state.session.user.email)+'</span></div>'
@@ -2972,8 +2974,22 @@ function renderOricert(){
     + '<nav class="oc-tabstrip">'
     + ORICERT_TABS.map(t=>'<button class="'+(tab===t.id?'active':'')+'" onclick="setOricertTab(\''+t.id+'\')">'+t.label.replace('<br>',' ')+'</button>').join('')
     + '</nav>'
-    + '<div class="oc-wrap">' + contenu + '</div>'
-    + '</div>';
+    + '<div class="oc-wrap">' + contenu + '</div>';
+  // Le rendu ORICERT est une branche a part (voir _renderBrut) qui ne passe
+  // jamais par le bloc toast/confirmDialog du rendu ORIGEN principal -- sans
+  // ceci, aucune confirmation de suppression ni aucun message de succes/erreur
+  // ne s'affichait jamais dans ORICERT (bug reellement rencontre et corrige).
+  if (state.toast){
+    html += '<div class="toast '+(state.toast.type==='success'?'success':'error')+'"><span>'+esc(state.toast.message)+'</span><button class="close" onclick="dismissToast()">✕</button></div>';
+  }
+  if (state.confirmDialog){
+    html += '<div class="modal-overlay"><div class="modal">'
+      + '<p style="font-size:14px;line-height:1.5;margin:0 0 20px;">'+esc(state.confirmDialog.message)+'</p>'
+      + '<div class="actions"><button type="button" class="btn" onclick="confirmDialogNo()">Annuler</button><button type="button" class="btn btn-primary" onclick="confirmDialogYes()">Confirmer</button></div>'
+      + '</div></div>';
+  }
+  html += '</div>';
+  return html;
 }
 
 /* ========================================================================
@@ -3522,7 +3538,7 @@ function ocFichiersListHTML(code){
   let html = '<div class="oc-exigence-fichiers">';
   if (fichiers.length>0){
     html += '<div class="oc-exigence-fichiers-liste">'
-      + fichiers.map(f=>'<div class="oc-exigence-fichier-item">📄 <span onclick="telechargerFichierDemande(\''+f.path+'\',\''+esc(f.nom).replace(/'/g,"\\'")+'\')" style="cursor:pointer;text-decoration:underline;">'+esc(f.nom)+'</span> <button class="btn-danger-text" style="padding:0 0 0 6px;" onclick="ocSupprimerFichierExigence('+f.id+',\''+f.path+'\')">🗑</button></div>').join('')
+      + fichiers.map(f=>'<div class="oc-exigence-fichier-item">📄 <span onclick="telechargerFichierDemande(\''+f.path+'\',\''+esc(f.nom).replace(/'/g,"\\'")+'\')" style="cursor:pointer;text-decoration:underline;flex:1;">'+esc(f.nom)+'</span><button class="oc-exigence-fichier-suppr" title="Supprimer" onclick="ocSupprimerFichierExigence('+f.id+',\''+f.path+'\')">🗑</button></div>').join('')
       + '</div>';
   }
   html += '<button class="btn-ghost" onclick="document.getElementById(\''+inputId+'\').click()">📎 Joindre un document</button>'
