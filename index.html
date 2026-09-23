@@ -249,6 +249,9 @@
   .oc-docs{margin:0 0 8px;padding-left:18px;font-size:12px;color:var(--ink-soft);}
   .oc-seed-badge{font-size:11px;background:#FBF0DC;color:#8C5A0A;border-radius:5px;padding:4px 8px;margin-bottom:8px;display:inline-block;}
   .oc-card-foot{margin-top:6px;}
+  .oc-exigence-fichiers{margin-top:10px;padding-top:10px;border-top:1px dashed var(--border);}
+  .oc-exigence-fichiers-liste{display:flex;flex-direction:column;gap:4px;margin-bottom:8px;}
+  .oc-exigence-fichier-item{font-size:12px;color:var(--ink-soft);}
   .oc-status-ctl{display:flex;gap:6px;}
   .oc-status-ctl button{border:1px solid var(--border);background:#fff;font-size:11.5px;padding:4px 10px;border-radius:6px;cursor:pointer;color:var(--ink-soft);}
   .oc-status-ctl button.active.sel-todo{background:var(--border);color:var(--ink);}
@@ -1229,7 +1232,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-19-105';
+const APP_VERSION = '2026-09-23-1';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -2879,7 +2882,7 @@ function choisirEspace(espace){
 }
 async function chargerDonneesOricert(){
   try{
-    const [exigences, interlocuteurs, sites, partenaires, clients, prestataires, documents, audits, nc] = await Promise.all([
+    const [exigences, interlocuteurs, sites, partenaires, clients, prestataires, documents, audits, nc, exigenceFichiers] = await Promise.all([
       supabaseClient.from('cert_exigences_statuts').select('*'),
       supabaseClient.from('cert_interlocuteurs').select('*').order('created_at'),
       supabaseClient.from('cert_sites').select('*').order('created_at'),
@@ -2889,6 +2892,7 @@ async function chargerDonneesOricert(){
       supabaseClient.from('cert_documents').select('*').order('created_at'),
       supabaseClient.from('cert_audits').select('*').order('created_at'),
       supabaseClient.from('cert_non_conformites').select('*').order('created_at'),
+      supabaseClient.from('cert_exigence_fichiers').select('*').order('created_at'),
     ]);
     state.certExigencesStatuts = exigences.data || [];
     state.oc_interlocuteurs = interlocuteurs.data || [];
@@ -2906,6 +2910,7 @@ async function chargerDonneesOricert(){
     state.oc_formation = tousDocs.filter(d=>d.reference==='FORMATION_SUPPORT').map(d=>({ id:d.id, nom:d.document, lien:d.date_document }));
     state.oc_audits = audits.data || [];
     state.certNonConformites = nc.data || [];
+    state.oc_exigenceFichiers = exigenceFichiers.data || [];
     state.oricertCharge = true;
     render();
   }catch(e){
@@ -3435,6 +3440,55 @@ function ocCardNoteHTML(r){
   const enonce = r.enonce ? '<div class="oc-card-enonce"><span class="oc-note-label">📜 Énoncé de l\'exigence (RA SAS2020 v1.5)</span><p>'+esc(r.enonce)+'</p></div>' : '';
   return '<div class="oc-card-note">'+enonce+'<span class="oc-note-label">📘 Ce qu\'il faut savoir</span><p>'+esc(r.detail)+'</p>'+nb+'</div>';
 }
+function ocFichiersDeExigence(code){
+  return (state.oc_exigenceFichiers||[]).filter(f=>f.exigence_code===code);
+}
+async function ocDeposerFichierExigence(input, code){
+  const files = Array.from(input.files||[]);
+  if (files.length===0) return;
+  try{
+    for (const file of files){
+      const path = 'oricert/exigences/'+code+'/'+Date.now()+'_'+assainirNomFichierOc(file.name);
+      const { error: upErr } = await supabaseClient.storage.from('documents-coop').upload(path, file, { upsert: true });
+      if (upErr){ showToast("Échec de l'envoi de "+file.name+" : "+upErr.message); continue; }
+      const { data, error } = await supabaseClient.from('cert_exigence_fichiers').insert({
+        exigence_code: code, nom: file.name, path, uploaded_by: state.session.user.id,
+      }).select().single();
+      if (!error && data) state.oc_exigenceFichiers = (state.oc_exigenceFichiers||[]).concat(data);
+    }
+    showToast(files.length>1 ? files.length+' fichiers déposés.' : 'Fichier déposé.', 'success');
+    render();
+  }catch(e){ showToast('Erreur : '+e.message); }
+  input.value = '';
+}
+function ocSupprimerFichierExigence(id, path){
+  askConfirm('Supprimer définitivement ce fichier ?\n\nCette action est irréversible.', async () => {
+    try{
+      await supabaseClient.storage.from('documents-coop').remove([path]);
+      await supabaseClient.from('cert_exigence_fichiers').delete().eq('id', id);
+      state.oc_exigenceFichiers = (state.oc_exigenceFichiers||[]).filter(f=>f.id!==id);
+      showToast('Fichier supprimé.', 'success');
+      render();
+    }catch(e){ showToast('Erreur : '+e.message); }
+  });
+}
+function assainirNomFichierOc(nom){
+  return String(nom||'fichier').replace(/[^a-zA-Z0-9._-]+/g,'_');
+}
+function ocFichiersListHTML(code){
+  const fichiers = ocFichiersDeExigence(code);
+  const inputId = 'oc-exigence-fichiers-'+code.replace(/[^a-zA-Z0-9]+/g,'_');
+  let html = '<div class="oc-exigence-fichiers">';
+  if (fichiers.length>0){
+    html += '<div class="oc-exigence-fichiers-liste">'
+      + fichiers.map(f=>'<div class="oc-exigence-fichier-item">📄 <span onclick="telechargerFichierDemande(\''+f.path+'\',\''+esc(f.nom).replace(/'/g,"\\'")+'\')" style="cursor:pointer;text-decoration:underline;">'+esc(f.nom)+'</span> <button class="btn-danger-text" style="padding:0 0 0 6px;" onclick="ocSupprimerFichierExigence('+f.id+',\''+f.path+'\')">🗑</button></div>').join('')
+      + '</div>';
+  }
+  html += '<button class="btn-ghost" onclick="document.getElementById(\''+inputId+'\').click()">📎 Joindre un document</button>'
+    + '<input type="file" id="'+inputId+'" style="display:none;" multiple onchange="ocDeposerFichierExigence(this,\''+code+'\')">'
+    + '</div>';
+  return html;
+}
 function ocItemCardHTML(r){
   const statut = ocStatutOf(r.code);
   const seeded = !(state.certExigencesStatuts||[]).find(s=>s.code===r.code) && !!OC_SEED[r.code];
@@ -3453,6 +3507,7 @@ function ocItemCardHTML(r){
     + '<ul class="oc-docs">'+docsHtml+'</ul>'
     + (seeded ? '<div class="oc-seed-badge">📄 Pré-rempli selon votre Plan de Gestion — vérifiez puis validez ou corrigez ci-dessous</div>' : '')
     + '<div class="oc-card-foot">'+ocStatutControlHTML(r.code, false)+'</div>'
+    + ocFichiersListHTML(r.code)
     + '</div>'
     + ocCardNoteHTML(r)
     + '</div></div>';
@@ -3478,6 +3533,7 @@ function ocQuarterlyCardHTML(r){
     + '</div>'
     + '<ul class="oc-docs">'+docsHtml+'</ul>'
     + '<div class="oc-qgrid">'+rowsHtml+'</div>'
+    + ocFichiersListHTML(r.code)
     + '</div>'
     + ocCardNoteHTML(r)
     + '</div></div>';
