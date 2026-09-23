@@ -281,12 +281,25 @@
   .oc-qdue{color:var(--ink-faint);white-space:nowrap;}
   .oc-qdue.overdue{color:var(--danger);font-weight:600;}
 
+  .oc-table-panel{overflow:hidden;}
+  .oc-table-scroll{overflow-x:auto;max-width:100%;}
   .oc-table{width:100%;border-collapse:collapse;font-size:13px;}
-  .oc-table th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-faint);padding:10px 14px;border-bottom:1px solid var(--border);}
-  .oc-table td{padding:9px 14px;border-bottom:1px solid var(--border);color:var(--ink);}
+  .oc-table th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-faint);padding:10px 14px;border-bottom:1px solid var(--border);white-space:nowrap;}
+  .oc-table td{padding:9px 14px;border-bottom:1px solid var(--border);color:var(--ink);min-width:110px;max-width:240px;overflow-wrap:break-word;vertical-align:top;}
   .oc-table-empty{padding:20px;text-align:center;color:var(--ink-faint);font-size:13px;}
-  .oc-table-add{display:flex;gap:8px;flex-wrap:wrap;padding:14px 16px;background:var(--surface-2);}
-  .oc-table-add input{flex:1;min-width:120px;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;}
+  .oc-table-add{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;padding:14px 16px;background:var(--surface-2);align-items:start;}
+  .oc-table-add-cell{min-width:0;}
+  .oc-table-add input[type="text"]{width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;}
+  .oc-table-add > button.btn-primary{grid-column:1/-1;justify-self:start;}
+  .oc-chip{display:inline-block;background:var(--surface-2, #f0f0f0);border:1px solid var(--border);border-radius:20px;padding:2px 9px;font-size:11.5px;margin:2px 4px 2px 0;white-space:nowrap;}
+  .oc-field-multi{display:flex;flex-direction:column;gap:5px;min-width:0;}
+  .oc-field-multi-row{display:flex;gap:4px;align-items:center;}
+  .oc-field-multi-row input{flex:1;min-width:0;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12.5px;}
+  .oc-field-multi-del{flex:none;background:none;border:none;color:var(--ink-faint);cursor:pointer;font-size:13px;padding:2px 4px;}
+  .oc-field-multi-del:hover{color:var(--danger,#c0392b);}
+  .oc-field-multi-add{align-self:flex-start;background:none;border:none;color:var(--accent);cursor:pointer;font-size:12px;padding:2px 0;}
+  .oc-field-checklist{display:flex;flex-direction:column;gap:4px;font-size:12.5px;}
+  .oc-field-checklist label{display:flex;align-items:center;gap:6px;font-weight:400;white-space:nowrap;}
 
   .oc-nc-howto{background:#FBF0DC;border:1px solid #E0C583;border-radius:8px;padding:12px 16px;font-size:12.5px;color:#5A4212;margin-bottom:14px;}
   .oc-nc-add-box{background:#fff;border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:16px;}
@@ -1243,7 +1256,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-23-9';
+const APP_VERSION = '2026-09-23-10';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3666,31 +3679,48 @@ function renderOcExigences(){
    (libelle affiche -> nom de colonne reel), et un texte d'intro. Reprend le
    principe du fichier source (systeme de tables generique a colonnes
    configurables) mais branche sur Supabase plutot que window.storage. */
+const OC_NIVEAUX_TRACABILITE = ['Identité Préservée', 'Ségrégation', 'Mass Balance'];
 const OC_TABLES = {
   interlocuteurs: {
     table:'cert_interlocuteurs', titre:'Responsabilités',
     intro:'Rôles et contacts clés, tels que désignés dans vos notes de service internes.',
-    cols:[['Nom','nom'],['Ville','ville'],['Fonction','role'],['Rôle certification','role_certification'],['Comité','comite'],['Contact','contact'],['Domaine','domaine']],
+    cols:[
+      ['Nom','nom'],['Ville','ville'],['Fonction','role'],['Rôle certification','role_certification'],
+      ['Comités','comites','multi'],['Mail','mails','multi'],['Contact','contacts','multi'],['Domaine','domaine'],
+    ],
   },
   sites: {
-    table:'cert_sites', titre:'Sites & Sous-traitants',
+    table:'cert_sites', titre:'Sites',
     intro:'Suivi des sites d\'usinage/entreposage évalués par le comité d\'approbation et de sanction. Voir aussi l\'exigence 1.3.1/1.3.2 dans Suivi des exigences.',
-    cols:[['Site / Sous-traitant','nom'],['Type','type'],['Statut','statut'],['Commentaire','commentaire']],
+    cols:[
+      ['Nom du site','nom'],['Localisation','localisation'],['Culture','culture'],
+      ['Activités','activites'],['Niveau de traçabilité','niveaux_tracabilite','checklist',OC_NIVEAUX_TRACABILITE],
+    ],
   },
   partenaires: {
     table:'cert_partenaires', titre:'Coopératives',
-    intro:'Coopératives sous contrat pour la campagne, et statut de signature du Code de Conduite et du contrat de prime. Une coopérative rejoint automatiquement cette liste dès sa première livraison enregistrée sur le portail — l\'ajout manuel reste possible en complément.',
-    cols:[['Coopérative','cooperative_nom'],['Volume (T)','volume_tonnes'],['Code de Conduite','code_conduite'],['Contrat de prime','contrat_prime']],
+    intro:'Coopératives sous contrat pour la campagne. Une coopérative rejoint automatiquement cette liste dès sa première livraison enregistrée sur le portail — l\'ajout manuel reste possible en complément.',
+    cols:[
+      ['Nom coopérative','cooperative_nom'],['Localisation','localisation'],['Mail coopérative','mails','multi'],
+      ['Personne contact','contacts','multi'],['Type de cacao','type_cacao'],
+      ['Niveau de traçabilité','niveaux_tracabilite','checklist',OC_NIVEAUX_TRACABILITE],
+    ],
   },
   clients: {
     table:'cert_clients', titre:'Clients',
     intro:'Acheteurs sous contrat auxquels ECORIGINE vend du cacao certifié.',
-    cols:[['Client','nom'],['Pays','pays'],['Contrat','contrat'],['Contact','contact']],
+    cols:[
+      ['Nom client','nom'],['Adresse','adresse'],['Siège social','siege_social'],
+      ['Numéros contrats','numeros_contrats','multi'],['Mail','mails','multi'],
+    ],
   },
   prestataires: {
     table:'cert_prestataires', titre:'Prestataires',
     intro:'Prestataires externes intervenant dans la chaîne (transport, contrôle qualité, etc.).',
-    cols:[['Prestataire','nom'],['Prestation','prestation'],['Contrat','contrat'],['Contact','contact']],
+    cols:[
+      ['Nom entreprise','nom'],['Nom prestataire','nom_prestataire'],['Type de prestation','prestation'],
+      ['Contact responsable','contacts','multi'],['Mail responsable','mails','multi'],
+    ],
   },
   documents: {
     table:'cert_documents', titre:'Documents',
@@ -3725,12 +3755,70 @@ function renderOcPartenaires(){
 
 function ocTableRows(tableId){ return state['oc_'+tableId] || []; }
 
+// Rendu d'UNE cellule en mode edition/ajout, selon le type de colonne :
+// - 'text' (defaut) : un simple champ texte
+// - 'multi' : plusieurs champs texte empilables (ex: mails, contacts, comites) --
+//   stocke en jsonb (tableau de chaines) cote base
+// - 'checklist' : cases a cocher multiples parmi une liste fixe (ex: niveaux de
+//   tracabilite) -- stocke en jsonb (tableau de chaines) cote base
+function ocChampEditHTML(c, valeurActuelle, prefixeId){
+  const [label, champ, type, options] = c;
+  const id = prefixeId+'-'+champ;
+  if (type==='checklist'){
+    const valeurs = Array.isArray(valeurActuelle) ? valeurActuelle : [];
+    return '<div class="oc-field-checklist" data-oc-field="'+champ+'" data-oc-type="checklist">'
+      + (options||[]).map(opt=>'<label><input type="checkbox" value="'+esc(opt)+'" '+(valeurs.includes(opt)?'checked':'')+'> '+esc(opt)+'</label>').join('')
+      + '</div>';
+  }
+  if (type==='multi'){
+    const valeurs = Array.isArray(valeurActuelle) ? valeurActuelle : (valeurActuelle ? [valeurActuelle] : []);
+    const items = valeurs.length ? valeurs : [''];
+    return '<div class="oc-field-multi" data-oc-field="'+champ+'" data-oc-type="multi">'
+      + items.map(v=>'<div class="oc-field-multi-row"><input type="text" value="'+esc(v)+'" placeholder="'+esc(label)+'"><button type="button" class="oc-field-multi-del" onclick="this.parentElement.remove()">✕</button></div>').join('')
+      + '<button type="button" class="oc-field-multi-add" onclick="ocAjouterChampMulti(this)">+ Ajouter</button>'
+      + '</div>';
+  }
+  return '<input type="text" value="'+esc(valeurActuelle||'')+'" placeholder="'+esc(label)+'" data-oc-field="'+champ+'" data-oc-type="text">';
+}
+function ocAjouterChampMulti(bouton){
+  const conteneur = bouton.parentElement;
+  const modele = conteneur.querySelector('.oc-field-multi-row');
+  const placeholder = modele ? modele.querySelector('input').placeholder : '';
+  const div = document.createElement('div');
+  div.className = 'oc-field-multi-row';
+  div.innerHTML = '<input type="text" placeholder="'+esc(placeholder)+'"><button type="button" class="oc-field-multi-del" onclick="this.parentElement.remove()">✕</button>';
+  conteneur.insertBefore(div, bouton);
+}
+// Lit la valeur saisie pour UN champ (texte simple, multi, ou checklist), a
+// l'interieur d'un conteneur donne (zone d'ajout ou ligne en edition).
+function ocLireChamp(conteneur, c){
+  const [label, champ, type] = c;
+  const bloc = conteneur.querySelector('[data-oc-field="'+champ+'"]');
+  if (!bloc) return null;
+  if (type==='checklist'){
+    return Array.from(bloc.querySelectorAll('input[type="checkbox"]:checked')).map(cb=>cb.value);
+  }
+  if (type==='multi'){
+    return Array.from(bloc.querySelectorAll('input[type="text"]')).map(i=>i.value.trim()).filter(Boolean);
+  }
+  return bloc.value.trim();
+}
+// Affiche la valeur d'UNE cellule en lecture (hors edition), selon son type.
+function ocValeurAffichee(c, valeur){
+  const [label, champ, type] = c;
+  if (type==='multi' || type==='checklist'){
+    const valeurs = Array.isArray(valeur) ? valeur : [];
+    if (valeurs.length===0) return '—';
+    return valeurs.map(v=>'<span class="oc-chip">'+esc(v)+'</span>').join('');
+  }
+  return esc(valeur || '—');
+}
 function renderOcTableSimple(tableId){
   const cfg = OC_TABLES[tableId];
   const rows = ocTableRows(tableId);
   const editId = state.ocTableEditId && state.ocTableEditTable===tableId ? state.ocTableEditId : null;
   let html = '<div class="panel-head"><h2>'+esc(cfg.titre)+'</h2><p>'+esc(cfg.intro)+'</p></div>';
-  html += '<div class="panel"><table class="oc-table"><thead><tr>'
+  html += '<div class="panel oc-table-panel"><div class="oc-table-scroll"><table class="oc-table"><thead><tr>'
     + cfg.cols.map(c=>'<th>'+esc(c[0])+'</th>').join('')
     + '<th></th></tr></thead><tbody>';
   if (rows.length===0){
@@ -3738,17 +3826,17 @@ function renderOcTableSimple(tableId){
   } else {
     rows.forEach(row=>{
       if (row.id===editId){
-        html += '<tr class="oc-table-row-edit">' + cfg.cols.map(c=>'<td><input type="text" value="'+esc(row[c[1]]||'')+'" data-oc-edit-field="'+c[1]+'"></td>').join('')
+        html += '<tr class="oc-table-row-edit">' + cfg.cols.map(c=>'<td>'+ocChampEditHTML(c, row[c[1]], 'ocedit')+'</td>').join('')
           + '<td style="white-space:nowrap;"><button class="oc-icon-btn oc-icon-btn-modif" title="Enregistrer" onclick="ocEnregistrerModifLigne(\''+tableId+'\','+row.id+')">✓</button><button class="oc-icon-btn oc-icon-btn-suppr" title="Annuler" onclick="ocAnnulerModifLigne()">✕</button></td></tr>';
       } else {
-        html += '<tr>' + cfg.cols.map(c=>'<td>'+esc(row[c[1]]||'—')+'</td>').join('')
+        html += '<tr>' + cfg.cols.map(c=>'<td>'+ocValeurAffichee(c, row[c[1]])+'</td>').join('')
           + '<td style="white-space:nowrap;"><button class="oc-icon-btn oc-icon-btn-modif" title="Modifier" onclick="ocModifierLigne(\''+tableId+'\','+row.id+')">✏️</button><button class="oc-icon-btn oc-icon-btn-suppr" title="Supprimer" onclick="ocSupprimerLigne(\''+tableId+'\','+row.id+')">🗑</button></td></tr>';
       }
     });
   }
-  html += '</tbody></table>'
+  html += '</tbody></table></div>'
     + '<div class="oc-table-add">'
-    + cfg.cols.map(c=>'<input type="text" placeholder="'+esc(c[0])+'" data-oc-field="'+c[1]+'">').join('')
+    + cfg.cols.map(c=>'<div class="oc-table-add-cell">'+ocChampEditHTML(c, null, 'ocnew')+'</div>').join('')
     + '<button class="btn btn-primary" onclick="ocAjouterLigne(\''+tableId+'\')">+ Ajouter</button>'
     + '</div></div>';
   return html;
@@ -3768,8 +3856,7 @@ async function ocEnregistrerModifLigne(tableId, id){
   if (!ligne) return;
   const patch = {};
   cfg.cols.forEach(c=>{
-    const input = ligne.querySelector('[data-oc-edit-field="'+c[1]+'"]');
-    patch[c[1]] = input ? input.value.trim() : '';
+    patch[c[1]] = ocLireChamp(ligne, c);
   });
   try{
     const { error } = await supabaseClient.from(cfg.table).update(patch).eq('id', id);
@@ -3790,9 +3877,9 @@ async function ocAjouterLigne(tableId){
   const row = {};
   let auMoinsUnChamp = false;
   cfg.cols.forEach(c=>{
-    const input = zone.querySelector('[data-oc-field="'+c[1]+'"]');
-    const val = input ? input.value.trim() : '';
-    if (val){ row[c[1]] = val; auMoinsUnChamp = true; }
+    const val = ocLireChamp(zone, c);
+    const rempli = Array.isArray(val) ? val.length>0 : !!val;
+    if (rempli){ row[c[1]] = val; auMoinsUnChamp = true; }
   });
   if (!auMoinsUnChamp){ showToast('Renseigne au moins un champ avant d\'ajouter une ligne.'); return; }
   try{
