@@ -1240,7 +1240,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-23-7';
+const APP_VERSION = '2026-09-23-8';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3725,6 +3725,7 @@ function ocTableRows(tableId){ return state['oc_'+tableId] || []; }
 function renderOcTableSimple(tableId){
   const cfg = OC_TABLES[tableId];
   const rows = ocTableRows(tableId);
+  const editId = state.ocTableEditId && state.ocTableEditTable===tableId ? state.ocTableEditId : null;
   let html = '<div class="panel-head"><h2>'+esc(cfg.titre)+'</h2><p>'+esc(cfg.intro)+'</p></div>';
   html += '<div class="panel"><table class="oc-table"><thead><tr>'
     + cfg.cols.map(c=>'<th>'+esc(c[0])+'</th>').join('')
@@ -3733,8 +3734,13 @@ function renderOcTableSimple(tableId){
     html += '<tr><td colspan="'+(cfg.cols.length+1)+'" class="oc-table-empty">Aucune ligne pour l\'instant.</td></tr>';
   } else {
     rows.forEach(row=>{
-      html += '<tr>' + cfg.cols.map(c=>'<td>'+esc(row[c[1]]||'—')+'</td>').join('')
-        + '<td><button class="btn-danger-text" onclick="ocSupprimerLigne(\''+tableId+'\','+row.id+')">🗑</button></td></tr>';
+      if (row.id===editId){
+        html += '<tr class="oc-table-row-edit">' + cfg.cols.map(c=>'<td><input type="text" value="'+esc(row[c[1]]||'')+'" data-oc-edit-field="'+c[1]+'"></td>').join('')
+          + '<td style="white-space:nowrap;"><button class="btn-ghost" style="padding:2px 6px;" onclick="ocEnregistrerModifLigne(\''+tableId+'\','+row.id+')">✓</button> <button class="btn-ghost" style="padding:2px 6px;" onclick="ocAnnulerModifLigne()">✕</button></td></tr>';
+      } else {
+        html += '<tr>' + cfg.cols.map(c=>'<td>'+esc(row[c[1]]||'—')+'</td>').join('')
+          + '<td style="white-space:nowrap;"><button class="btn-ghost" style="padding:2px 6px;" onclick="ocModifierLigne(\''+tableId+'\','+row.id+')">✏️</button> <button class="btn-danger-text" onclick="ocSupprimerLigne(\''+tableId+'\','+row.id+')">🗑</button></td></tr>';
+      }
     });
   }
   html += '</tbody></table>'
@@ -3743,6 +3749,35 @@ function renderOcTableSimple(tableId){
     + '<button class="btn btn-primary" onclick="ocAjouterLigne(\''+tableId+'\')">+ Ajouter</button>'
     + '</div></div>';
   return html;
+}
+function ocModifierLigne(tableId, id){
+  state.ocTableEditTable = tableId;
+  state.ocTableEditId = id;
+  render();
+}
+function ocAnnulerModifLigne(){
+  state.ocTableEditId = null;
+  render();
+}
+async function ocEnregistrerModifLigne(tableId, id){
+  const cfg = OC_TABLES[tableId];
+  const ligne = document.querySelector('.oc-table-row-edit');
+  if (!ligne) return;
+  const patch = {};
+  cfg.cols.forEach(c=>{
+    const input = ligne.querySelector('[data-oc-edit-field="'+c[1]+'"]');
+    patch[c[1]] = input ? input.value.trim() : '';
+  });
+  try{
+    const { error } = await supabaseClient.from(cfg.table).update(patch).eq('id', id);
+    if (error){ showToast("Échec de la modification : "+error.message); return; }
+    const liste = state['oc_'+tableId] || [];
+    const row = liste.find(r=>r.id===id);
+    if (row) Object.assign(row, patch);
+    state.ocTableEditId = null;
+    showToast('Ligne modifiée.', 'success');
+    render();
+  }catch(e){ showToast('Erreur : '+e.message); }
 }
 
 async function ocAjouterLigne(tableId){
