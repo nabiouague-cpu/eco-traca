@@ -1256,7 +1256,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-23-10';
+const APP_VERSION = '2026-09-23-11';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3694,7 +3694,7 @@ const OC_TABLES = {
     intro:'Suivi des sites d\'usinage/entreposage évalués par le comité d\'approbation et de sanction. Voir aussi l\'exigence 1.3.1/1.3.2 dans Suivi des exigences.',
     cols:[
       ['Nom du site','nom'],['Localisation','localisation'],['Culture','culture'],
-      ['Activités','activites'],['Niveau de traçabilité','niveaux_tracabilite','checklist',OC_NIVEAUX_TRACABILITE],
+      ['Activités','activites_multi','multi'],['Niveau de traçabilité','niveaux_tracabilite','checklist',OC_NIVEAUX_TRACABILITE],
     ],
   },
   partenaires: {
@@ -3736,6 +3736,86 @@ const OC_TABLES = {
 
 // Les 4 sous-onglets internes de "Coopératives partenaires" -- chacun pointe
 // vers une entree distincte de OC_TABLES (meme moteur de rendu generique).
+// Colonnes precises a inclure dans l'export Word par sous-onglet -- volontairement
+// un sous-ensemble des colonnes de la table (jamais tout), comme demande.
+const OC_EXPORT_WORD_COLS = {
+  partenaires: { titre:'Coopératives partenaires', cols:[
+    ['Nom coopérative','cooperative_nom'],['Mail','mails','multi'],['Type de cacao','type_cacao'],['Niveau de traçabilité','niveaux_tracabilite','checklist'],
+  ]},
+  sites: { titre:'Sites', cols:[
+    ['Nom du site','nom'],['Culture','culture'],['Activités','activites_multi','multi'],['Niveau de traçabilité','niveaux_tracabilite','checklist'],
+  ]},
+  prestataires: { titre:'Prestataires', cols:[
+    ['Nom entreprise','nom'],['Nom prestataire','nom_prestataire'],['Type de prestation','prestation'],['Mail','mails','multi'],
+  ]},
+};
+function ocValeurExportTexte(c, valeur){
+  const type = c[2];
+  if (type==='multi' || type==='checklist'){
+    return Array.isArray(valeur) ? valeur.join(', ') : '';
+  }
+  return valeur || '';
+}
+async function ocExporterWord(tableId){
+  const conf = OC_EXPORT_WORD_COLS[tableId];
+  if (!conf) return;
+  const rows = ocTableRows(tableId);
+  const entetes = conf.cols.map(c=>c[0]);
+  const lignes = rows.map(row=>conf.cols.map(c=>ocValeurExportTexte(c, row[c[1]])));
+  await genererWordTableau(conf.titre, entetes, lignes, conf.titre.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9]+/g,'_')+'_ECORIGINE.docx');
+}
+// Genere un .docx minimaliste mais propre (titre + tableau borde, en-tete grise,
+// colonnes justifiees en largeur egale) -- construit "a la main" (un .docx est un
+// zip de XML), avec JSZip (deja charge sur cette page), pour eviter de charger une
+// librairie externe non presente dans la liste des domaines autorises.
+async function genererWordTableau(titre, entetes, lignes, nomFichier){
+  try{
+    const zip = new JSZip();
+    const largeurTotale = 9360; // ~6.5 pouces utiles, en twips (1440/pouce), page A4 avec marges
+    const largeurCol = Math.floor(largeurTotale / entetes.length);
+    const echapXml = s => String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const celluleEntete = txt => '<w:tc><w:tcPr><w:tcW w:w="'+largeurCol+'" w:type="dxa"/><w:shd w:val="clear" w:color="auto" w:fill="1F6E5C"/><w:tcBorders><w:top w:val="single" w:sz="4" w:color="1F6E5C"/><w:left w:val="single" w:sz="4" w:color="1F6E5C"/><w:bottom w:val="single" w:sz="4" w:color="1F6E5C"/><w:right w:val="single" w:sz="4" w:color="1F6E5C"/></w:tcBorders></w:tcPr><w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="FFFFFF"/><w:sz w:val="20"/></w:rPr><w:t xml:space="preserve">'+echapXml(txt)+'</w:t></w:r></w:p></w:tc>';
+    const celluleDonnee = txt => '<w:tc><w:tcPr><w:tcW w:w="'+largeurCol+'" w:type="dxa"/><w:tcBorders><w:top w:val="single" w:sz="4" w:color="D0D5D2"/><w:left w:val="single" w:sz="4" w:color="D0D5D2"/><w:bottom w:val="single" w:sz="4" w:color="D0D5D2"/><w:right w:val="single" w:sz="4" w:color="D0D5D2"/></w:tcBorders></w:tcPr><w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:rPr><w:sz w:val="20"/></w:rPr><w:t xml:space="preserve">'+echapXml(txt||'—')+'</w:t></w:r></w:p></w:tc>';
+    const ligneEntete = '<w:tr>'+entetes.map(celluleEntete).join('')+'</w:tr>';
+    const lignesDonnees = lignes.map(l=>'<w:tr>'+l.map(celluleDonnee).join('')+'</w:tr>').join('');
+    const dateDuJour = new Date().toLocaleDateString('fr-FR');
+    const documentXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+      + '<w:body>'
+      + '<w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="32"/><w:color w:val="1F6E5C"/></w:rPr><w:t xml:space="preserve">ECORIGINE — '+echapXml(titre)+'</w:t></w:r></w:p>'
+      + '<w:p><w:pPr><w:spacing w:after="240"/></w:pPr><w:r><w:rPr><w:sz w:val="18"/><w:color w:val="666666"/></w:rPr><w:t xml:space="preserve">Export du '+echapXml(dateDuJour)+' — '+lignes.length+' ligne(s)</w:t></w:r></w:p>'
+      + '<w:tbl><w:tblPr><w:tblW w:w="'+largeurTotale+'" w:type="dxa"/><w:tblBorders>'
+      + '<w:top w:val="single" w:sz="4" w:color="D0D5D2"/><w:left w:val="single" w:sz="4" w:color="D0D5D2"/><w:bottom w:val="single" w:sz="4" w:color="D0D5D2"/><w:right w:val="single" w:sz="4" w:color="D0D5D2"/>'
+      + '<w:insideH w:val="single" w:sz="4" w:color="D0D5D2"/><w:insideV w:val="single" w:sz="4" w:color="D0D5D2"/></w:tblBorders></w:tblPr>'
+      + '<w:tblGrid>'+entetes.map(()=>'<w:gridCol w:w="'+largeurCol+'"/>').join('')+'</w:tblGrid>'
+      + ligneEntete + lignesDonnees
+      + '</w:tbl>'
+      + '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134"/></w:sectPr>'
+      + '</w:body></w:document>';
+
+    const contentTypesXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+      + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+      + '<Default Extension="xml" ContentType="application/xml"/>'
+      + '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+      + '</Types>';
+    const relsXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+      + '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+      + '</Relationships>';
+
+    zip.file('[Content_Types].xml', contentTypesXml);
+    zip.file('_rels/.rels', relsXml);
+    zip.file('word/document.xml', documentXml);
+
+    const blob = await zip.generateAsync({ type:'blob', mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href=url; a.download = nomFichier;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+    showToast('Fichier Word généré.', 'success');
+  }catch(e){ showToast('Échec de la génération du fichier Word : '+e.message); }
+}
+
 const OC_PARTENAIRES_SOUS_ONGLETS = [
   { id:'clients', label:'Clients' },
   { id:'partenaires', label:'Coopératives' },
@@ -3749,6 +3829,9 @@ function renderOcPartenaires(){
   html += '<div class="oc-subtabs">'
     + OC_PARTENAIRES_SOUS_ONGLETS.map(s=>'<button class="'+(actif===s.id?'active':'')+'" onclick="ocSetPartenairesSousOnglet(\''+s.id+'\')">'+esc(s.label)+'</button>').join('')
     + '</div>';
+  if (OC_EXPORT_WORD_COLS[actif]){
+    html += '<div class="controls" style="margin-bottom:10px;"><button class="btn-ghost" onclick="ocExporterWord(\''+actif+'\')">📄 Imprimer (Word)</button></div>';
+  }
   html += renderOcTableSimple(actif);
   return html;
 }
