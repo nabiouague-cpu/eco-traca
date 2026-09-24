@@ -220,6 +220,25 @@
   .oc-kv-card .k{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint);font-weight:600;}
   .oc-kv-card .v{margin-top:4px;font-size:14px;color:var(--ink);font-weight:500;}
 
+  .oc-donnees-section{background:#fff;border:1px solid var(--border);border-radius:10px;padding:18px 20px;margin-bottom:16px;}
+  .oc-donnees-section h3{margin:0 0 12px;font-size:15px;color:var(--ink);}
+
+  .oc-org-chart{overflow-x:auto;padding:10px 20px 24px;text-align:center;}
+  .oc-org-tbl{border-collapse:collapse;margin:0 auto;}
+  .oc-org-tbl-racine{width:100%;}
+  .oc-org-cell-box{padding:0 12px;text-align:center;vertical-align:bottom;}
+  .oc-org-box{background:#55605c;color:#fff;border-radius:6px;padding:10px 14px;min-width:150px;max-width:190px;text-align:center;box-shadow:0 1px 2px rgba(0,0,0,.08);display:inline-block;}
+  .oc-org-box-lateral{background:#6b7570;}
+  .oc-org-box-titre{font-size:12.5px;font-weight:700;text-transform:uppercase;letter-spacing:.01em;line-height:1.3;}
+  .oc-org-box-sous{font-size:11px;font-weight:400;margin-top:3px;opacity:.9;}
+  .oc-org-lateral-link{width:36px;height:2px;background:#7a8f86;flex:none;}
+  .oc-org-td{vertical-align:top;padding:0 6px;}
+  .oc-org-lien-v{border-top:1px solid #b9c2bd;position:relative;height:1px;padding:0!important;}
+  .oc-org-lien-v-bas{height:16px;position:relative;}
+  .oc-org-lien-v-bas::before{content:"";position:absolute;left:50%;top:0;width:1px;height:16px;background:#b9c2bd;}
+  .oc-org-td:first-child .oc-org-lien-v{border-top-left-radius:0;}
+  .oc-org-tbl .oc-org-tbl tr:first-child td.oc-org-lien-v{border-left:none;}
+
   .oc-toolbar{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin:16px 0;}
   .oc-grp{display:flex;gap:6px;flex-wrap:wrap;}
   .oc-pill-btn{border:1px solid var(--border);background:#fff;color:var(--ink-soft);font-size:12px;font-weight:500;padding:5px 12px;border-radius:20px;cursor:pointer;}
@@ -1270,7 +1289,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-23-16';
+const APP_VERSION = '2026-09-23-17';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -2920,7 +2939,7 @@ function choisirEspace(espace){
 }
 async function chargerDonneesOricert(){
   try{
-    const [exigences, interlocuteurs, sites, partenaires, clients, prestataires, documents, audits, nc, exigenceFichiers, certificats] = await Promise.all([
+    const [exigences, interlocuteurs, sites, partenaires, clients, prestataires, documents, audits, nc, exigenceFichiers, certificats, documentsLegaux] = await Promise.all([
       supabaseClient.from('cert_exigences_statuts').select('*'),
       supabaseClient.from('cert_interlocuteurs').select('*').order('created_at'),
       supabaseClient.from('cert_sites').select('*').order('created_at'),
@@ -2932,6 +2951,7 @@ async function chargerDonneesOricert(){
       supabaseClient.from('cert_non_conformites').select('*').order('created_at'),
       supabaseClient.from('cert_exigence_fichiers').select('*').order('created_at'),
       supabaseClient.from('cert_certificats').select('*').order('created_at', {ascending:false}),
+      supabaseClient.from('cert_documents_legaux').select('*').order('created_at', {ascending:false}),
     ]);
     state.certExigencesStatuts = exigences.data || [];
     state.oc_interlocuteurs = interlocuteurs.data || [];
@@ -2951,6 +2971,7 @@ async function chargerDonneesOricert(){
     state.certNonConformites = nc.data || [];
     state.oc_exigenceFichiers = exigenceFichiers.data || [];
     state.oc_certificats = certificats.data || [];
+    state.oc_documentsLegaux = documentsLegaux.data || [];
     state.oricertCharge = true;
     render();
   }catch(e){
@@ -3463,8 +3484,116 @@ function renderOcDonnees(){
     ['Campagne en cours','2026 – 2027 (01/09/2026 → 31/08/2027)'],
     ['Référentiel','RA SAS2020 v1.5 — Supply Chain'],
   ];
-  return '<div class="panel-head"><h2>Données principales</h2><p>Identité de l\'entreprise et paramètres de la campagne en cours.</p></div>'
-    + '<div class="oc-kv-grid">' + champs.map(c=>'<div class="oc-kv-card"><div class="k">'+esc(c[0])+'</div><div class="v">'+esc(c[1])+'</div></div>').join('') + '</div>';
+  let html = '<div class="panel-head"><h2>Données principales</h2><p>Identité de l\'entreprise, documents légaux et organisation d\'ECORIGINE.</p></div>';
+
+  html += '<div class="oc-donnees-section"><h3>Identité & campagne</h3>'
+    + '<div class="oc-kv-grid">' + champs.map(c=>'<div class="oc-kv-card"><div class="k">'+esc(c[0])+'</div><div class="v">'+esc(c[1])+'</div></div>').join('') + '</div>'
+    + '</div>';
+
+  html += '<div class="oc-donnees-section"><h3>Documents légaux d\'existence</h3>'
+    + '<p class="hint" style="margin:0 0 12px;">RCCM, statuts, attestation fiscale, et tout autre justificatif légal de l\'entreprise.</p>'
+    + '<div class="oc-exigence-fichiers-liste" style="margin-bottom:10px;">'
+    + (state.oc_documentsLegaux||[]).map(d=>'<div class="oc-exigence-fichier-item">📄 <span onclick="telechargerFichierDemande(\''+d.path+'\',\''+esc(d.nom).replace(/'/g,"\\'")+'\')" style="cursor:pointer;text-decoration:underline;flex:1;">'+esc(d.nom)+'</span><button class="oc-icon-btn oc-icon-btn-suppr" title="Supprimer" onclick="ocSupprimerDocumentLegal('+d.id+',\''+d.path+'\')">🗑</button></div>').join('')
+    + ((state.oc_documentsLegaux||[]).length===0 ? '<p class="oc-table-empty">Aucun document déposé pour l\'instant.</p>' : '')
+    + '</div>'
+    + '<input type="file" id="ocDocLegalInput" style="display:none;" multiple onchange="ocDeposerDocumentLegal(this)">'
+    + '<button class="btn btn-primary" onclick="document.getElementById(\'ocDocLegalInput\').click()">Ajouter un document</button>'
+    + '</div>';
+
+  html += '<div class="oc-donnees-section"><h3>Organigramme</h3>'
+    + renderOcOrganigramme()
+    + '</div>';
+
+  return html;
+}
+async function ocDeposerDocumentLegal(input){
+  const files = Array.from(input.files||[]);
+  if (files.length===0) return;
+  try{
+    for (const file of files){
+      const path = 'oricert/documents-legaux/'+Date.now()+'_'+assainirNomFichierOc(file.name);
+      const { error: upErr } = await supabaseClient.storage.from('documents-coop').upload(path, file, { upsert: true });
+      if (upErr){ showToast("Échec de l'envoi de "+file.name+" : "+upErr.message); continue; }
+      const { data, error } = await supabaseClient.from('cert_documents_legaux').insert({
+        nom: file.name, path, uploaded_by: state.session.user.id,
+      }).select().single();
+      if (!error && data) state.oc_documentsLegaux = (state.oc_documentsLegaux||[]).concat(data);
+    }
+    showToast(files.length>1 ? files.length+' documents déposés.' : 'Document déposé.', 'success');
+    render();
+  }catch(e){ showToast('Erreur : '+e.message); }
+  input.value = '';
+}
+function ocSupprimerDocumentLegal(id, path){
+  askConfirm('Supprimer définitivement ce document ?\n\nCette action est irréversible.', async () => {
+    try{
+      await supabaseClient.storage.from('documents-coop').remove([path]);
+      await supabaseClient.from('cert_documents_legaux').delete().eq('id', id);
+      state.oc_documentsLegaux = (state.oc_documentsLegaux||[]).filter(d=>d.id!==id);
+      showToast('Document supprimé.', 'success');
+      render();
+    }catch(e){ showToast('Erreur : '+e.message); }
+  });
+}
+// Organigramme ECORIGINE, presente comme une vraie structure hierarchique
+// (pas un fichier PDF a ouvrir) -- reproduit fidelement l'organigramme fourni,
+// avec Achats et Durabilite scindes en deux postes distincts (Responsable
+// Achats / Responsable Durabilite), l'agent de San Pedro restant rattache
+// uniquement au Responsable Achats.
+const OC_ORGANIGRAMME = {
+  titre: 'Administrateur Général', soustitre: null, lateral: 'Assistant du DG',
+  enfants: [
+    { titre:'Responsable Achats', soustitre:'En charge zone EST', enfants:[
+      { titre:'Agent Achats', soustitre:'San Pedro — En charge zone Ouest' },
+    ]},
+    { titre:'Responsable Durabilité', soustitre:null },
+    { titre:'Responsable Shipping', soustitre:null, enfants:[
+      { titre:'Assistante Responsable Shipping', soustitre:null },
+      { titre:'Superviseur Shipping', soustitre:'San Pedro', enfants:[
+        { titre:'Agent Suivi des Stocks', soustitre:'Abidjan' },
+        { titre:'Agent Suivi des Stocks', soustitre:'San Pedro' },
+      ]},
+    ]},
+    { titre:'Coordinatrice Exploitation', soustitre:null },
+    { titre:'Responsable Adm. & Financier', soustitre:null, enfants:[
+      { titre:'Trésorier', soustitre:null, enfants:[
+        { titre:'Assistante Comptable Trésorière', soustitre:null },
+      ]},
+      { titre:'Contrôleur de Gestion', soustitre:null, enfants:[
+        { titre:'Comptable', soustitre:null },
+      ]},
+    ]},
+    { titre:'Assistant Système d\'Information', soustitre:null },
+  ],
+};
+function ocOrgBoxHTML(node){
+  return '<div class="oc-org-box"><div class="oc-org-box-titre">'+esc(node.titre)+'</div>'
+    + (node.soustitre ? '<div class="oc-org-box-sous">'+esc(node.soustitre)+'</div>' : '')
+    + '</div>';
+}
+// Rendu en display:table (chaque noeud = une "cellule" avec sa propre colonne,
+// chaque niveau = une "ligne") -- plus robuste qu'un centrage flottant manuel :
+// le navigateur aligne nativement chaque sous-arbre sous son parent, sans jamais
+// de decalage cumulatif ni de contenu qui deborde hors du conteneur scrollable.
+function ocOrgNoeudHTML(node, estRacine){
+  const filsHtml = (node.enfants||[]).map(n=>'<td class="oc-org-td"><table class="oc-org-tbl"><tr><td colspan="99" class="oc-org-lien-v"></td></tr>'+ocOrgNoeudHTML(n)+'</table></td>').join('');
+  let html = '<tr><td colspan="99" class="oc-org-cell-box">';
+  if (estRacine && node.lateral){
+    html += '<div style="display:flex;align-items:center;justify-content:center;gap:0;">'+ocOrgBoxHTML(node)
+      + '<div class="oc-org-lateral-link"></div><div class="oc-org-box oc-org-box-lateral">'+esc(node.lateral)+'</div></div>';
+  } else {
+    html += ocOrgBoxHTML(node);
+  }
+  html += '</td></tr>';
+  if (filsHtml){
+    html += '<tr><td colspan="99" class="oc-org-lien-v-bas"></td></tr>'
+      + '<tr>'+filsHtml+'</tr>';
+  }
+  return html;
+}
+function renderOcOrganigramme(){
+  const racine = OC_ORGANIGRAMME;
+  return '<div class="oc-org-chart"><table class="oc-org-tbl oc-org-tbl-racine">'+ocOrgNoeudHTML(racine, true)+'</table></div>';
 }
 
 /* ---- Suivi des exigences ---- */
