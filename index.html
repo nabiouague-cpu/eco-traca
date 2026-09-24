@@ -221,6 +221,9 @@
   .oc-kv-card .v{margin-top:4px;font-size:14px;color:var(--ink);font-weight:500;}
 
   .oc-donnees-section{background:#fff;border:1px solid var(--border);border-radius:10px;padding:18px 20px;margin-bottom:16px;}
+  .oc-donnees-tuiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;}
+  .oc-donnees-tuiles .doc-cible-tuile{min-height:80px;display:flex;align-items:center;justify-content:center;}
+  .oc-donnees-tuiles .doc-cible-nom{font-size:14px;text-align:center;}
   .oc-donnees-section h3{margin:0 0 12px;font-size:15px;color:var(--ink);}
 
   .oc-comites-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;}
@@ -1296,7 +1299,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-23-19';
+const APP_VERSION = '2026-09-23-20';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3482,6 +3485,20 @@ function renderOcPortail(){
     + '</ul>';
 }
 
+const OC_DONNEES_SECTIONS = [
+  { cle:'identite', label:'Identité & campagne' },
+  { cle:'documents-legaux', label:'Documents légaux d\'existence' },
+  { cle:'organigramme', label:'Organigramme' },
+  { cle:'comites', label:'Comités existants' },
+];
+function ocOuvrirDonneesSection(cle){
+  state.ocDonneesSectionOuverte = cle;
+  render();
+}
+function ocFermerDonneesSection(){
+  state.ocDonneesSectionOuverte = null;
+  render();
+}
 function renderOcDonnees(){
   const champs = [
     ['Raison sociale','ECORIGINE SA'], ['Capital','200 000 000 FCFA'],
@@ -3493,27 +3510,48 @@ function renderOcDonnees(){
   ];
   let html = '<div class="panel-head"><h2>Données principales</h2><p>Identité de l\'entreprise, documents légaux et organisation d\'ECORIGINE.</p></div>';
 
-  html += '<div class="oc-donnees-section"><h3>Identité & campagne</h3>'
-    + '<div class="info-grid" style="font-size:13px;">' + champs.map(c=>'<div><span>'+esc(c[0])+' :</span> '+esc(c[1])+'</div>').join('') + '</div>'
-    + '</div>';
+  const ouverte = state.ocDonneesSectionOuverte;
 
-  html += '<div class="oc-donnees-section"><h3>Documents légaux d\'existence</h3>'
-    + '<p class="hint" style="margin:0 0 12px;">RCCM, statuts, attestation fiscale, et tout autre justificatif légal de l\'entreprise.</p>'
-    + '<div class="oc-exigence-fichiers-liste" style="margin-bottom:10px;">'
-    + (state.oc_documentsLegaux||[]).map(d=>'<div class="oc-exigence-fichier-item">📄 <span onclick="telechargerFichierDemande(\''+d.path+'\',\''+esc(d.nom).replace(/'/g,"\\'")+'\')" style="cursor:pointer;text-decoration:underline;flex:1;">'+esc(d.nom)+'</span><button class="oc-icon-btn oc-icon-btn-suppr" title="Supprimer" onclick="ocSupprimerDocumentLegal('+d.id+',\''+d.path+'\')">🗑</button></div>').join('')
-    + ((state.oc_documentsLegaux||[]).length===0 ? '<p class="oc-table-empty">Aucun document déposé pour l\'instant.</p>' : '')
-    + '</div>'
-    + '<input type="file" id="ocDocLegalInput" style="display:none;" multiple onchange="ocDeposerDocumentLegal(this)">'
-    + '<button class="btn btn-primary" onclick="document.getElementById(\'ocDocLegalInput\').click()">Ajouter un document</button>'
-    + '</div>';
+  if (!ouverte){
+    // Vue compacte par defaut : 4 cases cliquables, comme les tuiles de
+    // l'onglet Documents de conformite -- un clic deroule la section choisie.
+    html += '<div class="oc-donnees-tuiles">'
+      + OC_DONNEES_SECTIONS.map(s=>'<button class="doc-cible-tuile" onclick="ocOuvrirDonneesSection(\''+s.cle+'\')"><div class="doc-cible-nom">'+esc(s.label)+'</div></button>').join('')
+      + '</div>';
+    return html;
+  }
 
-  html += '<div class="oc-donnees-section"><h3>Organigramme</h3>'
-    + renderOcOrganigramme()
-    + '</div>';
+  html += '<div class="controls" style="margin-bottom:14px;"><button class="btn-ghost" onclick="ocFermerDonneesSection()">← Retour</button></div>';
 
-  html += '<div class="oc-donnees-section"><h3>Comités existants</h3>'
-    + renderOcComites()
-    + '</div>';
+  if (ouverte==='identite'){
+    html += '<div class="oc-donnees-section"><h3>Identité & campagne</h3>'
+      + '<div class="info-grid" style="font-size:13px;">' + champs.map(c=>'<div><span>'+esc(c[0])+' :</span> '+esc(c[1])+'</div>').join('') + '</div>'
+      + '</div>';
+  }
+
+  if (ouverte==='documents-legaux'){
+    html += '<div class="oc-donnees-section"><h3>Documents légaux d\'existence</h3>'
+      + '<p class="hint" style="margin:0 0 12px;">RCCM, statuts, attestation fiscale, et tout autre justificatif légal de l\'entreprise.</p>'
+      + '<div class="oc-exigence-fichiers-liste" style="margin-bottom:10px;">'
+      + (state.oc_documentsLegaux||[]).map(d=>'<div class="oc-exigence-fichier-item">📄 <span onclick="telechargerFichierDemande(\''+d.path+'\',\''+esc(d.nom).replace(/'/g,"\\'")+'\')" style="cursor:pointer;text-decoration:underline;flex:1;">'+esc(d.nom)+'</span><button class="oc-icon-btn oc-icon-btn-suppr" title="Supprimer" onclick="ocSupprimerDocumentLegal('+d.id+',\''+d.path+'\')">🗑</button></div>').join('')
+      + ((state.oc_documentsLegaux||[]).length===0 ? '<p class="oc-table-empty">Aucun document déposé pour l\'instant.</p>' : '')
+      + '</div>'
+      + '<input type="file" id="ocDocLegalInput" style="display:none;" multiple onchange="ocDeposerDocumentLegal(this)">'
+      + '<button class="btn btn-primary" onclick="document.getElementById(\'ocDocLegalInput\').click()">Ajouter un document</button>'
+      + '</div>';
+  }
+
+  if (ouverte==='organigramme'){
+    html += '<div class="oc-donnees-section"><h3>Organigramme</h3>'
+      + renderOcOrganigramme()
+      + '</div>';
+  }
+
+  if (ouverte==='comites'){
+    html += '<div class="oc-donnees-section"><h3>Comités existants</h3>'
+      + renderOcComites()
+      + '</div>';
+  }
 
   return html;
 }
