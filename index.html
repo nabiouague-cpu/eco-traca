@@ -292,10 +292,11 @@
   .oc-table-add input[type="text"]{width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;}
   .oc-table-add > button.btn-primary{grid-column:1/-1;justify-self:start;}
   .oc-table-add-actions{grid-column:1/-1;display:flex;gap:8px;}
-  .oc-table-add-toggle{padding:10px 16px;background:var(--surface-2);}
-  .oc-table-add-toggle .btn-ghost{border:1px dashed var(--border);width:100%;text-align:left;padding:8px 12px;}
+  .oc-table-add-toggle{padding:14px 16px;background:var(--surface-2);}
+  .oc-table-add-toggle .btn-primary{width:100%;text-align:center;padding:12px 14px;font-size:13.5px;}
   .oc-chip{display:inline-block;background:var(--surface-2, #f0f0f0);border:1px solid var(--border);border-radius:20px;padding:2px 9px;font-size:11.5px;margin:2px 4px 2px 0;white-space:nowrap;}
   .oc-field-multi{display:flex;flex-direction:column;gap:5px;min-width:0;}
+  .oc-field-multi-toggle{width:100%;padding:9px 10px;font-size:12px;text-align:center;}
   .oc-field-multi-row{display:flex;gap:4px;align-items:center;}
   .oc-field-multi-row input{flex:1;min-width:0;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12.5px;}
   .oc-field-multi-del{flex:none;background:none;border:none;color:var(--ink-faint);cursor:pointer;font-size:13px;padding:2px 4px;}
@@ -1259,7 +1260,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-23-12';
+const APP_VERSION = '2026-09-23-13';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3858,22 +3859,39 @@ function ocChampEditHTML(c, valeurActuelle, prefixeId){
   }
   if (type==='multi'){
     const valeurs = Array.isArray(valeurActuelle) ? valeurActuelle : (valeurActuelle ? [valeurActuelle] : []);
-    const items = valeurs.length ? valeurs : [''];
+    if (valeurs.length===0){
+      // Rien de renseigne pour l'instant : juste une case doree "+ Ajouter" --
+      // le premier clic fait apparaitre le vrai champ de saisie, pret a etre
+      // rempli, au lieu d'un champ vide affiche en permanence.
+      return '<div class="oc-field-multi" data-oc-field="'+champ+'" data-oc-type="multi">'
+        + '<button type="button" class="btn btn-primary oc-field-multi-toggle" onclick="ocAjouterChampMulti(this,true)">+ Ajouter '+esc(label)+'</button>'
+        + '</div>';
+    }
     return '<div class="oc-field-multi" data-oc-field="'+champ+'" data-oc-type="multi">'
-      + items.map(v=>'<div class="oc-field-multi-row"><input type="text" value="'+esc(v)+'" placeholder="'+esc(label)+'"><button type="button" class="oc-field-multi-del" onclick="this.parentElement.remove()">✕</button></div>').join('')
+      + valeurs.map(v=>'<div class="oc-field-multi-row"><input type="text" value="'+esc(v)+'" placeholder="'+esc(label)+'"><button type="button" class="oc-field-multi-del" onclick="this.parentElement.remove()">✕</button></div>').join('')
       + '<button type="button" class="oc-field-multi-add" onclick="ocAjouterChampMulti(this)">+ Ajouter</button>'
       + '</div>';
   }
   return '<input type="text" value="'+esc(valeurActuelle||'')+'" placeholder="'+esc(label)+'" data-oc-field="'+champ+'" data-oc-type="text">';
 }
-function ocAjouterChampMulti(bouton){
+function ocAjouterChampMulti(bouton, premierClic){
   const conteneur = bouton.parentElement;
+  if (premierClic){
+    // Premier ajout : remplace la case doree par un vrai champ de saisie, pret
+    // a etre rempli, plus le bouton discret pour en ajouter d'autres ensuite.
+    const placeholder = bouton.textContent.replace(/^\+ Ajouter /, '');
+    conteneur.innerHTML = '<div class="oc-field-multi-row"><input type="text" placeholder="'+esc(placeholder)+'"><button type="button" class="oc-field-multi-del" onclick="this.parentElement.remove()">✕</button></div>'
+      + '<button type="button" class="oc-field-multi-add" onclick="ocAjouterChampMulti(this)">+ Ajouter</button>';
+    conteneur.querySelector('input').focus();
+    return;
+  }
   const modele = conteneur.querySelector('.oc-field-multi-row');
   const placeholder = modele ? modele.querySelector('input').placeholder : '';
   const div = document.createElement('div');
   div.className = 'oc-field-multi-row';
   div.innerHTML = '<input type="text" placeholder="'+esc(placeholder)+'"><button type="button" class="oc-field-multi-del" onclick="this.parentElement.remove()">✕</button>';
   conteneur.insertBefore(div, bouton);
+  conteneur.querySelector('.oc-field-multi-row:last-of-type input').focus();
 }
 // Lit la valeur saisie pour UN champ (texte simple, multi, ou checklist), a
 // l'interieur d'un conteneur donne (zone d'ajout ou ligne en edition).
@@ -3927,7 +3945,7 @@ function renderOcTableSimple(tableId){
       + '<div class="oc-table-add-actions"><button class="btn btn-primary" onclick="ocAjouterLigne(\''+tableId+'\')">Enregistrer</button><button class="btn-ghost" onclick="ocFermerAjoutLigne()">Annuler</button></div>'
       + '</div>';
   } else {
-    html += '<div class="oc-table-add-toggle"><button class="btn-ghost" onclick="ocOuvrirAjoutLigne(\''+tableId+'\')">+ Ajouter</button></div>';
+    html += '<div class="oc-table-add-toggle"><button class="btn btn-primary" onclick="ocOuvrirAjoutLigne(\''+tableId+'\')">+ Ajouter</button></div>';
   }
   html += '</div>';
   return html;
