@@ -332,6 +332,7 @@
   .oc-field-multi-toggle{width:100%;padding:9px 10px;font-size:12px;text-align:center;}
   .oc-field-multi-row{display:flex;gap:4px;align-items:center;}
   .oc-field-multi-row input{flex:1;min-width:0;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12.5px;}
+  .oc-field-multi-row select{flex:1;min-width:0;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12.5px;}
   .oc-field-multi-del{flex:none;background:none;border:none;color:var(--ink-faint);cursor:pointer;font-size:13px;padding:2px 4px;}
   .oc-field-multi-del:hover{color:var(--danger,#c0392b);}
   .oc-field-multi-add{align-self:flex-start;padding:6px 12px;font-size:11.5px;}
@@ -1304,7 +1305,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-23-25';
+const APP_VERSION = '2026-09-23-26';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3955,7 +3956,7 @@ const OC_TABLES = {
     intro:'Rôles et contacts clés, tels que désignés dans vos notes de service internes.',
     cols:[
       ['Nom','nom'],['Ville','ville'],['Fonction','role','select',ocOrganigrammeAplati()],['Rôle certification','role_certification','select',OC_ROLES_CERTIFICATION],
-      ['Comités','comites','select-liste',OC_COMITES.map(c=>c.nom)],['Mail','mails','multi'],['Contact','contacts','multi'],['Domaine','domaine'],
+      ['Comités','comites','multi-select',OC_COMITES.map(c=>c.nom)],['Mail','mails','multi'],['Contact','contacts','multi'],['Domaine','domaine'],
     ],
   },
   sites: {
@@ -4020,7 +4021,7 @@ const OC_EXPORT_WORD_COLS = {
 };
 function ocValeurExportTexte(c, valeur){
   const type = c[2];
-  if (type==='multi' || type==='checklist' || type==='select-liste'){
+  if (type==='multi' || type==='checklist' || type==='select-liste' || type==='multi-select'){
     return Array.isArray(valeur) ? valeur.join(', ') : '';
   }
   return valeur || '';
@@ -4135,6 +4136,20 @@ function ocChampEditHTML(c, valeurActuelle, prefixeId){
       + (options||[]).map((opt,i)=>'<label><input type="checkbox" name="'+id+'-'+i+'" value="'+esc(opt)+'" '+(valeurs.includes(opt)?'checked':'')+'> '+esc(opt)+'</label>').join('')
       + '</div>';
   }
+  if (type==='multi-select'){
+    // Comme 'multi' (plusieurs entrees, case doree "Ajouter" pour en rajouter),
+    // mais chaque ligne est une liste deroulante parmi des options fixes plutot
+    // qu'un texte libre -- une personne peut appartenir a plusieurs comites,
+    // chacun choisi dans la vraie liste des comites existants.
+    const valeurs = Array.isArray(valeurActuelle) ? valeurActuelle : (valeurActuelle ? [valeurActuelle] : []);
+    if (!state.ocMultiCount) state.ocMultiCount = {};
+    const nAffiche = Math.max(valeurs.length, state.ocMultiCount[id] || 0, 1);
+    const items = Array.from({length:nAffiche}, (_,i)=>valeurs[i]||'');
+    return '<div class="oc-field-multi" data-oc-field="'+champ+'" data-oc-type="multi-select" data-oc-count-key="'+id+'">'
+      + items.map((v,i)=>'<div class="oc-field-multi-row"><select name="'+id+'-'+i+'"><option value="">'+esc(label)+'</option>'+(options||[]).map(opt=>'<option value="'+esc(opt)+'" '+(opt===v?'selected':'')+'>'+esc(opt)+'</option>').join('')+'</select><button type="button" class="oc-field-multi-del" onclick="ocRetirerChampMulti(this)">✕</button></div>').join('')
+      + '<button type="button" class="btn btn-primary oc-field-multi-add" onclick="ocAjouterChampMulti(this)">Ajouter</button>'
+      + '</div>';
+  }
   if (type==='multi'){
     const valeurs = Array.isArray(valeurActuelle) ? valeurActuelle : (valeurActuelle ? [valeurActuelle] : []);
     // Toujours au moins un champ visible d'emblee (comme Nom/Ville/Fonction),
@@ -4169,7 +4184,7 @@ function ocAjouterChampMulti(bouton){
   render();
   const nouveauConteneur = document.querySelector('[data-oc-count-key="'+cle+'"]');
   if (nouveauConteneur){
-    const lignes = nouveauConteneur.querySelectorAll('.oc-field-multi-row input');
+    const lignes = nouveauConteneur.querySelectorAll('.oc-field-multi-row input, .oc-field-multi-row select');
     if (lignes[nActuel]) lignes[nActuel].focus();
   }
 }
@@ -4190,6 +4205,9 @@ function ocLireChamp(conteneur, c){
   if (type==='checklist'){
     return Array.from(bloc.querySelectorAll('input[type="checkbox"]:checked')).map(cb=>cb.value);
   }
+  if (type==='multi-select'){
+    return Array.from(bloc.querySelectorAll('select')).map(s=>s.value).filter(Boolean);
+  }
   if (type==='multi'){
     return Array.from(bloc.querySelectorAll('input[type="text"]')).map(i=>i.value.trim()).filter(Boolean);
   }
@@ -4201,7 +4219,7 @@ function ocLireChamp(conteneur, c){
 // Affiche la valeur d'UNE cellule en lecture (hors edition), selon son type.
 function ocValeurAffichee(c, valeur){
   const [label, champ, type] = c;
-  if (type==='multi' || type==='checklist' || type==='select-liste'){
+  if (type==='multi' || type==='checklist' || type==='select-liste' || type==='multi-select'){
     const valeurs = Array.isArray(valeur) ? valeur : [];
     if (valeurs.length===0) return '—';
     return valeurs.map(v=>'<span class="oc-chip">'+esc(v)+'</span>').join('');
@@ -4232,7 +4250,7 @@ function renderOcTableSimple(tableId){
   html += '</tbody></table></div>';
   if (state.ocTableAjoutOuvert===tableId){
     html += '<div class="oc-table-add">'
-      + cfg.cols.map(c=>'<div class="oc-table-add-cell'+(c[2]==='checklist'?' oc-table-add-cell-large':'')+'">'+ocChampEditHTML(c, null, 'ocnew')+'</div>').join('')
+      + cfg.cols.map(c=>'<div class="oc-table-add-cell'+((c[2]==='checklist'||c[2]==='multi-select')?' oc-table-add-cell-large':'')+'">'+ocChampEditHTML(c, null, 'ocnew')+'</div>').join('')
       + '<div class="oc-table-add-actions"><button class="btn btn-primary" onclick="ocAjouterLigne(\''+tableId+'\')">Enregistrer</button><button class="btn-ghost" onclick="ocFermerAjoutLigne()">Annuler</button></div>'
       + '</div>';
   } else {
