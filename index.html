@@ -1089,9 +1089,17 @@ function capturerSaisies(){
   const champs = [];
   app.querySelectorAll('input, textarea, select').forEach(el=>{
     const type = String(el.type||'').toLowerCase();
-    if (['file','button','submit','reset','checkbox','radio','hidden'].includes(type)) return;
+    if (['file','button','submit','reset','radio','hidden'].includes(type)) return;
     const sel = selecteurChamp(el);
     if (!sel) return;
+    if (type==='checkbox'){
+      // Case a cocher : compare a l'etat coche par defaut du HTML (pas de
+      // "defaultValue" pertinent ici) -- necessaire pour les checklists
+      // (ex: niveaux de tracabilite) qui, sans ceci, perdaient leur selection
+      // au rafraichissement automatique en tache de fond.
+      if (el.checked !== el.defaultChecked) champs.push({ sel, checkbox:true, valeur: el.checked });
+      return;
+    }
     let modifie;
     if (el.tagName === 'SELECT'){
       const defaut = Array.from(el.options).findIndex(o=>o.defaultSelected);
@@ -1117,7 +1125,9 @@ function restaurerSaisies(s){
   if (s.contexte !== null && s.contexte === contexteEcran()){
     s.champs.forEach(c=>{
       const el = app.querySelector(c.sel);
-      if (el && el.value !== c.valeur) el.value = c.valeur;
+      if (!el) return;
+      if (c.checkbox){ if (el.checked !== c.valeur) el.checked = c.valeur; }
+      else if (el.value !== c.valeur) el.value = c.valeur;
     });
     if (s.focus){
       const el = app.querySelector(s.focus.sel);
@@ -1260,7 +1270,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-23-15';
+const APP_VERSION = '2026-09-23-16';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3854,7 +3864,7 @@ function ocChampEditHTML(c, valeurActuelle, prefixeId){
   if (type==='checklist'){
     const valeurs = Array.isArray(valeurActuelle) ? valeurActuelle : [];
     return '<div class="oc-field-checklist" data-oc-field="'+champ+'" data-oc-type="checklist">'
-      + (options||[]).map(opt=>'<label><input type="checkbox" value="'+esc(opt)+'" '+(valeurs.includes(opt)?'checked':'')+'> '+esc(opt)+'</label>').join('')
+      + (options||[]).map((opt,i)=>'<label><input type="checkbox" name="'+id+'-'+i+'" value="'+esc(opt)+'" '+(valeurs.includes(opt)?'checked':'')+'> '+esc(opt)+'</label>').join('')
       + '</div>';
   }
   if (type==='multi'){
@@ -3862,32 +3872,46 @@ function ocChampEditHTML(c, valeurActuelle, prefixeId){
     // Toujours au moins un champ visible d'emblee (comme Nom/Ville/Fonction),
     // jamais replie derriere une case a ouvrir -- seule la case doree du bas
     // sert a rajouter une 2e/3e entree si besoin.
-    const items = valeurs.length ? valeurs : [''];
-    return '<div class="oc-field-multi" data-oc-field="'+champ+'" data-oc-type="multi">'
-      + items.map(v=>'<div class="oc-field-multi-row"><input type="text" value="'+esc(v)+'" placeholder="'+esc(label)+'"><button type="button" class="oc-field-multi-del" onclick="this.parentElement.remove()">✕</button></div>').join('')
+    // Le nombre de lignes AFFICHEES peut depasser le nombre de valeurs deja
+    // enregistrees (ex: l'utilisateur vient de cliquer "Ajouter" pour une 2e
+    // ligne encore vide) -- on le retrouve dans state.ocMultiCount, mis a jour
+    // par ocAjouterChampMulti/ocRetirerChampMulti, pour que ce nombre de lignes
+    // survive a un render() declenche ailleurs (ex: rafraichissement
+    // automatique toutes les 2 minutes) sans perdre la ligne en cours de saisie.
+    if (!state.ocMultiCount) state.ocMultiCount = {};
+    const nAffiche = Math.max(valeurs.length, state.ocMultiCount[id] || 0, 1);
+    const items = Array.from({length:nAffiche}, (_,i)=>valeurs[i]||'');
+    return '<div class="oc-field-multi" data-oc-field="'+champ+'" data-oc-type="multi" data-oc-count-key="'+id+'">'
+      + items.map((v,i)=>'<div class="oc-field-multi-row"><input type="text" name="'+id+'-'+i+'" value="'+esc(v)+'" placeholder="'+esc(label)+'"><button type="button" class="oc-field-multi-del" onclick="ocRetirerChampMulti(this)">✕</button></div>').join('')
       + '<button type="button" class="btn btn-primary oc-field-multi-add" onclick="ocAjouterChampMulti(this)">Ajouter</button>'
       + '</div>';
   }
-  return '<input type="text" value="'+esc(valeurActuelle||'')+'" placeholder="'+esc(label)+'" data-oc-field="'+champ+'" data-oc-type="text">';
+  return '<input type="text" name="'+id+'" value="'+esc(valeurActuelle||'')+'" placeholder="'+esc(label)+'" data-oc-field="'+champ+'" data-oc-type="text">';
 }
-function ocAjouterChampMulti(bouton, premierClic){
+function ocAjouterChampMulti(bouton){
   const conteneur = bouton.parentElement;
-  if (premierClic){
-    // Premier ajout : remplace la case doree par un vrai champ de saisie, pret
-    // a etre rempli, plus une case doree "Ajouter" pour en ajouter d'autres ensuite.
-    const placeholder = bouton.textContent.replace(/^Ajouter /, '');
-    conteneur.innerHTML = '<div class="oc-field-multi-row"><input type="text" placeholder="'+esc(placeholder)+'"><button type="button" class="oc-field-multi-del" onclick="this.parentElement.remove()">✕</button></div>'
-      + '<button type="button" class="btn btn-primary oc-field-multi-add" onclick="ocAjouterChampMulti(this)">Ajouter</button>';
-    conteneur.querySelector('input').focus();
-    return;
+  const cle = conteneur.getAttribute('data-oc-count-key');
+  const nActuel = conteneur.querySelectorAll('.oc-field-multi-row').length;
+  if (!state.ocMultiCount) state.ocMultiCount = {};
+  state.ocMultiCount[cle] = nActuel + 1;
+  // Avant de re-rendre (qui va regenerer ce bloc avec une ligne de plus grace
+  // a state.ocMultiCount), on protege les valeurs deja tapees dans CE bloc
+  // precis comme le fait render() pour toute la page -- capturerSaisies() s'en
+  // charge deja globalement, donc un simple render() suffit ici.
+  render();
+  const nouveauConteneur = document.querySelector('[data-oc-count-key="'+cle+'"]');
+  if (nouveauConteneur){
+    const lignes = nouveauConteneur.querySelectorAll('.oc-field-multi-row input');
+    if (lignes[nActuel]) lignes[nActuel].focus();
   }
-  const modele = conteneur.querySelector('.oc-field-multi-row');
-  const placeholder = modele ? modele.querySelector('input').placeholder : '';
-  const div = document.createElement('div');
-  div.className = 'oc-field-multi-row';
-  div.innerHTML = '<input type="text" placeholder="'+esc(placeholder)+'"><button type="button" class="oc-field-multi-del" onclick="this.parentElement.remove()">✕</button>';
-  conteneur.insertBefore(div, bouton);
-  conteneur.querySelector('.oc-field-multi-row:last-of-type input').focus();
+}
+function ocRetirerChampMulti(bouton){
+  const ligne = bouton.parentElement;
+  const conteneur = ligne.parentElement;
+  const cle = conteneur.getAttribute('data-oc-count-key');
+  ligne.remove();
+  if (!state.ocMultiCount) state.ocMultiCount = {};
+  state.ocMultiCount[cle] = Math.max(1, conteneur.querySelectorAll('.oc-field-multi-row').length);
 }
 // Lit la valeur saisie pour UN champ (texte simple, multi, ou checklist), a
 // l'interieur d'un conteneur donne (zone d'ajout ou ligne en edition).
@@ -3952,15 +3976,18 @@ function ocOuvrirAjoutLigne(tableId){
 }
 function ocFermerAjoutLigne(){
   state.ocTableAjoutOuvert = null;
+  state.ocMultiCount = {};
   render();
 }
 function ocModifierLigne(tableId, id){
   state.ocTableEditTable = tableId;
   state.ocTableEditId = id;
+  state.ocMultiCount = {};
   render();
 }
 function ocAnnulerModifLigne(){
   state.ocTableEditId = null;
+  state.ocMultiCount = {};
   render();
 }
 async function ocEnregistrerModifLigne(tableId, id){
@@ -3978,6 +4005,7 @@ async function ocEnregistrerModifLigne(tableId, id){
     const row = liste.find(r=>r.id===id);
     if (row) Object.assign(row, patch);
     state.ocTableEditId = null;
+    state.ocMultiCount = {};
     showToast('Ligne modifiée.', 'success');
     render();
   }catch(e){ showToast('Erreur : '+e.message); }
@@ -4000,6 +4028,7 @@ async function ocAjouterLigne(tableId){
     if (error){ showToast("Échec de l'ajout : "+error.message); return; }
     state['oc_'+tableId] = (state['oc_'+tableId]||[]).concat(data);
     state.ocTableAjoutOuvert = null;
+    state.ocMultiCount = {};
     showToast('Ligne ajoutée.', 'success');
     render();
   }catch(e){ showToast("Échec de l'ajout : "+e.message); }
