@@ -224,6 +224,9 @@
   .oc-donnees-tuiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;}
   .oc-donnees-tuiles .doc-cible-tuile{min-height:80px;display:flex;align-items:center;justify-content:center;}
   .oc-donnees-tuiles .doc-cible-nom{font-size:14px;text-align:center;}
+  .doc-cible-tuile{background:#fff;border:1.5px solid var(--border);border-radius:14px;padding:16px 18px;text-align:left;cursor:pointer;font-family:inherit;transition:border-color .15s ease,box-shadow .15s ease;box-shadow:0 1px 3px rgba(0,0,0,.04);}
+  .doc-cible-tuile:hover{border-color:var(--accent, #1F6E5C);box-shadow:0 2px 8px rgba(0,0,0,.08);}
+  .doc-cible-nom{font-weight:600;font-size:13.5px;color:var(--ink);}
   .oc-donnees-section h3{margin:0 0 12px;font-size:15px;color:var(--ink);}
 
   .oc-comites-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;}
@@ -1299,7 +1302,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-23-20';
+const APP_VERSION = '2026-09-23-21';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3667,6 +3670,21 @@ const OC_ORGANIGRAMME = {
     { titre:'Assistant Système d\'Information', soustitre:null },
   ],
 };
+// Aplati l'arbre de l'organigramme en une liste de libelles "Titre (Sous-titre)"
+// -- utilisee comme options de la liste deroulante Fonction dans Responsabilites,
+// pour que les postes saisis restent toujours coherents avec l'organigramme reel.
+function ocOrganigrammeAplati(){
+  const resultats = [];
+  function parcourir(node){
+    let libelle = node.titre;
+    if (node.soustitre) libelle += ' ('+node.soustitre+')';
+    resultats.push(libelle);
+    if (node.lateral) resultats.push(node.lateral);
+    (node.enfants||[]).forEach(parcourir);
+  }
+  parcourir(OC_ORGANIGRAMME);
+  return resultats;
+}
 function ocOrgBoxHTML(node){
   return '<div class="oc-org-box"><div class="oc-org-box-titre">'+esc(node.titre)+'</div>'
     + (node.soustitre ? '<div class="oc-org-box-sous">'+esc(node.soustitre)+'</div>' : '')
@@ -3929,7 +3947,7 @@ const OC_TABLES = {
     table:'cert_interlocuteurs', titre:'Responsabilités',
     intro:'Rôles et contacts clés, tels que désignés dans vos notes de service internes.',
     cols:[
-      ['Nom','nom'],['Ville','ville'],['Fonction','role'],['Rôle certification','role_certification'],
+      ['Nom','nom'],['Ville','ville'],['Fonction','role','select',ocOrganigrammeAplati()],['Rôle certification','role_certification','select',OC_COMITES.map(c=>c.nom)],
       ['Comités','comites','multi'],['Mail','mails','multi'],['Contact','contacts','multi'],['Domaine','domaine'],
     ],
   },
@@ -4091,6 +4109,15 @@ function ocTableRows(tableId){ return state['oc_'+tableId] || []; }
 function ocChampEditHTML(c, valeurActuelle, prefixeId){
   const [label, champ, type, options] = c;
   const id = prefixeId+'-'+champ;
+  if (type==='select'){
+    // Liste deroulante liee a l'organigramme (Fonction) ou aux comites (Role
+    // certification) -- garantit que ce qui est saisi ici reste toujours
+    // coherent avec les postes/comites reellement definis ailleurs.
+    return '<select name="'+id+'" data-oc-field="'+champ+'" data-oc-type="select">'
+      + '<option value="">'+esc(label)+'</option>'
+      + (options||[]).map(opt=>'<option value="'+esc(opt)+'" '+(opt===valeurActuelle?'selected':'')+'>'+esc(opt)+'</option>').join('')
+      + '</select>';
+  }
   if (type==='checklist'){
     const valeurs = Array.isArray(valeurActuelle) ? valeurActuelle : [];
     return '<div class="oc-field-checklist" data-oc-field="'+champ+'" data-oc-type="checklist">'
