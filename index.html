@@ -513,7 +513,7 @@ const DOCS_REQUIS = [
   'Procuration pour les personnes mandataires (procuration de justice)',
   'Statuts et règlement intérieur',
   "Procès-verbal de la dernière Assemblée Générale Ordinaire (AGO)",
-  'Certificat(s) (si disponible(s))'
+  'Certificat'
 ];
 
 let leafletMapInstance = null;
@@ -1305,7 +1305,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-23-30';
+const APP_VERSION = '2026-09-23-31';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4358,10 +4358,17 @@ function renderOcCertificat(){
   let html = '<div class="panel-head"><h2>Certificats</h2><p>Certificats RA, Fairtrade et autres — d\'ECORIGINE, de ses sites, et de ses coopératives partenaires.</p></div>';
   html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px;">';
   OC_CERT_DOSSIERS.forEach(d=>{
-    const n = (state.oc_certificats||[]).filter(c=>c.dossier===d.cle).length;
+    let compte;
+    if (d.cle==='cooperatives'){
+      const nb = (state.cooperatives||[]).filter(c=>ocCertificatDeCooperative(c.id)).length;
+      compte = nb+' / '+(state.cooperatives||[]).length+' coopérative(s)';
+    } else {
+      const n = (state.oc_certificats||[]).filter(c=>c.dossier===d.cle).length;
+      compte = n+' certificat'+(n>1?'s':'');
+    }
     html += '<button class="doc-cible-tuile" onclick="ocOuvrirCertDossier(\''+d.cle+'\')">'
       + '<div class="doc-cible-nom">📁 '+esc(d.label)+'</div>'
-      + '<div class="doc-cible-compte">'+n+' certificat'+(n>1?'s':'')+'</div>'
+      + '<div class="doc-cible-compte">'+compte+'</div>'
       + '</button>';
   });
   html += '</div>';
@@ -4373,21 +4380,22 @@ function ocOuvrirCertDossier(cle){
 }
 function ocFermerCertDossier(){
   state.ocCertDossierOuvert = null;
+  state.ocCertSousDossierOuvert = null;
   render();
 }
 function renderOcCertDossierDetail(cle){
   const conf = OC_CERT_DOSSIERS.find(d=>d.cle===cle);
+  if (cle==='cooperatives'){
+    return state.ocCertSousDossierOuvert ? renderOcCertCooperativeDetail(state.ocCertSousDossierOuvert) : renderOcCertCooperativesListe();
+  }
+  if (cle==='sites'){
+    return state.ocCertSousDossierOuvert ? renderOcCertSiteDetail(state.ocCertSousDossierOuvert) : renderOcCertSitesListe();
+  }
   const certs = (state.oc_certificats||[]).filter(c=>c.dossier===cle).sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
   let html = '<div class="panel-head"><button class="btn-ghost" onclick="ocFermerCertDossier()" style="margin-bottom:10px;">← Retour aux certificats</button><h2>'+esc(conf.label)+'</h2></div>';
   html += '<div class="panel" style="padding:18px;">';
-  html += '<div class="oc-table-add" style="flex-wrap:wrap;">';
-  if (conf.avecRattachement){
-    const options = (state[conf.source]||[]);
-    html += '<select id="ocCertRattachement" style="min-width:200px;"><option value="">— Non rattaché à '+(cle==='sites'?'un site':'une coopérative')+' précis —</option>'
-      + options.map(o=>'<option value="'+o.id+'">'+esc(o[conf.champNom]||'(sans nom)')+'</option>').join('')
-      + '</select>';
-  }
-  html += '<input type="date" id="ocCertDateExpiration" title="Date d\'expiration (optionnel)">'
+  html += '<div class="oc-table-add" style="flex-wrap:wrap;">'
+    + '<input type="date" id="ocCertDateExpiration" title="Date d\'expiration (optionnel)">'
     + '<input type="file" id="ocCertFileInput" style="display:none;" onchange="ocDeposerCertificat(this,\''+cle+'\')">'
     + '<button class="btn btn-primary" onclick="document.getElementById(\'ocCertFileInput\').click()">+ Ajouter un certificat</button>'
     + '</div>';
@@ -4397,35 +4405,134 @@ function renderOcCertDossierDetail(cle){
     html += '<div class="oc-exigence-fichiers-liste" style="margin-top:14px;">'
       + certs.map(c=>{
           const expire = c.date_expiration ? (new Date(c.date_expiration) < new Date() ? ' <span style="color:var(--danger,#c0392b);">(expiré le '+esc(c.date_expiration)+')</span>' : ' <span class="hint">(expire le '+esc(c.date_expiration)+')</span>') : '';
-          return '<div class="oc-exigence-fichier-item">📄 <span onclick="telechargerFichierDemande(\''+c.path+'\',\''+esc(c.nom).replace(/'/g,"\\'")+'\')" style="cursor:pointer;text-decoration:underline;flex:1;">'+esc(c.nom)+(c.rattachement_nom?' — '+esc(c.rattachement_nom):'')+'</span>'+expire+'<button class="oc-icon-btn oc-icon-btn-suppr" title="Supprimer" onclick="ocSupprimerCertificat('+c.id+',\''+c.path+'\')">🗑</button></div>';
+          return '<div class="oc-exigence-fichier-item">📄 <span onclick="telechargerFichierDemande(\''+c.path+'\',\''+esc(c.nom).replace(/'/g,"\\'")+'\')" style="cursor:pointer;text-decoration:underline;flex:1;">'+esc(c.nom)+'</span>'+expire+'<button class="oc-icon-btn oc-icon-btn-suppr" title="Supprimer" onclick="ocSupprimerCertificat('+c.id+',\''+c.path+'\')">🗑</button></div>';
         }).join('')
       + '</div>';
   }
   html += '</div>';
   return html;
 }
+// Dossier "Coopératives" : un sous-dossier par vraie coopérative ECORIGINE
+// (state.cooperatives, pas oc_partenaires) -- affiche automatiquement si le
+// certificat a deja ete depose sur le PORTAIL de la cooperative (doc_check,
+// document "Certificat"), sans jamais dupliquer le fichier -- juste un lien
+// direct vers le meme fichier reellement stocke.
+function ocCertificatDeCooperative(coopId){
+  return (state.docCheck||[]).find(d=>d.cooperative_id===coopId && d.doc==='Certificat' && d.disponible && d.fichier_path);
+}
+function renderOcCertCooperativesListe(){
+  const coops = (state.cooperatives||[]).slice().sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'}));
+  let html = '<div class="panel-head"><button class="btn-ghost" onclick="ocFermerCertDossier()" style="margin-bottom:10px;">← Retour aux certificats</button><h2>Coopératives</h2><p>Un dossier par coopérative ECORIGINE — le certificat s\'affiche automatiquement dès qu\'il est déposé sur le portail de la coopérative.</p></div>';
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px;">';
+  coops.forEach(c=>{
+    const cert = ocCertificatDeCooperative(c.id);
+    html += '<button class="doc-cible-tuile" onclick="ocOuvrirCertSousDossier(\''+c.id+'\')">'
+      + '<div class="doc-cible-nom">📁 '+esc(c.nom)+'</div>'
+      + '<div class="doc-cible-compte">'+(cert ? '✅ Certificat déposé' : '⚠️ Aucun certificat')+'</div>'
+      + '</button>';
+  });
+  html += '</div>';
+  return html;
+}
+function renderOcCertCooperativeDetail(coopId){
+  const c = (state.cooperatives||[]).find(x=>x.id===coopId);
+  if (!c) return '<p class="hint">Coopérative introuvable.</p>';
+  const cert = ocCertificatDeCooperative(coopId);
+  let html = '<div class="panel-head"><button class="btn-ghost" onclick="ocFermerCertSousDossier()" style="margin-bottom:10px;">← Retour aux coopératives</button><h2>'+esc(c.nom)+'</h2></div>';
+  html += '<div class="panel" style="padding:18px;">';
+  if (cert){
+    html += '<div class="oc-exigence-fichiers-liste">'
+      + '<div class="oc-exigence-fichier-item">📄 <span onclick="telechargerFichierDemande(\''+cert.fichier_path+'\',\''+esc(cert.fichier_nom||'Certificat').replace(/'/g,"\\'")+'\')" style="cursor:pointer;text-decoration:underline;flex:1;">'+esc(cert.fichier_nom||'Certificat')+'</span></div>'
+      + '</div>'
+      + '<p class="hint" style="margin-top:10px;">Déposé par la coopérative elle-même, sur son portail — document « Certificat » de ses documents de conformité.</p>';
+  } else {
+    html += '<p class="oc-table-empty">Cette coopérative n\'a pas encore déposé son certificat sur son portail.</p>';
+  }
+  html += '</div>';
+  return html;
+}
+// Dossier "Sites" : un sous-dossier par site ORICERT (oc_sites) -- depot manuel
+// ici (les sites n'ont pas de portail propre), simplement organise par site
+// plutot qu'en liste plate.
+function renderOcCertSitesListe(){
+  const sites = (state.oc_sites||[]).slice().sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'}));
+  let html = '<div class="panel-head"><button class="btn-ghost" onclick="ocFermerCertDossier()" style="margin-bottom:10px;">← Retour aux certificats</button><h2>Sites</h2><p>Un dossier par site — déposez-y le certificat de chaque site.</p></div>';
+  if (sites.length===0){
+    html += '<p class="oc-table-empty">Aucun site enregistré pour l\'instant (voir Partenaires > Sites).</p>';
+    return html;
+  }
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px;">';
+  sites.forEach(s=>{
+    const certs = (state.oc_certificats||[]).filter(c=>c.dossier==='sites' && c.rattachement_id===String(s.id));
+    html += '<button class="doc-cible-tuile" onclick="ocOuvrirCertSousDossier(\''+s.id+'\')">'
+      + '<div class="doc-cible-nom">📁 '+esc(s.nom)+'</div>'
+      + '<div class="doc-cible-compte">'+certs.length+' certificat'+(certs.length>1?'s':'')+'</div>'
+      + '</button>';
+  });
+  html += '</div>';
+  return html;
+}
+function renderOcCertSiteDetail(siteId){
+  const s = (state.oc_sites||[]).find(x=>String(x.id)===String(siteId));
+  if (!s) return '<p class="hint">Site introuvable.</p>';
+  const certs = (state.oc_certificats||[]).filter(c=>c.dossier==='sites' && c.rattachement_id===String(siteId)).sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
+  let html = '<div class="panel-head"><button class="btn-ghost" onclick="ocFermerCertSousDossier()" style="margin-bottom:10px;">← Retour aux sites</button><h2>'+esc(s.nom)+'</h2></div>';
+  html += '<div class="panel" style="padding:18px;">';
+  html += '<div class="oc-table-add" style="flex-wrap:wrap;">'
+    + '<input type="date" id="ocCertDateExpiration" title="Date d\'expiration (optionnel)">'
+    + '<input type="file" id="ocCertFileInput" style="display:none;" onchange="ocDeposerCertificatSite(this,\''+siteId+'\',\''+esc(s.nom).replace(/'/g,"\\'")+'\')">'
+    + '<button class="btn btn-primary" onclick="document.getElementById(\'ocCertFileInput\').click()">+ Ajouter un certificat</button>'
+    + '</div>';
+  if (certs.length===0){
+    html += '<p class="oc-table-empty" style="margin-top:14px;">Aucun certificat déposé pour l\'instant.</p>';
+  } else {
+    html += '<div class="oc-exigence-fichiers-liste" style="margin-top:14px;">'
+      + certs.map(c=>{
+          const expire = c.date_expiration ? (new Date(c.date_expiration) < new Date() ? ' <span style="color:var(--danger,#c0392b);">(expiré le '+esc(c.date_expiration)+')</span>' : ' <span class="hint">(expire le '+esc(c.date_expiration)+')</span>') : '';
+          return '<div class="oc-exigence-fichier-item">📄 <span onclick="telechargerFichierDemande(\''+c.path+'\',\''+esc(c.nom).replace(/'/g,"\\'")+'\')" style="cursor:pointer;text-decoration:underline;flex:1;">'+esc(c.nom)+'</span>'+expire+'<button class="oc-icon-btn oc-icon-btn-suppr" title="Supprimer" onclick="ocSupprimerCertificat('+c.id+',\''+c.path+'\')">🗑</button></div>';
+        }).join('')
+      + '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+async function ocDeposerCertificatSite(input, siteId, siteNom){
+  const file = input.files[0];
+  if (!file) return;
+  const dateExpiration = (document.getElementById('ocCertDateExpiration')||{}).value || null;
+  try{
+    const path = 'oricert/certificats/sites/'+siteId+'/'+Date.now()+'_'+assainirNomFichierOc(file.name);
+    const { error: upErr } = await supabaseClient.storage.from('documents-coop').upload(path, file, { upsert: true });
+    if (upErr){ showToast("Échec de l'envoi : "+upErr.message); return; }
+    const { data, error } = await supabaseClient.from('cert_certificats').insert({
+      dossier:'sites', rattachement_id: String(siteId), rattachement_nom: siteNom,
+      nom: file.name, path, date_expiration: dateExpiration, uploaded_by: state.session.user.id,
+    }).select().single();
+    if (error){ showToast("Échec de l'enregistrement : "+error.message); return; }
+    state.oc_certificats = (state.oc_certificats||[]).concat(data);
+    showToast('Certificat ajouté.', 'success');
+    render();
+  }catch(e){ showToast('Erreur : '+e.message); }
+  input.value = '';
+}
+function ocOuvrirCertSousDossier(id){
+  state.ocCertSousDossierOuvert = id;
+  render();
+}
+function ocFermerCertSousDossier(){
+  state.ocCertSousDossierOuvert = null;
+  render();
+}
 async function ocDeposerCertificat(input, cle){
   const file = input.files[0];
   if (!file) return;
-  const conf = OC_CERT_DOSSIERS.find(d=>d.cle===cle);
-  let rattachementId = null, rattachementNom = null;
-  if (conf.avecRattachement){
-    const select = document.getElementById('ocCertRattachement');
-    const val = select ? select.value : '';
-    if (val){
-      const item = (state[conf.source]||[]).find(o=>String(o.id)===String(val));
-      rattachementId = val;
-      rattachementNom = item ? item[conf.champNom] : null;
-    }
-  }
   const dateExpiration = (document.getElementById('ocCertDateExpiration')||{}).value || null;
   try{
     const path = 'oricert/certificats/'+cle+'/'+Date.now()+'_'+assainirNomFichierOc(file.name);
     const { error: upErr } = await supabaseClient.storage.from('documents-coop').upload(path, file, { upsert: true });
     if (upErr){ showToast("Échec de l'envoi : "+upErr.message); return; }
     const { data, error } = await supabaseClient.from('cert_certificats').insert({
-      dossier: cle, rattachement_id: rattachementId, rattachement_nom: rattachementNom,
-      nom: file.name, path, date_expiration: dateExpiration, uploaded_by: state.session.user.id,
+      dossier: cle, nom: file.name, path, date_expiration: dateExpiration, uploaded_by: state.session.user.id,
     }).select().single();
     if (error){ showToast("Échec de l'enregistrement : "+error.message); return; }
     state.oc_certificats = (state.oc_certificats||[]).concat(data);
@@ -7067,7 +7174,7 @@ function _renderBrut(){
 
   if (state.modal && state.modal.type==='cooperative'){
     const c = state.modal.payload || {};
-    const certificatFichier = (state.docCheck||[]).find(d=>d.cooperative_id===c.id && d.doc==='Certificat(s) (si disponible(s))' && d.disponible && d.fichier_path);
+    const certificatFichier = (state.docCheck||[]).find(d=>d.cooperative_id===c.id && d.doc==='Certificat' && d.disponible && d.fichier_path);
     html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
       + '<h3>'+(c.id?'Modifier la coopérative':'Ajouter une coopérative')+'</h3>'
       + '<div id="modal-fields">'
