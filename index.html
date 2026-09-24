@@ -1305,7 +1305,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-23-32';
+const APP_VERSION = '2026-09-24-1';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4737,16 +4737,17 @@ async function ocNcAppelDialogue(n, historiqueMaj){
     const data = await resp.json();
     if (!resp.ok || data.error){ showToast('Échec du dialogue : '+(data.error||resp.status), 'error'); state.ocNcDialogueEnCours[n.id].chargement=false; render(); return; }
     if (data.termine){
-      // Synthese finale : remplit les 4 champs directement, et cloture le dialogue
-      const patch = {
-        cause_profonde: data.cause_profonde||'', mesures_correctives: data.action_corrective||'',
-        analyse_etendue: data.analyse_etendue||'', preuves_suggerees: data.preuves_suggerees||'',
-        dialogue_ia: historiqueMaj, updated_at: new Date().toISOString(),
-      };
+      // Synthese finale du dialogue : la cause profonde est identifiee. On
+      // enchaine directement sur la generation automatique des 3 sections
+      // restantes (mesure corrective, analyse d'etendue, preuves suggerees),
+      // desormais coherentes avec cette cause precise plutot qu'avec le seul
+      // commentaire de l'auditeur.
+      const patch = { cause_profonde: data.cause_profonde||'', dialogue_ia: historiqueMaj, updated_at: new Date().toISOString() };
       await supabaseClient.from('cert_non_conformites').update(patch).eq('id', n.id);
       Object.assign(n, patch);
       delete state.ocNcDialogueEnCours[n.id];
-      showToast('Synthèse générée — vérifie et ajuste les 4 sections si besoin.', 'success');
+      render();
+      await ocNcGenererAuto(n.id);
     } else {
       const historiqueFinal = historiqueMaj.concat([{ role:'assistant', contenu:data.question }]);
       state.ocNcDialogueEnCours[n.id] = { historique: historiqueFinal, chargement:false };
@@ -4777,17 +4778,18 @@ function ocNcPlanHTML(n){
     + '<div class="oc-nc-step"><div class="oc-nc-step-label">Commentaire de l\'auditeur</div>'
     + '<div class="oc-nc-step-hint">Ce que l\'auditeur a précisément constaté/écrit — sert de point de départ au dialogue guidé ci-dessous.</div>'
     + '<textarea onblur="ocNcMajChamp('+n.id+',\'commentaire_auditeur\',this.value)" placeholder="Ex : Non-conformité relevée lors de l\'audit interne du 12/09/2026 : le stockage du cacao ne respecte pas les conditions d\'hygiène minimales requises par l\'exigence 4.3.2.">'+esc(n.commentaire_auditeur||'')+'</textarea></div>'
+    + '<div class="oc-nc-step"><div class="oc-nc-step-label">2️⃣ Causes profondes</div>'
+    + '<div class="oc-nc-step-hint">Dialogue guidé ci-dessous — répondez aux questions pour identifier la vraie cause. C\'est cette cause qui servira ensuite à générer automatiquement la mesure corrective, l\'analyse d\'étendue et les preuves à réunir.</div>'
     + ocNcDialogueHTML(n)
-    + '<div class="oc-nc-step"><div class="oc-nc-step-label">1️⃣ Causes profondes</div>'
-    + '<div class="oc-nc-step-hint">Méthode des « 5 Pourquoi » : partez du constat, demandez « pourquoi ? », puis reposez la question sur chaque réponse, 4 à 5 fois, jusqu\'à atteindre la cause réelle.</div>'
     + '<textarea onblur="ocNcMajChamp('+n.id+',\'cause_profonde\',this.value)" placeholder="Ex : Pourquoi le site stockait le cacao à même le sol ? → Pas de palettes disponibles. Pourquoi ? → ...">'+esc(n.cause_profonde||'')+'</textarea></div>'
-    + '<div class="oc-nc-step"><div class="oc-nc-step-label">2️⃣ Action corrective</div>'
+    + ocNcAutoBoutonHTML(n)
+    + '<div class="oc-nc-step"><div class="oc-nc-step-label">3️⃣ Action corrective</div>'
     + '<div class="oc-nc-step-hint">Ce qui corrige CE cas précis, maintenant.</div>'
     + '<textarea onblur="ocNcMajChamp('+n.id+',\'mesures_correctives\',this.value)" placeholder="Ex : Achat immédiat de 20 palettes, formation flash de l\'équipe sur site.">'+esc(n.mesures_correctives||'')+'</textarea></div>'
-    + '<div class="oc-nc-step"><div class="oc-nc-step-label">3️⃣ Analyse d\'étendue — pour que ça ne se reproduise jamais</div>'
+    + '<div class="oc-nc-step"><div class="oc-nc-step-label">4️⃣ Analyse d\'étendue — pour que ça ne se reproduise jamais</div>'
     + '<div class="oc-nc-step-hint">Ce problème existe-t-il ailleurs (autres sites, autres coopératives, exigences similaires) ? Quelles actions mener pour l\'éviter durablement ?</div>'
     + '<textarea onblur="ocNcMajChamp('+n.id+',\'analyse_etendue\',this.value)" placeholder="Ex : Ajouter « palettes disponibles » à la Fiche d\'évaluation des sites, contrôlé à chaque inspection sur tous les sites.">'+esc(n.analyse_etendue||'')+'</textarea></div>'
-    + '<div class="oc-nc-step"><div class="oc-nc-step-label">4️⃣ Preuves matérielles à réunir</div>'
+    + '<div class="oc-nc-step"><div class="oc-nc-step-label">5️⃣ Preuves matérielles à réunir</div>'
     + '<div class="oc-nc-step-hint">Documents/justificatifs qui démontreront que tout ceci a bien été fait — à joindre ensuite en pièce jointe.</div>'
     + '<textarea onblur="ocNcMajChamp('+n.id+',\'preuves_suggerees\',this.value)" placeholder="Ex : Facture d\'achat des palettes, photo du nouveau stockage, Fiche d\'évaluation des sites mise à jour.">'+esc(n.preuves_suggerees||'')+'</textarea>'
     + '<button class="btn-ghost" onclick="document.getElementById(\'oc-nc-fichiers-'+n.id+'\').click()">📎 Joindre un fichier</button>'
@@ -4799,6 +4801,54 @@ function ocNcPlanHTML(n){
     + ['ouverte','en_cours','fermee'].map(s=>'<option value="'+s+'"'+(n.statut===s?' selected':'')+'>'+({ouverte:'Ouverte',en_cours:'En cours',fermee:'Fermée'})[s]+'</option>').join('')
     + '</select></div></div>';
 }
+// Bouton de generation automatique (mesure corrective + analyse etendue +
+// preuves suggerees), disponible des que la cause profonde est connue --
+// qu'elle vienne du dialogue guide ou d'une saisie manuelle directe.
+function ocNcAutoBoutonHTML(n){
+  if (!n.cause_profonde || !n.cause_profonde.trim()) return '';
+  const enCours = state.ocNcAutoEnCours && state.ocNcAutoEnCours[n.id];
+  return '<div class="oc-nc-step" style="text-align:center;">'
+    + '<button class="btn btn-primary" '+(enCours?'disabled':'')+' onclick="ocNcGenererAuto('+n.id+')">'+(enCours?'Génération en cours…':'✨ Générer la mesure corrective, l\'analyse d\'étendue et les preuves')+'</button>'
+    + '</div>';
+}
+async function ocNcGenererAuto(id){
+  const n = (state.certNonConformites||[]).find(x=>x.id===id);
+  if (!n || !n.cause_profonde) return;
+  const linkedReq = REQUIREMENTS.find(r=>r.code===n.exigence_code);
+  state.ocNcAutoEnCours = state.ocNcAutoEnCours || {};
+  state.ocNcAutoEnCours[id] = true;
+  render();
+  try{
+    const { data: sessionData } = await supabaseClient.auth.getSession();
+    const resp = await fetch(SUPABASE_URL+'/functions/v1/nc-dialogue-ia', {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', 'Authorization':'Bearer '+(sessionData&&sessionData.session?sessionData.session.access_token:SUPABASE_ANON_KEY) },
+      body: JSON.stringify({
+        mode: 'auto',
+        description: n.description,
+        commentaire_auditeur: n.commentaire_auditeur,
+        exigence_titre: linkedReq ? linkedReq.code+' — '+linkedReq.title : '',
+        exigence_detail: linkedReq ? linkedReq.detail : '',
+        cause_profonde: n.cause_profonde,
+      }),
+    });
+    const data = await resp.json();
+    delete state.ocNcAutoEnCours[id];
+    if (!resp.ok || data.error){ showToast('Échec de la génération : '+(data.error||resp.status)); render(); return; }
+    const patch = {
+      mesures_correctives: data.mesure_corrective||'', analyse_etendue: data.analyse_etendue||'',
+      preuves_suggerees: data.preuves_suggerees||'', updated_at: new Date().toISOString(),
+    };
+    await supabaseClient.from('cert_non_conformites').update(patch).eq('id', id);
+    Object.assign(n, patch);
+    showToast('Mesure corrective, analyse d\'étendue et preuves générées — vérifie et ajuste si besoin.', 'success');
+    render();
+  }catch(e){
+    delete state.ocNcAutoEnCours[id];
+    showToast('Échec de la génération : '+e.message);
+    render();
+  }
+}
 function ocNcCardHTML(n){
   const labels = {ouverte:'Ouverte', en_cours:'En cours', fermee:'Fermée'};
   const isOpen = state.ocNcOuverte===n.id;
@@ -4808,7 +4858,6 @@ function ocNcCardHTML(n){
     + (n.exigence_code ? '<span>📘 '+esc(n.exigence_code)+'</span>' : '')
     + (n.recu_le ? '<span>Reçu le : '+esc(n.recu_le)+'</span>' : '')
     + (n.du_le ? '<span>Dû le : '+esc(n.du_le)+'</span>' : '')
-    + (n.responsable ? '<span>Responsable : '+esc(n.responsable)+'</span>' : '')
     + '</div>'
     + '<div class="oc-nc-actions">'
     + '<button class="btn-ghost" onclick="ocNcToggle('+n.id+')">'+(isOpen?'▾ Masquer le plan d\'action':'▸ Plan d\'action correctif')+'</button>'
@@ -4846,7 +4895,6 @@ async function ocNcAjouter(){
   const row = {
     description: description.trim(),
     exigence_code: exigenceCode,
-    responsable: (document.getElementById('ocNcNewResp')||{}).value || '',
     recu_le: (document.getElementById('ocNcNewRecu')||{}).value || '',
     du_le: (document.getElementById('ocNcNewDu')||{}).value || '',
     commentaire_auditeur: commentaireAuditeur,
@@ -4879,7 +4927,6 @@ function renderOcNonConformites(){
   html += '<div class="oc-nc-add-box"><div class="oc-nc-add-grid">'
     + '<input type="text" id="ocNcNewDesc" placeholder="Description de la non-conformité constatée" style="grid-column:1/-1;">'
     + '<select id="ocNcNewExigence" onchange="ocNcApercuExigence(this.value)">'+ocNcExigenceOptions(exigenceApercu||'')+'</select>'
-    + '<input type="text" id="ocNcNewResp" placeholder="Responsable">'
     + '<input type="date" id="ocNcNewRecu" title="Reçu le">'
     + '<input type="date" id="ocNcNewDu" title="Dû le">'
     + '</div>'
