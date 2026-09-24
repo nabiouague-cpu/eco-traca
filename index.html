@@ -1305,7 +1305,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-23-31';
+const APP_VERSION = '2026-09-23-32';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4438,18 +4438,56 @@ function renderOcCertCooperativeDetail(coopId){
   const c = (state.cooperatives||[]).find(x=>x.id===coopId);
   if (!c) return '<p class="hint">Coopérative introuvable.</p>';
   const cert = ocCertificatDeCooperative(coopId);
+  const certsManuels = (state.oc_certificats||[]).filter(x=>x.dossier==='cooperatives' && x.rattachement_id===String(coopId)).sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
   let html = '<div class="panel-head"><button class="btn-ghost" onclick="ocFermerCertSousDossier()" style="margin-bottom:10px;">← Retour aux coopératives</button><h2>'+esc(c.nom)+'</h2></div>';
   html += '<div class="panel" style="padding:18px;">';
+
+  html += '<div class="hint" style="margin-bottom:8px;font-weight:600;">Déposé sur le portail de la coopérative</div>';
   if (cert){
-    html += '<div class="oc-exigence-fichiers-liste">'
+    html += '<div class="oc-exigence-fichiers-liste" style="margin-bottom:16px;">'
       + '<div class="oc-exigence-fichier-item">📄 <span onclick="telechargerFichierDemande(\''+cert.fichier_path+'\',\''+esc(cert.fichier_nom||'Certificat').replace(/'/g,"\\'")+'\')" style="cursor:pointer;text-decoration:underline;flex:1;">'+esc(cert.fichier_nom||'Certificat')+'</span></div>'
-      + '</div>'
-      + '<p class="hint" style="margin-top:10px;">Déposé par la coopérative elle-même, sur son portail — document « Certificat » de ses documents de conformité.</p>';
+      + '</div>';
   } else {
-    html += '<p class="oc-table-empty">Cette coopérative n\'a pas encore déposé son certificat sur son portail.</p>';
+    html += '<p class="oc-table-empty" style="margin-bottom:16px;">Cette coopérative n\'a pas encore déposé son certificat sur son portail.</p>';
+  }
+
+  html += '<div class="hint" style="margin-bottom:8px;font-weight:600;">Ajoutés manuellement</div>';
+  html += '<div class="oc-table-add" style="flex-wrap:wrap;margin-bottom:12px;">'
+    + '<input type="date" id="ocCertDateExpiration" title="Date d\'expiration (optionnel)">'
+    + '<input type="file" id="ocCertFileInput" style="display:none;" onchange="ocDeposerCertificatCooperative(this,\''+coopId+'\',\''+esc(c.nom).replace(/'/g,"\\'")+'\')">'
+    + '<button class="btn btn-primary" onclick="document.getElementById(\'ocCertFileInput\').click()">+ Ajouter un certificat</button>'
+    + '</div>';
+  if (certsManuels.length===0){
+    html += '<p class="oc-table-empty">Aucun certificat ajouté manuellement pour l\'instant.</p>';
+  } else {
+    html += '<div class="oc-exigence-fichiers-liste">'
+      + certsManuels.map(x=>{
+          const expire = x.date_expiration ? (new Date(x.date_expiration) < new Date() ? ' <span style="color:var(--danger,#c0392b);">(expiré le '+esc(x.date_expiration)+')</span>' : ' <span class="hint">(expire le '+esc(x.date_expiration)+')</span>') : '';
+          return '<div class="oc-exigence-fichier-item">📄 <span onclick="telechargerFichierDemande(\''+x.path+'\',\''+esc(x.nom).replace(/'/g,"\\'")+'\')" style="cursor:pointer;text-decoration:underline;flex:1;">'+esc(x.nom)+'</span>'+expire+'<button class="oc-icon-btn oc-icon-btn-suppr" title="Supprimer" onclick="ocSupprimerCertificat('+x.id+',\''+x.path+'\')">🗑</button></div>';
+        }).join('')
+      + '</div>';
   }
   html += '</div>';
   return html;
+}
+async function ocDeposerCertificatCooperative(input, coopId, coopNom){
+  const file = input.files[0];
+  if (!file) return;
+  const dateExpiration = (document.getElementById('ocCertDateExpiration')||{}).value || null;
+  try{
+    const path = 'oricert/certificats/cooperatives/'+coopId+'/'+Date.now()+'_'+assainirNomFichierOc(file.name);
+    const { error: upErr } = await supabaseClient.storage.from('documents-coop').upload(path, file, { upsert: true });
+    if (upErr){ showToast("Échec de l'envoi : "+upErr.message); return; }
+    const { data, error } = await supabaseClient.from('cert_certificats').insert({
+      dossier:'cooperatives', rattachement_id: String(coopId), rattachement_nom: coopNom,
+      nom: file.name, path, date_expiration: dateExpiration, uploaded_by: state.session.user.id,
+    }).select().single();
+    if (error){ showToast("Échec de l'enregistrement : "+error.message); return; }
+    state.oc_certificats = (state.oc_certificats||[]).concat(data);
+    showToast('Certificat ajouté.', 'success');
+    render();
+  }catch(e){ showToast('Erreur : '+e.message); }
+  input.value = '';
 }
 // Dossier "Sites" : un sous-dossier par site ORICERT (oc_sites) -- depot manuel
 // ici (les sites n'ont pas de portail propre), simplement organise par site
