@@ -291,6 +291,9 @@
   .oc-table-add-cell{min-width:0;}
   .oc-table-add input[type="text"]{width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;}
   .oc-table-add > button.btn-primary{grid-column:1/-1;justify-self:start;}
+  .oc-table-add-actions{grid-column:1/-1;display:flex;gap:8px;}
+  .oc-table-add-toggle{padding:10px 16px;background:var(--surface-2);}
+  .oc-table-add-toggle .btn-ghost{border:1px dashed var(--border);width:100%;text-align:left;padding:8px 12px;}
   .oc-chip{display:inline-block;background:var(--surface-2, #f0f0f0);border:1px solid var(--border);border-radius:20px;padding:2px 9px;font-size:11.5px;margin:2px 4px 2px 0;white-space:nowrap;}
   .oc-field-multi{display:flex;flex-direction:column;gap:5px;min-width:0;}
   .oc-field-multi-row{display:flex;gap:4px;align-items:center;}
@@ -1256,7 +1259,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-23-11';
+const APP_VERSION = '2026-09-23-12';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3917,12 +3920,25 @@ function renderOcTableSimple(tableId){
       }
     });
   }
-  html += '</tbody></table></div>'
-    + '<div class="oc-table-add">'
-    + cfg.cols.map(c=>'<div class="oc-table-add-cell">'+ocChampEditHTML(c, null, 'ocnew')+'</div>').join('')
-    + '<button class="btn btn-primary" onclick="ocAjouterLigne(\''+tableId+'\')">+ Ajouter</button>'
-    + '</div></div>';
+  html += '</tbody></table></div>';
+  if (state.ocTableAjoutOuvert===tableId){
+    html += '<div class="oc-table-add">'
+      + cfg.cols.map(c=>'<div class="oc-table-add-cell">'+ocChampEditHTML(c, null, 'ocnew')+'</div>').join('')
+      + '<div class="oc-table-add-actions"><button class="btn btn-primary" onclick="ocAjouterLigne(\''+tableId+'\')">Enregistrer</button><button class="btn-ghost" onclick="ocFermerAjoutLigne()">Annuler</button></div>'
+      + '</div>';
+  } else {
+    html += '<div class="oc-table-add-toggle"><button class="btn-ghost" onclick="ocOuvrirAjoutLigne(\''+tableId+'\')">+ Ajouter</button></div>';
+  }
+  html += '</div>';
   return html;
+}
+function ocOuvrirAjoutLigne(tableId){
+  state.ocTableAjoutOuvert = tableId;
+  render();
+}
+function ocFermerAjoutLigne(){
+  state.ocTableAjoutOuvert = null;
+  render();
 }
 function ocModifierLigne(tableId, id){
   state.ocTableEditTable = tableId;
@@ -3969,6 +3985,7 @@ async function ocAjouterLigne(tableId){
     const { data, error } = await supabaseClient.from(cfg.table).insert(row).select().single();
     if (error){ showToast("Échec de l'ajout : "+error.message); return; }
     state['oc_'+tableId] = (state['oc_'+tableId]||[]).concat(data);
+    state.ocTableAjoutOuvert = null;
     showToast('Ligne ajoutée.', 'success');
     render();
   }catch(e){ showToast("Échec de l'ajout : "+e.message); }
