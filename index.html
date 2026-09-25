@@ -1308,7 +1308,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-24-2';
+const APP_VERSION = '2026-09-24-3';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4679,8 +4679,8 @@ function ocNcDialogueHTML(n){
   const enCharge = dlg && dlg.chargement;
   let html = '<div class="oc-nc-dialogue">';
   html += '<div class="oc-nc-step-label">💬 Dialogue guidé (assistant)</div>';
-  if (!n.commentaire_auditeur || !n.commentaire_auditeur.trim()){
-    html += '<div class="oc-nc-step-hint">Renseigne d\'abord le commentaire de l\'auditeur ci-dessus, puis lance le dialogue guidé — il posera des questions ciblées pour construire les 4 sections ci-dessous à ta place.</div>';
+  if (!n.description || !n.description.trim()){
+    html += '<div class="oc-nc-step-hint">Renseigne d\'abord la description de la non-conformité ci-dessus, puis lance le dialogue guidé — il posera des questions ciblées pour construire les sections ci-dessous à ta place.</div>';
     return html+'</div>';
   }
   if (historique.length===0 && !enCharge){
@@ -4731,7 +4731,7 @@ async function ocNcAppelDialogue(n, historiqueMaj){
       headers: { 'Content-Type':'application/json', 'Authorization':'Bearer '+(sessionData&&sessionData.session?sessionData.session.access_token:SUPABASE_ANON_KEY) },
       body: JSON.stringify({
         description: n.description,
-        commentaire_auditeur: n.commentaire_auditeur,
+        commentaire_auditeur: n.description,
         exigence_titre: linkedReq ? linkedReq.code+' — '+linkedReq.title : '',
         exigence_detail: linkedReq ? linkedReq.detail : '',
         historique: historiqueMaj,
@@ -4778,9 +4778,9 @@ function ocNcPlanHTML(n){
   return '<div class="oc-nc-plan">'
     + '<div class="oc-nc-step"><div class="oc-nc-step-label">1️⃣ Comprendre l\'exigence</div>'+exigenceBox
     + '<select onchange="ocNcMajChamp('+n.id+',\'exigence_code\',this.value)">'+ocNcExigenceOptions(n.exigence_code)+'</select></div>'
-    + '<div class="oc-nc-step"><div class="oc-nc-step-label">Commentaire de l\'auditeur</div>'
-    + '<div class="oc-nc-step-hint">Ce que l\'auditeur a précisément constaté/écrit — sert de point de départ au dialogue guidé ci-dessous.</div>'
-    + '<textarea onblur="ocNcMajChamp('+n.id+',\'commentaire_auditeur\',this.value)" placeholder="Ex : Non-conformité relevée lors de l\'audit interne du 12/09/2026 : le stockage du cacao ne respecte pas les conditions d\'hygiène minimales requises par l\'exigence 4.3.2.">'+esc(n.commentaire_auditeur||'')+'</textarea></div>'
+    + '<div class="oc-nc-step"><div class="oc-nc-step-label">Description de la non-conformité</div>'
+    + '<div class="oc-nc-step-hint">Ce qui a été précisément constaté — sert de point de départ au dialogue guidé ci-dessous.</div>'
+    + '<textarea onblur="ocNcMajChamp('+n.id+',\'description\',this.value)" placeholder="Ex : Non-conformité relevée lors de l\'audit interne du 12/09/2026 : le stockage du cacao ne respecte pas les conditions d\'hygiène minimales requises par l\'exigence 4.3.2.">'+esc(n.description||'')+'</textarea></div>'
     + '<div class="oc-nc-step"><div class="oc-nc-step-label">2️⃣ Causes profondes</div>'
     + '<div class="oc-nc-step-hint">Dialogue guidé ci-dessous — répondez aux questions pour identifier la vraie cause. C\'est cette cause qui servira ensuite à générer automatiquement la mesure corrective, l\'analyse d\'étendue et les preuves à réunir.</div>'
     + ocNcDialogueHTML(n)
@@ -4829,7 +4829,7 @@ async function ocNcGenererAuto(id){
       body: JSON.stringify({
         mode: 'auto',
         description: n.description,
-        commentaire_auditeur: n.commentaire_auditeur,
+        commentaire_auditeur: n.description,
         exigence_titre: linkedReq ? linkedReq.code+' — '+linkedReq.title : '',
         exigence_detail: linkedReq ? linkedReq.detail : '',
         cause_profonde: n.cause_profonde,
@@ -4871,8 +4871,6 @@ function ocNcCardHTML(n){
     html += linkedReq
       ? '<div class="oc-nc-exigence-box">📘 <b>'+esc(linkedReq.code)+'</b>'+(linkedReq.enonce?'<br><br>'+esc(linkedReq.enonce):' — '+esc(linkedReq.detail))+'</div>'
       : '<div class="oc-nc-exigence-box">Aucune exigence liée pour l\'instant.</div>';
-    html += '<div class="oc-nc-step-label" style="margin-top:12px;">Commentaire de l\'auditeur</div>'
-      + '<div class="oc-nc-resume-texte">'+(n.commentaire_auditeur ? esc(n.commentaire_auditeur) : '<span class="hint">Aucun commentaire renseigné.</span>')+'</div>';
     if (n.cause_profonde){
       html += '<div class="oc-nc-step-label" style="margin-top:12px;">✅ Cause profonde identifiée</div><div class="oc-nc-resume-texte">'+esc(n.cause_profonde)+'</div>';
     }
@@ -4912,13 +4910,11 @@ async function ocNcAjouter(){
   const description = (document.getElementById('ocNcNewDesc')||{}).value || '';
   if (!description.trim()){ showToast('Décris la non-conformité avant de l\'ajouter.'); return; }
   const exigenceCode = (document.getElementById('ocNcNewExigence')||{}).value || '';
-  const commentaireAuditeur = (document.getElementById('ocNcNewCommentaireAuditeur')||{}).value || '';
   const row = {
     description: description.trim(),
     exigence_code: exigenceCode,
     recu_le: (document.getElementById('ocNcNewRecu')||{}).value || '',
     du_le: (document.getElementById('ocNcNewDu')||{}).value || '',
-    commentaire_auditeur: commentaireAuditeur,
     statut: 'ouverte',
   };
   try{
@@ -4940,13 +4936,12 @@ function renderOcNonConformites(){
   const exigenceApercu = state.ocNcNewExigenceApercu;
   const reqApercu = exigenceApercu ? REQUIREMENTS.find(r=>r.code===exigenceApercu) : null;
   html += '<div class="oc-nc-add-box"><div class="oc-nc-add-grid">'
-    + '<input type="text" id="ocNcNewDesc" placeholder="Description de la non-conformité constatée" style="grid-column:1/-1;">'
-    + '<select id="ocNcNewExigence" onchange="ocNcApercuExigence(this.value)">'+ocNcExigenceOptions(exigenceApercu||'')+'</select>'
+    + '<select id="ocNcNewExigence" onchange="ocNcApercuExigence(this.value)" style="grid-column:1/-1;">'+ocNcExigenceOptions(exigenceApercu||'')+'</select>'
     + '<input type="date" id="ocNcNewRecu" title="Reçu le">'
     + '<input type="date" id="ocNcNewDu" title="Dû le">'
     + '</div>'
     + (reqApercu ? '<div class="oc-nc-exigence-box" style="margin:0 0 12px;">📘 <b>'+esc(reqApercu.code)+'</b>'+(reqApercu.enonce?'<br><br>'+esc(reqApercu.enonce):' — '+esc(reqApercu.detail))+'</div>' : '')
-    + '<textarea id="ocNcNewCommentaireAuditeur" placeholder="Commentaire de l\'auditeur concernant cette non-conformité…" style="width:100%;min-height:60px;margin-bottom:12px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:inherit;resize:vertical;"></textarea>'
+    + '<textarea id="ocNcNewDesc" placeholder="Description de la non-conformité constatée…" style="width:100%;min-height:60px;margin-bottom:12px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:inherit;resize:vertical;"></textarea>'
     + '<button class="btn btn-primary" onclick="ocNcAjouter()">Enregistrer</button></div>';
   if (records.length===0){
     html += '<p class="oc-table-empty">Aucune non-conformité enregistrée pour le moment.</p>';
