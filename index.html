@@ -237,6 +237,15 @@
   .oc-comite-preroga li:last-child{margin-bottom:0;}
 
   .oc-org-chart{overflow-x:auto;padding:10px 20px 24px;text-align:center;}
+  .oc-cal-nav{display:flex;align-items:center;justify-content:center;gap:20px;margin-bottom:16px;}
+  .oc-cal-mois-titre{font-size:18px;font-weight:700;color:var(--ink);min-width:160px;text-align:center;}
+  .oc-cal-liste{display:flex;flex-direction:column;gap:10px;}
+  .oc-cal-carte{background:#fff;border:1px solid var(--border);border-left:4px solid var(--accent, #1F6E5C);border-radius:8px;padding:12px 16px;}
+  .oc-cal-carte-date{font-size:12px;font-weight:700;color:var(--accent, #1F6E5C);text-transform:capitalize;margin-bottom:3px;}
+  .oc-cal-carte-comite{font-size:11.5px;color:var(--ink-soft);margin-bottom:3px;}
+  .oc-cal-carte-theme{font-size:13.5px;font-weight:600;color:var(--ink);}
+  .oc-cal-carte-type{display:inline-block;background:var(--surface-2, #f0f0f0);border-radius:10px;padding:1px 8px;font-size:10.5px;font-weight:400;margin-left:6px;color:var(--ink-soft);}
+  .oc-cal-carte-public{font-size:12px;color:var(--ink-soft);margin-top:4px;}
   .apercu-excel-feuille{margin-bottom:16px;}
   .apercu-excel-feuille:last-child{margin-bottom:0;}
   .apercu-excel-nom-feuille{font-weight:700;font-size:13px;margin-bottom:6px;color:var(--ink);}
@@ -1319,7 +1328,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-24-12';
+const APP_VERSION = '2026-09-24-13';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3027,7 +3036,7 @@ function choisirEspace(espace){
 }
 async function chargerDonneesOricert(){
   try{
-    const [exigences, interlocuteurs, sites, partenaires, clients, prestataires, documents, audits, nc, exigenceFichiers, certificats, documentsLegaux] = await Promise.all([
+    const [exigences, interlocuteurs, sites, partenaires, clients, prestataires, documents, audits, nc, exigenceFichiers, certificats, documentsLegaux, calendrierActivites] = await Promise.all([
       supabaseClient.from('cert_exigences_statuts').select('*'),
       supabaseClient.from('cert_interlocuteurs').select('*').order('created_at'),
       supabaseClient.from('cert_sites').select('*').order('created_at'),
@@ -3040,6 +3049,7 @@ async function chargerDonneesOricert(){
       supabaseClient.from('cert_exigence_fichiers').select('*').order('created_at'),
       supabaseClient.from('cert_certificats').select('*').order('created_at', {ascending:false}),
       supabaseClient.from('cert_documents_legaux').select('*').order('created_at', {ascending:false}),
+      supabaseClient.from('cert_calendrier_activites').select('*').order('date_prevue', {ascending:true, nullsFirst:false}),
     ]);
     state.certExigencesStatuts = exigences.data || [];
     state.oc_interlocuteurs = interlocuteurs.data || [];
@@ -3060,6 +3070,7 @@ async function chargerDonneesOricert(){
     state.oc_exigenceFichiers = exigenceFichiers.data || [];
     state.oc_certificats = certificats.data || [];
     state.oc_documentsLegaux = documentsLegaux.data || [];
+    state.oc_calendrierActivites = calendrierActivites.data || [];
     state.oricertCharge = true;
     render();
   }catch(e){
@@ -3079,6 +3090,7 @@ const ORICERT_TABS = [
   { id:'portail', label:'Portail', icon:ICON_OC_PORTAIL },
   { id:'donnees', label:'Données<br>principales', icon:ICON_OC_DONNEES },
   { id:'interlocuteurs', label:'Responsabilités', icon:ICON_OC_INTERLOCUTEURS },
+  { id:'calendrier', label:'Calendrier', icon:ICON_OC_EXIGENCES },
   { id:'exigences', label:'Suivi des<br>exigences', icon:ICON_OC_EXIGENCES },
   { id:'certificat', label:'Certificats', icon:ICON_OC_CERTIFICAT },
   { id:'partenaires', label:'Partenaires', icon:ICON_OC_PARTENAIRES },
@@ -3099,6 +3111,7 @@ function renderOricert(){
   if (tab==='portail') contenu = renderOcPortail();
   else if (tab==='donnees') contenu = renderOcDonnees();
   else if (tab==='interlocuteurs') contenu = renderOcTableSimple('interlocuteurs');
+  else if (tab==='calendrier') contenu = renderOcCalendrier();
   else if (tab==='exigences') contenu = renderOcExigences();
   else if (tab==='certificat') contenu = renderOcCertificat();
   else if (tab==='partenaires') contenu = renderOcPartenaires();
@@ -3784,6 +3797,89 @@ function ocOrgNoeudHTML(node, estRacine){
       + '<tr>'+filsHtml+'</tr>';
   }
   return html;
+}
+const OC_MOIS_NOMS = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
+function ocCalendrierMoisCourant(){
+  if (!state.ocCalendrierMoisAffiche){
+    const auj = new Date();
+    state.ocCalendrierMoisAffiche = auj.getFullYear()+'-'+String(auj.getMonth()+1).padStart(2,'0');
+  }
+  return state.ocCalendrierMoisAffiche;
+}
+function ocCalendrierChangerMois(delta){
+  const [y,m] = ocCalendrierMoisCourant().split('-').map(Number);
+  const d = new Date(y, m-1+delta, 1);
+  state.ocCalendrierMoisAffiche = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+  render();
+}
+function renderOcCalendrier(){
+  const moisCle = ocCalendrierMoisCourant();
+  const [annee, mois] = moisCle.split('-').map(Number);
+  const activites = state.oc_calendrierActivites || [];
+  // Activites du mois affiche (date_prevue dans le mois) -- les "Selon besoin"
+  // (reunions extraordinaires, sans date fixe) sont listees a part, toujours
+  // visibles, puisqu'elles peuvent survenir n'importe quand.
+  const duMois = activites.filter(a=>{
+    if (!a.date_prevue) return false;
+    const d = new Date(a.date_prevue+'T00:00:00');
+    return d.getFullYear()===annee && (d.getMonth()+1)===mois;
+  }).sort((a,b)=> new Date(a.date_prevue) - new Date(b.date_prevue));
+  const selonBesoin = activites.filter(a=>!a.date_prevue);
+
+  let html = '<div class="panel-head"><h2>Calendrier des activités</h2><p>Réunions, sensibilisations, quiz et activités terrain des comités — mis en évidence mois par mois pour prévenir les personnes concernées à l\'avance.</p></div>';
+
+  html += '<div class="oc-cal-nav">'
+    + '<button class="btn-ghost" onclick="ocCalendrierChangerMois(-1)">← Mois précédent</button>'
+    + '<div class="oc-cal-mois-titre">'+esc(OC_MOIS_NOMS[mois-1])+' '+annee+'</div>'
+    + '<button class="btn-ghost" onclick="ocCalendrierChangerMois(1)">Mois suivant →</button>'
+    + '</div>';
+
+  html += '<div class="panel" style="padding:18px;">';
+  if (duMois.length===0){
+    html += '<p class="oc-table-empty">Aucune activité prévue ce mois-ci.</p>';
+  } else {
+    html += '<div class="oc-cal-liste">' + duMois.map(a=>ocCalendrierCarteHTML(a)).join('') + '</div>';
+    html += '<div style="text-align:center;margin-top:16px;"><button class="btn btn-primary" onclick="ocCalendrierCopierMessage(\''+moisCle+'\')">📋 Copier le message à communiquer</button></div>';
+  }
+  html += '</div>';
+
+  if (selonBesoin.length>0){
+    html += '<div class="oc-donnees-section" style="margin-top:16px;"><h3>Activités déclenchées selon les besoins (sans date fixe)</h3>'
+      + '<div class="oc-cal-liste">' + selonBesoin.map(a=>ocCalendrierCarteHTML(a)).join('') + '</div>'
+      + '</div>';
+  }
+  return html;
+}
+function ocCalendrierCarteHTML(a){
+  const dateAffichee = a.date_prevue ? new Date(a.date_prevue+'T00:00:00').toLocaleDateString('fr-FR', {weekday:'long', day:'numeric', month:'long'}) : (a.date_libre||'Selon besoin');
+  return '<div class="oc-cal-carte">'
+    + '<div class="oc-cal-carte-date">'+esc(dateAffichee)+'</div>'
+    + '<div class="oc-cal-carte-comite">'+esc(a.comite)+'</div>'
+    + '<div class="oc-cal-carte-theme">'+esc(a.theme)+' <span class="oc-cal-carte-type">'+esc(a.type)+'</span></div>'
+    + (a.public_concerne ? '<div class="oc-cal-carte-public">👥 '+esc(a.public_concerne)+(a.duree?' — '+esc(a.duree):'')+'</div>' : '')
+    + '</div>';
+}
+function ocCalendrierCopierMessage(moisCle){
+  const [annee, mois] = moisCle.split('-').map(Number);
+  const activites = (state.oc_calendrierActivites||[]).filter(a=>{
+    if (!a.date_prevue) return false;
+    const d = new Date(a.date_prevue+'T00:00:00');
+    return d.getFullYear()===annee && (d.getMonth()+1)===mois;
+  }).sort((a,b)=> new Date(a.date_prevue) - new Date(b.date_prevue));
+  let msg = 'ECORIGINE — Activités de certification prévues en '+OC_MOIS_NOMS[mois-1]+' '+annee+' :\n\n';
+  activites.forEach(a=>{
+    const dateAffichee = new Date(a.date_prevue+'T00:00:00').toLocaleDateString('fr-FR', {weekday:'long', day:'numeric', month:'long'});
+    msg += '• '+dateAffichee+' — '+a.theme+' ('+a.comite+')';
+    if (a.public_concerne) msg += '\n  Concerné(s) : '+a.public_concerne;
+    if (a.duree) msg += ' — Durée : '+a.duree;
+    msg += '\n\n';
+  });
+  msg += 'Merci de prendre vos dispositions en conséquence.';
+  navigator.clipboard.writeText(msg).then(()=>{
+    showToast('Message copié — colle-le où tu veux le communiquer.', 'success');
+  }).catch(()=>{
+    showToast("Impossible de copier automatiquement — sélectionne et copie le texte toi-même.");
+  });
 }
 function renderOcOrganigramme(){
   const racine = OC_ORGANIGRAMME;
