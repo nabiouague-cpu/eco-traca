@@ -371,6 +371,9 @@
   .oc-nc-step select{padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:12.5px;}
   .oc-nc-save-row{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--ink-soft);}
   .oc-nc-dialogue{background:var(--surface-2);border-radius:8px;padding:12px;margin:4px 0 8px;}
+  .oc-nc-causes-types{display:flex;flex-direction:column;gap:6px;margin-bottom:6px;}
+  .oc-nc-cause-type-btn{text-align:left;padding:10px 14px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:12.5px;line-height:1.4;cursor:pointer;font-family:inherit;color:var(--ink);transition:border-color .15s ease,background .15s ease;}
+  .oc-nc-cause-type-btn:hover{border-color:var(--accent, #1F6E5C);background:var(--surface-2);}
   .oc-nc-dialogue-fil{display:flex;flex-direction:column;gap:8px;margin-top:8px;max-height:280px;overflow-y:auto;}
   .oc-nc-bulle{padding:8px 12px;border-radius:10px;font-size:12.5px;max-width:85%;line-height:1.4;}
   .oc-nc-bulle-ia{background:#fff;border:1px solid var(--border);align-self:flex-start;}
@@ -1315,7 +1318,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-24-9';
+const APP_VERSION = '2026-09-24-10';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4718,6 +4721,574 @@ function ocSupprimerFormation(id){
 }
 
 /* ---- Non-conformites — plan d'action correctif guide ---- */
+// Bibliotheque de causes profondes types par exigence RA -- pour chacune, 3
+// scenarios courants avec mesure corrective / analyse d'etendue / preuves
+// suggerees pre-redigees. Objectif : eviter de recourir au dialogue IA (cout +
+// disponibilite) sur les cas frequents -- l'IA reste disponible en secours
+// pour les cas qui ne correspondent a aucun scenario type.
+const OC_CAUSES_TYPES = {
+  "1.1.1": [
+    {
+      "cause": "La procédure de traçabilité existante n'a jamais été mise à jour ni resignée depuis sa création, alors que l'organisation ou les flux ont changé.",
+      "mesure_corrective": "Réviser la procédure de traçabilité pour refléter l'organisation actuelle et la faire signer par l'Administrateur Général.",
+      "analyse_etendue": "Mettre en place une revue annuelle systématique de toutes les procédures documentées, avec une date de révision programmée dans le calendrier de certification.",
+      "preuves_suggerees": "Procédure de traçabilité révisée et signée, date de signature, calendrier de revue annuelle des procédures."
+    },
+    {
+      "cause": "Le personnel n'a pas été formé au contenu de la procédure, qui reste donc théorique et non appliquée sur le terrain.",
+      "mesure_corrective": "Organiser une session de formation du personnel concerné sur la procédure de traçabilité en vigueur.",
+      "analyse_etendue": "Intégrer la formation à la procédure de traçabilité dans le parcours d'intégration de tout nouvel employé concerné.",
+      "preuves_suggerees": "Liste de présence à la formation, support de formation utilisé, attestations signées par les participants."
+    },
+    {
+      "cause": "La procédure décrit un flux théorique qui ne correspond plus au flux réel (nouveaux sites, nouveaux intermédiaires non intégrés).",
+      "mesure_corrective": "Cartographier le flux réel actuel et mettre à jour la procédure en conséquence.",
+      "analyse_etendue": "Ajouter un point de vérification trimestriel comparant le flux documenté au flux opérationnel réel.",
+      "preuves_suggerees": "Nouvelle cartographie des flux, procédure mise à jour, compte-rendu de la vérification trimestrielle."
+    }
+  ],
+  "1.1.2": [
+    {
+      "cause": "La politique droits humains & environnement n'a jamais été formalisée par écrit, seulement appliquée de façon informelle.",
+      "mesure_corrective": "Rédiger et faire signer une politique formelle couvrant les droits humains et l'environnement par la direction.",
+      "analyse_etendue": "Intégrer la revue de cette politique au cycle annuel de revue des procédures de management.",
+      "preuves_suggerees": "Politique signée, date de diffusion, accusé de réception du personnel."
+    },
+    {
+      "cause": "La politique existe mais n'a pas été diffusée à l'ensemble du personnel et des partenaires concernés.",
+      "mesure_corrective": "Diffuser la politique existante par affichage sur site et transmission écrite aux coopératives partenaires.",
+      "analyse_etendue": "Systématiser la diffusion de toute nouvelle politique via un canal de communication fixe (email + affichage), avec accusé de réception.",
+      "preuves_suggerees": "Preuve de diffusion (email, affichage photographié), liste des destinataires, accusés de réception."
+    },
+    {
+      "cause": "Le contenu de la politique ne couvre pas tous les aspects requis (par exemple, manque le volet environnement ou un droit humain spécifique).",
+      "mesure_corrective": "Compléter la politique pour couvrir l'ensemble des aspects requis par le référentiel.",
+      "analyse_etendue": "Faire relire toute future politique par une personne formée au référentiel RA avant diffusion.",
+      "preuves_suggerees": "Politique complétée et signée, grille de vérification de conformité au référentiel utilisée pour la relecture."
+    }
+  ],
+  "1.1.3": [
+    {
+      "cause": "Les comités prévus (réclamation/genre, approbation et sanction, évaluation travail des enfants) n'ont jamais été formellement constitués par écrit.",
+      "mesure_corrective": "Rédiger et signer les notes de service de constitution de chaque comité manquant, avec noms et rôles des membres.",
+      "analyse_etendue": "Ajouter la vérification de l'existence de chaque comité requis à la checklist annuelle de préparation d'audit.",
+      "preuves_suggerees": "Notes de service de constitution signées, liste des membres avec leurs fonctions."
+    },
+    {
+      "cause": "Un ou plusieurs comités existent sur le papier mais leurs membres n'ont pas la compétence ou la disponibilité réelle pour fonctionner.",
+      "mesure_corrective": "Revoir la composition du comité concerné pour y intégrer des membres réellement compétents et disponibles.",
+      "analyse_etendue": "Définir des critères clairs de sélection des membres de comité (disponibilité, compétence, légitimité) pour toute future nomination.",
+      "preuves_suggerees": "Nouvelle note de service avec la composition révisée, CV ou preuve de compétence des nouveaux membres."
+    },
+    {
+      "cause": "Le responsable désigné a quitté l'organisation ou changé de poste, sans que son remplacement dans le comité soit formalisé.",
+      "mesure_corrective": "Nommer formellement un remplaçant et mettre à jour la note de service de constitution du comité.",
+      "analyse_etendue": "Ajouter une clause de mise à jour automatique des comités en cas de changement de poste au processus RH.",
+      "preuves_suggerees": "Note de service mise à jour, date de prise de fonction du remplaçant."
+    }
+  ],
+  "1.2.1": [
+    {
+      "cause": "Aucun système d'archivage formel n'a été mis en place ; les documents sont dispersés sans garantie de conservation sur 5 ans.",
+      "mesure_corrective": "Mettre en place un système d'archivage centralisé (physique et/ou numérique) garantissant la conservation des documents sur 5 ans.",
+      "analyse_etendue": "Documenter une procédure d'archivage écrite précisant l'emplacement, la durée et le responsable de chaque catégorie de document.",
+      "preuves_suggerees": "Procédure d'archivage signée, capture du système de classement mis en place (dossiers, étagères, serveur)."
+    },
+    {
+      "cause": "Le système d'archivage existe mais des documents ont été perdus ou détruits avant l'échéance des 5 ans (déménagement, panne informatique sans sauvegarde).",
+      "mesure_corrective": "Reconstituer si possible les documents manquants et sécuriser immédiatement une sauvegarde du système d'archivage actuel.",
+      "analyse_etendue": "Mettre en place une sauvegarde régulière (numérique) et un accès limité à l'archive physique pour éviter toute perte future.",
+      "preuves_suggerees": "Preuve de sauvegarde régulière mise en place, inventaire actualisé des documents archivés."
+    },
+    {
+      "cause": "Le personnel en charge de l'archivage n'a pas été formé aux règles de conservation et de classement.",
+      "mesure_corrective": "Former la ou les personnes responsables de l'archivage aux règles de conservation de 5 ans et au système de classement.",
+      "analyse_etendue": "Désigner un responsable unique et formé de l'archivage, avec un suppléant formé également en cas d'absence.",
+      "preuves_suggerees": "Attestation de formation, désignation écrite du responsable archivage."
+    }
+  ],
+  "1.2.2": [
+    {
+      "cause": "Le plan de gestion a été rédigé mais jamais présenté ni expliqué aux équipes concernées.",
+      "mesure_corrective": "Organiser une session de formation présentant le plan de gestion aux équipes concernées.",
+      "analyse_etendue": "Intégrer systématiquement une formation au plan de gestion dès sa validation annuelle, avant sa mise en application.",
+      "preuves_suggerees": "Liste de présence à la formation, support de présentation utilisé."
+    },
+    {
+      "cause": "Le plan de gestion a évolué (mise à jour des risques ou mesures) sans que les équipes en soient réinformées.",
+      "mesure_corrective": "Organiser une session de mise à jour pour présenter les changements du plan de gestion aux équipes.",
+      "analyse_etendue": "Prévoir une communication systématique à chaque révision du plan de gestion, avec un résumé des changements.",
+      "preuves_suggerees": "Liste de présence à la session de mise à jour, résumé des changements diffusé."
+    },
+    {
+      "cause": "De nouveaux employés ont rejoint l'équipe sans recevoir la formation initiale au plan de gestion.",
+      "mesure_corrective": "Former sans délai les nouveaux employés concernés au plan de gestion en vigueur.",
+      "analyse_etendue": "Intégrer la formation au plan de gestion dans le parcours d'intégration standard de tout nouvel employé.",
+      "preuves_suggerees": "Liste de présence, checklist d'intégration incluant cette formation."
+    }
+  ],
+  "1.3.1": [
+    {
+      "cause": "Les sites à inspecter n'avaient pas encore été choisis/validés au moment prévu de l'inspection, retardant tout le processus.",
+      "mesure_corrective": "Finaliser sans délai le choix et la validation des sites, puis programmer l'inspection interne.",
+      "analyse_etendue": "Avancer la date de choix des sites dans le calendrier de campagne, en amont de toute autre étape liée à l'inspection.",
+      "preuves_suggerees": "Liste des sites validés avec date, planning de l'inspection réalisée."
+    },
+    {
+      "cause": "La grille d'évaluation des sites n'était pas prête ou pas à jour au moment de l'inspection.",
+      "mesure_corrective": "Finaliser/mettre à jour la grille d'évaluation puis réaliser l'inspection avec cet outil.",
+      "analyse_etendue": "Vérifier et valider la grille d'évaluation en amont de chaque campagne, avant le choix des sites.",
+      "preuves_suggerees": "Grille d'évaluation à jour, rapports d'inspection remplis avec cette grille."
+    },
+    {
+      "cause": "La personne en charge de l'inspection n'était pas disponible ou n'a pas été désignée à temps.",
+      "mesure_corrective": "Désigner formellement un responsable de l'inspection interne et réaliser l'inspection sans délai.",
+      "analyse_etendue": "Anticiper la désignation du responsable d'inspection dès le début de campagne, indépendamment du choix des sites.",
+      "preuves_suggerees": "Note de désignation du responsable, rapport d'inspection signé."
+    }
+  ],
+  "1.3.2": [
+    {
+      "cause": "Le mécanisme d'approbation et de sanction des sites sous-traitants n'a jamais été formalisé par écrit.",
+      "mesure_corrective": "Rédiger et faire approuver un mécanisme écrit d'approbation et de sanction des sites, avec critères et seuils clairs.",
+      "analyse_etendue": "Intégrer la vérification de ce mécanisme à la checklist annuelle de préparation de campagne.",
+      "preuves_suggerees": "Document du mécanisme signé, grille de critères d'approbation/sanction utilisée."
+    },
+    {
+      "cause": "Le comité d'approbation et de sanction existe mais n'a pas appliqué le mécanisme sur un ou plusieurs sites réels de la campagne.",
+      "mesure_corrective": "Appliquer rétroactivement le mécanisme sur les sites concernés et documenter la décision prise.",
+      "analyse_etendue": "Rendre obligatoire la validation du comité avant tout premier déchargement sur un nouveau site.",
+      "preuves_suggerees": "Décisions d'approbation/sanction signées pour chaque site, date d'application."
+    },
+    {
+      "cause": "Les décisions d'approbation/sanction n'ont pas été documentées ni signées, même si le processus a été suivi informellement.",
+      "mesure_corrective": "Formaliser par écrit et faire signer les décisions déjà prises pour les sites de la campagne en cours.",
+      "analyse_etendue": "Exiger systématiquement une trace écrite signée pour toute décision du comité, dès sa prochaine réunion.",
+      "preuves_suggerees": "Décisions signées rétroactivement, modèle de fiche de décision mis en place pour l'avenir."
+    }
+  ],
+  "1.4.1": [
+    {
+      "cause": "Le mécanisme de traitement des griefs (plaintes) n'a jamais été activé ou communiqué aux personnes concernées.",
+      "mesure_corrective": "Activer le mécanisme de plainte et le communiquer clairement (affichage, canal dédié) aux employés et parties prenantes.",
+      "analyse_etendue": "Vérifier annuellement la connaissance du mécanisme par un sondage rapide auprès du personnel.",
+      "preuves_suggerees": "Preuve de communication/affichage du mécanisme, canal de dépôt de plainte opérationnel."
+    },
+    {
+      "cause": "Le mécanisme existe mais aucune plainte n'a jamais été enregistrée alors que des remontées informelles existent, signe qu'il n'est pas réellement utilisé ou fait confiance.",
+      "mesure_corrective": "Rappeler activement l'existence et la confidentialité du mécanisme, et vérifier son accessibilité réelle sur le terrain.",
+      "analyse_etendue": "Mettre en place un canal anonyme supplémentaire (boîte à suggestions, numéro dédié) pour lever les freins à l'utilisation.",
+      "preuves_suggerees": "Preuve de la campagne de rappel, description du canal anonyme ajouté."
+    },
+    {
+      "cause": "Le mécanisme ne garantit pas la confidentialité ou protège mal contre les représailles, ce qui dissuade son utilisation.",
+      "mesure_corrective": "Revoir le mécanisme pour garantir explicitement la confidentialité et la protection contre les représailles.",
+      "analyse_etendue": "Faire auditer périodiquement le mécanisme de plainte par une personne externe au comité pour vérifier son fonctionnement réel.",
+      "preuves_suggerees": "Mécanisme révisé avec clause de confidentialité/protection, preuve de la communication de cette révision."
+    }
+  ],
+  "2.1.1": [
+    {
+      "cause": "Le cacao certifié et non certifié sont stockés dans le même espace, sans séparation visuelle ni physique claire.",
+      "mesure_corrective": "Réorganiser immédiatement le stockage pour séparer physiquement et visuellement le cacao certifié du non-certifié.",
+      "analyse_etendue": "Instaurer un marquage permanent (couleur, étiquette, zone dédiée) sur tous les sites de stockage concernés.",
+      "preuves_suggerees": "Photos du nouveau stockage séparé, plan de zonage du site."
+    },
+    {
+      "cause": "Le personnel n'a pas été formé à l'importance de la séparation visuelle, entraînant des mélanges accidentels.",
+      "mesure_corrective": "Former le personnel de stockage/manutention à l'obligation de séparation visuelle du certifié/non-certifié.",
+      "analyse_etendue": "Intégrer cette règle dans la formation initiale de tout nouvel employé manipulant le cacao.",
+      "preuves_suggerees": "Liste de présence à la formation, affichage des règles de séparation sur site."
+    },
+    {
+      "cause": "Le site ne dispose pas de suffisamment d'espace ou de moyens (bâches, étiquettes) pour assurer une séparation correcte.",
+      "mesure_corrective": "Acquérir le matériel nécessaire (bâches, étiquettes, marquages au sol) pour permettre une vraie séparation.",
+      "analyse_etendue": "Intégrer les besoins en matériel de séparation dans le budget annuel d'équipement des sites.",
+      "preuves_suggerees": "Facture d'achat du matériel, photos du site équipé."
+    }
+  ],
+  "2.1.2": [
+    {
+      "cause": "Aucun facteur de conversion n'a été documenté ni justifié comme non applicable, alors que le référentiel l'exige explicitement.",
+      "mesure_corrective": "Documenter et faire approuver une justification écrite de la non-applicabilité des facteurs de conversion pour votre activité.",
+      "analyse_etendue": "Revoir annuellement cette justification pour confirmer qu'elle reste valable si l'activité évolue.",
+      "preuves_suggerees": "Document de justification signé, description de l'activité justifiant la non-applicabilité."
+    },
+    {
+      "cause": "L'activité a évolué (nouvelle transformation, nouveau process) et implique désormais un facteur de conversion non pris en compte.",
+      "mesure_corrective": "Réévaluer l'applicabilité des facteurs de conversion suite à l'évolution de l'activité et documenter le résultat.",
+      "analyse_etendue": "Ajouter une revue de l'applicabilité des facteurs de conversion à chaque changement significatif de process.",
+      "preuves_suggerees": "Nouvelle évaluation documentée, description du changement de process."
+    },
+    {
+      "cause": "La justification de non-applicabilité existe mais n'a jamais été formalisée par écrit ni signée.",
+      "mesure_corrective": "Formaliser par écrit et faire signer la justification déjà appliquée informellement.",
+      "analyse_etendue": "Systématiser la formalisation écrite de toute justification d'exemption au référentiel.",
+      "preuves_suggerees": "Document signé, date de formalisation."
+    }
+  ],
+  "2.1.3": [
+    {
+      "cause": "Le récapitulatif des volumes des 12 derniers mois n'a jamais été établi faute de centralisation des données d'achat/vente.",
+      "mesure_corrective": "Établir sans délai le récapitulatif des volumes des 12 derniers mois à partir des données disponibles (achats, ventes, stocks).",
+      "analyse_etendue": "Mettre en place une mise à jour mensuelle continue du récapitulatif plutôt qu'une reconstitution ponctuelle en fin de période.",
+      "preuves_suggerees": "Tableau de bilan (intrants, achats, stock, transformés, extrants, pertes, ventes) complété."
+    },
+    {
+      "cause": "Le récapitulatif existe mais contient des écarts non expliqués entre volume acheté et volume vendu.",
+      "mesure_corrective": "Investiguer et documenter l'origine des écarts constatés, corriger le récapitulatif en conséquence.",
+      "analyse_etendue": "Mettre en place un contrôle croisé mensuel entre les volumes déclarés et les documents source (bordereaux, factures).",
+      "preuves_suggerees": "Récapitulatif corrigé, note explicative des écarts identifiés."
+    },
+    {
+      "cause": "Les données sources (bordereaux, factures) ne sont pas centralisées, rendant impossible un récapitulatif fiable.",
+      "mesure_corrective": "Centraliser sans délai l'ensemble des documents sources nécessaires pour établir un récapitulatif fiable.",
+      "analyse_etendue": "Mettre en place un système de classement centralisé (physique ou numérique) de tous les documents d'achat/vente au fil de l'eau.",
+      "preuves_suggerees": "Récapitulatif établi, système de classement centralisé mis en place."
+    }
+  ],
+  "2.1.4": [
+    {
+      "cause": "Les documents d'entrée/sortie (bordereaux, connaissements) ne sont pas systématiquement vérifiés à leur réception.",
+      "mesure_corrective": "Mettre en place une vérification systématique de chaque document d'entrée/sortie dès sa réception.",
+      "analyse_etendue": "Désigner un responsable de cette vérification et lui fournir une checklist de contrôle standard.",
+      "preuves_suggerees": "Checklist de vérification utilisée, exemples de documents vérifiés et signés."
+    },
+    {
+      "cause": "La personne en charge de la vérification n'a pas été formée aux points de contrôle attendus.",
+      "mesure_corrective": "Former la personne responsable de la vérification des documents aux points de contrôle requis.",
+      "analyse_etendue": "Prévoir une formation systématique de toute personne prenant ce rôle, avec une checklist de référence.",
+      "preuves_suggerees": "Attestation de formation, checklist de contrôle formalisée."
+    },
+    {
+      "cause": "Des incohérences entre documents (volumes, dates, origines) ont été identifiées mais jamais tracées ni corrigées.",
+      "mesure_corrective": "Documenter et corriger les incohérences identifiées, en remontant à la source du document erroné.",
+      "analyse_etendue": "Mettre en place un registre des anomalies documentaires, avec suivi de leur résolution.",
+      "preuves_suggerees": "Registre des anomalies et de leur résolution, documents corrigés."
+    }
+  ],
+  "2.1.5": [
+    {
+      "cause": "Une allégation Rainforest Alliance a été utilisée (sur emballage, communication) sans validation préalable.",
+      "mesure_corrective": "Retirer ou corriger sans délai l'allégation non approuvée, et soumettre une demande d'approbation formelle.",
+      "analyse_etendue": "Mettre en place une règle interne obligeant toute validation d'allégation avant impression/diffusion.",
+      "preuves_suggerees": "Preuve de retrait/correction, demande d'approbation soumise et sa réponse."
+    },
+    {
+      "cause": "Le personnel en charge de la communication/marketing ignore la nécessité de faire approuver toute allégation RA.",
+      "mesure_corrective": "Informer et former le personnel concerné sur l'obligation d'approbation préalable de toute allégation.",
+      "analyse_etendue": "Intégrer cette règle dans le processus standard de validation de tout support de communication.",
+      "preuves_suggerees": "Preuve de la formation/information, procédure de validation des supports mise à jour."
+    },
+    {
+      "cause": "Le processus d'approbation existe mais n'a pas été suivi par manque de temps avant une échéance commerciale urgente.",
+      "mesure_corrective": "Régulariser l'allégation utilisée en urgence en soumettant la demande d'approbation a posteriori.",
+      "analyse_etendue": "Anticiper les délais d'approbation dans la planification des campagnes commerciales et marketing.",
+      "preuves_suggerees": "Demande d'approbation régularisée, planning intégrant désormais ce délai."
+    }
+  ],
+  "2.1.6": [
+    {
+      "cause": "Aucun contrôle systématique n'existe pour détecter une double vente potentielle d'un même lot certifié.",
+      "mesure_corrective": "Mettre en place un contrôle systématique croisant chaque vente avec le solde de volume certifié disponible.",
+      "analyse_etendue": "Intégrer ce contrôle directement dans l'outil de suivi des volumes (tableau ou plateforme), avec alerte automatique en cas de dépassement.",
+      "preuves_suggerees": "Outil de suivi mis à jour avec le contrôle intégré, exemple de vérification effectuée."
+    },
+    {
+      "cause": "Un cas de double vente a été identifié, révélant une faille dans le suivi des volumes disponibles à la vente.",
+      "mesure_corrective": "Corriger sans délai la double vente identifiée et régulariser la situation avec les parties concernées.",
+      "analyse_etendue": "Renforcer le contrôle des volumes disponibles avant toute confirmation de vente, avec double vérification.",
+      "preuves_suggerees": "Documentation de la correction effectuée, nouveau processus de double vérification mis en place."
+    },
+    {
+      "cause": "Plusieurs personnes peuvent engager une vente sans coordination centralisée du volume réellement disponible.",
+      "mesure_corrective": "Centraliser la validation de toute vente auprès d'une seule personne ou d'un outil unique de suivi des volumes.",
+      "analyse_etendue": "Définir clairement les rôles et un point de validation unique pour toute transaction de volume certifié.",
+      "preuves_suggerees": "Procédure de validation centralisée, désignation du responsable unique."
+    }
+  ],
+  "2.2.1": [
+    {
+      "cause": "Les transactions n'ont pas été enregistrées sur la plateforme de traçabilité dans le délai de deux semaines suivant la fin du trimestre, par manque de suivi du calendrier.",
+      "mesure_corrective": "Enregistrer sans délai les transactions en retard sur la plateforme de traçabilité.",
+      "analyse_etendue": "Mettre en place un rappel calendaire automatique deux semaines avant chaque échéance trimestrielle de déclaration.",
+      "preuves_suggerees": "Capture des transactions désormais enregistrées, calendrier de rappel mis en place."
+    },
+    {
+      "cause": "La personne responsable de la saisie sur la plateforme était absente ou a quitté le poste sans remplacement désigné.",
+      "mesure_corrective": "Désigner un remplaçant et procéder à l'enregistrement des transactions en retard.",
+      "analyse_etendue": "Former une personne suppléante à la saisie sur la plateforme, pour garantir une continuité en cas d'absence.",
+      "preuves_suggerees": "Transactions enregistrées, désignation écrite du suppléant formé."
+    },
+    {
+      "cause": "Un problème technique (accès, connexion) a empêché la saisie dans les délais sans qu'une solution alternative n'ait été cherchée.",
+      "mesure_corrective": "Résoudre le problème d'accès et enregistrer sans délai les transactions concernées.",
+      "analyse_etendue": "Identifier une solution de secours (autre accès, autre connexion) en cas de panne future, documentée dans la procédure.",
+      "preuves_suggerees": "Transactions enregistrées, procédure de secours documentée."
+    }
+  ],
+  "2.2.2": [
+    {
+      "cause": "Les redevances Rainforest Alliance n'ont pas été réglées intégralement par manque de trésorerie disponible au moment de l'échéance.",
+      "mesure_corrective": "Régler sans délai le solde des redevances dues, en priorité sur les autres dépenses non essentielles.",
+      "analyse_etendue": "Provisionner à l'avance le montant des redevances attendues dans la planification budgétaire annuelle.",
+      "preuves_suggerees": "Preuve de paiement du solde, budget prévisionnel intégrant désormais cette provision."
+    },
+    {
+      "cause": "Le montant réel dû n'avait pas été correctement calculé, entraînant un règlement partiel involontaire.",
+      "mesure_corrective": "Recalculer le montant réellement dû et régler le complément sans délai.",
+      "analyse_etendue": "Mettre en place une double vérification du calcul des redevances avant chaque règlement.",
+      "preuves_suggerees": "Nouveau calcul détaillé, preuve du règlement du complément."
+    },
+    {
+      "cause": "Le paiement a été effectué mais la preuve n'a pas été transmise ou enregistrée correctement auprès de Rainforest Alliance.",
+      "mesure_corrective": "Retransmettre la preuve de paiement à Rainforest Alliance et confirmer sa bonne réception.",
+      "analyse_etendue": "Systématiser la conservation et l'archivage de toute preuve de paiement de redevance dès son émission.",
+      "preuves_suggerees": "Accusé de réception de Rainforest Alliance, copie de la preuve de paiement archivée."
+    }
+  ],
+  "2.2.3": [
+    {
+      "cause": "Le rôle de partenaire commercial mandaté n'a jamais été formellement vérifié ni documenté pour l'intermédiaire concerné.",
+      "mesure_corrective": "Vérifier et documenter formellement le mandat du partenaire commercial concerné.",
+      "analyse_etendue": "Vérifier systématiquement le statut de tout nouveau partenaire commercial avant le début de toute transaction.",
+      "preuves_suggerees": "Document de mandat vérifié, contrat ou accord formalisant le rôle du partenaire."
+    },
+    {
+      "cause": "Le mandat du partenaire a expiré ou changé sans que cela soit pris en compte dans les transactions en cours.",
+      "mesure_corrective": "Mettre à jour le statut du partenaire et régulariser les transactions concernées.",
+      "analyse_etendue": "Mettre en place une date de rappel de renouvellement pour chaque mandat de partenaire commercial.",
+      "preuves_suggerees": "Mandat renouvelé ou mis à jour, transactions régularisées."
+    },
+    {
+      "cause": "Aucune procédure ne définit clairement les critères de vérification du rôle de partenaire commercial mandaté.",
+      "mesure_corrective": "Rédiger une procédure définissant les critères et étapes de vérification du rôle de partenaire commercial.",
+      "analyse_etendue": "Intégrer cette procédure au processus d'intégration de tout nouveau partenaire commercial.",
+      "preuves_suggerees": "Procédure rédigée et validée, exemple de vérification effectuée selon cette procédure."
+    }
+  ],
+  "2.3.1": [
+    {
+      "cause": "Des facteurs de conversion utilisés ne correspondent à aucun process réel observé, mais sont issus d'une estimation non vérifiée.",
+      "mesure_corrective": "Vérifier et corriger les facteurs de conversion pour qu'ils correspondent aux process réels observés.",
+      "analyse_etendue": "Mettre en place une vérification annuelle des facteurs de conversion utilisés par rapport aux données réelles de production.",
+      "preuves_suggerees": "Facteurs de conversion corrigés, données de production ayant servi à la vérification."
+    },
+    {
+      "cause": "Le process de transformation a évolué (nouvel équipement, nouvelle méthode) sans mise à jour du facteur de conversion associé.",
+      "mesure_corrective": "Recalculer le facteur de conversion suite à l'évolution du process et le mettre à jour.",
+      "analyse_etendue": "Ajouter la mise à jour du facteur de conversion à la checklist de tout changement de process ou d'équipement.",
+      "preuves_suggerees": "Nouveau facteur de conversion documenté, description du changement de process."
+    },
+    {
+      "cause": "Aucune mesure réelle n'a jamais été effectuée pour vérifier le facteur de conversion utilisé, qui reste théorique.",
+      "mesure_corrective": "Réaliser une mesure réelle du rendement de transformation pour établir un facteur de conversion fiable.",
+      "analyse_etendue": "Programmer des mesures réelles périodiques du rendement pour ajuster le facteur de conversion si besoin.",
+      "preuves_suggerees": "Rapport de mesure du rendement réel, facteur de conversion mis à jour en conséquence."
+    }
+  ],
+  "2.3.2": [
+    {
+      "cause": "Une partie du volume en bilan massique n'a pas été couverte par des ventes déclarées, laissant un écart avec le volume acheté.",
+      "mesure_corrective": "Identifier et régulariser l'écart de couverture constaté sur le bilan massique.",
+      "analyse_etendue": "Mettre en place un suivi continu du taux de couverture, avec alerte dès que celui-ci s'approche de 100% sans être atteint.",
+      "preuves_suggerees": "Bilan massique corrigé montrant la couverture à 100%, historique des ventes régularisées."
+    },
+    {
+      "cause": "Le calcul du bilan massique contient une erreur de méthode, sous-estimant le volume réellement disponible à la vente certifiée.",
+      "mesure_corrective": "Corriger la méthode de calcul du bilan massique et refaire le calcul sur la période concernée.",
+      "analyse_etendue": "Faire valider la méthode de calcul du bilan massique par une personne formée, avant toute nouvelle période.",
+      "preuves_suggerees": "Bilan massique recalculé, méthode de calcul validée documentée."
+    },
+    {
+      "cause": "Le suivi du bilan massique est fait manuellement sans outil dédié, entraînant des oublis ou erreurs de report.",
+      "mesure_corrective": "Mettre en place un outil de suivi structuré (tableau dédié ou plateforme) pour le bilan massique.",
+      "analyse_etendue": "Automatiser autant que possible le calcul du taux de couverture à partir des données d'achat/vente déjà enregistrées.",
+      "preuves_suggerees": "Outil de suivi mis en place, exemple de calcul automatisé du taux de couverture."
+    }
+  ],
+  "2.3.3": [
+    {
+      "cause": "Un transfert en bilan massique a été réalisé sans qu'un envoi physique correspondant de produit n'ait eu lieu.",
+      "mesure_corrective": "Régulariser le transfert en l'associant à un envoi physique réel, ou l'annuler si aucun envoi n'a eu lieu.",
+      "analyse_etendue": "Mettre en place une règle de blocage empêchant tout transfert en bilan massique sans référence à un envoi physique associé.",
+      "preuves_suggerees": "Document de l'envoi physique associé (bon de livraison, bordereau), transfert régularisé."
+    },
+    {
+      "cause": "La personne réalisant le transfert n'était pas informée de l'obligation d'associer un envoi physique réel.",
+      "mesure_corrective": "Former la personne concernée à cette exigence et régulariser le ou les transferts problématiques.",
+      "analyse_etendue": "Intégrer cette règle dans la formation de toute personne habilitée à réaliser des transferts en bilan massique.",
+      "preuves_suggerees": "Attestation de formation, transferts régularisés."
+    },
+    {
+      "cause": "Le lien entre transfert documentaire et envoi physique n'est pas tracé dans les documents utilisés, rendant le contrôle impossible.",
+      "mesure_corrective": "Mettre en place un document type reliant explicitement chaque transfert à son envoi physique.",
+      "analyse_etendue": "Systématiser l'usage de ce document type pour tout transfert futur en bilan massique.",
+      "preuves_suggerees": "Modèle de document mis en place, exemples remplis pour les transferts récents."
+    }
+  ],
+  "2.3.4": [
+    {
+      "cause": "Du cacao en bilan massique a été utilisé sans respecter les règles d'origine requises (mélange non autorisé entre origines).",
+      "mesure_corrective": "Identifier le volume concerné et corriger la déclaration pour respecter les règles d'origine applicables.",
+      "analyse_etendue": "Mettre en place un contrôle systématique de l'origine avant tout mélange en bilan massique.",
+      "preuves_suggerees": "Déclaration corrigée, documentation des origines des lots concernés."
+    },
+    {
+      "cause": "Le personnel en charge des mélanges en bilan massique ne connaît pas précisément les règles d'origine applicables.",
+      "mesure_corrective": "Former le personnel concerné aux règles d'origine applicables au bilan massique.",
+      "analyse_etendue": "Intégrer les règles d'origine dans la formation standard de toute personne manipulant des volumes en bilan massique.",
+      "preuves_suggerees": "Attestation de formation, support pédagogique sur les règles d'origine utilisé."
+    },
+    {
+      "cause": "L'origine des lots n'est pas systématiquement enregistrée à leur entrée, rendant impossible le contrôle des règles au moment du mélange.",
+      "mesure_corrective": "Mettre en place un enregistrement systématique de l'origine dès l'entrée de chaque lot.",
+      "analyse_etendue": "Intégrer ce champ origine comme obligatoire dans tout document ou outil d'enregistrement des entrées.",
+      "preuves_suggerees": "Registre d'entrée avec champ origine renseigné, procédure mise à jour."
+    }
+  ],
+  "2.3.5": [
+    {
+      "cause": "Le pays d'origine n'a pas été mentionné sur un ou plusieurs documents d'achat/vente du cacao.",
+      "mesure_corrective": "Corriger les documents concernés en y ajoutant le pays d'origine manquant.",
+      "analyse_etendue": "Intégrer le champ pays d'origine comme obligatoire dans le modèle standard des documents d'achat/vente utilisés.",
+      "preuves_suggerees": "Documents corrigés avec pays d'origine mentionné, modèle de document mis à jour."
+    },
+    {
+      "cause": "Le modèle de document utilisé (facture, bordereau) ne prévoit pas de champ dédié au pays d'origine.",
+      "mesure_corrective": "Mettre à jour le modèle de document pour y intégrer un champ pays d'origine obligatoire.",
+      "analyse_etendue": "Vérifier que tous les modèles de documents commerciaux utilisés respectent les mentions obligatoires du référentiel.",
+      "preuves_suggerees": "Nouveau modèle de document intégrant le champ, exemples de documents utilisant ce nouveau modèle."
+    },
+    {
+      "cause": "La personne rédigeant les documents d'achat/vente n'était pas informée de cette obligation de mention.",
+      "mesure_corrective": "Informer la personne concernée de cette obligation et corriger les documents déjà émis si possible.",
+      "analyse_etendue": "Intégrer cette exigence dans la formation ou le rappel des obligations documentaires du personnel concerné.",
+      "preuves_suggerees": "Preuve de l'information transmise, documents corrigés."
+    }
+  ],
+  "3.1.1": [
+    {
+      "cause": "Le paiement de la prime n'a pas été déclaré sur la plateforme dans les délais requis, faute de suivi du calendrier de déclaration.",
+      "mesure_corrective": "Déclarer sans délai le paiement de la prime sur la plateforme de traçabilité.",
+      "analyse_etendue": "Mettre en place un rappel calendaire pour chaque échéance de déclaration de prime.",
+      "preuves_suggerees": "Capture de la déclaration effectuée sur la plateforme, preuve du paiement de la prime."
+    },
+    {
+      "cause": "La prime a bien été payée aux coopératives mais aucune trace formelle n'a été conservée pour la déclarer précisément.",
+      "mesure_corrective": "Reconstituer la trace du paiement effectué et procéder à la déclaration sur la plateforme.",
+      "analyse_etendue": "Systématiser l'émission d'un justificatif de paiement de prime à chaque versement, à conserver et utiliser pour la déclaration.",
+      "preuves_suggerees": "Justificatif de paiement reconstitué, déclaration effectuée sur la plateforme."
+    },
+    {
+      "cause": "La personne en charge de la déclaration sur la plateforme n'avait pas accès ou n'était pas formée à cet outil.",
+      "mesure_corrective": "Donner l'accès nécessaire et former la personne concernée, puis procéder à la déclaration en retard.",
+      "analyse_etendue": "Former une personne suppléante à la déclaration sur la plateforme pour garantir une continuité en cas d'absence.",
+      "preuves_suggerees": "Déclaration effectuée, preuve de la formation/accès donné."
+    }
+  ],
+  "3.1.2": [
+    {
+      "cause": "Les contrats de prime n'ont pas encore été signés avec un ou plusieurs fournisseurs, faute de suivi centralisé des signatures.",
+      "mesure_corrective": "Faire signer sans délai les contrats de prime manquants avec les fournisseurs concernés.",
+      "analyse_etendue": "Mettre en place un tableau de suivi centralisé des signatures de contrats de prime, avec relance automatique pour les partenaires n'ayant pas répondu.",
+      "preuves_suggerees": "Contrats de prime signés, tableau de suivi des signatures mis en place."
+    },
+    {
+      "cause": "Un fournisseur refuse ou tarde à signer le contrat de prime proposé, sans qu'un plan de relance structuré n'existe.",
+      "mesure_corrective": "Relancer formellement le fournisseur concerné et documenter les échanges jusqu'à obtention de la signature.",
+      "analyse_etendue": "Définir un processus de relance à échéances fixes (J+15, J+30) pour tout contrat de prime non signé.",
+      "preuves_suggerees": "Historique des relances effectuées, contrat finalement signé ou justification documentée du refus."
+    },
+    {
+      "cause": "Le modèle de contrat de prime utilisé n'est pas homogène pour toutes les coopératives, compliquant le suivi des signatures.",
+      "mesure_corrective": "Harmoniser le modèle de contrat de prime utilisé pour toutes les coopératives partenaires.",
+      "analyse_etendue": "Adopter un modèle unique de contrat de prime, basé sur un modèle validé, pour toute nouvelle coopérative.",
+      "preuves_suggerees": "Modèle de contrat harmonisé, contrats signés selon ce modèle unique."
+    }
+  ],
+  "4.1.1": [
+    {
+      "cause": "Aucune sensibilisation annuelle sur le travail des enfants/forcé/discrimination/harcèlement n'a été organisée cette année.",
+      "mesure_corrective": "Organiser sans délai une session de sensibilisation couvrant l'ensemble de ces thématiques pour la direction et le personnel.",
+      "analyse_etendue": "Inscrire cette sensibilisation dans le calendrier annuel fixe de l'organisation, à une date précise chaque année.",
+      "preuves_suggerees": "Liste de présence à la sensibilisation, support utilisé, date de la session."
+    },
+    {
+      "cause": "La sensibilisation a été faite mais n'a pas couvert l'ensemble du personnel concerné (nouveaux employés, sites distants).",
+      "mesure_corrective": "Organiser une session complémentaire pour le personnel n'ayant pas encore été sensibilisé.",
+      "analyse_etendue": "Mettre en place un suivi de participation garantissant que 100% du personnel concerné est couvert chaque année.",
+      "preuves_suggerees": "Liste de présence complémentaire, taux de couverture du personnel sensibilisé."
+    },
+    {
+      "cause": "L'affichage permanent rappelant l'existence des recours n'a jamais été mis en place ou a disparu sur un ou plusieurs sites.",
+      "mesure_corrective": "Mettre en place ou remettre en place l'affichage visible et permanent sur tous les sites concernés.",
+      "analyse_etendue": "Intégrer la vérification de la présence de cet affichage à la checklist d'inspection régulière des sites.",
+      "preuves_suggerees": "Photos de l'affichage en place sur chaque site, checklist d'inspection mise à jour."
+    }
+  ],
+  "4.1.2": [
+    {
+      "cause": "Les risques de travail des enfants/forcé/discrimination/violence n'ont jamais été formellement évalués ni intégrés au plan de gestion.",
+      "mesure_corrective": "Réaliser sans délai une évaluation des risques et l'intégrer avec ses mesures d'atténuation dans le plan de gestion.",
+      "analyse_etendue": "Programmer une revue annuelle de cette évaluation des risques, en lien avec la revue générale du plan de gestion.",
+      "preuves_suggerees": "Évaluation des risques documentée, plan de gestion mis à jour avec les mesures d'atténuation."
+    },
+    {
+      "cause": "L'évaluation des risques existe mais n'a pas été mise à jour malgré un changement de contexte (nouvelle zone, nouveaux profils d'employés).",
+      "mesure_corrective": "Mettre à jour l'évaluation des risques pour tenir compte du changement de contexte survenu.",
+      "analyse_etendue": "Déclencher une mise à jour de l'évaluation des risques à chaque changement significatif de zone ou d'activité, pas seulement annuellement.",
+      "preuves_suggerees": "Évaluation des risques mise à jour, description du changement de contexte ayant motivé la mise à jour."
+    },
+    {
+      "cause": "Les mesures d'atténuation existent mais ne sont pas concrètement suivies ni vérifiées sur le terrain.",
+      "mesure_corrective": "Mettre en place un suivi concret de l'application des mesures d'atténuation prévues.",
+      "analyse_etendue": "Intégrer la vérification de ces mesures aux inspections de site régulières, avec un responsable identifié.",
+      "preuves_suggerees": "Rapport de suivi de l'application des mesures, compte-rendu des inspections de site."
+    }
+  ],
+  "4.1.3": [
+    {
+      "cause": "Aucun dispositif de surveillance continue des risques travail des enfants/forcé/discrimination/harcèlement n'a été mis en place, seule l'évaluation initiale existe.",
+      "mesure_corrective": "Mettre en place un dispositif de surveillance continue (visites régulières, points de contrôle) de ces risques.",
+      "analyse_etendue": "Définir une fréquence fixe de surveillance (mensuelle, trimestrielle) avec un responsable désigné et des outils de suivi.",
+      "preuves_suggerees": "Dispositif de surveillance documenté, comptes-rendus des premières visites/contrôles réalisés."
+    },
+    {
+      "cause": "La surveillance existe mais n'est pas documentée, rendant impossible la preuve de son caractère continu.",
+      "mesure_corrective": "Mettre en place un support de documentation systématique (registre, fiche) pour chaque action de surveillance réalisée.",
+      "analyse_etendue": "Centraliser tous les comptes-rendus de surveillance dans un registre unique, consultable à tout moment.",
+      "preuves_suggerees": "Registre de surveillance rempli, fiches de contrôle datées et signées."
+    },
+    {
+      "cause": "La personne en charge de la surveillance n'a pas été formée à détecter les signaux de ces risques sur le terrain.",
+      "mesure_corrective": "Former la personne responsable de la surveillance à la détection de ces risques.",
+      "analyse_etendue": "Intégrer cette formation dans le parcours de toute personne amenée à effectuer des visites de site.",
+      "preuves_suggerees": "Attestation de formation, grille de détection utilisée lors des visites."
+    }
+  ],
+  "4.1.4": [
+    {
+      "cause": "Aucun protocole écrit ne décrit comment traiter un cas avéré de travail des enfants/forcé/discrimination/harcèlement s'il survient.",
+      "mesure_corrective": "Rédiger et faire valider un protocole écrit de traitement des cas avérés, garantissant sécurité et confidentialité des victimes.",
+      "analyse_etendue": "Faire connaître ce protocole à l'ensemble des comités et responsables concernés, avec une revue annuelle.",
+      "preuves_suggerees": "Protocole rédigé et validé, preuve de sa diffusion aux comités concernés."
+    },
+    {
+      "cause": "Un cas avéré est survenu mais n'a pas été traité selon un processus structuré, faute de protocole disponible au moment des faits.",
+      "mesure_corrective": "Documenter rétroactivement le traitement effectué et rédiger sans délai un protocole pour les cas futurs.",
+      "analyse_etendue": "Analyser le cas survenu pour identifier les lacunes du traitement informel et les intégrer dans le protocole rédigé.",
+      "preuves_suggerees": "Protocole rédigé, analyse du cas traité (de façon anonymisée et confidentielle)."
+    },
+    {
+      "cause": "Le protocole existe mais ne garantit pas explicitement la confidentialité et la sécurité des victimes tout au long du processus.",
+      "mesure_corrective": "Revoir le protocole pour y intégrer explicitement les garanties de confidentialité et de sécurité des victimes.",
+      "analyse_etendue": "Faire valider le protocole révisé par le comité concerné et le communiquer aux personnes en charge de son application.",
+      "preuves_suggerees": "Protocole révisé avec clauses de confidentialité/sécurité, preuve de sa validation."
+    }
+  ]
+};
+
 function ocNcExigenceOptions(selected){
   let html = '<option value="">— Aucune exigence liée —</option>';
   // Ne propose QUE les vrais codes du referentiel Rainforest Alliance -- exclut
@@ -4744,18 +5315,49 @@ function ocNcExigenceOptions(selected){
   return html;
 }
 /* ---- Dialogue guide avec Claude pour construire le plan d'action ---- */
+// Affiche les causes types disponibles (bibliotheque) pour l'exigence liee --
+// un clic applique directement la cause + mesure corrective + analyse
+// d'etendue + preuves suggerees, sans aucun appel IA (cout et disponibilite
+// preserves). Rien ne s'affiche si aucune exigence n'est encore liee, ou si
+// la bibliotheque ne couvre pas (encore) cette exigence.
+function ocNcCausesTypesHTML(n){
+  if (!n.exigence_code) return '';
+  const causes = OC_CAUSES_TYPES[n.exigence_code];
+  if (!causes || causes.length===0) return '';
+  return '<div class="oc-nc-causes-types">'
+    + '<div class="oc-nc-step-hint" style="margin-bottom:8px;">Cas fréquents pour l\'exigence '+esc(n.exigence_code)+' — touchez celui qui correspond pour remplir directement les 3 sections suivantes (mesure corrective, analyse d\'étendue, preuves), sans passer par le dialogue guidé.</div>'
+    + causes.map((c,i)=>'<button type="button" class="oc-nc-cause-type-btn" onclick="ocNcAppliquerCauseType('+n.id+','+i+')">'+esc(c.cause)+'</button>').join('')
+    + '</div>';
+}
+async function ocNcAppliquerCauseType(id, index){
+  const n = (state.certNonConformites||[]).find(x=>x.id===id);
+  if (!n || !n.exigence_code) return;
+  const causes = OC_CAUSES_TYPES[n.exigence_code];
+  const c = causes && causes[index];
+  if (!c) return;
+  const patch = {
+    cause_profonde: c.cause, mesures_correctives: c.mesure_corrective,
+    analyse_etendue: c.analyse_etendue, preuves_suggerees: c.preuves_suggerees,
+    updated_at: new Date().toISOString(),
+  };
+  try{
+    await supabaseClient.from('cert_non_conformites').update(patch).eq('id', id);
+    Object.assign(n, patch);
+    showToast('Cause type appliquée — vérifie et ajuste le texte si besoin.', 'success');
+    render();
+  }catch(e){ showToast('Erreur : '+e.message); }
+}
 function ocNcDialogueHTML(n){
   const dlg = state.ocNcDialogueEnCours && state.ocNcDialogueEnCours[n.id];
   const historique = (n.dialogue_ia && n.dialogue_ia.length) ? n.dialogue_ia : (dlg ? dlg.historique : []);
   const enCharge = dlg && dlg.chargement;
   let html = '<div class="oc-nc-dialogue">';
-  html += '<div class="oc-nc-step-label">💬 Dialogue guidé (assistant)</div>';
   if (!n.description || !n.description.trim()){
     html += '<div class="oc-nc-step-hint">Renseigne d\'abord la description de la non-conformité ci-dessus, puis lance le dialogue guidé — il posera des questions ciblées pour construire les sections ci-dessous à ta place.</div>';
     return html+'</div>';
   }
   if (historique.length===0 && !enCharge){
-    html += '<button class="btn btn-primary" onclick="ocNcLancerDialogue('+n.id+')">💬 Lancer le dialogue guidé</button>';
+    html += '<button class="btn-ghost" onclick="ocNcLancerDialogue('+n.id+')">💬 Aucun cas ne correspond — lancer le dialogue guidé (assistant IA)</button>';
   } else {
     html += '<div class="oc-nc-dialogue-fil">';
     historique.forEach(h=>{
@@ -4853,9 +5455,11 @@ function ocNcPlanHTML(n){
     + '<div class="oc-nc-step-hint">Ce qui a été précisément constaté — sert de point de départ au dialogue guidé ci-dessous.</div>'
     + '<textarea onblur="ocNcMajChamp('+n.id+',\'description\',this.value)" placeholder="Ex : Non-conformité relevée lors de l\'audit interne du 12/09/2026 : le stockage du cacao ne respecte pas les conditions d\'hygiène minimales requises par l\'exigence 4.3.2.">'+esc(n.description||'')+'</textarea></div>'
     + '<div class="oc-nc-step"><div class="oc-nc-step-label">2️⃣ Causes profondes</div>'
-    + '<div class="oc-nc-step-hint">Dialogue guidé ci-dessous — répondez aux questions pour identifier la vraie cause. C\'est cette cause qui servira ensuite à générer automatiquement la mesure corrective, l\'analyse d\'étendue et les preuves à réunir.</div>'
+    + ocNcCausesTypesHTML(n)
+    + '<div class="oc-nc-step-hint" style="margin-top:10px;">Aucun de ces cas ne correspond ? Décris la cause toi-même ci-dessous, ou utilise le dialogue guidé (assistant IA) en dernier recours.</div>'
+    + '<textarea onblur="ocNcMajChamp('+n.id+',\'cause_profonde\',this.value)" placeholder="Ex : Pourquoi le site stockait le cacao à même le sol ? → Pas de palettes disponibles. Pourquoi ? → ...">'+esc(n.cause_profonde||'')+'</textarea>'
     + ocNcDialogueHTML(n)
-    + '<textarea onblur="ocNcMajChamp('+n.id+',\'cause_profonde\',this.value)" placeholder="Ex : Pourquoi le site stockait le cacao à même le sol ? → Pas de palettes disponibles. Pourquoi ? → ...">'+esc(n.cause_profonde||'')+'</textarea></div>'
+    + '</div>'
     + ocNcAutoBoutonHTML(n)
     + '<div class="oc-nc-step"><div class="oc-nc-step-label">3️⃣ Action corrective</div>'
     + '<div class="oc-nc-step-hint">Ce qui corrige CE cas précis, maintenant.</div>'
