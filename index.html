@@ -1315,7 +1315,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-24-7';
+const APP_VERSION = '2026-09-24-8';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -2647,21 +2647,31 @@ const APERCU_MIME = {
 async function apercuExcelHTML(blob){
   const buf = await blob.arrayBuffer();
   const wb = XLSX.read(buf, { type:'array' });
-  const LIMITE_FEUILLES = 5, LIMITE_LIGNES = 200;
+  const LIMITE_FEUILLES = 5, LIMITE_LIGNES = 3000;
   let html = '';
   wb.SheetNames.slice(0, LIMITE_FEUILLES).forEach(nomFeuille=>{
     const feuille = wb.Sheets[nomFeuille];
-    let tableHtml = XLSX.utils.sheet_to_html(feuille, { editable:false });
+    const range = XLSX.utils.decode_range(feuille['!ref']||'A1');
+    const totalLignes = range.e.r + 1;
+    const tronque = totalLignes > LIMITE_LIGNES;
+    // Au-dela de la limite, on ne genere reellement que les LIMITE_LIGNES
+    // premieres lignes (pas juste un message) -- evite de construire un DOM
+    // inutilement enorme sur un fichier exceptionnellement volumineux.
+    let tableHtml;
+    if (tronque){
+      const rangeLimitee = Object.assign({}, range, { e: Object.assign({}, range.e, { r: LIMITE_LIGNES-1 }) });
+      tableHtml = XLSX.utils.sheet_to_html(feuille, { editable:false, range: rangeLimitee });
+    } else {
+      tableHtml = XLSX.utils.sheet_to_html(feuille, { editable:false });
+    }
     // sheet_to_html renvoie un document complet (<html><body><table>...) -- on
     // n'en garde que le <table>, pour l'inserer proprement dans la modale.
     const m = tableHtml.match(/<table[\s\S]*<\/table>/);
     tableHtml = m ? m[0] : tableHtml;
-    const range = XLSX.utils.decode_range(feuille['!ref']||'A1');
-    const tronque = (range.e.r+1) > LIMITE_LIGNES;
     html += '<div class="apercu-excel-feuille">'
       + (wb.SheetNames.length>1 ? '<div class="apercu-excel-nom-feuille">'+esc(nomFeuille)+'</div>' : '')
       + '<div class="apercu-excel-scroll">'+tableHtml+'</div>'
-      + (tronque ? '<div class="hint" style="margin-top:6px;">Aperçu tronqué — '+(range.e.r+1)+' lignes au total, télécharge le fichier pour tout voir.</div>' : '')
+      + (tronque ? '<div class="hint" style="margin-top:6px;">Aperçu limité aux '+LIMITE_LIGNES+' premières lignes sur '+totalLignes+' — télécharge le fichier pour tout voir.</div>' : '')
       + '</div>';
   });
   if (wb.SheetNames.length > LIMITE_FEUILLES){
