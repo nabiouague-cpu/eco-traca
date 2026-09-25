@@ -237,6 +237,13 @@
   .oc-comite-preroga li:last-child{margin-bottom:0;}
 
   .oc-org-chart{overflow-x:auto;padding:10px 20px 24px;text-align:center;}
+  .apercu-excel-feuille{margin-bottom:16px;}
+  .apercu-excel-feuille:last-child{margin-bottom:0;}
+  .apercu-excel-nom-feuille{font-weight:700;font-size:13px;margin-bottom:6px;color:var(--ink);}
+  .apercu-excel-scroll{overflow-x:auto;border:1px solid var(--border);border-radius:8px;}
+  .apercu-excel-scroll table{border-collapse:collapse;font-size:12px;white-space:nowrap;}
+  .apercu-excel-scroll td, .apercu-excel-scroll th{border:1px solid var(--border);padding:4px 8px;}
+  .apercu-excel-scroll tr:first-child td{background:var(--surface-2);font-weight:600;}
   .oc-org-tbl{border-collapse:collapse;margin:0 auto;}
   .oc-org-tbl-racine{width:100%;}
   .oc-org-cell-box{padding:0 12px;text-align:center;vertical-align:bottom;}
@@ -1308,7 +1315,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-24-6';
+const APP_VERSION = '2026-09-24-7';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -2630,7 +2637,38 @@ async function telechargerFichierDemande(path, nom){
 
 const APERCU_MIME = {
   pdf:'application/pdf', jpg:'image/jpeg', jpeg:'image/jpeg', png:'image/png', gif:'image/gif', webp:'image/webp',
+  xlsx:'excel', xls:'excel', csv:'excel',
 };
+
+// Apercu Excel : convertit la 1ere feuille (ou toutes si petites) en tableau
+// HTML lisible directement dans la modale -- pas de rendu fidele au vrai
+// format Excel, juste les donnees, largement suffisant pour une verification
+// rapide avant validation/rejet.
+async function apercuExcelHTML(blob){
+  const buf = await blob.arrayBuffer();
+  const wb = XLSX.read(buf, { type:'array' });
+  const LIMITE_FEUILLES = 5, LIMITE_LIGNES = 200;
+  let html = '';
+  wb.SheetNames.slice(0, LIMITE_FEUILLES).forEach(nomFeuille=>{
+    const feuille = wb.Sheets[nomFeuille];
+    let tableHtml = XLSX.utils.sheet_to_html(feuille, { editable:false });
+    // sheet_to_html renvoie un document complet (<html><body><table>...) -- on
+    // n'en garde que le <table>, pour l'inserer proprement dans la modale.
+    const m = tableHtml.match(/<table[\s\S]*<\/table>/);
+    tableHtml = m ? m[0] : tableHtml;
+    const range = XLSX.utils.decode_range(feuille['!ref']||'A1');
+    const tronque = (range.e.r+1) > LIMITE_LIGNES;
+    html += '<div class="apercu-excel-feuille">'
+      + (wb.SheetNames.length>1 ? '<div class="apercu-excel-nom-feuille">'+esc(nomFeuille)+'</div>' : '')
+      + '<div class="apercu-excel-scroll">'+tableHtml+'</div>'
+      + (tronque ? '<div class="hint" style="margin-top:6px;">Aperçu tronqué — '+(range.e.r+1)+' lignes au total, télécharge le fichier pour tout voir.</div>' : '')
+      + '</div>';
+  });
+  if (wb.SheetNames.length > LIMITE_FEUILLES){
+    html += '<div class="hint" style="margin-top:8px;">+ '+(wb.SheetNames.length-LIMITE_FEUILLES)+' autre(s) feuille(s) non affichée(s) — télécharge le fichier pour tout voir.</div>';
+  }
+  return html;
+}
 
 // Ouvre un apercu du fichier AVANT de decider de valider ou rejeter -- PDF et
 // images s'affichent directement ; les autres formats (Excel, Word...) n'ont
@@ -2643,6 +2681,18 @@ async function apercuFichier(path, nom, titre){
   try{
     const { data, error } = await supabaseClient.storage.from('documents-coop').download(path);
     if (error){ state.modal.payload.chargement=false; state.modal.payload.erreur=error.message; render(); return; }
+    if (state.modal.payload.mime==='excel'){
+      try{
+        state.modal.payload.excelHtml = await apercuExcelHTML(data);
+      }catch(eExcel){
+        state.modal.payload.erreur = "Impossible de lire ce fichier Excel ("+eExcel.message+").";
+      }
+      state.modal.payload.chargement = false;
+      // Garde aussi l'URL de telechargement, au cas ou la lecture Excel echoue.
+      state.modal.payload.url = URL.createObjectURL(data);
+      render();
+      return;
+    }
     const url = URL.createObjectURL(data);
     state.modal.payload.chargement = false;
     state.modal.payload.url = url;
@@ -7655,10 +7705,14 @@ function _renderBrut(){
       corps = '<iframe src="'+pl.url+'" style="width:100%;height:72vh;border:1px solid var(--border);border-radius:8px;"></iframe>';
     } else if (pl.mime && pl.mime.startsWith('image/')){
       corps = '<div style="text-align:center;"><img src="'+pl.url+'" style="max-width:100%;max-height:72vh;border-radius:8px;"></div>';
+    } else if (pl.mime==='excel'){
+      corps = pl.excelHtml
+        ? '<div style="max-height:72vh;overflow:auto;">'+pl.excelHtml+'</div>'
+        : '<div style="padding:50px 20px;text-align:center;color:var(--ink-soft);">Aperçu non disponible — télécharge-le pour le consulter.</div>';
     } else {
       corps = '<div style="padding:50px 20px;text-align:center;color:var(--ink-soft);">Aperçu non disponible pour ce type de fichier — télécharge-le pour le consulter.</div>';
     }
-    html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal wide" style="max-width:800px;">'
+    html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal wide" style="max-width:'+(pl.mime==='excel'?'1100px':'800px')+';">'
       + '<h3>👁 '+esc(pl.titre||pl.nom||'Aperçu')+'</h3>'
       + (pl.titre && pl.nom ? '<div class="hint" style="margin:-6px 0 10px;">Fichier envoyé : '+esc(pl.nom)+'</div>' : '')
       + corps
