@@ -1396,7 +1396,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-24-22';
+const APP_VERSION = '2026-09-24-23';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4186,8 +4186,13 @@ async function genererConnaissement(){
   const prefixeAffiche = (document.getElementById('connPrefixeAffiche')||{}).textContent || '';
   const numeroSaisi = v('connNumero').trim();
   const numeroConnaissement = (prefixeAffiche && prefixeAffiche!=='—' && numeroSaisi) ? (prefixeAffiche+numeroSaisi) : '';
-  const mois = v('connMois');
-  const annee = v('connAnnee').trim();
+  // Une seule case jour/mois/annee -- source unique pour la date affichee sur
+  // le document (haut de page + Date Edition) ET pour mois/annee dans le QR code.
+  const dateSaisie = v('connDateSaisie');
+  const NOMS_MOIS = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
+  const dateObj = dateSaisie ? new Date(dateSaisie+'T00:00:00') : null;
+  const mois = dateObj ? NOMS_MOIS[dateObj.getMonth()] : '';
+  const annee = dateObj ? String(dateObj.getFullYear()) : '';
   const numeroCampagne = v('connNumeroCampagne').trim();
   const nomTransporteur = v('connTransporteur').trim();
   const immatVehicule = v('connImmatVehicule').trim();
@@ -4208,14 +4213,13 @@ async function genererConnaissement(){
   if (!coopANom) manquants.push('Coopérative initiale');
   if (!coopB) manquants.push('Coopérative finale');
   if (!numeroConnaissement) manquants.push('N° de connaissement');
-  if (!mois) manquants.push('Mois');
-  if (!annee) manquants.push('Année');
+  if (!dateSaisie) manquants.push('Date du connaissement');
   if (!poidsNet) manquants.push('Poids net');
   if (manquants.length){ showToast('Champs obligatoires manquants : '+manquants.join(', ')); return; }
 
-  // Date et heure de creation du connaissement, generees maintenant (pas saisies).
-  const maintenant = new Date();
-  const dateEdition = maintenant.getFullYear()+'-'+String(maintenant.getMonth()+1).padStart(2,'0')+'-'+String(maintenant.getDate()).padStart(2,'0');
+  // La date affichee sur le document (haut de page + Date Edition) est celle
+  // saisie dans la case unique jour/mois/annee -- seule l'heure reste aleatoire.
+  const dateEdition = dateSaisie;
   const heureEdition = ocConnHeureAleatoire();
 
   const codeCcc = coopB.ccc_num || '';
@@ -9445,12 +9449,9 @@ function _renderBrut(){
       +   '<span id="connPrefixeAffiche" style="box-sizing:border-box;display:flex;align-items:center;padding:7px 0 7px 10px;font-size:13px;font-family:var(--sans);background:var(--surface-2);border:1px solid var(--border);border-right:none;border-radius:8px 0 0 8px;color:var(--ink-soft);white-space:nowrap;">—</span>'
       +   '<input type="text" id="connNumero" placeholder="3" style="box-sizing:border-box;border-radius:0 8px 8px 0;border-left:none;width:80px;flex:none;margin:0;">'
       + '</div></label>'
-      + '<label class="field">Mois *<select id="connMois"><option value="">Sélectionner…</option>'
-      +   ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'].map(m=>'<option value="'+m+'">'+m+'</option>').join('')
-      + '</select></label>'
-      + '<label class="field">Année *<input type="text" id="connAnnee" placeholder="Ex : 2026" value="'+new Date().getFullYear()+'"></label>'
+      + '<label class="field">Date du connaissement *<input type="date" id="connDateSaisie" value="'+new Date().toISOString().slice(0,10)+'"></label>'
       + '<label class="field">N° de campagne<input type="text" id="connNumeroCampagne" placeholder="Ex : 2"></label>'
-      + '<div></div><div></div>'
+      + '<div></div>'
       + '<label class="field" style="grid-column:1/-1;font-weight:700;margin-top:6px;">Transporteur (mémorisé pour cette coopérative initiale)</label>'
       + '<label class="field">Nom transporteur<input type="text" id="connTransporteur"></label>'
       + '<label class="field">Nom chauffeur<input type="text" id="connChauffeur"></label>'
