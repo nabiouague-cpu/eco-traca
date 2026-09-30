@@ -1396,7 +1396,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-24-20';
+const APP_VERSION = '2026-09-24-21';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4140,6 +4140,15 @@ async function ocConnRappelerMemoireInitiale(nom){
 // Rappelle automatiquement le trajet et l'adresse de l'expediteur pour cette
 // cooperative finale (toujours une vraie cooperative de notre base).
 async function ocConnRappelerMemoireFinale(coopId){
+  // Des que la cooperative finale est choisie, verrouille le prefixe du n de
+  // connaissement -- {n CCC}-{annee campagne}-2- -- exactement comme pour les
+  // fiches de tracabilite (prefixeConnaissementPourCoop, deja utilisee ailleurs).
+  const affichagePrefixe = document.getElementById('connPrefixeAffiche');
+  if (affichagePrefixe){
+    const coop = state.cooperatives.find(c=>c.id===coopId);
+    const prefixe = prefixeConnaissementPourCoop(coop);
+    affichagePrefixe.textContent = prefixe || '—';
+  }
   if (!coopId) return;
   try{
     const { data } = await supabaseClient.from('connaissement_memoire_finale').select('*').eq('cooperative_id', coopId).maybeSingle();
@@ -4172,7 +4181,11 @@ async function genererConnaissement(){
   const coopANom = v('connCoopANom').trim();
   const coopBId = v('connCoopB');
   const coopB = state.cooperatives.find(c=>c.id===coopBId);
-  const numeroConnaissement = v('connNumero').trim();
+  // Numero complet = prefixe verrouille (code CCC de B-annee campagne-2-) + le
+  // seul numero final saisi par l'utilisateur, comme pour les fiches de tracabilite.
+  const prefixeAffiche = (document.getElementById('connPrefixeAffiche')||{}).textContent || '';
+  const numeroSaisi = v('connNumero').trim();
+  const numeroConnaissement = (prefixeAffiche && prefixeAffiche!=='—' && numeroSaisi) ? (prefixeAffiche+numeroSaisi) : '';
   const mois = v('connMois');
   const annee = v('connAnnee').trim();
   const numeroCampagne = v('connNumeroCampagne').trim();
@@ -9426,7 +9439,10 @@ function _renderBrut(){
       + '<label class="field">Coopérative finale (certifiée) *<select id="connCoopB" onchange="ocConnRappelerMemoireFinale(this.value)"><option value="">Sélectionner…</option>'
       +   coopsTriees.map(c=>'<option value="'+c.id+'">'+esc(c.nom)+'</option>').join('')
       + '</select></label>'
-      + '<label class="field">N° de connaissement *<input type="text" id="connNumero" placeholder="Ex : SC0xxxxx-2026-1-1"></label>'
+      + '<label class="field">N° de connaissement *<div style="display:flex;align-items:stretch;gap:0;">'
+      +   '<span id="connPrefixeAffiche" style="box-sizing:border-box;display:flex;align-items:center;padding:7px 0 7px 10px;font-size:13px;font-family:var(--sans);background:var(--surface-2);border:1px solid var(--border);border-right:none;border-radius:8px 0 0 8px;color:var(--ink-soft);white-space:nowrap;">—</span>'
+      +   '<input type="text" id="connNumero" placeholder="3" style="box-sizing:border-box;border-radius:0 8px 8px 0;border-left:none;width:80px;flex:none;margin:0;">'
+      + '</div></label>'
       + '<label class="field">Mois *<select id="connMois"><option value="">Sélectionner…</option>'
       +   ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'].map(m=>'<option value="'+m+'">'+m+'</option>').join('')
       + '</select></label>'
