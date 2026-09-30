@@ -1396,7 +1396,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-24-31';
+const APP_VERSION = '2026-09-24-32';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4280,8 +4280,11 @@ async function genererConnaissement(){
     nombreSacs, poidsBrut, poidsNet, distance, coutTkm, coutTheorique: coutTheoriqueFinal, qrDataUrl,
     departement, sousPrefecture, adresseExpediteur, magasinExpediteur,
   });
+  // Ecrit le document tout de suite apres l'ouverture, sans rien entre les deux --
+  // evite que l'onglet affiche "about:blank" le temps que le contenu arrive.
   const f = window.open('', '_blank');
   if (!f){ showToast("Le navigateur a bloqué l'ouverture — autorise les fenêtres pop-up pour imprimer le connaissement."); return; }
+  f.document.open();
   f.document.write(html);
   f.document.close();
   state.modal = null;
@@ -4294,49 +4297,55 @@ function connaissementHTML(d){
   // le QR code, lui, n'utilise que mois/annee (d.mois/d.annee), jamais ce format.
   const dateAffichee = d.dateEdition ? new Date(d.dateEdition+'T00:00:00').toLocaleDateString('fr-FR', {day:'2-digit', month:'2-digit', year:'2-digit'}) : '';
   const heureAffichee = d.heureEdition || '';
-  // Construit une paire "libellé : valeur" sur le modele du PDF envoye -- colonne
-  // de libelle a largeur fixe (comme un vrai formulaire imprime), pas des &nbsp;
-  // empiles qui ne s'alignent jamais correctement d'une ligne a l'autre.
+  // Paire "libelle : valeur" fidele au modele PDF envoye : colonne de libelle a
+  // largeur fixe, AUCUN soulignement (le modele n'en a nulle part, y compris
+  // sur les titres de section TRANSPORTEUR/DESTINATAIRE/EXPEDITEUR).
   const paire = (label, valeur) => `<div class="conn-paire"><span class="conn-label">${esc(label)}</span><span class="conn-sep">:</span><span class="conn-valeur">${esc(valeur||'')}</span></div>`;
   return `<!doctype html><html><head><meta charset="utf-8"><title>Connaissement ${esc(d.numeroConnaissement)}</title>
 <style>
   @page { size: A4; margin: 14mm; }
   * { box-sizing: border-box; }
-  body { font-family: Arial, Helvetica, sans-serif; color:#000; font-size:12.5px; margin:0; line-height:1.5; }
-  .conn-top { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:4px; }
-  .conn-logo { height:64px; }
-  .conn-date-top { font-size:10.5px; text-align:right; }
-  h1 { text-align:center; font-size:22px; margin:8px 0 10px; letter-spacing:0.3px; }
-  .conn-port { text-align:center; font-size:16px; margin:0 0 20px; }
+  body { font-family: Arial, Helvetica, sans-serif; color:#000; font-size:12.5px; margin:0; line-height:1.6; }
+  .conn-top { display:flex; justify-content:space-between; align-items:flex-start; }
+  .conn-logo { height:66px; }
+  .conn-heure-logo { font-size:10px; color:#333; margin-top:2px; }
+  .conn-date-top { font-size:10.5px; }
+  h1 { text-align:center; font-size:22px; margin:10px 0 14px; letter-spacing:0.3px; }
+  .conn-port { text-align:center; font-size:16px; margin:0 0 22px; }
   .conn-port b { color:#C00000; font-size:22px; }
   .conn-ligne2 { display:flex; justify-content:space-between; gap:24px; border-bottom:1.5px solid #000; padding-bottom:14px; margin-bottom:16px; }
   .conn-ligne2 .conn-paire { margin:0; }
   .conn-bloc { border-bottom:1.5px solid #000; padding:10px 0 16px; margin-bottom:4px; }
-  .conn-bloc-titre { font-weight:bold; text-decoration:underline; margin-bottom:12px; font-size:13px; }
-  .conn-grid { display:grid; grid-template-columns:1fr 1fr; row-gap:10px; column-gap:24px; }
+  .conn-bloc-titre { font-weight:bold; margin-bottom:14px; font-size:13px; }
+  .conn-grid { display:grid; grid-template-columns:1fr 1fr; row-gap:12px; column-gap:24px; }
   .conn-paire { display:flex; align-items:baseline; white-space:nowrap; }
-  .conn-label { display:inline-block; min-width:118px; }
-  .conn-sep { display:inline-block; width:14px; text-align:center; flex:none; }
-  .conn-valeur { white-space:normal; }
+  .conn-label { display:inline-block; min-width:118px; font-weight:bold; }
+  .conn-sep { display:inline-block; width:14px; text-align:center; flex:none; font-weight:bold; }
+  .conn-valeur { white-space:normal; font-weight:normal; }
   .conn-qr-row { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; }
   .conn-qr-row img { width:112px; height:112px; flex:none; }
   table.conn-table { width:78%; margin:18px auto; border-collapse:collapse; }
   table.conn-table th, table.conn-table td { border:1px solid #000; padding:7px 10px; font-size:12px; }
-  table.conn-table th { background:#f2f2f2; text-align:left; }
+  table.conn-table th { background:#fff; text-align:left; font-weight:normal; }
   table.conn-table td.conn-cert { text-align:right; }
-  .conn-trajet { display:flex; justify-content:space-between; gap:16px; margin:16px 0; }
-  .conn-trajet .conn-label { color:#C00000; font-weight:bold; }
-  .conn-bas { display:flex; justify-content:space-between; gap:16px; margin:12px 0; }
-  .conn-signatures { display:flex; justify-content:space-between; margin-top:32px; font-size:11px; text-align:center; }
+  .conn-trajet { display:flex; justify-content:space-between; gap:16px; margin:18px 0; }
+  .conn-trajet .conn-label { color:#C00000; }
+  .conn-bas { display:flex; justify-content:space-between; gap:16px; margin:10px 0; font-weight:bold; font-size:12px; }
+  .conn-signatures { display:flex; justify-content:space-between; margin-top:10px; font-size:12px; font-weight:bold; text-align:center; }
   .conn-signatures > div { width:31%; }
-  .conn-nb { color:#C00000; font-size:10.5px; margin-top:28px; }
+  .conn-cadres { display:flex; justify-content:space-between; gap:16px; margin-top:8px; }
+  .conn-cadre { width:31%; height:70px; border:1px solid #000; }
+  .conn-nb { color:#C00000; font-size:10.5px; margin-top:20px; text-align:center; }
   .conn-actions { text-align:center; margin:16px 0; }
   @media print { .conn-actions { display:none; } }
 </style></head><body>
   <div class="conn-actions"><button onclick="window.print()">🖨 Imprimer / Enregistrer en PDF</button></div>
   <div class="conn-top">
-    <img class="conn-logo" src="data:image/png;base64,${CONN_LOGO_CCC_B64}">
-    <div class="conn-date-top">${esc(dateAffichee)} ${esc(heureAffichee)}</div>
+    <div>
+      <img class="conn-logo" src="data:image/png;base64,${CONN_LOGO_CCC_B64}">
+      <div class="conn-heure-logo">${esc(heureAffichee)}</div>
+    </div>
+    <div class="conn-date-top">${esc(dateAffichee)}</div>
   </div>
   <h1>CONNAISSEMENT ENTREE USINE</h1>
   <div class="conn-port">Port : <b>ABIDJAN</b></div>
@@ -4395,23 +4404,27 @@ function connaissementHTML(d){
     ${paire('Distance', d.distance)}
     ${paire('Coût TKM', d.coutTkm)}
   </div>
+  <div style="text-align:left;margin:10px 0;font-size:12px;">Coût de transport théorique&nbsp;:&nbsp;&nbsp;<b>${d.coutTheorique!=null?connFmtKg(d.coutTheorique)+' FCFA':''}</b></div>
+  <div style="text-align:center;margin:4px 0 14px;font-size:12px;">Coût de transport réel&nbsp;:&nbsp;&nbsp;<b>0 FCFA</b></div>
   <div class="conn-bas">
-    ${paire('Coût de transport théorique', d.coutTheorique!=null?connFmtKg(d.coutTheorique)+' FCFA':'')}
-    ${paire('Coût de transport réel', '0 FCFA')}
-  </div>
-  <div class="conn-bas" style="margin-top:20px;">
-    ${paire('Date Edition', (dateAffichee+' '+heureAffichee).trim())}
-    ${paire('Date réception', '')}
-    ${paire('Date réception', '')}
+    <div>Date Edition&nbsp;:&nbsp;&nbsp;${esc((dateAffichee+' '+heureAffichee).trim())}</div>
+    <div>Date réception&nbsp;:</div>
+    <div>Date réception&nbsp;:</div>
   </div>
   <div class="conn-signatures">
     <div>Signature expéditeur</div>
     <div>Signature réceptionnaire</div>
     <div>Signature agent pesée</div>
   </div>
+  <div class="conn-cadres">
+    <div class="conn-cadre"></div>
+    <div class="conn-cadre"></div>
+    <div class="conn-cadre"></div>
+  </div>
   <div class="conn-nb">NB : Le coût du transport = (poids net réceptionné x coût TKM)</div>
 </body></html>`;
 }
+
 
 
 
