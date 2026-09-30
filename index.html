@@ -1396,7 +1396,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-24-32';
+const APP_VERSION = '2026-09-24-33';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4193,6 +4193,15 @@ async function genererConnaissement(){
   const dateObj = dateSaisie ? new Date(dateSaisie+'T00:00:00') : null;
   const mois = dateObj ? NOMS_MOIS[dateObj.getMonth()] : '';
   const annee = dateObj ? String(dateObj.getFullYear()) : '';
+  // Campagne/Recolte affichees en plage sur 2 ans (ex: 2026-2027), comme dans
+  // le modele -- meme regle que le prefixe de connaissement (campagne
+  // septembre a aout) : le numero de connaissement, lui, garde la seule annee
+  // de debut de campagne (numeroConnaissement deja fixe via le prefixe verrouille).
+  const campagnePlage = dateObj ? (() => {
+    const m = dateObj.getMonth()+1, a = dateObj.getFullYear();
+    const debut = m>=9 ? a : a-1;
+    return debut+'-'+(debut+1);
+  })() : '';
   const numeroCampagne = v('connNumeroCampagne').trim();
   const nomTransporteur = v('connTransporteur').trim();
   const immatVehicule = v('connImmatVehicule').trim();
@@ -4277,7 +4286,7 @@ async function genererConnaissement(){
   const html = connaissementHTML({
     coopB, numeroConnaissement, mois, annee, numeroCampagne, lieuDepart,
     nomTransporteur, immatVehicule, immatRemorque, nomChauffeur, dateEdition, heureEdition,
-    nombreSacs, poidsBrut, poidsNet, distance, coutTkm, coutTheorique: coutTheoriqueFinal, qrDataUrl,
+    nombreSacs, poidsBrut, poidsNet, distance, coutTkm, coutTheorique: coutTheoriqueFinal, qrDataUrl, campagnePlage,
     departement, sousPrefecture, adresseExpediteur, magasinExpediteur,
   });
   // Ecrit le document tout de suite apres l'ouverture, sans rien entre les deux --
@@ -4297,46 +4306,59 @@ function connaissementHTML(d){
   // le QR code, lui, n'utilise que mois/annee (d.mois/d.annee), jamais ce format.
   const dateAffichee = d.dateEdition ? new Date(d.dateEdition+'T00:00:00').toLocaleDateString('fr-FR', {day:'2-digit', month:'2-digit', year:'2-digit'}) : '';
   const heureAffichee = d.heureEdition || '';
-  // Paire "libelle : valeur" fidele au modele PDF envoye : colonne de libelle a
-  // largeur fixe, AUCUN soulignement (le modele n'en a nulle part, y compris
-  // sur les titres de section TRANSPORTEUR/DESTINATAIRE/EXPEDITEUR).
+  // Campagne/Recolte sur deux annees (AAAA-AAAA+1), comme le vrai modele
+  // ("Campagne 2025-2026", "Récolte : 2025 - 2026") -- jamais l'annee seule.
+  const anneeNum = parseInt(d.annee, 10);
+  const anneeSuivante = isNaN(anneeNum) ? '' : String(anneeNum + 1);
+  const campagnePlage = d.annee ? (d.annee+'-'+anneeSuivante) : '';
+  const recoltePlage = d.annee ? (d.annee+' - '+anneeSuivante) : '';
+  // Paire "libelle : valeur", espacement mesure sur le vrai PDF (label en gras,
+  // deux-points resserres, pas d'espace excessif). Aucun soulignement nulle
+  // part dans le modele, y compris sur les titres de section.
   const paire = (label, valeur) => `<div class="conn-paire"><span class="conn-label">${esc(label)}</span><span class="conn-sep">:</span><span class="conn-valeur">${esc(valeur||'')}</span></div>`;
   return `<!doctype html><html><head><meta charset="utf-8"><title>Connaissement ${esc(d.numeroConnaissement)}</title>
 <style>
   @page { size: A4; margin: 14mm; }
   * { box-sizing: border-box; }
-  body { font-family: Arial, Helvetica, sans-serif; color:#000; font-size:12.5px; margin:0; line-height:1.6; }
+  body { font-family: Arial, Helvetica, sans-serif; color:#000; font-size:11.5px; margin:0; line-height:1.45; }
   .conn-top { display:flex; justify-content:space-between; align-items:flex-start; }
-  .conn-logo { height:66px; }
-  .conn-heure-logo { font-size:10px; color:#333; margin-top:2px; }
-  .conn-date-top { font-size:10.5px; }
-  h1 { text-align:center; font-size:22px; margin:10px 0 14px; letter-spacing:0.3px; }
-  .conn-port { text-align:center; font-size:16px; margin:0 0 22px; }
-  .conn-port b { color:#C00000; font-size:22px; }
-  .conn-ligne2 { display:flex; justify-content:space-between; gap:24px; border-bottom:1.5px solid #000; padding-bottom:14px; margin-bottom:16px; }
+  .conn-logo { height:60px; }
+  .conn-heure-logo { font-size:9.5px; color:#333; margin-top:2px; }
+  .conn-date-top { font-size:10px; }
+  h1 { text-align:center; font-size:20px; margin:8px 0 6px; letter-spacing:0.2px; }
+  .conn-port { text-align:center; font-size:17px; margin:0 0 14px; }
+  .conn-port b { color:#C00000; font-size:19px; display:inline-block; position:relative; top:2px; }
+  .conn-ligne2 { display:flex; justify-content:space-between; gap:20px; padding-bottom:8px; margin-bottom:8px; }
   .conn-ligne2 .conn-paire { margin:0; }
-  .conn-bloc { border-bottom:1.5px solid #000; padding:10px 0 16px; margin-bottom:4px; }
-  .conn-bloc-titre { font-weight:bold; margin-bottom:14px; font-size:13px; }
-  .conn-grid { display:grid; grid-template-columns:1fr 1fr; row-gap:12px; column-gap:24px; }
+  .conn-sep-h { border-bottom:1.3px solid #000; margin:0 0 10px; }
+  .conn-bloc { padding:8px 0 10px; }
+  .conn-bloc-titre { font-weight:bold; margin-bottom:8px; font-size:12px; }
+  .conn-grid { display:grid; grid-template-columns:1fr 1fr; row-gap:7px; column-gap:20px; }
   .conn-paire { display:flex; align-items:baseline; white-space:nowrap; }
-  .conn-label { display:inline-block; min-width:118px; font-weight:bold; }
-  .conn-sep { display:inline-block; width:14px; text-align:center; flex:none; font-weight:bold; }
+  .conn-label { display:inline-block; min-width:108px; font-weight:bold; }
+  .conn-sep { display:inline-block; width:10px; text-align:center; flex:none; font-weight:bold; }
   .conn-valeur { white-space:normal; font-weight:normal; }
   .conn-qr-row { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; }
-  .conn-qr-row img { width:112px; height:112px; flex:none; }
-  table.conn-table { width:78%; margin:18px auto; border-collapse:collapse; }
-  table.conn-table th, table.conn-table td { border:1px solid #000; padding:7px 10px; font-size:12px; }
+  .conn-qr-row img { width:96px; height:96px; flex:none; }
+  /* Tableau : largeur et colonnes mesurees sur le vrai PDF (70.8-480.3 sur 595.32pt) */
+  table.conn-table { width:68.8%; margin:12px auto; border-collapse:collapse; }
+  table.conn-table col.c1 { width:24.2%; } table.conn-table col.c2 { width:23.2%; }
+  table.conn-table col.c3 { width:26.4%; } table.conn-table col.c4 { width:26.2%; }
+  table.conn-table th, table.conn-table td { border:1px solid #000; padding:5px 8px; font-size:11px; }
   table.conn-table th { background:#fff; text-align:left; font-weight:normal; }
-  table.conn-table td.conn-cert { text-align:right; }
-  .conn-trajet { display:flex; justify-content:space-between; gap:16px; margin:18px 0; }
+  /* Cellule Certification : une seule cellule fusionnee sur les 3 lignes, texte justifie a gauche */
+  table.conn-table td.conn-cert { text-align:left; vertical-align:middle; }
+  .conn-trajet { display:flex; justify-content:space-between; gap:16px; margin:12px 0; }
   .conn-trajet .conn-label { color:#C00000; }
-  .conn-bas { display:flex; justify-content:space-between; gap:16px; margin:10px 0; font-weight:bold; font-size:12px; }
-  .conn-signatures { display:flex; justify-content:space-between; margin-top:10px; font-size:12px; font-weight:bold; text-align:center; }
-  .conn-signatures > div { width:31%; }
-  .conn-cadres { display:flex; justify-content:space-between; gap:16px; margin-top:8px; }
-  .conn-cadre { width:31%; height:70px; border:1px solid #000; }
-  .conn-nb { color:#C00000; font-size:10.5px; margin-top:20px; text-align:center; }
-  .conn-actions { text-align:center; margin:16px 0; }
+  .conn-bas-ligne { font-size:11px; margin:6px 0; }
+  .conn-bas-ligne.centre { text-align:center; }
+  .conn-bas { display:flex; justify-content:space-between; gap:16px; margin:10px 0 4px; font-size:11px; }
+  .conn-signatures { display:flex; justify-content:space-between; margin-top:6px; font-size:11px; text-align:center; }
+  .conn-signatures > div { width:19.3%; }
+  .conn-cadres { display:flex; justify-content:space-between; margin-top:6px; }
+  .conn-cadre { width:19.3%; height:54px; border:1px solid #000; }
+  .conn-nb { color:#C00000; font-size:9.5px; margin-top:16px; text-align:center; }
+  .conn-actions { text-align:center; margin:14px 0; }
   @media print { .conn-actions { display:none; } }
 </style></head><body>
   <div class="conn-actions"><button onclick="window.print()">🖨 Imprimer / Enregistrer en PDF</button></div>
@@ -4350,13 +4372,14 @@ function connaissementHTML(d){
   <h1>CONNAISSEMENT ENTREE USINE</h1>
   <div class="conn-port">Port : <b>ABIDJAN</b></div>
   <div class="conn-ligne2">
-    ${paire('Campagne', 'Campagne '+(d.annee||''))}
+    ${paire('Campagne', 'Campagne '+campagnePlage)}
     ${paire('N° de Connaissement', d.numeroConnaissement)}
   </div>
   <div class="conn-ligne2">
     ${paire('Produit', 'CACAO')}
-    ${paire('Récolte', d.annee)}
+    ${paire('Récolte', recoltePlage)}
   </div>
+  <div class="conn-sep-h"></div>
   <div class="conn-bloc">
     <div class="conn-bloc-titre">EXPEDITEUR&nbsp;&nbsp;:&nbsp;&nbsp;${esc(c.ccc_num||'')}&nbsp;&nbsp;&nbsp;${esc((c.nom_complet||c.nom||'').toUpperCase())}</div>
     <div class="conn-grid">
@@ -4368,6 +4391,7 @@ function connaissementHTML(d){
       ${paire('Magasin', d.magasinExpediteur)}
     </div>
   </div>
+  <div class="conn-sep-h"></div>
   <div class="conn-bloc">
     <div class="conn-qr-row">
       <div style="flex:1;">
@@ -4382,6 +4406,7 @@ function connaissementHTML(d){
       ${d.qrDataUrl ? `<img src="${d.qrDataUrl}">` : ''}
     </div>
   </div>
+  <div class="conn-sep-h"></div>
   <div class="conn-bloc">
     <div class="conn-bloc-titre">DESTINATAIRE&nbsp;&nbsp;:&nbsp;&nbsp;${esc(CONN_CODE_EXPORTATEUR)}&nbsp;&nbsp;&nbsp;${esc(CONN_DESTINATAIRE.nom)}</div>
     <div class="conn-grid">
@@ -4393,19 +4418,21 @@ function connaissementHTML(d){
       ${paire('Magasin', CONN_DESTINATAIRE.magasin)}
     </div>
   </div>
+  <div class="conn-sep-h"></div>
   <table class="conn-table">
+    <colgroup><col class="c1"><col class="c2"><col class="c3"><col class="c4"></colgroup>
     <tr><th>RUBRIQUE</th><th>QUANTITE CHARGEE</th><th>QUANTITE RECEPTIONNEE</th><th>Certification</th></tr>
-    <tr><td>Nombre de sacs</td><td>${esc(d.nombreSacs||'')}</td><td>0</td><td class="conn-cert">RAINFOREST</td></tr>
-    <tr><td>Poids brut (Kg)</td><td>${connFmtKg(d.poidsBrut)}</td><td>0,00</td><td class="conn-cert">RAINFOREST</td></tr>
-    <tr><td>Poids net (Kg)</td><td>${connFmtKg(d.poidsNet)}</td><td>0,00</td><td class="conn-cert">RAINFOREST</td></tr>
+    <tr><td>Nombre de sacs</td><td>${esc(d.nombreSacs||'')}</td><td>0</td><td class="conn-cert" rowspan="3" style="vertical-align:top;">RAINFOREST</td></tr>
+    <tr><td>Poids brut (Kg)</td><td>${connFmtKg(d.poidsBrut)}</td><td>0,00</td></tr>
+    <tr><td>Poids net (Kg)</td><td>${connFmtKg(d.poidsNet)}</td><td>0,00</td></tr>
   </table>
   <div class="conn-trajet">
     ${paire('Lieu de départ', d.lieuDepart)}
     ${paire('Distance', d.distance)}
     ${paire('Coût TKM', d.coutTkm)}
   </div>
-  <div style="text-align:left;margin:10px 0;font-size:12px;">Coût de transport théorique&nbsp;:&nbsp;&nbsp;<b>${d.coutTheorique!=null?connFmtKg(d.coutTheorique)+' FCFA':''}</b></div>
-  <div style="text-align:center;margin:4px 0 14px;font-size:12px;">Coût de transport réel&nbsp;:&nbsp;&nbsp;<b>0 FCFA</b></div>
+  <div class="conn-bas-ligne">Coût de transport théorique&nbsp;:&nbsp;&nbsp;<b>${d.coutTheorique!=null?connFmtKg(d.coutTheorique)+' FCFA':''}</b></div>
+  <div class="conn-bas-ligne centre">Coût de transport réel&nbsp;:&nbsp;&nbsp;<b>0 FCFA</b></div>
   <div class="conn-bas">
     <div>Date Edition&nbsp;:&nbsp;&nbsp;${esc((dateAffichee+' '+heureAffichee).trim())}</div>
     <div>Date réception&nbsp;:</div>
@@ -4424,6 +4451,7 @@ function connaissementHTML(d){
   <div class="conn-nb">NB : Le coût du transport = (poids net réceptionné x coût TKM)</div>
 </body></html>`;
 }
+
 
 
 
