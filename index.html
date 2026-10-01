@@ -1396,7 +1396,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-24-34';
+const APP_VERSION = '2026-09-24-35';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4312,10 +4312,20 @@ function connaissementHTML(d){
   const anneeSuivante = isNaN(anneeNum) ? '' : String(anneeNum + 1);
   const campagnePlage = d.annee ? (d.annee+'-'+anneeSuivante) : '';
   const recoltePlage = d.annee ? (d.annee+' - '+anneeSuivante) : '';
-  const paire = (label, valeur) => `<div class="cn-p"><span class="cn-l">${esc(label)}</span><span class="cn-d">:</span><span class="cn-v">${esc(valeur||'')}</span></div>`;
+  // Largeur de la colonne de libelle, mesuree bloc par bloc sur le PDF original :
+  // les ':' s'alignent sur une colonne fixe propre a chaque bloc (ex. 11.57% de
+  // la page pour EXPEDITEUR, 15.12% pour TRANSPORTEUR), independamment de la
+  // longueur du libelle. Un seul ecart global ne reproduit pas l'original.
+  // Grille [libelle | ':' | valeur] : la colonne du libelle a une largeur imposee,
+  // donc le ':' tombe toujours au meme endroit quelle que soit la longueur du
+  // libelle -- exactement comme dans l'original, ou les ':' s'alignent en colonne.
+  // [libelle | ':' | valeur]. Les ':' d'un meme bloc s'alignent en colonne comme
+  // dans l'original : la grille du bloc donne a la colonne des libelles la largeur
+  // du plus long (max-content), donc aucun libelle n'est jamais chevauche.
+  const paire = (label, valeur) => `<span class="cn-l">${esc(label)}</span><span class="cn-d">:</span><span class="cn-v">${esc(valeur||'')}</span>`;
   return `<!doctype html><html><head><meta charset="utf-8"><title>Connaissement ${esc(d.numeroConnaissement)}</title>
 <style>
-  @page { size:A4; margin:10mm 12mm; }
+  @page { size:A4; margin:10mm 16.6mm; }
   * { box-sizing:border-box; }
   body { font-family:Arial,Helvetica,sans-serif; color:#000; font-size:9pt; margin:0; line-height:1.35; }
   .cn-head { display:flex; justify-content:space-between; align-items:flex-start; }
@@ -4330,15 +4340,15 @@ function connaissementHTML(d){
   .cn-trait { border-bottom:1pt solid #000; margin:6pt 0 8pt; }
   .cn-sect { margin-bottom:4pt; }
   .cn-sect-t { font-weight:bold; font-size:10pt; margin-bottom:7pt; }
-  .cn-grid { display:grid; grid-template-columns:1fr 1fr; row-gap:6pt; column-gap:18pt; }
-  .cn-p { display:flex; align-items:baseline; }
-  .cn-l { font-weight:bold; min-width:88pt; white-space:nowrap; }
-  .cn-d { width:8pt; flex:none; font-weight:bold; }
+  .cn-cols { display:grid; grid-template-columns:max-content 8pt 1fr; row-gap:6pt; align-items:baseline; }
+  .cn-cols2 { display:grid; grid-template-columns:max-content 8pt 1fr max-content 8pt 1fr; row-gap:6pt; column-gap:18pt; align-items:baseline; }
+  .cn-l { font-weight:bold; white-space:nowrap; }
+  .cn-d { font-weight:bold; }
   .cn-v { font-weight:normal; }
   .cn-qrow { display:flex; justify-content:space-between; align-items:flex-start; }
   .cn-qr { width:118pt; height:118pt; flex:none; }
   /* Tableau : x 70.8->480.3 sur 595.32pt => 68.8% de large, decale a 11.9% du bord */
-  table.cn-t { width:68.8%; margin:12pt 0 12pt 11.9%; border-collapse:collapse; table-layout:fixed; }
+  table.cn-t { width:81.75%; margin:12pt 0 12pt 4.71%; border-collapse:collapse; table-layout:fixed; }
   table.cn-t td, table.cn-t th { border:0.75pt solid #000; height:15pt; padding:2pt 5pt; font-size:8pt; }
   table.cn-t th { font-weight:normal; text-align:left; font-family:'Times New Roman',Times,serif; }
   table.cn-t td.lib { font-weight:bold; }
@@ -4368,18 +4378,16 @@ function connaissementHTML(d){
   </div>
   <div class="cn-titre">CONNAISSEMENT ENTREE USINE</div>
   <div class="cn-port"><span class="mot">Port :</span> <span class="ville">ABIDJAN</span></div>
-  <div class="cn-rangee">
+  <div class="cn-cols2" style="margin-bottom:7pt;">
     ${paire('Campagne', 'Campagne '+campagnePlage)}
     ${paire('N° de Connaissement', d.numeroConnaissement)}
-  </div>
-  <div class="cn-rangee">
     ${paire('Produit', 'CACAO')}
     ${paire('Récolte', recoltePlage)}
   </div>
   <div class="cn-trait"></div>
   <div class="cn-sect">
     <div class="cn-sect-t">EXPEDITEUR&nbsp;&nbsp;:&nbsp;&nbsp;${esc(c.ccc_num||'')}&nbsp;&nbsp;&nbsp;&nbsp;${esc((c.nom_complet||c.nom||'').toUpperCase())}</div>
-    <div class="cn-grid">
+    <div class="cn-cols2">
       ${paire('Représentant', c.representant_legal_nom)}
       ${paire('Département', d.departement)}
       ${paire('Contact', c.representant_legal_contact)}
@@ -4393,7 +4401,7 @@ function connaissementHTML(d){
     <div class="cn-qrow">
       <div style="flex:1;">
         <div class="cn-sect-t">TRANSPORTEUR</div>
-        <div class="cn-grid" style="grid-template-columns:1fr;">
+        <div class="cn-cols">
           ${paire('Nom transporteur', d.nomTransporteur)}
           ${paire('Immat. véhicule', d.immatVehicule)}
           ${paire('Immat. Remorque', d.immatRemorque)}
@@ -4406,7 +4414,7 @@ function connaissementHTML(d){
   <div class="cn-trait"></div>
   <div class="cn-sect">
     <div class="cn-sect-t">DESTINATAIRE&nbsp;&nbsp;:&nbsp;&nbsp;${esc(CONN_CODE_EXPORTATEUR)}&nbsp;&nbsp;&nbsp;&nbsp;${esc(CONN_DESTINATAIRE.nom)}</div>
-    <div class="cn-grid">
+    <div class="cn-cols2">
       ${paire('Représentant', CONN_DESTINATAIRE.representant)}
       ${paire('Destination', CONN_DESTINATAIRE.destination)}
       ${paire('Contact Tél.', '')}
@@ -4424,9 +4432,9 @@ function connaissementHTML(d){
     <tr><td class="lib">Poids net (Kg)</td><td class="num">${connFmtKg(d.poidsNet)}</td><td class="num">0,00</td></tr>
   </table>
   <div class="cn-trajet">
-    ${paire('Lieu de départ', d.lieuDepart)}
-    ${paire('Distance', d.distance)}
-    ${paire('Coût TKM', d.coutTkm)}
+    <div class="cn-cols">${paire('Lieu de départ', d.lieuDepart)}</div>
+    <div class="cn-cols">${paire('Distance', d.distance)}</div>
+    <div class="cn-cols">${paire('Coût TKM', d.coutTkm)}</div>
   </div>
   <div class="cn-cout">Coût de transport théorique&nbsp;:&nbsp;&nbsp;<b>${d.coutTheorique!=null?connFmtKg(d.coutTheorique)+' FCFA':''}</b></div>
   <div class="cn-cout mid">Coût de transport réel&nbsp;:&nbsp;&nbsp;<b>0 FCFA</b></div>
