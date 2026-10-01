@@ -1397,7 +1397,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-01-40';
+const APP_VERSION = '2026-10-01-41';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3289,6 +3289,9 @@ function ocBoutonTracerVolume(coopId){
   if (!peutTracerVolume(coopId)) return '';
   return '<button class="btn btn-primary" onclick="ocOuvrirTracerVolume(\''+esc(coopId)+'\')">Tracer un volume</button>';
 }
+function ocBoutonGenererConnaissement(){
+  return '<button class="btn btn-primary" onclick="ouvrirGenerationConnaissement()">📄 Générer un connaissement</button>';
+}
 function ocOuvrirTracerVolume(coopId){
   openModal('tracerVolumeDirecte', { coopId: coopId, campagneId: state.campagneFilter });
 }
@@ -4517,8 +4520,10 @@ async function genererConnaissement(){
   const conteneurQr = document.createElement('div');
   conteneurQr.style.cssText = 'position:fixed;left:-9999px;top:-9999px;';
   document.body.appendChild(conteneurQr);
-  new QRCode(conteneurQr, { text: contenuQr, width: 240, height: 240, correctLevel: QRCode.CorrectLevel.M });
+  const qrObj = new QRCode(conteneurQr, { text: contenuQr, width: 240, height: 240, correctLevel: QRCode.CorrectLevel.M });
   await new Promise(r=>setTimeout(r, 60));
+  let qrMatrice = null;
+  try{ const oq = qrObj._oQRCode; const nq = oq.getModuleCount(); qrMatrice = []; for (let r=0; r<nq; r++){ const lg = []; for (let k=0; k<nq; k++) lg.push(!!oq.isDark(r,k)); qrMatrice.push(lg); } }catch(e){ qrMatrice = null; }
   let qrDataUrl = '';
   const canvas = conteneurQr.querySelector('canvas');
   const img = conteneurQr.querySelector('img');
@@ -4562,7 +4567,7 @@ async function genererConnaissement(){
   const html = connaissementHTML({
     coopB, numeroConnaissement, mois, annee, numeroCampagne, lieuDepart,
     nomTransporteur, immatVehicule, immatRemorque, nomChauffeur, dateEdition, heureEdition,
-    nombreSacs, poidsBrut, poidsNet, distance, coutTkm, coutTheorique: coutTheoriqueFinal, qrDataUrl, campagnePlage,
+    nombreSacs, poidsBrut, poidsNet, distance, coutTkm, coutTheorique: coutTheoriqueFinal, qrDataUrl, qrMatrice, campagnePlage,
     departement, sousPrefecture, adresseExpediteur, magasinExpediteur, traite,
   });
   // Ecrit le document tout de suite apres l'ouverture, sans rien entre les deux --
@@ -4576,175 +4581,219 @@ async function genererConnaissement(){
   showToast('Connaissement généré — utilise « Imprimer » puis « Enregistrer en PDF ».', 'success');
   render();
 }
+// ---------------------------------------------------------------------------------
+// Connaissement : page SVG de 210 x 297 mm (1 unite = 1 mm).
+// Chaque element est place a sa coordonnee releveee en millimetres sur le modele officiel
+// (scan A4 300 dpi, redresse de 0,24 deg) : position, ligne de base, taille de police,
+// epaisseur des traits, cadres, logo et QR. Aucun flux ni marge calcule par le navigateur,
+// donc le rendu est identique d'un poste a l'autre.
+// Format : [id, police(A=Arial,T=Times), graisse, taille pt, x (mm), ligne de base (mm),
+//           ancrage (s=debut, e=fin), rouge(0/1), texte fixe ou null, largeur max (mm) ou 0]
+const CONN_ELEMS = [
+  ["heure","A",400,7.9,9.8,38.27,"s",0,null,20],
+  ["dateHaut","A",400,7.85,184.52,38.95,"s",0,null,20],
+  ["titre","A",700,20.15,44.16,42.42,"s",0,"CONNAISSEMENT ENTREE USINE",0],
+  ["portMot","A",700,19.95,77.34,55.46,"s",1,"Port",0],
+  ["portCol","A",700,19.95,93.64,55.54,"s",1,":",0],
+  ["portVille","A",700,21.5,97.01,56.73,"s",1,"ABIDJAN",0],
+  ["lbl_campagne","A",400,10.65,9.63,63.5,"s",0,"Campagne",0],
+  ["c_campagne","A",400,10.65,42.41,63.5,"s",0,":",0],
+  ["v_campagne","A",400,10.55,47.0,63.58,"s",0,null,55],
+  ["lbl_nconn","A",400,8.4,104.15,63.5,"s",0,"N° Connaissement :",0],
+  ["v_nconn","A",400,10.25,136.4,63.42,"s",0,null,62],
+  ["lbl_produit","A",400,11.15,9.5,71.63,"s",0,"Produit",0],
+  ["c_produit","A",400,11.15,42.31,71.71,"s",0,":",0],
+  ["v_produit","A",400,10.2,46.98,71.97,"s",0,null,0],
+  ["lbl_recolte","A",400,10.85,79.61,71.46,"s",0,"Récolte :",0],
+  ["v_recolte","A",400,10.25,96.85,71.63,"s",0,null,35],
+  ["lbl_traite","A",400,10.45,134.28,71.97,"s",0,"Traite :",0],
+  ["v_traite","A",400,10.8,151.07,71.97,"s",0,null,45],
+  ["lbl_exp","T",400,10.65,9.8,81.53,"s",0,"EXPEDITEUR",0],
+  ["c_exp","A",400,10.65,41.82,81.53,"s",0,":",0],
+  ["v_expcode","A",400,9.35,46.76,81.36,"s",0,null,26],
+  ["v_expnom","A",400,9.25,71.56,81.36,"s",0,null,127.2],
+  ["lbl_repr","A",400,9.95,9.7,89.83,"s",0,"Représentant",0],
+  ["c_repr","A",400,10.65,39.37,89.92,"s",0,":",0],
+  ["v_repr","A",400,9.2,46.72,89.92,"s",0,null,66],
+  ["lbl_dept","A",400,9.9,115.62,90.25,"s",0,"Département",0],
+  ["c_dept","A",400,10.65,140.97,90.25,"s",0,":",0],
+  ["v_dept","A",400,8.95,148.01,90.0,"s",0,null,50],
+  ["lbl_contact","A",400,9.95,9.73,97.37,"s",0,"Contact(s)",0],
+  ["c_contact","A",400,10.65,39.45,97.37,"s",0,":",0],
+  ["v_contact","A",400,9.1,46.78,97.37,"s",0,null,66],
+  ["lbl_sp","A",400,10.05,115.66,97.71,"s",0,"Sous-Préfecture :",0],
+  ["v_sp","A",400,7.8,148.47,97.87,"s",0,null,50],
+  ["lbl_adr","A",400,9.95,9.81,104.48,"s",0,"Adresse",0],
+  ["c_adr","A",400,10.65,39.79,104.48,"s",0,":",0],
+  ["v_adr","A",400,9.15,46.73,104.48,"s",0,null,66],
+  ["lbl_mag","A",400,10.05,115.79,104.73,"s",0,"Magasin",0],
+  ["c_mag","A",400,10.65,138.68,104.73,"s",0,":",0],
+  ["v_mag","A",400,7.9,148.28,105.33,"s",0,null,50],
+  ["lbl_transp","T",400,9.5,9.76,119.89,"s",0,"TRANSPORTEUR",0],
+  ["lbl_nt","A",400,10.35,9.52,127.08,"s",0,"Nom Transporteur :",0],
+  ["v_nt","A",400,9.2,46.72,127.17,"s",0,null,95],
+  ["lbl_iv","A",400,9.8,9.42,135.13,"s",0,"Immat. Véhicule",0],
+  ["c_iv","A",400,10.65,39.45,135.13,"s",0,":",0],
+  ["v_iv","A",400,9.1,46.83,135.13,"s",0,null,95],
+  ["lbl_ir","A",400,9.75,9.42,142.41,"s",0,"Immat. Remorque",0],
+  ["c_ir","A",400,10.65,39.62,142.41,"s",0,":",0],
+  ["v_ir","A",400,9.35,46.65,142.41,"s",0,null,95],
+  ["lbl_nc","A",400,9.85,9.54,148.34,"s",0,"Nom Chauffeur",0],
+  ["c_nc","A",400,10.65,39.96,148.42,"s",0,":",0],
+  ["v_nc","A",400,9.2,46.75,148.34,"s",0,null,95],
+  ["lbl_dest","T",400,9.5,9.72,160.27,"s",0,"DESTINATAIRE",0],
+  ["c_dest","A",400,10.65,39.45,160.19,"s",0,":",0],
+  ["v_destcode","A",400,8.9,46.78,160.36,"s",0,null,20],
+  ["v_destnom","A",400,9.15,70.86,160.44,"s",0,null,38],
+  ["lbl_r2","A",400,9.95,9.62,167.72,"s",0,"Representant",0],
+  ["c_r2","A",400,10.65,39.2,167.72,"s",0,":",0],
+  ["v_r2","A",400,9.2,46.47,167.89,"s",0,null,60],
+  ["lbl_destn","A",400,10.0,110.96,167.64,"s",0,"Destination",0],
+  ["c_destn","A",400,10.65,131.4,167.64,"s",0,":",0],
+  ["v_destn","A",400,9.9,141.05,167.64,"s",0,null,40],
+  ["lbl_ct","A",400,9.85,9.64,174.75,"s",0,"Contact Tel.",0],
+  ["c_ct","A",400,10.65,40.21,174.75,"s",0,":",0],
+  ["lbl_la","A",400,10.25,111.29,174.75,"s",0,"Lieu d'arrivée :",0],
+  ["v_la","A",400,9.9,141.22,174.92,"s",0,null,40],
+  ["lbl_ad2","A",400,9.95,9.56,182.37,"s",0,"Adresse",0],
+  ["c_ad2","A",400,10.65,39.53,182.37,"s",0,":",0],
+  ["lbl_mg2","A",400,10.1,111.04,182.71,"s",0,"Magasin",0],
+  ["c_mg2","A",400,10.65,131.4,182.8,"s",0,":",0],
+  ["v_mg2a","A",400,9.0,141.15,182.71,"s",0,null,12],
+  ["v_mg2b","A",400,7.65,155.3,182.54,"s",0,null,43],
+  ["th1","T",400,8.45,24.13,189.91,"s",0,"RUBRIQUE",0],
+  ["th2","T",400,8.5,50.17,189.82,"s",0,"QUANTITE CHARGEE",0],
+  ["th3","T",400,8.55,90.55,189.91,"s",0,"QUANTITE RECEPTIONNEE",0],
+  ["th4","T",700,8.0,148.79,189.91,"s",0,"Certification",0],
+  ["tr1","A",400,8.35,23.8,196.26,"s",0,"Nombre de sacs",0],
+  ["tr2","A",400,10.05,24.01,203.03,"s",0,"Poids brut (Kg)",0],
+  ["tr3","A",400,9.9,23.93,209.89,"s",0,"Poids net (Kg)",0],
+  ["n1a","A",400,8.0,85.46,196.43,"e",0,null,0],
+  ["n1b","A",400,9.1,131.19,196.51,"e",0,null,0],
+  ["n2a","A",400,9.3,85.64,203.12,"e",0,null,0],
+  ["n2b","A",400,9.1,131.19,203.12,"e",0,null,0],
+  ["n3a","A",400,9.3,85.47,209.89,"e",0,null,0],
+  ["n3b","A",400,9.1,131.19,209.97,"e",0,null,0],
+  ["lbl_ld","A",400,10.95,23.73,220.64,"s",1,"Lieu de depart :",0],
+  ["v_ld","A",400,9.7,57.33,220.56,"s",1,null,50],
+  ["lbl_dist","A",400,11.05,111.95,220.47,"s",1,"Distance:",0],
+  ["v_dist","A",400,9.25,133.82,220.47,"s",1,null,20],
+  ["lbl_tkm","A",400,8.45,156.91,220.13,"s",1,"Coût TKM:",0],
+  ["v_tkm","A",400,10.25,177.27,220.3,"s",1,null,20],
+  ["lbl_ct1","A",400,10.15,23.78,228.94,"s",0,"Coût de transport théorique :",0],
+  ["v_ct1","A",400,10.3,108.73,228.94,"e",0,null,0],
+  ["u_ct1","A",400,10.25,111.72,228.94,"s",0,"FCFA",0],
+  ["v_tkm2","A",400,10.05,163.22,230.63,"s",1,null,20],
+  ["lbl_ct2","A",400,11.05,24.1,236.81,"s",0,"Coût de transport réel:",0],
+  ["v_ct2","A",400,10.3,108.35,236.81,"e",0,null,0],
+  ["u_ct2","A",400,10.25,111.8,236.81,"s",0,"FCFA",0],
+  ["lbl_de","A",400,7.75,10.44,245.96,"s",0,"Date Edition :",0],
+  ["v_de","A",400,6.8,31.8,245.87,"s",0,null,25],
+  ["lbl_dr1","A",400,7.8,84.19,245.45,"s",0,"Date reception :",0],
+  ["lbl_dr2","A",400,7.8,153.53,245.45,"s",0,"Date reception :",0],
+  ["lbl_s1","A",400,8.55,12.99,251.63,"s",0,"Signature Expéditeur",0],
+  ["lbl_s2","A",400,8.6,83.68,251.63,"s",0,"Signature receptionnaire",0],
+  ["lbl_s3","A",400,8.35,160.82,251.88,"s",0,"Signature Agent pesée",0],
+  ["nb","A",400,7.95,63.78,276.35,"s",1,"NB: Le coût de transport = (Poids net receptionné x coût TKM)",0],
+  ["page","A",400,5.9,176.71,288.29,"s",0,"1 / 1",0]
+];
+// Traits : [x1, y1, x2, y2, epaisseur] en mm
+const CONN_TRAITS = [
+  [8.9,75.44,198.8,75.44,0.30],[8.8,113.66,198.9,113.66,0.25],[8.8,155.03,198.9,155.03,0.22],[8.6,213.40,199.1,213.40,0.20],
+  [9.9,120.65,36.7,120.65,0.17],
+  [23.1,185.72,181.9,185.72,0.25],[23.0,191.94,182.0,191.94,0.45],[23.0,198.58,132.5,198.58,0.25],[23.1,205.28,132.5,205.28,0.25],[23.1,212.30,182.0,212.30,0.25],
+  [23.11,185.6,23.11,212.5,0.34],[49.28,185.6,49.28,212.5,0.34],[86.36,185.6,86.36,212.5,0.17],[86.74,185.6,86.74,212.5,0.25],[132.29,185.6,132.29,212.5,0.25],[181.87,185.7,181.87,212.4,0.17]
+];
+// Cadres de signature : [x, y, largeur, hauteur, epaisseur] en mm
+const CONN_CADRES = [[8.47,253.2,37.21,18.0,0.2],[81.28,253.67,39.07,17.86,0.2],[158.96,254.12,35.82,17.08,0.2]];
+// Logo CCC et QR : [x, y, largeur, hauteur] en mm
+const CONN_LOGO_BOX = [8.17,11.47,38.01,22.32];
+const CONN_QR_BOX = [146.7,115.05,38.55,38.55];
+
+function connNombreFr(n, decimales){
+  const v = Number(n);
+  if (n===''||n==null||isNaN(v)) return '';
+  return v.toLocaleString('fr-FR', {minimumFractionDigits:decimales, maximumFractionDigits:decimales}).replace(/[\u202f\u00a0]/g,' ');
+}
 function connaissementHTML(d){
   const c = d.coopB;
-  // Toutes les mesures ci-dessous sont relevees sur le PDF original (595.32pt de
-  // large) : tailles de police, largeurs de colonnes, position du QR, hauteurs
-  // de lignes. Rien n'est invente -- seules les valeurs saisies au formulaire
-  // changent d'un connaissement a l'autre.
-  const dateAffichee = d.dateEdition ? new Date(d.dateEdition+'T00:00:00').toLocaleDateString('fr-FR', {day:'2-digit', month:'2-digit', year:'2-digit'}) : '';
-  const heureAffichee = d.heureEdition || '';
+  const aff = s => String(s==null?'':s).replace(/[\u202f\u00a0]/g,' ');
+  const dateAffichee = d.dateEdition ? d.dateEdition.split('-').reverse().join('/') : '';
   const anneeNum = parseInt(d.annee, 10);
-  const anneeSuivante = isNaN(anneeNum) ? '' : String(anneeNum + 1);
-  const campagnePlage = d.annee ? (d.annee+'-'+anneeSuivante) : '';
-  const recoltePlage = d.annee ? (d.annee+' - '+anneeSuivante) : '';
-  // Largeur de la colonne de libelle, mesuree bloc par bloc sur le PDF original :
-  // les ':' s'alignent sur une colonne fixe propre a chaque bloc (ex. 11.57% de
-  // la page pour EXPEDITEUR, 15.12% pour TRANSPORTEUR), independamment de la
-  // longueur du libelle. Un seul ecart global ne reproduit pas l'original.
-  // Grille [libelle | ':' | valeur] : la colonne du libelle a une largeur imposee,
-  // donc le ':' tombe toujours au meme endroit quelle que soit la longueur du
-  // libelle -- exactement comme dans l'original, ou les ':' s'alignent en colonne.
-  // [libelle | ':' | valeur]. Les ':' d'un meme bloc s'alignent en colonne comme
-  // dans l'original : la grille du bloc donne a la colonne des libelles la largeur
-  // du plus long (max-content), donc aucun libelle n'est jamais chevauche.
-  const paire = (label, valeur) => `<span class="cn-l">${esc(label)}</span><span class="cn-d">:</span><span class="cn-v">${esc(valeur||'')}</span>`;
+  const campagnePlage = d.campagnePlage || (isNaN(anneeNum) ? '' : (anneeNum+'-'+(anneeNum+1)));
+  const recoltePlage = campagnePlage.replace('-', ' - ');
+  const mag = String(CONN_DESTINATAIRE.magasin||'').trim().split(/[\s\u00a0]+/);
+  const magCode = mag.shift() || '';
+  const magNom = mag.join(' ');
+  const coutTheo = d.coutTheorique!=null ? connNombreFr(Math.round(d.coutTheorique), 0) : '0';
+  const tkm = connNombreFr(d.coutTkm, 2);
+  const V = {
+    heure: (d.heureEdition||'') ? d.heureEdition+':00' : '',
+    dateHaut: dateAffichee,
+    v_campagne: campagnePlage ? 'campagne '+campagnePlage : '',
+    v_nconn: d.numeroConnaissement, v_produit: 'CACAO', v_recolte: recoltePlage, v_traite: d.traite||'Principale',
+    v_expcode: c.ccc_num||'', v_expnom: (c.nom_complet||c.nom||'').toUpperCase(),
+    v_repr: c.representant_legal_nom||'', v_dept: d.departement, v_contact: c.representant_legal_contact||'',
+    v_sp: d.sousPrefecture, v_adr: d.adresseExpediteur, v_mag: d.magasinExpediteur,
+    v_nt: d.nomTransporteur, v_iv: d.immatVehicule, v_ir: d.immatRemorque, v_nc: d.nomChauffeur,
+    v_destcode: CONN_CODE_EXPORTATEUR, v_destnom: CONN_DESTINATAIRE.nom, v_r2: CONN_DESTINATAIRE.representant,
+    v_destn: CONN_DESTINATAIRE.destination, v_la: CONN_DESTINATAIRE.lieuArrivee, v_mg2a: magCode, v_mg2b: magNom,
+    n1a: d.nombreSacs!==''&&d.nombreSacs!=null ? connNombreFr(d.nombreSacs,0) : '', n1b: '0',
+    n2a: connNombreFr(d.poidsBrut,2), n2b: '0,00', n3a: connNombreFr(d.poidsNet,2), n3b: '0,00',
+    v_ld: d.lieuDepart, v_dist: d.distance!==''&&d.distance!=null ? connNombreFr(d.distance, Number.isInteger(Number(d.distance))?0:2) : '',
+    v_tkm: tkm, v_ct1: coutTheo, v_tkm2: tkm, v_ct2: '0', v_de: dateAffichee,
+  };
+  const FAM_A = "Arial,'Liberation Sans',Helvetica,sans-serif";
+  const FAM_T = "'Times New Roman','Liberation Serif',Times,serif";
+  let svg = '';
+  CONN_TRAITS.forEach(t=>{ svg += '<line x1="'+t[0]+'" y1="'+t[1]+'" x2="'+t[2]+'" y2="'+t[3]+'" stroke="#000" stroke-width="'+t[4]+'"/>'; });
+  CONN_CADRES.forEach(r=>{ svg += '<rect x="'+r[0]+'" y="'+r[1]+'" width="'+r[2]+'" height="'+r[3]+'" fill="none" stroke="#000" stroke-width="'+r[4]+'"/>'; });
+  svg += '<image x="'+CONN_LOGO_BOX[0]+'" y="'+CONN_LOGO_BOX[1]+'" width="'+CONN_LOGO_BOX[2]+'" height="'+CONN_LOGO_BOX[3]+'" href="data:image/png;base64,'+CONN_LOGO_CCC_B64+'"/>';
+  if (d.qrMatrice && d.qrMatrice.length){
+    // QR dessine en vectoriel module par module (net a l'impression, taille exacte)
+    const n = d.qrMatrice.length, m = CONN_QR_BOX[2]/n;
+    let p = '';
+    d.qrMatrice.forEach((ligne, r)=>{
+      let c0 = -1;
+      for (let k=0; k<=n; k++){
+        const noir = k<n && ligne[k];
+        if (noir && c0<0) c0 = k;
+        if (!noir && c0>=0){ p += 'M'+(CONN_QR_BOX[0]+c0*m).toFixed(3)+' '+(CONN_QR_BOX[1]+r*m).toFixed(3)+'h'+((k-c0)*m).toFixed(3)+'v'+m.toFixed(3)+'h-'+((k-c0)*m).toFixed(3)+'z'; c0 = -1; }
+      }
+    });
+    svg += '<path d="'+p+'" fill="#000" shape-rendering="crispEdges"/>';
+  } else if (d.qrDataUrl){
+    svg += '<image x="'+CONN_QR_BOX[0]+'" y="'+CONN_QR_BOX[1]+'" width="'+CONN_QR_BOX[2]+'" height="'+CONN_QR_BOX[3]+'" href="'+d.qrDataUrl+'"/>';
+  }
+  CONN_ELEMS.forEach(e=>{
+    const t = e[8]!=null ? e[8] : aff(V[e[0]]);
+    if (t==null || t==='') return;
+    svg += '<text x="'+e[4]+'" y="'+e[5]+'" font-family="'+(e[1]==='T'?FAM_T:FAM_A)+'" font-size="'+(e[3]*0.352778).toFixed(3)+'" font-weight="'+e[2]+'" fill="'+(e[7]?'#C00000':'#000')+'"'
+      + (e[6]==='e' ? ' text-anchor="end"' : '') + (e[9] ? ' data-maxw="'+e[9]+'"' : '') + '>'+esc(t)+'</text>';
+  });
+  // Certification : cellule du tableau (vide dans le modele pour une cooperative non certifiee)
+  svg += '<text x="134.3" y="203.4" font-family="'+FAM_A+'" font-size="3.175" font-style="italic" fill="#000">RAINFOREST</text>';
   return `<!doctype html><html><head><meta charset="utf-8"><title>Connaissement ${esc(d.numeroConnaissement)}</title>
 <style>
-  @page { size:A4; margin:10mm 16.6mm; }
-  * { box-sizing:border-box; }
-  body { font-family:Arial,Helvetica,sans-serif; color:#000; font-size:9pt; margin:0; line-height:1.35; }
-  .cn-head { display:flex; justify-content:space-between; align-items:flex-start; }
-  .cn-logo { width:92pt; height:54pt; }
-  .cn-heure { font-size:7pt; margin-top:3pt; }
-  .cn-datehaut { font-size:7pt; }
-  .cn-titre { text-align:center; font-size:18pt; font-weight:bold; margin:-4pt 0 0; }
-  .cn-port { text-align:center; margin:15pt 0 0; }
-  .cn-port .mot { color:#C00000; font-weight:bold; font-size:18pt; }
-  .cn-port .ville { color:#C00000; font-weight:bold; font-size:20pt; display:inline-block; position:relative; top:2pt; }
-  .cn-rangee { display:flex; justify-content:space-between; gap:18pt; margin:0 0 7pt; }
-  .cn-trait { border-bottom:1pt solid #000; margin:6pt 0 8pt; }
-  .cn-sect { margin-bottom:4pt; }
-  .cn-sect-t { font-weight:bold; font-size:10pt; margin-bottom:7pt; }
-  .cn-cols { display:grid; grid-template-columns:max-content 8pt 1fr; row-gap:9pt; align-items:baseline; }
-  .cn-cols2 { display:grid; grid-template-columns:max-content 8pt 1fr max-content 8pt 1fr; row-gap:9pt; column-gap:18pt; align-items:baseline; }
-  .cn-l { font-weight:bold; white-space:nowrap; }
-  .cn-d { font-weight:bold; }
-  .cn-v { font-weight:normal; }
-  .cn-qrow { display:flex; justify-content:space-between; align-items:flex-start; }
-  .cn-qr { width:118pt; height:118pt; flex:none; margin-top:-6pt; margin-bottom:-14pt; }
-  /* Tableau : x 70.8->480.3 sur 595.32pt => 68.8% de large, decale a 11.9% du bord */
-  table.cn-t { width:81.75%; margin:12pt 0 12pt 4.71%; border-collapse:collapse; table-layout:fixed; }
-  table.cn-t td, table.cn-t th { border:0.75pt solid #000; height:15pt; padding:2pt 5pt; font-size:8pt; }
-  table.cn-t th { white-space:nowrap; }
-  table.cn-t th { font-weight:normal; text-align:left; font-family:'Times New Roman',Times,serif; }
-  table.cn-t td.lib { font-weight:bold; }
-  table.cn-t td.num { text-align:right; vertical-align:middle; }
-  /* Certification : cellule unique fusionnee, texte a gauche et centre verticalement */
-  table.cn-t td.cert { text-align:left; vertical-align:middle; font-style:italic; }
-  .cn-ligne3 { display:flex; gap:28pt; align-items:baseline; }
-  /* Trajet : libelles ET valeurs en rouge, comme sur le modele */
-  .cn-trajet { display:flex; justify-content:space-between; gap:14pt; margin:10pt 0; }
-  .cn-trajet .cn-l, .cn-trajet .cn-d, .cn-trajet .cn-v { color:#C00000; }
-  /* Couts : libelle a gauche, valeur alignee au centre, cout TKM repete a droite */
-  .cn-coutrow { display:grid; grid-template-columns:38% 32% 1fr; align-items:baseline; font-size:9pt; margin:5pt 0; }
-  .cn-coutlab { font-weight:bold; padding-left:5%; }
-  .cn-coutval { font-weight:bold; text-align:center; }
-  .cn-couttkm { text-align:right; color:#C00000; font-weight:bold; padding-right:8%; }
-  .cn-dates { display:flex; justify-content:space-between; font-size:7pt; font-weight:bold; margin:10pt 0 4pt; }
-  .cn-sign { display:flex; justify-content:space-between; font-size:7pt; font-weight:bold; text-align:center; }
-  .cn-sign > div { width:19.3%; }
-  .cn-cadres { display:flex; justify-content:space-between; margin-top:4pt; }
-  .cn-cadre { width:19.3%; height:48pt; border:0.75pt solid #000; }
-  .cn-nb { color:#C00000; font-size:7pt; font-weight:bold; text-align:center; margin-top:12pt; }
-  .cn-actions { text-align:center; margin:10pt 0; }
+  @page { size:210mm 297mm; margin:0; }
+  html, body { margin:0; padding:0; background:#fff; }
+  .cn-page { position:relative; width:210mm; height:296.6mm; overflow:hidden; background:#fff; }
+  .cn-page svg { display:block; width:210mm; height:297mm; white-space:pre; font-kerning:none; text-rendering:geometricPrecision; }
+  .cn-actions { text-align:center; padding:10px; font:14px Arial,sans-serif; }
+  @media screen { body { background:#d9d9d9; } .cn-page { margin:0 auto 12mm; box-shadow:0 0 8px rgba(0,0,0,.35); } }
   @media print { .cn-actions { display:none; } }
 </style></head><body>
   <div class="cn-actions"><button onclick="window.print()">🖨 Imprimer / Enregistrer en PDF</button></div>
-  <div class="cn-head">
-    <div>
-      <img class="cn-logo" src="data:image/png;base64,${CONN_LOGO_CCC_B64}">
-      <div class="cn-heure">${esc(heureAffichee)}</div>
-    </div>
-
-  </div>
-  <div class="cn-titre">CONNAISSEMENT ENTREE USINE</div>
-  <div class="cn-port"><span class="mot">Port :</span> <span class="ville">ABIDJAN</span></div>
-  <div class="cn-cols2" style="margin:20pt 0 0;">
-    ${paire('Campagne', 'campagne '+campagnePlage)}
-    ${paire('N° Connaissement', d.numeroConnaissement)}
-  </div>
-  <div class="cn-ligne3" style="margin:9pt 0 0;">
-    <div class="cn-cols">${paire('Produit', 'CACAO')}</div>
-    <div class="cn-cols">${paire('Récolte', recoltePlage)}</div>
-    <div class="cn-cols">${paire('Traite', d.traite||'Principale')}</div>
-  </div>
-  <div class="cn-trait"></div>
-  <div class="cn-sect">
-    <div class="cn-sect-t">EXPEDITEUR&nbsp;&nbsp;:&nbsp;&nbsp;${esc(c.ccc_num||'')}&nbsp;&nbsp;&nbsp;&nbsp;${esc((c.nom_complet||c.nom||'').toUpperCase())}</div>
-    <div class="cn-cols2">
-      ${paire('Représentant', c.representant_legal_nom)}
-      ${paire('Département', d.departement)}
-      ${paire('Contact', c.representant_legal_contact)}
-      ${paire('Sous-préfecture', d.sousPrefecture)}
-      ${paire('Adresse', d.adresseExpediteur)}
-      ${paire('Magasin', d.magasinExpediteur)}
-    </div>
-  </div>
-  <div class="cn-trait"></div>
-  <div class="cn-sect">
-    <div class="cn-qrow">
-      <div style="flex:1;">
-        <div class="cn-sect-t">TRANSPORTEUR</div>
-        <div class="cn-cols">
-          ${paire('Nom transporteur', d.nomTransporteur)}
-          ${paire('Immat. véhicule', d.immatVehicule)}
-          ${paire('Immat. Remorque', d.immatRemorque)}
-          ${paire('Nom Chauffeur', d.nomChauffeur)}
-        </div>
-      </div>
-      ${d.qrDataUrl ? `<img class="cn-qr" src="${d.qrDataUrl}">` : ''}
-    </div>
-  </div>
-  <div class="cn-trait"></div>
-  <div class="cn-sect">
-    <div class="cn-sect-t">DESTINATAIRE&nbsp;&nbsp;:&nbsp;&nbsp;${esc(CONN_CODE_EXPORTATEUR)}&nbsp;&nbsp;&nbsp;&nbsp;${esc(CONN_DESTINATAIRE.nom)}</div>
-    <div class="cn-cols2">
-      ${paire('Représentant', CONN_DESTINATAIRE.representant)}
-      ${paire('Destination', CONN_DESTINATAIRE.destination)}
-      ${paire('Contact Tél.', '')}
-      ${paire("Lieu d'arrivée", CONN_DESTINATAIRE.lieuArrivee)}
-      ${paire('Adresse', '')}
-      ${paire('Magasin', CONN_DESTINATAIRE.magasin)}
-    </div>
-  </div>
-  <div class="cn-trait"></div>
-  <table class="cn-t">
-    <colgroup><col style="width:24.4%"><col style="width:23.4%"><col style="width:26.6%"><col style="width:25.6%"></colgroup>
-    <tr><th>RUBRIQUE</th><th>QUANTITE CHARGEE</th><th>QUANTITE RECEPTIONNEE</th><th>Certification</th></tr>
-    <tr><td class="lib">Nombre de sacs</td><td class="num">${esc(d.nombreSacs||'')}</td><td class="num">0</td><td class="cert" rowspan="3">RAINFOREST</td></tr>
-    <tr><td class="lib">Poids brut (Kg)</td><td class="num">${connFmtKg(d.poidsBrut)}</td><td class="num">0,00</td></tr>
-    <tr><td class="lib">Poids net (Kg)</td><td class="num">${connFmtKg(d.poidsNet)}</td><td class="num">0,00</td></tr>
-  </table>
-  <div class="cn-trajet">
-    <div class="cn-cols">${paire('Lieu de départ', d.lieuDepart)}</div>
-    <div class="cn-cols">${paire('Distance', d.distance)}</div>
-    <div class="cn-cols">${paire('Coût TKM', d.coutTkm)}</div>
-  </div>
-  <div class="cn-coutrow">
-    <div class="cn-coutlab">Coût de transport théorique&nbsp;:</div>
-    <div class="cn-coutval">${d.coutTheorique!=null?connFmtKg(d.coutTheorique)+' FCFA':''}</div>
-    <div class="cn-couttkm">${esc(d.coutTkm||'')}</div>
-  </div>
-  <div class="cn-coutrow">
-    <div class="cn-coutlab">Coût de transport réel&nbsp;:</div>
-    <div class="cn-coutval">0 FCFA</div>
-    <div class="cn-couttkm"></div>
-  </div>
-  <div class="cn-dates">
-    <div>Date Edition&nbsp;:&nbsp;&nbsp;${esc(dateAffichee)}</div>
-    <div>Date réception&nbsp;:</div>
-    <div>Date réception&nbsp;:</div>
-  </div>
-  <div class="cn-sign">
-    <div>Signature expéditeur</div>
-    <div>Signature réceptionnaire</div>
-    <div>Signature agent pesée</div>
-  </div>
-  <div class="cn-cadres">
-    <div class="cn-cadre"></div><div class="cn-cadre"></div><div class="cn-cadre"></div>
-  </div>
-  <div class="cn-nb">NB : Le coût du transport = (poids net réceptionné x coût TKM)</div>
+  <div class="cn-page"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 210 297">${svg}</svg></div>
+<scr${'ipt'}>
+  // Texte trop long pour sa zone : on le comprime pour qu'il reste dans sa colonne.
+  window.addEventListener('load', function(){
+    document.querySelectorAll('text[data-maxw]').forEach(function(t){
+      var m = parseFloat(t.getAttribute('data-maxw'));
+      try{ if (t.getComputedTextLength() > m){ t.setAttribute('textLength', m); t.setAttribute('lengthAdjust', 'spacingAndGlyphs'); } }catch(e){}
+    });
+  });
+<\/script>
 </body></html>`;
 }
 
@@ -9149,6 +9198,7 @@ function renderDashboardTab(){
     + '<button class="btn" onclick="exportCsv()">Exporter (Excel)</button>'
     + '<button class="btn btn-primary" '+(state.cooperatives.length===0?'disabled title="Crée une coopérative d\'abord"':'onclick="openModal(\'importRapportCCC\')"')+'>Importer un rapport CCC</button>'
     + ocBoutonTracerVolume(state.coopFilter)
+    + ocBoutonGenererConnaissement()
     + (nQueueCoops>0 ? '<button class="btn" style="border-color:var(--warn);color:var(--warn);" onclick="openAlertQueue()">Traiter toutes les alertes (' + nQueueCoops + ' coopérative' + (nQueueCoops>1?'s':'') + ')</button>' : '')
     + '</div>';
 
@@ -9262,7 +9312,7 @@ function renderCoopDashboard(){
   html += '<div class="top" style="margin-bottom:10px;">'
     + '<div><h1 style="font-size:19px;">'+esc(coop.nom)+(coop.ccc_num?' <span class="num" style="font-size:14px;color:var(--ink-faint);">('+esc(coop.ccc_num)+')</span>':'')+'</h1>'
     + '<p class="sub"><span class="badge neutral">'+esc(coop.statut||'—')+'</span>'+(coop.certifications?' · '+esc(coop.certifications):'')+'</p></div>'
-    + '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start;">' + ocBoutonTracerVolume(coop.id)
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start;">' + ocBoutonTracerVolume(coop.id) + ocBoutonGenererConnaissement()
     + '<button class="btn" onclick="openModal(\'cooperative\','+esc(JSON.stringify(coop)).replace(/&#39;/g,"&apos;")+')">Modifier la fiche</button>'
     + '</div>'
     + '</div>';
