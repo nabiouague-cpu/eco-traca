@@ -1396,7 +1396,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-09-24-37';
+const APP_VERSION = '2026-09-24-38';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7771,6 +7771,35 @@ function evolutionSvg(achatsSorted, pot){
 function getDocCheck(coopId, doc){
   return state.docCheck.find(d=>d.cooperative_id===coopId && d.doc===doc) || null;
 }
+// Depot direct d'un document par l'admin, pour les coopératives enregistrées
+// manuellement (sans compte portail -- elles ne peuvent donc jamais deposer
+// elles-memes) comme pour toute coopérative, par commodite. Meme convention
+// de chemin de stockage que le portail (coopId/documents/...), pour que le
+// fichier soit traite exactement comme un depot de la cooperative.
+async function ocAdminDeposerDocCoop(coopId, idx, input){
+  const file = input.files[0];
+  if (!file) return;
+  const doc = DOCS_REQUIS[idx];
+  let rec = getDocCheck(coopId, doc);
+  const nouvelle = !rec;
+  if (nouvelle){ rec = { id: genId('dc'), cooperative_id: coopId, doc, disponible:false, rappels:[] }; }
+  try{
+    const path = coopId + '/documents/' + rec.id + '_' + Date.now().toString(36) + '_' + assainirNomFichierOc(file.name);
+    const { error: upErr } = await supabaseClient.storage.from('documents-coop').upload(path, file, { upsert:true });
+    if (upErr){ showToast("Échec de l'envoi : "+upErr.message); input.value=''; return; }
+    rec.disponible = true; rec.fichier_path = path; rec.fichier_nom = file.name;
+    if (nouvelle) state.docCheck.push(rec);
+    const { error } = await supabaseClient.from('doc_check').upsert({
+      id: rec.id, cooperative_id: coopId, doc,
+      disponible:true, fichier_path:path, fichier_nom:file.name,
+      soumis_par: state.session.user.id, soumis_le: new Date().toISOString(),
+    });
+    if (error){ showToast("Échec de l'enregistrement : "+error.message); input.value=''; return; }
+    showToast('Document ajouté.', 'success');
+    render();
+  }catch(e){ showToast('Erreur : '+e.message); }
+  input.value = '';
+}
 async function toggleDocCheck(coopId, idx){
   const doc = DOCS_REQUIS[idx];
   let rec = getDocCheck(coopId, doc);
@@ -8270,6 +8299,11 @@ function renderChecklistForCoop(coopId){
       + '<span>'+esc(doc)+'</span></label>'
       + (rec && rec.fichier_path ? '<button class="btn-ghost" title="Voir le document sans le télécharger" onclick="apercuFichier(\''+escJs(rec.fichier_path)+'\',\''+escJs(rec.fichier_nom||'')+'\',\''+escJs(doc+' — '+coop.nom)+'\')">👁 Aperçu</button>'
         + '<button class="btn-ghost" onclick="telechargerFichierDemande(\''+esc(rec.fichier_path)+'\',\''+esc(rec.fichier_nom||'')+'\')">'+esc(rec.fichier_nom||'Télécharger')+'</button>' : '')
+      // Depot direct par l'admin -- utile pour une cooperative enregistree
+      // manuellement (sans compte portail, donc sans autre moyen de deposer),
+      // et disponible pour toute cooperative par commodite.
+      + '<input type="file" id="ocAdminDoc-'+coopId+'-'+i+'" style="display:none;" onchange="ocAdminDeposerDocCoop(\''+coopId+'\','+i+',this)">'
+      + '<button class="btn-ghost" onclick="document.getElementById(\'ocAdminDoc-'+coopId+'-'+i+'\').click()">+ Ajouter</button>'
       + (rappelsCount>0 ? '<span class="hint">'+rappelsCount+' relance(s) — dernière le '+esc(rec.rappels[rec.rappels.length-1])+'</span>' : '')
       + blocVersions
       + '</div>';
