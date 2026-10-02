@@ -83,6 +83,8 @@
   .btn-ghost{color:var(--accent);}
   .btn-danger-text{color:var(--danger);}
   a.btn-ghost{display:inline-block;}
+  /* Meme gabarit que les badges de statut (« En cours de validation ») */
+  .btn-ghost.btn-compact{font-size:11.5px;padding:3px 10px;border-radius:20px;line-height:1.35;}
   .btn-ghost:hover:not(:disabled){background:var(--accent-soft);border-color:var(--accent-line);}
   .btn-danger-text:hover:not(:disabled){background:var(--danger-bg);border-color:var(--danger-line);}
   .btn-ghost:disabled,.btn-danger-text:disabled{opacity:.4;cursor:not-allowed;}
@@ -819,7 +821,7 @@ const ICON_DEMANDES = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor
 function openContratRAModal(coopId){
   const coop = coopById(coopId);
   if (!coop) return;
-  if (coop.statut!=='Certifiée'){ showToast("Le contrat n'est disponible que pour une coopérative certifiée."); return; }
+  if (coop.statut==='Non certifiée'){ showToast("Cette coopérative n'est pas certifiée."); return; }
   const missing = [];
   if (!coop.rccm) missing.push('N° RCCM');
   if (!coop.ccc_num) missing.push('N° agrément CCC');
@@ -828,7 +830,12 @@ function openContratRAModal(coopId){
   if (!coop.representant_legal_nom) missing.push('Nom du représentant légal');
   if (!coop.siege_social && !coop.ville) missing.push('Ville ou Siège social');
   if (missing.length>0){
-    showToast('Champs manquants pour générer le contrat : '+missing.join(', ')+'. Complète la fiche coopérative (Modifier) avant de continuer.');
+    // Les donnees de certification ne s'affichent dans la fiche que pour « Certifiée » : on l'indique pour ne pas bloquer.
+    const manqueCertif = missing.includes('Identifiant de certification') || missing.includes('Volume certificat');
+    showToast('Champs manquants pour générer le contrat : '+missing.join(', ')+'. '
+      + (coop.statut!=='Certifiée' && manqueCertif
+          ? "L'identifiant et le volume de certification se renseignent dans la fiche (Modifier) lorsque la coopérative est « Certifiée » : passe-la d'abord en « Certifiée », puis reviens générer le contrat."
+          : 'Complète la fiche coopérative (Modifier) avant de continuer.'));
     return;
   }
   state.modal = {type:'contratRA', payload:{coopId, campagne_label:'2026-2027', periode_label:'Septembre 2026 à août 2027', date_debut:'2026-09-01'}};
@@ -1183,7 +1190,7 @@ async function enregistrerNomsComplets(){
 }
 
 function ouvrirGenerationContratsGroupe(){
-  const certifiees = state.cooperatives.filter(c=>c.statut==='Certifiée')
+  const certifiees = state.cooperatives.filter(c=>c.statut!=='Non certifiée')
     .sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'}));
   if (certifiees.length===0){ showToast('Aucune coopérative certifiée pour le moment.'); return; }
   state.modal = {type:'contratsGroupe', payload:{
@@ -1484,7 +1491,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-53';
+const APP_VERSION = '2026-10-02-54';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8959,7 +8966,7 @@ function renderCoopCard(c){
     + '<button class="btn-ghost" onclick="ouvrirEnvoiMessage(\''+c.id+'\')">✉ Message</button>'
     + '<button class="btn-ghost" onclick="ouvrirEnvoiDocuments(\''+c.id+'\')">📎 Documents</button>'
     + '<button class="btn-ghost" onclick="openModal(\'cooperative\', '+esc(JSON.stringify(c)).replace(/&#39;/g,"&apos;")+')">Modifier</button>'
-    + (c.statut==='Certifiée' ? '<button class="btn-ghost" onclick="openContratRAModal(\''+c.id+'\')">Générer le contrat</button>' : '')
+    + (c.statut!=='Non certifiée' ? '<button class="btn-ghost btn-compact" onclick="openContratRAModal(\''+c.id+'\')">Générer le contrat</button>' : '')
     + '<button class="btn-ghost" onclick="toggleExpandCoop(\''+c.id+'\')">'+(state.expandedCoop.has(c.id)?'Fermer':'Détail')+'</button>'
     + '<button class="btn-danger-text" onclick="deleteCooperative(\''+c.id+'\')">Supprimer</button>'
     + '</div>';
