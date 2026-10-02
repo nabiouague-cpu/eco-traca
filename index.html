@@ -760,7 +760,7 @@ const ICON_DEMANDES = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor
 function openContratRAModal(coopId){
   const coop = coopById(coopId);
   if (!coop) return;
-  if (coop.statut==='Non certifiée'){ showToast("Cette coopérative n'est pas certifiée."); return; }
+  if (coop.statut!=='Certifiée'){ showToast("Le contrat n'est disponible que pour une coopérative certifiée."); return; }
   const missing = [];
   if (!coop.rccm) missing.push('N° RCCM');
   if (!coop.ccc_num) missing.push('N° agrément CCC');
@@ -988,7 +988,11 @@ function toggleToutesCoopsSelection(typeModal){
 // portail cooperative (onbEnregistrerFiche), pour rester coherent des deux cotes.
 function ocAcToggleCertifBlock(statut){
   const bloc = document.getElementById('acBlocCertif');
-  if (bloc) bloc.style.display = (statut === 'Non certifiée') ? 'none' : 'grid';
+  if (bloc) bloc.style.display = (statut === 'Certifiée') ? 'grid' : 'none';
+  if (statut !== 'Certifiée'){
+    // nouvelle fiche : rien a conserver dans les champs de certification
+    ['acCertifications','acIdentifiantCertif','acDateFinLicence','acVolumeCertificat'].forEach(id=>{ const el=document.getElementById(id); if (el) el.value=''; });
+  }
 }
 function ouvrirAjoutCooperative(){
   state.modal = {type:'ajoutCooperative', payload:{}};
@@ -1024,11 +1028,12 @@ async function enregistrerAjoutCooperative(){
 
   const payload = {
     nom, nom_complet, type:'cooperative', statut,
-    certifications: v('acCertifications').trim(),
+    // Les donnees de certification ne concernent qu'une cooperative « Certifiée ».
+    certifications: statut==='Certifiée' ? v('acCertifications').trim() : '',
     rccm: v('acRccm').trim(), ccc_num: v('acCccNum').trim(),
-    identifiant_certification: v('acIdentifiantCertif').trim(),
-    date_fin_licence: v('acDateFinLicence') || null,
-    volume_certificat: v('acVolumeCertificat') ? Number(v('acVolumeCertificat')) : null,
+    identifiant_certification: statut==='Certifiée' ? v('acIdentifiantCertif').trim() : '',
+    date_fin_licence: statut==='Certifiée' ? (v('acDateFinLicence') || null) : null,
+    volume_certificat: statut==='Certifiée' && v('acVolumeCertificat') ? Number(v('acVolumeCertificat')) : null,
     ville: v('acVille').trim(), siege_social: v('acSiegeSocial').trim(), adresse_postale: v('acAdressePostale').trim(),
     representant_legal_nom, representant_legal_contact,
     contact_nom, contact_contact,
@@ -1119,7 +1124,7 @@ async function enregistrerNomsComplets(){
 }
 
 function ouvrirGenerationContratsGroupe(){
-  const certifiees = state.cooperatives.filter(c=>c.statut!=='Non certifiée')
+  const certifiees = state.cooperatives.filter(c=>c.statut==='Certifiée')
     .sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'}));
   if (certifiees.length===0){ showToast('Aucune coopérative certifiée pour le moment.'); return; }
   state.modal = {type:'contratsGroupe', payload:{
@@ -1420,7 +1425,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-47';
+const APP_VERSION = '2026-10-02-48';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1747,6 +1752,7 @@ async function validerDemandeIdentite(id){
     const champs = d.champs_proposes || {};
     const propre = {};
     Object.entries(champs).forEach(([k,v])=>{ if (v) propre[k]=v; });
+    if (propre.statut === 'Non certifiée'){ propre.certifications = ''; propre.identifiant_certification = ''; propre.date_fin_licence = null; propre.volume_certificat = 0; }
     const { error: updErr } = await supabaseClient.from('cooperatives').update(propre).eq('id', d.cooperative_id);
     if (updErr){ showToast('Échec de la mise à jour de la fiche : '+updErr.message); return; }
     const { error: diErr } = await supabaseClient.from('demandes_identite').update({statut:'validee', traite_le: new Date().toISOString()}).eq('id', id);
@@ -7216,10 +7222,13 @@ function closeModal(){
 
 function toggleCertifFields(){
   const statutEl = document.querySelector('select[name="statut"]');
-  const hide = statutEl && statutEl.value === 'Non certifiée';
+  // Les donnees de certification ne s'affichent que pour « Certifiée » (masquees pour « En cours » et « Non certifiée »).
+  const hide = !!statutEl && statutEl.value !== 'Certifiée';
   const f1 = document.getElementById('certif-fields');
   if (f1) f1.style.display = hide ? 'none' : 'block';
-  if (hide){
+  // Pour « En cours », on masque SANS effacer (une cooperative en renouvellement garde son identifiant et son volume) ;
+  // seule « Non certifiée » vide ces champs.
+  if (statutEl && statutEl.value === 'Non certifiée'){
     const certifInput = document.querySelector('select[name="certifications"]');
     const idInput = document.querySelector('input[name="identifiant_certification"]');
     const dateFinInput = document.querySelector('input[name="date_fin_licence"]');
@@ -7260,6 +7269,7 @@ async function submitCooperative(){
     libelle2: fv('libelle2').trim() || null,
     libelle3: fv('libelle3').trim() || null,
   };
+  if (data.statut === 'Non certifiée'){ data.certifications = ''; data.identifiant_certification = ''; data.date_fin_licence = null; data.volume_certificat = 0; }
   let coopId;
   if (editId){
     const existing = state.cooperatives.find(c=>c.id===editId);
@@ -8819,9 +8829,9 @@ function renderCoopCard(c){
   let html = '<div class="coop-card'+(aVerifier?' unverified':'')+'" id="coop-card-'+esc(c.id)+'">'
     + '<div class="coop-card-head">'
     + '<div><div class="coop-card-name">'+esc(c.nom)+(c.verifiee?' <span class="verified-badge" title="Coopérative vérifiée">✓</span>':'')+(c.ccc_num?' <span class="coop-card-ccc">('+esc(c.ccc_num)+')</span>':'')+'</div>'
-    + '<div class="coop-card-cert">'+esc(c.certifications||'—')+'</div></div>'
+    + '<div class="coop-card-cert">'+esc(c.statut==='Certifiée' ? (c.certifications||'—') : '—')+'</div></div>'
     + '<div style="display:flex;align-items:stretch;gap:8px;flex-shrink:0;">'
-    + certificationLogoHtml(c.certifications)
+    + (c.statut==='Certifiée' ? certificationLogoHtml(c.certifications) : '')
     + '<span class="badge neutral" style="align-self:center;">'+esc(c.statut||'—')+'</span>'
     + '</div>'
     + '</div>'
@@ -8840,7 +8850,7 @@ function renderCoopCard(c){
     + '<button class="btn-ghost" onclick="ouvrirEnvoiMessage(\''+c.id+'\')">✉ Message</button>'
     + '<button class="btn-ghost" onclick="ouvrirEnvoiDocuments(\''+c.id+'\')">📎 Documents</button>'
     + '<button class="btn-ghost" onclick="openModal(\'cooperative\', '+esc(JSON.stringify(c)).replace(/&#39;/g,"&apos;")+')">Modifier</button>'
-    + (c.statut!=='Non certifiée' ? '<button class="btn-ghost" onclick="openContratRAModal(\''+c.id+'\')">Générer le contrat</button>' : '')
+    + (c.statut==='Certifiée' ? '<button class="btn-ghost" onclick="openContratRAModal(\''+c.id+'\')">Générer le contrat</button>' : '')
     + '<button class="btn-ghost" onclick="toggleExpandCoop(\''+c.id+'\')">'+(state.expandedCoop.has(c.id)?'Fermer':'Détail')+'</button>'
     + '<button class="btn-danger-text" onclick="deleteCooperative(\''+c.id+'\')">Supprimer</button>'
     + '</div>';
@@ -8855,9 +8865,9 @@ function renderCoopCard(c){
       + '<div><span>Adresse postale :</span> '+esc(c.adresse_postale||'—')+'</div>'
       + '<div><span>Ville :</span> '+esc(c.ville||'—')+'</div>'
       + '<div><span>Siège social :</span> '+esc(c.siege_social||'—')+'</div>'
-      + (c.statut!=='Non certifiée' ? '<div><span>Identifiant de certification :</span> '+esc(c.identifiant_certification||'—')+'</div>' : '')
-      + (c.statut!=='Non certifiée' ? '<div><span>Date de fin de licence :</span> '+esc(c.date_fin_licence||'—')+'</div>' : '')
-      + (c.statut!=='Non certifiée' ? '<div><span>Volume certificat :</span> '+(c.volume_certificat?fmtKg(c.volume_certificat):'—')+'</div>' : '')
+      + (c.statut==='Certifiée' ? '<div><span>Identifiant de certification :</span> '+esc(c.identifiant_certification||'—')+'</div>' : '')
+      + (c.statut==='Certifiée' ? '<div><span>Date de fin de licence :</span> '+esc(c.date_fin_licence||'—')+'</div>' : '')
+      + (c.statut==='Certifiée' ? '<div><span>Volume certificat :</span> '+(c.volume_certificat?fmtKg(c.volume_certificat):'—')+'</div>' : '')
       + '</div>'
       + '<div class="hint" style="margin-bottom:8px;">Producteurs de cette coopérative</div>'
       + '<div class="achat-list">'
@@ -9473,7 +9483,7 @@ function renderCoopDashboard(){
 
   html += '<div class="top" style="margin-bottom:10px;">'
     + '<div><h1 style="font-size:19px;">'+esc(coop.nom)+(coop.ccc_num?' <span class="num" style="font-size:14px;color:var(--ink-faint);">('+esc(coop.ccc_num)+')</span>':'')+'</h1>'
-    + '<p class="sub"><span class="badge neutral">'+esc(coop.statut||'—')+'</span>'+(coop.certifications?' · '+esc(coop.certifications):'')+'</p></div>'
+    + '<p class="sub"><span class="badge neutral">'+esc(coop.statut||'—')+'</span>'+(coop.statut==='Certifiée' && coop.certifications?' · '+esc(coop.certifications):'')+'</p></div>'
     + '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start;">' + ocBoutonTracerVolume(coop.id) + ocBoutonGenererConnaissement()
     + '<button class="btn" onclick="openModal(\'cooperative\','+esc(JSON.stringify(coop)).replace(/&#39;/g,"&apos;")+')">Modifier la fiche</button>'
     + '</div>'
@@ -9487,9 +9497,9 @@ function renderCoopDashboard(){
     + '<div><span>Adresse postale :</span> '+esc(coop.adresse_postale||'—')+'</div>'
     + '<div><span>Ville :</span> '+esc(coop.ville||'—')+'</div>'
     + '<div><span>Siège social :</span> '+esc(coop.siege_social||'—')+'</div>'
-    + (coop.statut!=='Non certifiée' ? '<div><span>Identifiant de certification :</span> '+esc(coop.identifiant_certification||'—')+'</div>' : '')
-    + (coop.statut!=='Non certifiée' ? '<div><span>Date de fin de licence :</span> '+esc(coop.date_fin_licence||'—')+'</div>' : '')
-    + (coop.statut!=='Non certifiée' ? '<div><span>Volume certificat :</span> '+(coop.volume_certificat?fmtKg(coop.volume_certificat):'—')+'</div>' : '')
+    + (coop.statut==='Certifiée' ? '<div><span>Identifiant de certification :</span> '+esc(coop.identifiant_certification||'—')+'</div>' : '')
+    + (coop.statut==='Certifiée' ? '<div><span>Date de fin de licence :</span> '+esc(coop.date_fin_licence||'—')+'</div>' : '')
+    + (coop.statut==='Certifiée' ? '<div><span>Volume certificat :</span> '+(coop.volume_certificat?fmtKg(coop.volume_certificat):'—')+'</div>' : '')
     + '</div>';
 
   html += '<div class="cards">'
@@ -9690,7 +9700,7 @@ function _renderBrut(){
       + '<label class="field">Statut<select name="statut" onchange="toggleCertifFields()">'
       + ['Certifiée','En cours de certification','Non certifiée'].map(s=>'<option value="'+s+'"'+(c.statut===s?' selected':'')+'>'+s+'</option>').join('')
       + '</select></label>'
-      + '<div id="certif-fields" style="display:'+(c.statut==='Non certifiée'?'none':'block')+'">'
+      + '<div id="certif-fields" style="display:'+(c.statut==='Certifiée'?'block':'none')+'">'
       + '<label class="field">Certification<select name="certifications">'
       + ['','Rainforest Alliance','Fairtrade','Cocoa Horizon'].map(s=>'<option value="'+s+'"'+(c.certifications===s?' selected':'')+'>'+(s||'—')+'</option>').join('')
       + '</select></label>'
