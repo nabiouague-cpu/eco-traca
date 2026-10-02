@@ -85,6 +85,28 @@
   a.btn-ghost{display:inline-block;}
   /* Meme gabarit que les badges de statut (« En cours de validation ») */
   .btn-ghost.btn-compact{font-size:11.5px;padding:3px 10px;border-radius:20px;line-height:1.35;}
+  /* Choix en cartes : meme gabarit partout (cases pour plusieurs choix, ronds pour un seul), alignes en grille */
+  .choix-grille{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:6px;}
+  .choix-grille.une-colonne{grid-template-columns:1fr;}
+  .choix-grille > .choix:last-child:nth-child(odd){grid-column:1 / -1;}
+  .choix{display:block;position:relative;cursor:pointer;margin:0;font-weight:400;}
+  .choix-input{position:absolute;opacity:0;pointer-events:none;width:1px;height:1px;margin:0;}
+  .choix-carte{display:flex;align-items:center;gap:11px;box-sizing:border-box;height:100%;min-height:54px;padding:10px 13px;border:1.5px solid var(--border);border-radius:10px;background:var(--surface);color:var(--ink);font-size:13px;line-height:1.35;transition:border-color .12s ease,background-color .12s ease;}
+  .choix:hover .choix-carte{border-color:var(--accent-line);background:var(--surface-2);}
+  .choix-input:focus-visible + .choix-carte{outline:2px solid var(--accent);outline-offset:2px;}
+  .choix-puce{flex:none;width:18px;height:18px;box-sizing:border-box;border:1.5px solid var(--ink-faint);border-radius:5px;background:var(--surface);display:flex;align-items:center;justify-content:center;transition:background-color .12s ease,border-color .12s ease;}
+  .choix-puce.ronde{border-radius:50%;}
+  .choix-puce::after{content:"";width:8px;height:8px;border-radius:50%;background:#fff;transform:scale(0);transition:transform .12s ease;}
+  .choix-puce:not(.ronde)::after{width:9px;height:5px;border-radius:0;background:none;border-left:2px solid #fff;border-bottom:2px solid #fff;transform:rotate(-45deg) scale(0) translate(1px,-1px);}
+  .choix-texte{flex:1;min-width:0;}
+  .choix-titre{display:block;font-weight:600;}
+  .choix-sous{display:block;margin-top:2px;font-size:12px;color:var(--ink-soft);font-weight:400;}
+  .choix-input:checked + .choix-carte{border-color:var(--accent);background:var(--accent-soft);color:var(--accent);}
+  .choix-input:checked + .choix-carte .choix-texte{font-weight:600;}
+  .choix-input:checked + .choix-carte .choix-sous{color:var(--ink-soft);font-weight:400;}
+  .choix-input:checked + .choix-carte .choix-puce{background:var(--accent);border-color:var(--accent);}
+  .choix-input:checked + .choix-carte .choix-puce.ronde::after{transform:scale(1);}
+  .choix-input:checked + .choix-carte .choix-puce:not(.ronde)::after{transform:rotate(-45deg) scale(1) translate(1px,-1px);}
   .btn-ghost:hover:not(:disabled){background:var(--accent-soft);border-color:var(--accent-line);}
   .btn-danger-text:hover:not(:disabled){background:var(--danger-bg);border-color:var(--danger-line);}
   .btn-ghost:disabled,.btn-danger-text:disabled{opacity:.4;cursor:not-allowed;}
@@ -1513,7 +1535,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-57';
+const APP_VERSION = '2026-10-02-58';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -1980,7 +2002,7 @@ function renderAccesTab(){
    Demandes coopératives (cote ECORIGINE)
    ============================================================ */
 const DEMANDE_TYPE_LABELS = {
-  compliance: 'Documents de conformité (Compliance)',
+  compliance: 'Documents de conformité',
   masterdata: 'Registre des membres et données de géolocalisation',
   product_movements: 'Fiches de traçabilité',
   questionnaires: 'Questionnaires',
@@ -2606,7 +2628,12 @@ function toggleDemandeType(type){
   }
   const s = state.newDemandeTypes;
   if (s.has(type)) s.delete(type); else s.add(type);
+  // La fenetre est redessinee (des champs apparaissent selon les types) : on conserve sa position de defilement.
+  const fenetre = document.querySelector('.modal');
+  const haut = fenetre ? fenetre.scrollTop : 0;
   render();
+  const fenetreApres = document.querySelector('.modal');
+  if (fenetreApres) fenetreApres.scrollTop = haut;
   if (state.modal && state.modal.payload && state.modal.payload.fichierSource){
     const newInput = document.getElementById('demande_fichier_source_input');
     if (newInput){
@@ -10378,18 +10405,20 @@ function _renderBrut(){
       + state.cooperatives.map(c=>'<option value="'+esc(c.id)+'"'+(nd.demande_cooperative_id===c.id?' selected':'')+'>'+esc(c.nom)+'</option>').join('')
       + '</select></label>'
       + '<div class="field"><label>Type de donnée demandée</label>'
-      + '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:6px;">'
+      + '<div class="choix-grille">'
       + Object.entries(DEMANDE_TYPE_LABELS).map(([k,label])=>{
           const active = state.newDemandeTypes.has(k);
-          return '<div onclick="toggleDemandeType(\''+k+'\')" style="cursor:pointer;padding:14px 12px;border-radius:9px;text-align:center;font-size:13px;border:2px solid '+(active?'var(--accent)':'var(--border)')+';background:'+(active?'var(--accent-soft)':'var(--surface)')+';color:'+(active?'var(--accent)':'var(--ink)')+';font-weight:'+(active?'600':'400')+';">'+esc(label)+'</div>';
+          return '<label class="choix"><input type="checkbox" class="choix-input" '+(active?'checked':'')+' onchange="toggleDemandeType(\''+k+'\')">'
+            + '<span class="choix-carte"><span class="choix-puce"></span><span class="choix-texte">'+esc(label)+'</span></span></label>';
         }).join('')
       + '</div></div>'
       + (state.newDemandeTypes.has('masterdata')
           ? '<div class="field"><label>Masterdata — quels fichiers demander ?</label>'
-            + '<div style="display:flex;flex-direction:column;gap:6px;margin-top:6px;">'
+            + '<div class="choix-grille une-colonne">'
             + [['les-deux','Registre des membres ET géolocalisation (les deux obligatoires)'],['registre','Uniquement le registre des membres'],['geolocalisation','Uniquement les données de géolocalisation']].map(([val,lbl])=>{
                 const checked = (nd.demande_masterdata_scope||'les-deux')===val;
-                return '<label style="display:flex;align-items:flex-start;gap:8px;font-weight:400;cursor:pointer;"><input type="radio" name="demande_masterdata_scope" value="'+val+'" '+(checked?'checked':'')+' style="margin-top:3px;"><span>'+esc(lbl)+'</span></label>';
+                return '<label class="choix"><input type="radio" class="choix-input" name="demande_masterdata_scope" value="'+val+'" '+(checked?'checked':'')+'>'
+                  + '<span class="choix-carte"><span class="choix-puce ronde"></span><span class="choix-texte">'+esc(lbl)+'</span></span></label>';
               }).join('')
             + '</div></div>'
           : '')
@@ -10397,8 +10426,13 @@ function _renderBrut(){
       + (state.newDemandeTypes.has('autres')
           ? '<label class="field">Document à joindre (optionnel)<input type="file" id="demande_fichier_source_input"></label>'
             + '<div class="field" style="margin:4px 0 14px;"><label style="font-weight:600;font-size:13px;display:block;margin-bottom:6px;">Nature du document joint</label>'
-            + '<label style="display:flex;align-items:flex-start;gap:8px;font-weight:400;margin-bottom:6px;cursor:pointer;"><input type="radio" name="demande_doc_nature" value="signer" '+((nd.demande_doc_nature||'signer')==='signer'?'checked':'')+' style="margin-top:3px;"><span>À signer et retourner — la coopérative doit le télécharger, le signer, puis soumettre la version signée en retour (contrat, code de conduite...).</span></label>'
-            + '<label style="display:flex;align-items:flex-start;gap:8px;font-weight:400;cursor:pointer;"><input type="radio" name="demande_doc_nature" value="transmettre" '+(nd.demande_doc_nature==='transmettre'?'checked':'')+' style="margin-top:3px;"><span>À transmettre simplement — la coopérative le télécharge pour information, aucun retour n\'est nécessaire.</span></label>'
+            + '<div class="choix-grille une-colonne">'
+            + [['signer','À signer et retourner','La coopérative le télécharge, le signe, puis soumet la version signée en retour (contrat, code de conduite…).'],['transmettre','À transmettre simplement','La coopérative le télécharge pour information, aucun retour n\'est nécessaire.']].map(([val,titre,sous])=>{
+                const checked = (nd.demande_doc_nature||'signer')===val;
+                return '<label class="choix"><input type="radio" class="choix-input" name="demande_doc_nature" value="'+val+'" '+(checked?'checked':'')+'>'
+                  + '<span class="choix-carte"><span class="choix-puce ronde"></span><span class="choix-texte"><span class="choix-titre">'+titre+'</span><span class="choix-sous">'+sous+'</span></span></span></label>';
+              }).join('')
+            + '</div>'
             + '</div>'
           : '')
       + '<label class="field">Ton nom (affiché à la coopérative)<input type="text" name="demande_demandeur_nom" value="'+esc(nd.demande_demandeur_nom||'')+'" placeholder="ex : Nabi Ouague"></label>'
