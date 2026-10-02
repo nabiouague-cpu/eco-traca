@@ -452,6 +452,22 @@
   .versions-doc > .version-ligne:first-of-type{border-top:none;}
   .check-item label{display:flex;align-items:center;gap:10px;cursor:pointer;flex:1;}
   .check-item input[type=checkbox]{width:16px;height:16px;accent-color:var(--accent);}
+  .doc-item{padding:13px 18px 14px;border-bottom:1px solid var(--border);}
+  .doc-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .doc-head input[type=checkbox]{width:16px;height:16px;accent-color:var(--accent);flex-shrink:0;}
+  .doc-nom{font-size:13.5px;font-weight:600;color:var(--ink);flex:1;min-width:120px;cursor:pointer;}
+  .doc-nom-lien{color:var(--accent);text-decoration:underline;text-decoration-color:var(--accent-line);text-underline-offset:3px;}
+  .doc-nom-lien:hover{text-decoration-color:var(--accent);}
+  .doc-etat{font-size:11.5px;padding:2px 9px;border-radius:999px;white-space:nowrap;}
+  .doc-etat.ok{background:var(--ok-bg);color:var(--ok);}
+  .doc-etat.manque{background:var(--warn-bg);color:var(--warn);}
+  .doc-actions{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:9px;}
+  .doc-btn{border:1px solid var(--border);background:var(--surface);color:var(--accent);padding:7px 6px;border-radius:7px;font-size:12.5px;font-family:inherit;cursor:pointer;text-align:center;white-space:nowrap;}
+  .doc-btn:hover:not(:disabled){background:var(--accent-soft);border-color:var(--accent-line);}
+  .doc-btn:disabled{opacity:.4;cursor:not-allowed;}
+  .doc-btn-danger{color:var(--danger);}
+  .doc-btn-danger:hover:not(:disabled){background:var(--danger-bg);border-color:var(--danger-line);}
+  .doc-relances{margin-top:6px;}
 
   @media (max-width:820px){
     .cards{grid-template-columns:repeat(2,1fr);}
@@ -559,6 +575,17 @@ const DOCS_REQUIS = [
   "Procès-verbal de la dernière Assemblée Générale Ordinaire (AGO)",
   'Certificat'
 ];
+// Intitule court affiche dans l'onglet Conformite : seul l'AFFICHAGE change, le nom complet de DOCS_REQUIS reste la
+// cle utilisee en base (et par le portail) pour retrouver chaque document.
+const DOCS_INTITULES = {
+  'BIC (si disponible)': 'BIC',
+  'ARF (Attestation de Régularité Fiscale)': 'ARF',
+  'Procuration pour les personnes mandataires (procuration de justice)': 'Procuration des mandataires',
+  'Procès-verbal de la dernière Assemblée Générale Ordinaire (AGO)': "PV de l'AGO",
+};
+function intituleDoc(doc){
+  return DOCS_INTITULES[doc] || String(doc||'').replace(/\s*\(si disponible\)\s*$/i, '');
+}
 
 let leafletMapInstance = null;
 
@@ -1425,7 +1452,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-48';
+const APP_VERSION = '2026-10-02-49';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8195,6 +8222,31 @@ async function ocAdminDeposerDocCoop(coopId, idx, input){
   }catch(e){ showToast('Erreur : '+e.message); }
   input.value = '';
 }
+// Supprime le FICHIER d'un document (apres confirmation) : le document repasse en « manquant ». Le declencheur d'archivage
+// de la base ne s'active que sur un REMPLACEMENT de fichier ; ici on retire donc aussi le fichier du stockage, sauf
+// s'il est encore utilise ailleurs.
+function supprimerDocCoop(coopId, idx){
+  const doc = DOCS_REQUIS[idx];
+  const rec = getDocCheck(coopId, doc);
+  if (!rec || !rec.fichier_path){ showToast('Aucun fichier à supprimer pour ce document.'); return; }
+  const coop = coopById(coopId);
+  askConfirm('Supprimer définitivement le fichier de « '+intituleDoc(doc)+' » ('+(coop?coop.nom:'coopérative')+') ?\n\n« '+(rec.fichier_nom||rec.fichier_path)+' » sera effacé et le document repassera en « manquant ». Cette action est irréversible.', async ()=>{
+    const chemin = rec.fichier_path;
+    const { error } = await supabaseClient.from('doc_check').update({ disponible:false, fichier_path:null, fichier_nom:null }).eq('id', rec.id);
+    if (error){ showToast('Échec de la suppression : '+error.message); return; }
+    rec.disponible = false; rec.fichier_path = ''; rec.fichier_nom = '';
+    const { data: encoreUtilise } = await supabaseClient.from('doc_check').select('id').eq('fichier_path', chemin).limit(1);
+    const { data: archive } = await supabaseClient.from('doc_check_versions').select('id').eq('fichier_path', chemin).limit(1);
+    if ((encoreUtilise && encoreUtilise.length>0) || (archive && archive.length>0)){
+      showToast('Document retiré de la liste (le fichier est encore utilisé ailleurs : conservé).', 'success');
+      render(); return;
+    }
+    const { error: errStock } = await supabaseClient.storage.from('documents-coop').remove([chemin]);
+    if (errStock) showToast("Document retiré de la liste, mais le fichier n'a pas pu être effacé du stockage : "+errStock.message);
+    else showToast('Document supprimé.', 'success');
+    render();
+  });
+}
 async function toggleDocCheck(coopId, idx){
   const doc = DOCS_REQUIS[idx];
   let rec = getDocCheck(coopId, doc);
@@ -8668,11 +8720,13 @@ function renderChecklistForCoop(coopId){
   const coop = coopById(coopId);
   if (!coop) return '';
   const missing = missingDocs(coopId);
-  let html = '<div class="panel"><div class="panel-head"><h2>Checklist documents — '+esc(coop.nom)+'</h2>'
-    + '<button class="btn btn-primary" onclick="genererEmailManquants(\''+coopId+'\')">Générer l\'email (documents manquants)</button>'
+  const nDispo = DOCS_REQUIS.length - missing.length;
+  let html = '<div class="panel"><div class="panel-head"><h2>Documents de conformité — '+esc(coop.nom)+' <span class="hint" style="font-weight:400;">('+nDispo+'/'+DOCS_REQUIS.length+' disponibles)</span></h2>'
+    + '<div class="row-actions">'
     + '<button class="btn-ghost" onclick="retourChecklistToutes()">← Toutes les coopératives</button>'
-    + '</div>';
-  html += '<div class="panel-note">Coche les documents disponibles ; « 👁 Aperçu » ouvre le document envoyé par la coopérative sans le télécharger. Le bouton ci-dessus liste automatiquement les cases non cochées et ouvre un email pré-rempli vers les adresses de la fiche coopérative.</div>';
+    + '<button class="btn btn-primary" onclick="genererEmailManquants(\''+coopId+'\')">Générer l\'email (documents manquants)</button>'
+    + '</div></div>';
+  html += '<div class="panel-note">Coche un document quand il est disponible. Cliquez sur son nom pour l\'afficher. Les trois boutons agissent sur le fichier de chaque document : <strong>Ajouter</strong> (ou remplacer), <strong>Télécharger</strong> et <strong>Supprimer</strong>.</div>';
   const versionsCoop = versionsDeCoop(coopId);
   if (versionsCoop.length>0){
     html += '<div class="panel-note">🗂 '+versionsCoop.length+' ancienne(s) version(s) archivée(s) pour cette coopérative ('+fmtMo(tailleVersions(versionsCoop))+'), rangées sous le document concerné. Vérifiez-les avec « Aperçu », puis supprimez-les quand vous êtes sûr. '
@@ -8681,25 +8735,43 @@ function renderChecklistForCoop(coopId){
   html += '<div class="checklist-grid">';
   DOCS_REQUIS.forEach((doc,i)=>{
     const rec = getDocCheck(coopId, doc);
-    const checked = rec && rec.disponible;
-    const rappelsCount = rec ? rec.rappels.length : 0;
+    const checked = !!(rec && rec.disponible);
+    const aFichier = !!(rec && rec.fichier_path);
+    const intitule = intituleDoc(doc);
+    const titreApercu = intitule+' — '+coop.nom;
+    const idCase = 'chk-'+coopId+'-'+i, idFichier = 'ocAdminDoc-'+coopId+'-'+i;
+    const rappelsCount = rec && rec.rappels ? rec.rappels.length : 0;
     const versions = versionsDeDoc(coopId, doc);
     const cleV = coopId+'|'+i;
     const ouvertV = !!(state.versionsOuvertes && state.versionsOuvertes[cleV]);
     const blocVersions = versions.length===0 ? '' :
       '<div class="versions-doc"><button class="btn-ghost" onclick="basculerVersionsDoc(\''+escJs(cleV)+'\')">🗂 '+versions.length+' ancienne(s) version(s) archivée(s) '+(ouvertV?'▲':'▼')+'</button>'
-      + (ouvertV ? versions.map(v=>ligneVersionHtml(v, doc+' — '+coop.nom)).join('') : '') + '</div>';
-    html += '<div class="check-item"><label>'
-      + '<input type="checkbox" '+(checked?'checked':'')+' onchange="toggleDocCheck(\''+coopId+'\','+i+')">'
-      + '<span>'+esc(doc)+'</span></label>'
-      + (rec && rec.fichier_path ? '<button class="btn-ghost" title="Voir le document sans le télécharger" onclick="apercuFichier(\''+escJs(rec.fichier_path)+'\',\''+escJs(rec.fichier_nom||'')+'\',\''+escJs(doc+' — '+coop.nom)+'\')">👁 Aperçu</button>'
-        + '<button class="btn-ghost" onclick="telechargerFichierDemande(\''+esc(rec.fichier_path)+'\',\''+esc(rec.fichier_nom||'')+'\')">'+esc(rec.fichier_nom||'Télécharger')+'</button>' : '')
-      // Depot direct par l'admin -- utile pour une cooperative enregistree
-      // manuellement (sans compte portail, donc sans autre moyen de deposer),
-      // et disponible pour toute cooperative par commodite.
-      + '<input type="file" id="ocAdminDoc-'+coopId+'-'+i+'" style="display:none;" onchange="ocAdminDeposerDocCoop(\''+coopId+'\','+i+',this)">'
-      + '<button class="btn-ghost" onclick="document.getElementById(\'ocAdminDoc-'+coopId+'-'+i+'\').click()">+ Ajouter</button>'
-      + (rappelsCount>0 ? '<span class="hint">'+rappelsCount+' relance(s) — dernière le '+esc(rec.rappels[rec.rappels.length-1])+'</span>' : '')
+      + (ouvertV ? versions.map(v=>ligneVersionHtml(v, titreApercu)).join('') : '') + '</div>';
+    let etat;
+    if (aFichier){
+      const d = rec.soumis_le ? new Date(rec.soumis_le) : null;
+      etat = '<span class="doc-etat ok">Fichier déposé'+(d && !isNaN(d) ? ' le '+esc(d.toLocaleDateString('fr-FR')) : '')+'</span>';
+    } else if (checked){
+      etat = '<span class="doc-etat ok">Disponible, sans fichier</span>';
+    } else {
+      etat = '<span class="doc-etat manque">Manquant</span>';
+    }
+    // Le nom ouvre l'apercu quand un fichier existe ; sinon il coche/decoche la case.
+    const nom = aFichier
+      ? '<span class="doc-nom doc-nom-lien" title="Afficher le document" onclick="apercuFichier(\''+escJs(rec.fichier_path)+'\',\''+escJs(rec.fichier_nom||'')+'\',\''+escJs(titreApercu)+'\')">'+esc(intitule)+'</span>'
+      : '<label class="doc-nom" for="'+idCase+'">'+esc(intitule)+'</label>';
+    html += '<div class="doc-item">'
+      + '<div class="doc-head">'
+      +   '<input type="checkbox" id="'+idCase+'" '+(checked?'checked':'')+' onchange="toggleDocCheck(\''+coopId+'\','+i+')">'
+      +   nom + etat
+      + '</div>'
+      + '<div class="doc-actions">'
+      +   '<input type="file" id="'+idFichier+'" style="display:none;" onchange="ocAdminDeposerDocCoop(\''+coopId+'\','+i+',this)">'
+      +   '<button class="doc-btn" title="Ajouter ou remplacer le fichier" onclick="document.getElementById(\''+idFichier+'\').click()">Ajouter</button>'
+      +   '<button class="doc-btn" '+(aFichier?'onclick="telechargerFichierDemande(\''+escJs(rec.fichier_path)+'\',\''+escJs(rec.fichier_nom||'')+'\')"':'disabled title="Aucun fichier à télécharger"')+'>Télécharger</button>'
+      +   '<button class="doc-btn doc-btn-danger" '+(aFichier?'onclick="supprimerDocCoop(\''+coopId+'\','+i+')"':'disabled title="Aucun fichier à supprimer"')+'>Supprimer</button>'
+      + '</div>'
+      + (rappelsCount>0 ? '<div class="hint doc-relances">'+rappelsCount+' relance(s) — dernière le '+esc(rec.rappels[rec.rappels.length-1])+'</div>' : '')
       + blocVersions
       + '</div>';
   });
@@ -8709,7 +8781,7 @@ function renderChecklistForCoop(coopId){
 }
 
 function renderChecklistSummary(){
-  let html = '<div class="panel"><div class="panel-head"><h2>Checklist documents par coopérative</h2></div>';
+  let html = '<div class="panel"><div class="panel-head"><h2>Documents de conformité par coopérative</h2></div>';
   if (state.cooperatives.length===0){
     html += '<div class="empty">Aucune coopérative enregistrée.</div>';
   } else {
