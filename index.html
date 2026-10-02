@@ -110,6 +110,10 @@
   .coop-card:last-child{margin-bottom:0;}
   .coop-card.unverified{border-color:var(--warn-line);}
   .coop-card.coop-trouvee{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-line);transition:box-shadow .3s;}
+  .panel.coop-trouvee{box-shadow:0 0 0 3px var(--accent-line);transition:box-shadow .3s;}
+  #btn-haut-page{position:fixed;right:18px;bottom:calc(18px + env(safe-area-inset-bottom,0px));display:flex;align-items:center;gap:6px;padding:10px 16px;border:none;border-radius:999px;background:var(--accent);color:#fff;font-family:var(--sans);font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.25);z-index:40;opacity:0;pointer-events:none;transform:translateY(8px);transition:opacity .2s,transform .2s;}
+  #btn-haut-page.visible{opacity:1;pointer-events:auto;transform:none;}
+  #btn-haut-page:hover{background:var(--teal);}
   .coop-search{position:relative;max-width:520px;margin:0 0 14px;}
   .coop-search input{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;background:var(--surface);color:var(--ink);}
   .coop-search input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
@@ -496,6 +500,7 @@
   <button onclick="location.reload()" style="background:#fff;color:var(--accent);border:none;border-radius:6px;padding:5px 14px;font-weight:600;cursor:pointer;">Actualiser maintenant</button>
 </div>
 <div id="app"><div class="loading">Chargement des données…</div></div>
+<button type="button" id="btn-haut-page" title="Retour en haut de la page" aria-label="Retour en haut de la page">↑ Haut de page</button>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -566,7 +571,7 @@ let state = {
   storageOk: true,
   coopDashboardId: null,
   coopFocusGroup: null,
-  coopSearch: '',
+  coopSearchTxt: {},
   expandedSections: new Set(),
   storageErrorMsg: '',
   changesSinceExport: 0,
@@ -1304,6 +1309,14 @@ function render(){
   if (app) app.dataset.ctx = contexteEcran();
   restaurerSaisies(s);
 }
+// Bouton « Haut de page » : apparait des qu'on a defile, ramene en haut de la page.
+(function(){
+  const b = document.getElementById('btn-haut-page'); if (!b) return;
+  const maj = ()=>{ b.classList.toggle('visible', (window.scrollY || document.documentElement.scrollTop || 0) > 300); };
+  window.addEventListener('scroll', maj, { passive:true });
+  b.addEventListener('click', ()=>{ window.scrollTo({ top:0, behavior:'smooth' }); });
+  maj();
+})();
 let toastAutoDismissId = 0;
 function showToast(message, type){
   state.toast = { message, type: type||'error' };
@@ -1407,7 +1420,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-01-45';
+const APP_VERSION = '2026-10-01-46';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -2245,13 +2258,13 @@ function renderStockageTab(){
     return String(b.date||'').localeCompare(String(a.date||'')); // date desc par defaut
   });
 
-  let html = '<div class="controls">'
-    + '<label class="field">Coopérative<select onchange="state.stockageCoopFilter=this.value;state.dossierStockageActif=null;state.stockageRecherche=\'\';render();">'
+  let html = ocRechercheCoopHtml('stockage') + '<div class="controls">'
+    + '<label class="field">Coopérative<select onchange="state.stockageCoopFilter=this.value;state.dossierStockageActif=null;state.coopSearchTxt.stockage=\'\';state.stockageRecherche=\'\';render();">'
     + state.cooperatives.slice().sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'})).map(c=>'<option value="'+c.id+'"'+(coopId===c.id?' selected':'')+'>'+esc(c.nom)+'</option>').join('')
     + '</select></label>'
     + '</div>';
 
-  html += '<div class="panel"><div class="panel-head"><h2>'+esc(coop?coop.nom:'')+' — '+fmtNum(totalFichiers)+' fichier(s) au total</h2>'
+  html += '<div class="panel" id="stock-panel"><div class="panel-head"><h2>'+esc(coop?coop.nom:'')+' — '+fmtNum(totalFichiers)+' fichier(s) au total</h2>'
     + '<div style="display:flex;gap:8px;">'
     + '<button class="btn" id="stock-export-selection-btn" '+(selection.length>0?'onclick="exporterDossiersStockage(\''+coopId+'\', ['+selection.map(c=>"'"+c+"'").join(',')+'])"':'disabled')+'>Exporter la sélection ('+selection.length+')</button>'
     + '<button class="btn btn-primary" id="stock-export-tout-btn" '+(totalFichiers>0?'onclick="exporterDossiersStockage(\''+coopId+'\', null)"':'disabled')+'>Tout exporter (ZIP)</button>'
@@ -8896,15 +8909,19 @@ function renderCoopGroup(sectionKey, title, list){
   return html;
 }
 
-// ===== Recherche d'une cooperative dans l'onglet Cooperatives =====
-let _ocCoopRechIdx = -1;
-function ocRechercheCoopHtml(){
+// ===== Recherche d'une cooperative (onglets Cooperatives et Stockage) =====
+// ctx = 'coops' (aller a la carte de la cooperative) ou 'stockage' (afficher le stockage de la cooperative).
+let _ocCoopRechIdx = {};
+function ocRechercheCoopHtml(ctx){
+  const txt = (state.coopSearchTxt && state.coopSearchTxt[ctx]) || '';
   return '<div class="coop-search">'
-    + '<input type="search" id="coop-search" autocomplete="off" placeholder="Rechercher une coopérative (nom ou code CCC)…" value="'+esc(state.coopSearch||'')+'" oninput="ocCoopRechercher(this.value)" onkeydown="ocCoopRechercheTouche(event)" onfocus="ocCoopRechercher(this.value)" onblur="setTimeout(ocCoopFermerListe,150)">'
-    + '<div class="coop-search-list" id="coop-search-list" style="display:none;"></div>'
+    + '<input type="search" id="coop-search-'+ctx+'" autocomplete="off" placeholder="Rechercher une coopérative (nom ou code CCC)…" value="'+esc(txt)+'"'
+    + ' oninput="ocCoopRechercher(this.value,\''+ctx+'\')" onkeydown="ocCoopRechercheTouche(event,\''+ctx+'\')" onfocus="ocCoopRechercher(this.value,\''+ctx+'\')"'
+    + ' onblur="setTimeout(function(){ocCoopFermerListe(\''+ctx+'\')},150)">'
+    + '<div class="coop-search-list" id="coop-search-list-'+ctx+'" style="display:none;"></div>'
     + '</div>';
 }
-// Coopératives correspondant à la saisie (nom, code CCC, nom complet), les plus proches d'abord.
+// Cooperatives correspondant a la saisie (nom, code CCC, nom complet), les plus proches d'abord.
 function ocCoopCorrespondances(q){
   const n = stripAccents(String(q||'')).toLowerCase().trim();
   if (!n) return [];
@@ -8921,60 +8938,81 @@ function ocCoopCorrespondances(q){
     .sort((a,b)=>a.s-b.s || String(a.c.nom||'').localeCompare(String(b.c.nom||''), 'fr', {sensitivity:'base'}))
     .slice(0, 8).map(x=>x.c);
 }
-function ocCoopRechercher(q){
-  state.coopSearch = q;
-  const box = document.getElementById('coop-search-list'); if (!box) return;
+function ocCoopRechercher(q, ctx){
+  state.coopSearchTxt = state.coopSearchTxt || {};
+  state.coopSearchTxt[ctx] = q;
+  const box = document.getElementById('coop-search-list-'+ctx); if (!box) return;
   if (!String(q||'').trim()){ box.style.display = 'none'; box.innerHTML = ''; return; }
   const res = ocCoopCorrespondances(q);
-  _ocCoopRechIdx = res.length ? 0 : -1;
+  _ocCoopRechIdx[ctx] = res.length ? 0 : -1;
   box.innerHTML = res.length
-    ? res.map((c,i)=>'<div class="coop-search-item'+(i===0?' actif':'')+'" data-id="'+esc(c.id)+'" onmousedown="ocAllerCooperative(\''+esc(c.id)+'\')"><span>'+esc(c.nom)+'</span><span class="meta">'+esc([c.ccc_num, c.statut==='Non certifiée'?'non certifiée':'certifiée'].filter(Boolean).join(' · '))+'</span></div>').join('')
+    ? res.map((c,i)=>'<div class="coop-search-item'+(i===0?' actif':'')+'" data-id="'+esc(c.id)+'" onmousedown="ocCoopChoisir(\''+ctx+'\',\''+esc(c.id)+'\')"><span>'+esc(c.nom)+'</span><span class="meta">'+esc([c.ccc_num, c.statut==='Non certifiée'?'non certifiée':'certifiée'].filter(Boolean).join(' · '))+'</span></div>').join('')
     : '<div class="coop-search-vide">Aucune coopérative trouvée.</div>';
   box.style.display = 'block';
 }
-function ocCoopRechercheTouche(e){
-  const box = document.getElementById('coop-search-list'); if (!box) return;
+function ocCoopRechercheTouche(e, ctx){
+  const box = document.getElementById('coop-search-list-'+ctx); if (!box) return;
   const items = [].slice.call(box.querySelectorAll('.coop-search-item'));
   if (e.key==='ArrowDown' || e.key==='ArrowUp'){
     if (!items.length) return;
     e.preventDefault();
-    _ocCoopRechIdx = (_ocCoopRechIdx + (e.key==='ArrowDown'?1:-1) + items.length) % items.length;
-    items.forEach((it,i)=>it.classList.toggle('actif', i===_ocCoopRechIdx));
+    _ocCoopRechIdx[ctx] = ((_ocCoopRechIdx[ctx]||0) + (e.key==='ArrowDown'?1:-1) + items.length) % items.length;
+    items.forEach((it,i)=>it.classList.toggle('actif', i===_ocCoopRechIdx[ctx]));
   } else if (e.key==='Enter'){
     e.preventDefault();
-    const it = items[_ocCoopRechIdx>=0 ? _ocCoopRechIdx : 0];
-    if (it) ocAllerCooperative(it.getAttribute('data-id'));
+    const idx = (_ocCoopRechIdx[ctx]>=0) ? _ocCoopRechIdx[ctx] : 0;
+    const it = items[idx];
+    if (it) ocCoopChoisir(ctx, it.getAttribute('data-id'));
   } else if (e.key==='Escape'){
-    ocCoopFermerListe();
+    ocCoopFermerListe(ctx);
   }
 }
-function ocCoopFermerListe(){
-  const b = document.getElementById('coop-search-list'); if (b) b.style.display = 'none';
+function ocCoopFermerListe(ctx){
+  const b = document.getElementById('coop-search-list-'+ctx); if (b) b.style.display = 'none';
 }
-// Deplie le groupe de la cooperative si besoin, fait defiler jusqu'a sa carte et la surligne.
+function ocCoopChoisir(ctx, coopId){
+  if (ctx==='stockage') ocAllerStockageCoop(coopId); else ocAllerCooperative(coopId);
+}
+function ocSurlignerElement(id){
+  setTimeout(()=>{
+    const el = document.getElementById(id); if (!el) return;
+    el.scrollIntoView({ behavior:'smooth', block:'center' });
+    el.classList.add('coop-trouvee');
+    setTimeout(()=>el.classList.remove('coop-trouvee'), 3000);
+  }, 60);
+}
+// Onglet Cooperatives : deplie le groupe de la cooperative si besoin, defile jusqu'a sa carte et la surligne.
 function ocAllerCooperative(coopId){
   const c = coopById(coopId); if (!c) return;
   const key = c.statut==='Non certifiée' ? 'cooperatives-non-certifiees' : 'cooperatives-certifiees';
   let rerender = false;
   if (!state.expandedSections.has(key)){ state.expandedSections.add(key); state.coopFocusGroup = key; rerender = true; }
   else if (state.coopFocusGroup && state.coopFocusGroup!==key){ state.coopFocusGroup = key; rerender = true; }
-  state.coopSearch = c.nom;
-  ocCoopFermerListe();
-  const champ = document.getElementById('coop-search'); if (champ) champ.value = c.nom;
+  state.coopSearchTxt = state.coopSearchTxt || {};
+  state.coopSearchTxt.coops = c.nom;
+  ocCoopFermerListe('coops');
+  const champ = document.getElementById('coop-search-coops'); if (champ) champ.value = c.nom;
   if (rerender) render();
-  setTimeout(()=>{
-    const el = document.getElementById('coop-card-'+coopId); if (!el) return;
-    el.scrollIntoView({ behavior:'smooth', block:'center' });
-    el.classList.add('coop-trouvee');
-    setTimeout(()=>el.classList.remove('coop-trouvee'), 3000);
-  }, 60);
+  ocSurlignerElement('coop-card-'+coopId);
+}
+// Onglet Stockage : affiche directement le stockage de la cooperative choisie.
+function ocAllerStockageCoop(coopId){
+  const c = coopById(coopId); if (!c) return;
+  state.stockageCoopFilter = coopId;
+  state.dossierStockageActif = null;
+  state.stockageRecherche = '';
+  state.coopSearchTxt = state.coopSearchTxt || {};
+  state.coopSearchTxt.stockage = c.nom;
+  ocCoopFermerListe('stockage');
+  render();
+  ocSurlignerElement('stock-panel');
 }
 
 function renderCooperativesTab(){
   let html = '';
   const nCertifieesTotal = state.cooperatives.filter(c=>c.statut!=='Non certifiée').length;
   if (state.cooperatives.length>0){
-    html += ocRechercheCoopHtml();
+    html += ocRechercheCoopHtml('coops');
     html += '<div class="controls">'
       + '<button class="btn btn-primary" onclick="ouvrirAjoutCooperative()">+ Ajouter une coopérative</button>'
       + '<button class="btn btn-primary" onclick="ouvrirGenerationConnaissement()">📄 Générer un connaissement</button>'
