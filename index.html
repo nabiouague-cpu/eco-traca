@@ -109,6 +109,15 @@
   .coop-card{background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;margin-bottom:12px;}
   .coop-card:last-child{margin-bottom:0;}
   .coop-card.unverified{border-color:var(--warn-line);}
+  .coop-card.coop-trouvee{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-line);transition:box-shadow .3s;}
+  .coop-search{position:relative;max-width:520px;margin:0 0 14px;}
+  .coop-search input{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;background:var(--surface);color:var(--ink);}
+  .coop-search input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
+  .coop-search-list{position:absolute;left:0;right:0;top:100%;margin-top:4px;background:var(--surface);border:1px solid var(--border);border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.10);z-index:30;max-height:320px;overflow:auto;}
+  .coop-search-item{padding:9px 12px;cursor:pointer;font-size:13.5px;display:flex;justify-content:space-between;gap:10px;}
+  .coop-search-item:hover,.coop-search-item.actif{background:var(--accent-soft);}
+  .coop-search-item .meta{color:var(--ink-soft);font-size:12px;white-space:nowrap;}
+  .coop-search-vide{padding:9px 12px;font-size:13px;color:var(--ink-soft);}
   .coop-card-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:4px;}
   .coop-card-name{font-size:15px;font-weight:600;line-height:1.3;}
   .coop-card-name .coop-card-ccc{font-size:11.5px;font-weight:400;color:var(--ink-faint);}
@@ -557,6 +566,7 @@ let state = {
   storageOk: true,
   coopDashboardId: null,
   coopFocusGroup: null,
+  coopSearch: '',
   expandedSections: new Set(),
   storageErrorMsg: '',
   changesSinceExport: 0,
@@ -1397,7 +1407,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-01-44';
+const APP_VERSION = '2026-10-01-45';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8787,7 +8797,7 @@ function renderConformiteTab(){
 function renderCoopCard(c){
   const stats = coopStats(c.id);
   const aVerifier = c.created_by && !c.verifiee;
-  let html = '<div class="coop-card'+(aVerifier?' unverified':'')+'">'
+  let html = '<div class="coop-card'+(aVerifier?' unverified':'')+'" id="coop-card-'+esc(c.id)+'">'
     + '<div class="coop-card-head">'
     + '<div><div class="coop-card-name">'+esc(c.nom)+(c.verifiee?' <span class="verified-badge" title="Coopérative vérifiée">✓</span>':'')+(c.ccc_num?' <span class="coop-card-ccc">('+esc(c.ccc_num)+')</span>':'')+'</div>'
     + '<div class="coop-card-cert">'+esc(c.certifications||'—')+'</div></div>'
@@ -8886,10 +8896,85 @@ function renderCoopGroup(sectionKey, title, list){
   return html;
 }
 
+// ===== Recherche d'une cooperative dans l'onglet Cooperatives =====
+let _ocCoopRechIdx = -1;
+function ocRechercheCoopHtml(){
+  return '<div class="coop-search">'
+    + '<input type="search" id="coop-search" autocomplete="off" placeholder="Rechercher une coopérative (nom ou code CCC)…" value="'+esc(state.coopSearch||'')+'" oninput="ocCoopRechercher(this.value)" onkeydown="ocCoopRechercheTouche(event)" onfocus="ocCoopRechercher(this.value)" onblur="setTimeout(ocCoopFermerListe,150)">'
+    + '<div class="coop-search-list" id="coop-search-list" style="display:none;"></div>'
+    + '</div>';
+}
+// Coopératives correspondant à la saisie (nom, code CCC, nom complet), les plus proches d'abord.
+function ocCoopCorrespondances(q){
+  const n = stripAccents(String(q||'')).toLowerCase().trim();
+  if (!n) return [];
+  const score = c=>{
+    const nom = stripAccents(String(c.nom||'')).toLowerCase();
+    const complet = stripAccents(String(c.nom_complet||'')).toLowerCase();
+    const ccc = String(c.ccc_num||'').toLowerCase();
+    if (nom.startsWith(n) || ccc.startsWith(n)) return 0;
+    if (nom.includes(n) || ccc.includes(n)) return 1;
+    if (complet.includes(n)) return 2;
+    return -1;
+  };
+  return state.cooperatives.map(c=>({ c: c, s: score(c) })).filter(x=>x.s>=0)
+    .sort((a,b)=>a.s-b.s || String(a.c.nom||'').localeCompare(String(b.c.nom||''), 'fr', {sensitivity:'base'}))
+    .slice(0, 8).map(x=>x.c);
+}
+function ocCoopRechercher(q){
+  state.coopSearch = q;
+  const box = document.getElementById('coop-search-list'); if (!box) return;
+  if (!String(q||'').trim()){ box.style.display = 'none'; box.innerHTML = ''; return; }
+  const res = ocCoopCorrespondances(q);
+  _ocCoopRechIdx = res.length ? 0 : -1;
+  box.innerHTML = res.length
+    ? res.map((c,i)=>'<div class="coop-search-item'+(i===0?' actif':'')+'" data-id="'+esc(c.id)+'" onmousedown="ocAllerCooperative(\''+esc(c.id)+'\')"><span>'+esc(c.nom)+'</span><span class="meta">'+esc([c.ccc_num, c.statut==='Non certifiée'?'non certifiée':'certifiée'].filter(Boolean).join(' · '))+'</span></div>').join('')
+    : '<div class="coop-search-vide">Aucune coopérative trouvée.</div>';
+  box.style.display = 'block';
+}
+function ocCoopRechercheTouche(e){
+  const box = document.getElementById('coop-search-list'); if (!box) return;
+  const items = [].slice.call(box.querySelectorAll('.coop-search-item'));
+  if (e.key==='ArrowDown' || e.key==='ArrowUp'){
+    if (!items.length) return;
+    e.preventDefault();
+    _ocCoopRechIdx = (_ocCoopRechIdx + (e.key==='ArrowDown'?1:-1) + items.length) % items.length;
+    items.forEach((it,i)=>it.classList.toggle('actif', i===_ocCoopRechIdx));
+  } else if (e.key==='Enter'){
+    e.preventDefault();
+    const it = items[_ocCoopRechIdx>=0 ? _ocCoopRechIdx : 0];
+    if (it) ocAllerCooperative(it.getAttribute('data-id'));
+  } else if (e.key==='Escape'){
+    ocCoopFermerListe();
+  }
+}
+function ocCoopFermerListe(){
+  const b = document.getElementById('coop-search-list'); if (b) b.style.display = 'none';
+}
+// Deplie le groupe de la cooperative si besoin, fait defiler jusqu'a sa carte et la surligne.
+function ocAllerCooperative(coopId){
+  const c = coopById(coopId); if (!c) return;
+  const key = c.statut==='Non certifiée' ? 'cooperatives-non-certifiees' : 'cooperatives-certifiees';
+  let rerender = false;
+  if (!state.expandedSections.has(key)){ state.expandedSections.add(key); state.coopFocusGroup = key; rerender = true; }
+  else if (state.coopFocusGroup && state.coopFocusGroup!==key){ state.coopFocusGroup = key; rerender = true; }
+  state.coopSearch = c.nom;
+  ocCoopFermerListe();
+  const champ = document.getElementById('coop-search'); if (champ) champ.value = c.nom;
+  if (rerender) render();
+  setTimeout(()=>{
+    const el = document.getElementById('coop-card-'+coopId); if (!el) return;
+    el.scrollIntoView({ behavior:'smooth', block:'center' });
+    el.classList.add('coop-trouvee');
+    setTimeout(()=>el.classList.remove('coop-trouvee'), 3000);
+  }, 60);
+}
+
 function renderCooperativesTab(){
   let html = '';
   const nCertifieesTotal = state.cooperatives.filter(c=>c.statut!=='Non certifiée').length;
   if (state.cooperatives.length>0){
+    html += ocRechercheCoopHtml();
     html += '<div class="controls">'
       + '<button class="btn btn-primary" onclick="ouvrirAjoutCooperative()">+ Ajouter une coopérative</button>'
       + '<button class="btn btn-primary" onclick="ouvrirGenerationConnaissement()">📄 Générer un connaissement</button>'
