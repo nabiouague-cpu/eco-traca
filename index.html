@@ -1902,7 +1902,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-66';
+const APP_VERSION = '2026-10-02-67';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -9946,6 +9946,31 @@ async function enregistrerVolumesFiche(coop, fiche, tentative){
   lignes.forEach(l=>state.achats.push(l));
   return { ok:true, kg:fiche.total, nbParcelles:lignes.filter(l=>l.producteur_id).length };
 }
+// Alerte automatique « producteurs proches de leur plafond » (message calcule et depose cote base, une seule fois par connaissement).
+async function declencherAlertePlafondCoop(coopId, connaissement){
+  try{
+    state._alertesVerifiees = state._alertesVerifiees || {};
+    const cle = coopId+'|'+String(connaissement).toUpperCase();
+    if (state._alertesVerifiees[cle]) return;
+    const { data, error } = await supabaseClient.rpc('alerter_producteurs_plafond', { p_coop_id: coopId, p_connaissement: connaissement });
+    if (error) return;
+    state._alertesVerifiees[cle] = true;
+    if (data) supabaseClient.functions.invoke('email-message-coop', { body: { message_id: data } }).catch(()=>{});
+  }catch(e){ /* ne bloque jamais le reste */ }
+}
+// Pour chaque cooperative : son dernier connaissement (avec detail par parcelle) dont l'alerte n'a pas encore ete envoyee.
+async function alertesPlafondManquantesAdmin(){
+  const parCoop = {};
+  (state.achats||[]).filter(a=>a.producteur_id && a.connaissement && a.cooperative_id).forEach(a=>{
+    const c = parCoop[a.cooperative_id];
+    if (!c || String(a.date||'') > String(c.date||'')) parCoop[a.cooperative_id] = { connaissement: a.connaissement, date: a.date };
+  });
+  const dejaEnvoyees = new Set((state.messagesCoop||[]).map(m=>m.id));
+  for (const [coopId, c] of Object.entries(parCoop)){
+    if (dejaEnvoyees.has('msg_alerte_'+coopId+'_'+String(c.connaissement).toUpperCase())) continue;
+    await declencherAlertePlafondCoop(coopId, c.connaissement);
+  }
+}
 async function rattraperFichesRecues(){
   if (state._rattrapageFiches || typeof XLSX==='undefined') return;
   const demandeById = {};
@@ -9955,7 +9980,7 @@ async function rattraperFichesRecues(){
     const d = demandeById[f.demande_id];
     return f.type==='product_movements' && f.connaissement && d && d.statut==='acceptee' && !avecParcelles.has(d.cooperative_id+'|'+String(f.connaissement).toUpperCase());
   });
-  if (aTraiter.length===0) return;
+  if (aTraiter.length===0){ await alertesPlafondManquantesAdmin(); return; }
   state._rattrapageFiches = true;
   let nb = 0, kg = 0; const echecs = [];
   try{
@@ -9970,11 +9995,13 @@ async function rattraperFichesRecues(){
         const r = await enregistrerVolumesFiche(coop, fiche);
         if (!r.ok) throw new Error(r.erreur);
         if (!r.dejaFait){ nb++; kg += r.kg; }
+        await declencherAlertePlafondCoop(coop.id, fiche.connaissement);
       }catch(e){ echecs.push((coop?coop.nom+' — ':'')+f.connaissement+' ('+e.message+')'); }
     }
   } finally { state._rattrapageFiches = false; }
   if (nb>0){ showToast(nb+' fiche(s) de traçabilité reçue(s) enregistrée(s) automatiquement : '+fmtKg(kg)+' ajoutés aux volumes achetés.', 'success'); render(); }
   else if (echecs.length>0 && !state._rattrapageFichesAvertie){ state._rattrapageFichesAvertie = true; showToast('Enregistrement automatique impossible pour : '+echecs.join(' ; ')); }
+  await alertesPlafondManquantesAdmin();
 }
 
 // Fiches de tracabilite envoyees (avec connaissement extrait et enregistre a
