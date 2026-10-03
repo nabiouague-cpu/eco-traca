@@ -1902,7 +1902,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-65';
+const APP_VERSION = '2026-10-02-66';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3552,7 +3552,7 @@ function coopStats(coopId){
   // independamment, meme quand plusieurs parcelles appartiennent au meme producteur.
   // Chaque ligne a son propre Farm ID distinct : pas de deduplication necessaire ici,
   // sommer ligne par ligne ne compte jamais deux fois le meme achat.
-  const achete = list.reduce((s,p)=> s + cumulAchats(p.farm_id, 'all', 'all'), 0);
+  const achete = list.reduce((s,p)=> s + cumulAchats(p.farm_id, 'all', 'all', coopId), 0);
   const pct = pot>0 ? (achete/pot*100) : null;
   const connList = state.achats.filter(a=>!a.producteur_id && a.cooperative_id===coopId);
   const netProduit = connList.reduce((s,a)=>s+(Number(a.poids_net_produit)||0),0);
@@ -3569,9 +3569,13 @@ function potentiel(p){
 }
 // filtre continu : en periode "intermediaire", on compte aussi les livraisons "principale"
 // de la meme campagne, pour que le plafond soit une continuite sur l'annee (70% puis 100%)
-function achatsProducteur(producteurId, campagneId, periode){
+// Un Farm ID n'est unique QUE dans sa cooperative (le meme code, ex. « E-032-P1 », existe chez plusieurs cooperatives) : le cumul
+// d'un producteur ne compte donc que les achats de SA cooperative. Sans ce filtre, les livraisons d'une cooperative etaient
+// attribuees aux producteurs d'une autre portant le meme Farm ID (fausses alertes de plafond).
+function achatsProducteur(producteurId, campagneId, periode, coopId){
   return state.achats.filter(a=>{
     if (a.producteur_id !== producteurId) return false;
+    if (a.cooperative_id !== coopId) return false;
     if (campagneId==='all') return true; // toutes campagnes : la notion de periode ne s'applique pas
     if ((a.campagne_id||'')!==campagneId) return false;
     if (periode==='principale') return a.periode==='principale';
@@ -3579,8 +3583,8 @@ function achatsProducteur(producteurId, campagneId, periode){
     return true;
   });
 }
-function cumulAchats(producteurId, campagneId, periode){
-  return achatsProducteur(producteurId, campagneId, periode)
+function cumulAchats(producteurId, campagneId, periode, coopId){
+  return achatsProducteur(producteurId, campagneId, periode, coopId)
     .reduce((sum,a) => sum + (Number(a.quantite_kg)||0), 0);
 }
 function statusFor(pot, ceiling, cumul, seuil, periode){
@@ -3620,7 +3624,7 @@ function ocMelanger(liste){
 function ocProducteursEligibles(coopId, campagneId, periode){
   return state.producteurs
     .filter(p=>p.cooperative_id===coopId && p.farm_id)
-    .map(p=>({ p: p, remaining: effectiveCeiling(p, campagneId, periode) - cumulAchats(p.farm_id, campagneId, periode) }))
+    .map(p=>({ p: p, remaining: effectiveCeiling(p, campagneId, periode) - cumulAchats(p.farm_id, campagneId, periode, coopId) }))
     .filter(e=>e.remaining>=1);
 }
 // Repartit volumeTotalKg (kg entiers) entre ~nbDemande producteurs eligibles, sans jamais
@@ -3899,7 +3903,7 @@ function computeRows(){
     .map(p=>{
       const pot = potentiel(p);
       const ceiling = effectiveCeiling(p, state.campagneFilter, periode);
-      const cumul = cumulAchats(p.farm_id, state.campagneFilter, periode);
+      const cumul = cumulAchats(p.farm_id, state.campagneFilter, periode, p.cooperative_id);
       const st = statusFor(pot, ceiling, cumul, seuil, state.campagneFilter!=='all' ? periode : null);
       const restant = ceiling>0 ? Math.max(ceiling - cumul, 0) : null;
       return { p, pot, ceiling, cumul, restant, st, periode: state.campagneFilter!=='all' ? periode : null };
@@ -8947,7 +8951,7 @@ async function verifierLimitesFicheTracabilite(demandeId){
       const p = state.producteurs.find(x=>x.farm_id===farmId && x.cooperative_id===demande.cooperative_id);
       if (!p){ depassements.push({ farmId, nom:null, code:null, introuvable:true, qteNouvelle }); return; }
       const ceiling = effectiveCeiling(p, campagneId, periode);
-      const cumulActuel = cumulAchats(farmId, campagneId, periode);
+      const cumulActuel = cumulAchats(farmId, campagneId, periode, demande.cooperative_id);
       const nouveauCumul = cumulActuel + qteNouvelle;
       const pct = ceiling>0 ? (nouveauCumul/ceiling*100) : null;
       const item = { farmId, nom:p.nom, code:p.code, cumulActuel, qteNouvelle, nouveauCumul, ceiling, pct };
@@ -10099,7 +10103,7 @@ function renderDashboardTab(){
         + '<div class="row-actions">'+((r.st.key==='danger'||r.st.key==='warn')?'<button class="btn-ghost" onclick="alerterCooperative(\''+r.p.id+'\')">Alerter la coopérative</button>':'')+'<button class="btn-ghost" onclick="toggleExpand(\''+r.p.id+'\')">'+(state.expanded.has(r.p.id)?'Fermer':'Détail')+'</button></div>'
         + '</div>';
       if (state.expanded.has(r.p.id)){
-        const list = achatsProducteur(r.p.farm_id, state.campagneFilter, state.periodeFilter)
+        const list = achatsProducteur(r.p.farm_id, state.campagneFilter, state.periodeFilter, r.p.cooperative_id)
           .sort((a,b)=> a.date.localeCompare(b.date));
         html += '<div class="detail"><div class="detail-grid">'
           + '<div><div class="hint" style="margin-bottom:8px;">Livraisons (issues du fichier de traçabilité)</div><div class="achat-list">'
