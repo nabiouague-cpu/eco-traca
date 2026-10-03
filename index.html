@@ -217,6 +217,21 @@
   .chip-coop.repli{border-style:dashed;background:var(--surface-2);color:var(--ink-soft);}
   .chip-coop.gris{background:var(--gray-bg);color:var(--ink-soft);font-size:12.5px;padding:5px 12px;}
   .chip-coop.gris.actif{background:var(--accent);color:#fff;}
+  /* ---- Achats par connaissement : accordeon par cooperative ---- */
+  .acc-coop{border-top:1px solid var(--border);}
+  .acc-coop-head{display:flex;align-items:center;gap:16px;padding:14px 18px;cursor:pointer;font-size:13.5px;user-select:none;}
+  .acc-coop-head:hover{background:var(--accent-soft);}
+  .acc-coop-head.ouvert{background:var(--accent-soft);}
+  .acc-coop-head .acc-fl{width:16px;color:var(--ink-soft);font-size:14px;flex-shrink:0;}
+  .acc-coop-head .acc-nom{font-weight:700;font-size:14.5px;flex:0 0 290px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .acc-coop-head .acc-info > span:nth-child(1){min-width:125px;}
+  .acc-coop-head .acc-info > span:nth-child(2){min-width:105px;}
+  .acc-coop-head .acc-info{display:flex;gap:22px;flex-wrap:wrap;align-items:center;color:var(--ink-soft);flex:1;}
+  .acc-coop-head .acc-info b{color:var(--ink);}
+  .acc-coop-head.gris{background:var(--surface-2);}
+  .acc-coop-head.gris .acc-nom{color:var(--ink-soft);font-weight:600;}
+  .acc-coop-head.gris:hover{background:var(--gray-bg);}
+  .acc-coop-body{padding:6px 18px 16px 52px;}
   /* ---- Tableau des producteurs : vraies colonnes alignees (texte a gauche, nombres a droite) ---- */
   .tbl-prod-wrap{max-height:74vh;overflow:auto;border-top:1px solid var(--border);}
   .tbl-prod{width:100%;table-layout:fixed;border-collapse:separate;border-spacing:0;font-size:13px;min-width:900px;}
@@ -712,6 +727,7 @@ let state = {
   coopFocusGroup: null,
   coopSearchTxt: {},
   expandedSections: new Set(),
+  sectionsRepliees: new Set(),   // sections ouvertes par defaut (liste des producteurs) que l'utilisateur a repliees
   storageErrorMsg: '',
   changesSinceExport: 0,
   toast: null,
@@ -741,7 +757,9 @@ let state = {
   conformiteCoopFilter: 'all',
   conformiteSousOnglet: null,
   dashboardSousOnglet: null,
-  coopsPasLivreesOuvert: false,   // barre de cooperatives : bloc « Pas encore livre » deplie ou non
+  coopsPasLivreesOuvert: false,
+  achatsCoopEtat: {},              // accordeon des achats : cooperative -> ouverte (true) / repliee (false) apres un clic
+  achatsPasLivreesOuvert: false,   // barre de cooperatives : bloc « Pas encore livre » deplie ou non
   expanded: new Set(),
   expandedCoop: new Set(),
   modal: null,
@@ -1933,17 +1951,20 @@ function showToast(message, type){
 }
 function dismissToast(){ state.toast = null; retirerToast(); }
 const COLLAPSE_THRESHOLD = 10;
+// La liste des producteurs (tableau de bord et fiche d'une cooperative) s'affiche D'EMBLEE : pas de clic sur « Derouler ».
+function sectionParDefautOuverte(key){ return key==='producteurs' || String(key).indexOf('coopdash-prod-')===0; }
 function toggleSection(key){
-  if (state.expandedSections.has(key)) state.expandedSections.delete(key);
-  else state.expandedSections.add(key);
+  const ensemble = sectionParDefautOuverte(key) ? state.sectionsRepliees : state.expandedSections;
+  if (ensemble.has(key)) ensemble.delete(key); else ensemble.add(key);
   render();
 }
 function sectionToggleHtml(key, count){
   if (count < COLLAPSE_THRESHOLD) return '';
-  const expanded = state.expandedSections.has(key);
-  return '<button class="btn-ghost" onclick="toggleSection(\''+key+'\')">'+(expanded?'Réduire ▲':'Dérouler ('+count+') ▼')+'</button>';
+  const ouverte = sectionIsOpen(key, count);
+  return '<button class="btn-ghost" onclick="toggleSection(\''+key+'\')">'+(ouverte?'Réduire ▲':'Dérouler ('+count+') ▼')+'</button>';
 }
 function sectionIsOpen(key, count){
+  if (sectionParDefautOuverte(key)) return !state.sectionsRepliees.has(key);
   return count < COLLAPSE_THRESHOLD || state.expandedSections.has(key);
 }
 // Assainit un nom de fichier pour l'utiliser dans un CHEMIN de stockage Supabase
@@ -2017,7 +2038,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-77';
+const APP_VERSION = '2026-10-02-81';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3640,6 +3661,7 @@ async function loadAll(silencieux){
       } else { state.demandeFichiers = []; }
     }
     state.error = null;
+    appliquerCampagneParDefaut();
   }catch(e){
     state.error = "Impossible de charger les données. Vérifiez la connexion et réessayez.";
   }
@@ -9960,36 +9982,7 @@ function blocTransportConnaissement(a){
     + '</div>';
 }
 // Niveau 2 : achats par connaissement — un chargement, saisi au niveau de la coopérative (pas de detail producteur ici)
-function renderAchatsConnaissementPanel(){
-  const list = achatsFiltered().filter(a=>!a.producteur_id);
-  const totalKg = list.reduce((s,a)=>s+(Number(a.quantite_kg)||0),0);
-  const totalNetProduit = list.reduce((s,a)=>s+(Number(a.poids_net_produit)||0),0);
-
-  const groups = new Map();
-  list.forEach(a=>{
-    const key = a.campagne_id || '__none__';
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(a);
-  });
-  const orderedKeys = state.campagnes.map(c=>c.id).filter(id=>groups.has(id));
-  if (groups.has('__none__')) orderedKeys.push('__none__');
-
-  const totalPrime = list.reduce((s,a)=>s+calcPrime(a),0);
-  let html = '<div class="panel">';
-  html += '<div class="panel-head"><h2>Achats par connaissement ('+fmtNum(list.length)+')</h2><span class="num" style="color:var(--ink-soft)">'+fmtKg(totalKg)+' déclaré'+(totalNetProduit>0?' · '+fmtKg(totalNetProduit)+' net payé':'')+(totalPrime>0?' · '+fmtNum(totalPrime)+' FCFA de prime':'')+'</span>'+sectionToggleHtml('connaissement', list.length)+'</div>';
-  html += '<div class="panel-note">Un chargement par coopérative, dissocié par campagne. Poids brut et net déclarés par la coopérative à l\'émission du connaissement ; poids net payé = après analyse qualité et réfraction éventuelle à l\'usine, validé par le Conseil Café-Cacao — c\'est sur cette base qu\'ECORIGINE paie la coopérative et calcule la prime de certification. Pas de détail producteur à ce niveau.</div>';
-  if (list.length===0){
-    html += '<div class="empty">Aucun achat par connaissement pour ce filtre.<br><button class="btn" '+((state.cooperatives.length===0||state.campagnes.length===0)?'disabled title="Crée une coopérative et une campagne d\'abord"':'onclick="openModal(\'achat\')"')+'>+ Achat (connaissement)</button></div>';
-  } else if (!sectionIsOpen('connaissement', list.length)){
-    html += '<div class="empty">Liste repliée ('+fmtNum(list.length)+' achats) — clique sur « Dérouler » ci-dessus pour l\'afficher.</div>';
-  } else {
-    orderedKeys.forEach(key=>{
-      const camp = key==='__none__' ? null : state.campagnes.find(c=>c.id===key);
-      const items = groups.get(key).sort((a,b)=> b.date.localeCompare(a.date));
-      const subTotal = items.reduce((s,a)=>s+(Number(a.quantite_kg)||0),0);
-      const primeSubTotal = items.reduce((s,a)=>s+calcPrime(a),0);
-      html += '<div class="group-header">'+(camp?esc(camp.nom):'Sans campagne (à corriger)')+' <span class="hint">— '+fmtNum(items.length)+' achat(s), '+fmtKg(subTotal)+' déclaré'+(primeSubTotal>0?' · prime '+fmtNum(primeSubTotal)+' FCFA':'')+'</span></div>';
-      items.forEach(a=>{
+function carteAchatHtml(a){
         const coop = coopById(a.cooperative_id);
         const hasAccepte = a.poids_net_produit || a.poids_brut_accepte || a.nombre_sacs_accepte;
         const prime = calcPrime(a);
@@ -9999,7 +9992,7 @@ function renderAchatsConnaissementPanel(){
           : a.verification_tracabilite==='ecart' ? '<span class="badge warn" title="Écart entre le poids déclaré et le total de la fiche de traçabilité pour ce connaissement">⚠ Écart '+(a.ecart_kg>0?'+':'')+fmtKg(a.ecart_kg)+'</span>'
           : a.verification_tracabilite==='non_trouve' ? '<span class="badge neutral" title="Aucune fiche de traçabilité correspondante trouvée pour ce connaissement">Pas de fiche liée</span>'
           : '';
-        html += '<div class="achat-card">'
+        return '<div class="achat-card">'
           + '<div class="achat-card-head">'
           + '<div><div class="name">'+esc(a.connaissement||'(sans numéro)')+(a.type_cacao?' <span class="badge neutral">'+esc(a.type_cacao)+'</span>':'')+(a.declare_par_coop?' <span class="badge neutral" title="Cette vente a été déclarée directement par la coopérative depuis son portail">Déclaré par la coop.</span>':'')+(verifBadge?' '+verifBadge:'')+'</div><div class="coop">'+esc(coop?coop.nom:'—')+' · '+esc(a.date)+(a.periode?' · '+(a.periode==='principale'?'principale':'intermédiaire'):'')+(prime>0?' · <span class="num">prime '+fmtNum(prime)+' FCFA</span>':'')+(a.lieu_origine?' · origine '+esc(a.lieu_origine):'')+(a.usine_dechargement?' · usine '+esc(a.usine_dechargement):'')+(a.tkm?' · TKM '+fmtNum(a.tkm):'')+'</div></div>'
           + '<div class="row-actions"><button class="btn-primary" style="padding:4px 10px;font-size:12px;" onclick="ouvrirFinalisationPaiement(\''+a.id+'\')">Réception à l\'usine</button><button class="btn-ghost" onclick="openModal(\'achat\','+esc(JSON.stringify(a)).replace(/&#39;/g,"&apos;")+')">Modifier</button><button class="btn-danger-text" onclick="'+(a.connaissement?'annulerConnaissementRefoule':'deleteAchat')+'(\''+a.id+'\')">'+(a.connaissement?'Camion refoulé / annuler':'Supprimer')+'</button></div>'
@@ -10022,12 +10015,97 @@ function renderAchatsConnaissementPanel(){
           + '</div>'
           + '</div>'
           + '</div>';
-      });
+}
+
+function renderAchatsConnaissementPanel(){
+  const list = achatsFiltered().filter(a=>!a.producteur_id);
+  const totalKg = list.reduce((s,a)=>s+(Number(a.quantite_kg)||0),0);
+  const totalNetProduit = list.reduce((s,a)=>s+(Number(a.poids_net_produit)||0),0);
+
+  const groups = new Map();
+  list.forEach(a=>{
+    const key = a.campagne_id || '__none__';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(a);
+  });
+  const orderedKeys = state.campagnes.map(c=>c.id).filter(id=>groups.has(id));
+  if (groups.has('__none__')) orderedKeys.push('__none__');
+
+  const totalPrime = list.reduce((s,a)=>s+calcPrime(a),0);
+  let html = '<div class="panel">';
+  html += '<div class="panel-head"><h2>Achats par connaissement ('+fmtNum(list.length)+')</h2><span class="num" style="color:var(--ink-soft)">'+fmtKg(totalKg)+' déclaré'+(totalNetProduit>0?' · '+fmtKg(totalNetProduit)+' net payé':'')+(totalPrime>0?' · '+fmtNum(totalPrime)+' FCFA de prime':'')+'</span>'+'</div>';
+  html += '<div class="panel-note">Un chargement par coopérative, dissocié par campagne. Poids brut et net déclarés par la coopérative à l\'émission du connaissement ; poids net payé = après analyse qualité et réfraction éventuelle à l\'usine, validé par le Conseil Café-Cacao — c\'est sur cette base qu\'ECORIGINE paie la coopérative et calcule la prime de certification. Pas de détail producteur à ce niveau.</div>';
+  if (list.length===0){
+    html += '<div class="empty">Aucun achat par connaissement pour ce filtre.<br><button class="btn" '+((state.cooperatives.length===0||state.campagnes.length===0)?'disabled title="Crée une coopérative et une campagne d\'abord"':'onclick="openModal(\'achat\')"')+'>+ Achat (connaissement)</button></div>';
+  } else {
+    // ---- Accordeon : une ligne repliee par cooperative qui a livre ; un clic deplie ses fiches de connaissement ----
+    const parCoop = new Map();
+    list.forEach(a=>{ const k = a.cooperative_id||'__aucune__'; if (!parCoop.has(k)) parCoop.set(k, []); parCoop.get(k).push(a); });
+    const coopsLivrees = Array.from(parCoop.entries()).map(([id, items])=>({
+      id, coop: coopById(id), items,
+      kg: items.reduce((t,a)=>t+(Number(a.quantite_kg)||0),0),
+      nb: new Set(items.map(a=>String(a.connaissement||a.id).toUpperCase())).size,
+      derniere: items.reduce((m,a)=>(a.date||'')>m ? a.date : m, ''),
+    })).sort((x,y)=> String(y.derniere).localeCompare(String(x.derniere)) || y.kg - x.kg);
+    const defautOuvert = state.coopFilter!=='all' || coopsLivrees.length===1;
+    coopsLivrees.forEach(c=>{
+      const ouvert = Object.prototype.hasOwnProperty.call(state.achatsCoopEtat, c.id) ? state.achatsCoopEtat[c.id] : defautOuvert;
+      const v = resumeVerificationAchats(c.items);
+      html += '<div class="acc-coop">'
+        + '<div class="acc-coop-head'+(ouvert?' ouvert':'')+'" role="button" tabindex="0" onclick="basculerAchatsCoop(\''+c.id+'\','+(defautOuvert?'true':'false')+')">'
+        + '<span class="acc-fl">'+(ouvert?'▾':'▸')+'</span>'
+        + '<span class="acc-nom">'+esc(c.coop?c.coop.nom:'Coopérative inconnue')+'</span>'
+        + '<span class="acc-info"><span><b>'+fmtNum(c.nb)+'</b> connaissement'+(c.nb>1?'s':'')+'</span><span><b>'+fmtKg(c.kg)+'</b></span><span>dernière livraison : '+dateFr(c.derniere)+'</span></span>'
+        + (v ? '<span class="badge '+v.cls+'" title="'+esc(v.titre)+'">'+v.label+'</span>' : '')
+        + '</div>';
+      if (ouvert){
+        const groupes = new Map();
+        c.items.forEach(a=>{ const key = a.campagne_id || '__none__'; if (!groupes.has(key)) groupes.set(key, []); groupes.get(key).push(a); });
+        const cles = state.campagnes.map(x=>x.id).filter(id=>groupes.has(id));
+        if (groupes.has('__none__')) cles.push('__none__');
+        html += '<div class="acc-coop-body">';
+        cles.forEach(key=>{
+          const camp = key==='__none__' ? null : state.campagnes.find(x=>x.id===key);
+          const items = groupes.get(key).sort((x,y)=> String(y.date).localeCompare(String(x.date)));
+          const subTotal = items.reduce((t,a)=>t+(Number(a.quantite_kg)||0),0);
+          const primeSubTotal = items.reduce((t,a)=>t+calcPrime(a),0);
+          if (cles.length>1 || !camp) html += '<div class="group-header">'+(camp?esc(camp.nom):'Sans campagne (à corriger)')+' <span class="hint">— '+fmtNum(items.length)+' achat(s), '+fmtKg(subTotal)+' déclaré'+(primeSubTotal>0?' · prime '+fmtNum(primeSubTotal)+' FCFA':'')+'</span></div>';
+          items.forEach(a=>{ html += carteAchatHtml(a); });
+        });
+        html += '</div>';
+      }
+      html += '</div>';
     });
+    // ---- Cooperatives qui n'ont PAS encore livre (dans le filtre courant) ----
+    const livreesIds = new Set(coopsLivrees.map(c=>c.id));
+    const pasLivrees = (state.coopFilter==='all' ? state.cooperatives : state.cooperatives.filter(c=>c.id===state.coopFilter))
+      .filter(c=>!livreesIds.has(c.id)).sort((x,y)=>String(x.nom).localeCompare(String(y.nom),'fr'));
+    if (pasLivrees.length>0){
+      html += '<div class="acc-coop"><div class="acc-coop-head gris'+(state.achatsPasLivreesOuvert?' ouvert':'')+'" role="button" tabindex="0" onclick="basculerAchatsPasLivrees()">'
+        + '<span class="acc-fl">'+(state.achatsPasLivreesOuvert?'▾':'▸')+'</span><span class="acc-nom">Pas encore livré</span>'
+        + '<span class="acc-info"><span>'+fmtNum(pasLivrees.length)+' coopérative'+(pasLivrees.length>1?'s':'')+' — aucune livraison enregistrée'+(state.campagneFilter==='all'?'':' pour cette campagne')+'</span></span></div>';
+      if (state.achatsPasLivreesOuvert) html += '<div class="acc-coop-body"><div class="chips-coops">'+pasLivrees.map(c=>'<button type="button" class="chip-coop gris" title="Afficher cette coopérative" onclick="setCoopFilter(\''+c.id+'\')">'+esc(c.nom)+'</button>').join('')+'</div></div>';
+      html += '</div>';
+    }
   }
   html += '</div>';
   return html;
 }
+// Resume de la concordance fiche <-> connaissement d'une cooperative : le pire cas l'emporte (ecart > pas de fiche > concordant).
+function resumeVerificationAchats(items){
+  const nbEcart = items.filter(a=>a.verification_tracabilite==='ecart').length;
+  const nbSans = items.filter(a=>a.verification_tracabilite==='non_trouve').length;
+  const nbOk = items.filter(a=>a.verification_tracabilite==='concordant').length;
+  if (nbEcart>0) return { cls:'warn', label:'⚠ Écart', titre:nbEcart+' connaissement(s) avec un écart entre le poids déclaré et la fiche de traçabilité' };
+  if (nbSans>0) return { cls:'neutral', label:'Pas de fiche liée', titre:nbSans+' connaissement(s) sans fiche de traçabilité correspondante' };
+  if (nbOk>0 && nbOk===items.length) return { cls:'ok', label:'✓ Concordant', titre:'Tous les connaissements concordent avec leur fiche de traçabilité' };
+  return null;
+}
+function basculerAchatsCoop(coopId, defautOuvert){
+  const actuel = Object.prototype.hasOwnProperty.call(state.achatsCoopEtat, coopId) ? state.achatsCoopEtat[coopId] : defautOuvert;
+  state.achatsCoopEtat[coopId] = !actuel; render();
+}
+function basculerAchatsPasLivrees(){ state.achatsPasLivreesOuvert = !state.achatsPasLivreesOuvert; render(); }
 
 // ---- Enregistrement automatique des fiches de tracabilite recues ----
 // A la reception d'une fiche conforme, le portail de la cooperative enregistre lui-meme les volumes (une ligne d'achat par parcelle
@@ -10215,8 +10293,14 @@ function legendeTableauProducteurs(){
     + '<span class="pastille" style="background:var(--danger)"></span>limite atteinte ou dépassée.'
     + '</div>';
 }
+// Au-dela de ce nombre de lignes (ex. « Toutes cooperatives » = plusieurs milliers de producteurs), seules les premieres sont affichees :
+// la liste est deja classee du plus proche de la limite au plus eloigne, donc toutes les alertes y figurent.
+const LIMITE_LIGNES_PRODUCTEURS = 2000;
 function renderTableauProducteurs(rows, opts){
   opts = opts || {};
+  const totalLignes = rows.length;
+  const tronque = totalLignes > LIMITE_LIGNES_PRODUCTEURS;
+  if (tronque) rows = rows.slice(0, LIMITE_LIGNES_PRODUCTEURS);
   const montrerCoop = !!opts.montrerCoop;
   const principale = state.campagneFilter!=='all' && state.periodeFilter==='principale';
   const limitePct = principale ? 70 : 100;
@@ -10224,6 +10308,7 @@ function renderTableauProducteurs(rows, opts){
   const nbCol = 8 + (montrerCoop?1:0);
   const largeurs = montrerCoop ? [15,8,14,8,9,14,9,10,13] : [17,9,9,10,17,11,11,16];
   let html = legendeTableauProducteurs()
+    + (tronque ? '<div class="legende-prod" style="background:var(--warn-bg);color:var(--warn);border-bottom:1px solid var(--warn-line);"><b>Affichage des '+fmtNum(LIMITE_LIGNES_PRODUCTEURS)+' premiers producteurs sur '+fmtNum(totalLignes)+'</b>, classés du plus proche de la limite au plus éloigné (toutes les alertes y figurent). Choisis une coopérative pour voir tous ses producteurs.</div>' : '')
     + '<div class="tbl-prod-wrap"><table class="tbl-prod"><colgroup>'+largeurs.map(w=>'<col style="width:'+w+'%">').join('')+'</colgroup><thead><tr>'
     + '<th class="g">Producteur</th>'
     + '<th>Parcelle</th>'
@@ -10317,6 +10402,18 @@ function renderBarreCooperatives(){
     html += '</div>';
   }
   return html + '</div>';
+}
+// Campagne en cours d'apres la date du jour (septembre = nouvelle campagne) : choisie d'office au premier chargement du tableau de bord.
+function campagneCourante(){
+  const d = new Date();
+  const debut = (d.getMonth()+1)>=9 ? d.getFullYear() : d.getFullYear()-1;
+  const triees = (state.campagnes||[]).slice().sort((a,b)=>String(b.nom||'').localeCompare(String(a.nom||'')));
+  return triees.find(c=>String(c.nom||'').includes(String(debut))) || triees[0] || null;
+}
+function appliquerCampagneParDefaut(){
+  if (state._campagneParDefautFaite || !(state.campagnes||[]).length) return;
+  state._campagneParDefautFaite = true;
+  if (state.campagneFilter==='all'){ const c = campagneCourante(); if (c) state.campagneFilter = c.id; }
 }
 function renderDashboardTab(){
   const rows = computeRows();
