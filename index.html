@@ -945,9 +945,11 @@ async function genererContratDepuisModele(coop, campagne_label, periode_label, d
 const DOCUMENTS_DEMANDABLES = [
   { id:'contrat_ra', nom:"Contrat d'Approvisionnement RAINFOREST ALLIANCE", nature:'signer', genere:true,
     message:"Merci de nous transmettre le Contrat d'approvisionnement RAINFOREST ALLIANCE paraphé, signé et cacheté par le Responsable de la Coopérative." },
-  { id:'procuration', nom:'Procuration ECORIGINE', nature:'signer', modele:'procuration_ecorigine', wordObligatoire:true,
+  { id:'procuration', nom:'Procuration ECORIGINE', nature:'signer', wordObligatoire:true,
+    fichierModele:{ url:'modeles/procuration_ecorigine_26-27.docx', nom:'Projet de procuration ECORIGINE 26-27.docx' },
     message:"Merci de nous transmettre le document signé par au moins trois membres du Comité de Gestion, cacheté et légalisé à la Mairie. Veuillez également renseigner les informations de votre Coopérative en en-tête." },
-  { id:'code_conduite', nom:'Code de conduite ECORIGINE', nature:'signer', modele:'code_conduite_ecorigine',
+  { id:'code_conduite', nom:'Code de conduite ECORIGINE', nature:'signer',
+    fichierModele:{ url:'modeles/code_de_conduite_ecorigine_v1.2.pdf', nom:'CODE_DE_CONDUITE_ECORIGINE_V1.2.pdf' },
     message:"Merci de nous transmettre le Code de conduite signé par au moins trois membres du Comité de Gestion ou du Conseil d'Administration et cacheté." },
 ];
 function documentDemandable(id){ return DOCUMENTS_DEMANDABLES.find(d=>d.id===id) || null; }
@@ -1293,6 +1295,10 @@ function blocDocumentRegistre(doc, nd){
       + '<label class="field">Période (texte affiché)<input type="text" name="demande_contrat_periode" value="'+esc(nd.demande_contrat_periode||p.periode_label)+'" placeholder="ex : Septembre 2026 à août 2027"></label>'
       + '<label class="field">Date de début du contrat<input type="date" name="demande_contrat_date" value="'+esc(nd.demande_contrat_date||p.date_debut)+'"></label>';
   }
+  if (doc.fichierModele){
+    return '<div class="hint" style="margin:-4px 0 12px;">✓ Modèle intégré à ORIGEN : <strong>'+esc(doc.fichierModele.nom)+'</strong>. Il sera joint tel quel à la demande de chaque coopérative'
+      + (doc.wordObligatoire ? ' (en Word : la coopérative le remplit)' : ' (à imprimer, signer et retourner)')+'. Aucun fichier à déposer.</div>';
+  }
   const stocke = (state.modelesDocuments || {})[doc.modele];
   if (stocke){
     return '<div class="hint" style="margin:-4px 0 12px;">✓ Modèle intégré à ORIGEN : <strong>'+esc(stocke.nom)+'</strong>. Il sera joint tel quel à la demande'
@@ -1322,7 +1328,7 @@ async function choisirDocumentAutres(id){
       pl.demande_contrat_periode = pl.demande_contrat_periode || p.periode_label;
       pl.demande_contrat_date = pl.demande_contrat_date || p.date_debut;
     }
-    if (doc.modele) await rafraichirModeleDocument(doc.modele);
+    if (doc.modele && !doc.fichierModele) await rafraichirModeleDocument(doc.modele);
   } else {
     if (nomsStandards.includes(String(pl.demande_name||'').trim())) pl.demande_name = '';
     if (messagesStandards.includes(String(pl.demande_message||'').trim())) pl.demande_message = '';
@@ -1902,7 +1908,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-68';
+const APP_VERSION = '2026-10-02-69';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3044,6 +3050,16 @@ async function creerDemande(){
     };
     if (!paramsContrat.campagne_label || !paramsContrat.periode_label || !paramsContrat.date_debut){ showToast('Renseigne la campagne, la période et la date de début du contrat.'); return; }
     genererPour = (coop)=>contratPdfPourCooperative(coop, paramsContrat);
+  } else if (docReg && docReg.fichierModele){
+    // Modele integre au site (dossier « modeles ») : lu une seule fois, puis joint tel quel a la demande de chaque cooperative.
+    let blobModele = null;
+    try{
+      const rep = await fetch(docReg.fichierModele.url+'?v='+encodeURIComponent(APP_VERSION), { cache:'no-cache' });
+      if (!rep.ok) throw new Error('HTTP '+rep.status);
+      blobModele = await rep.blob();
+      if (!(blobModele.size > 1000)) throw new Error('fichier vide');
+    }catch(eModele){ showToast('Impossible de charger le modèle « '+docReg.nom+' » : '+eModele.message+'. Actualise la page puis réessaie.'); return; }
+    genererPour = async ()=>({ fichier: blobModele, nom: docReg.fichierModele.nom });
   } else if (docReg && docReg.modele){
     let blobModele = null, nomModele = null;
     const stocke = await modeleDocumentStocke(docReg.modele);
