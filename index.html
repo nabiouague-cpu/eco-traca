@@ -200,6 +200,36 @@
   .row:last-child{border-bottom:none;}
   .row-head{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-faint);background:var(--surface-2);}
   .stat-label{display:none;}
+  /* ---- Tableau des producteurs : vraies colonnes alignees (texte a gauche, nombres a droite) ---- */
+  .tbl-prod-wrap{max-height:74vh;overflow:auto;border-top:1px solid var(--border);}
+  .tbl-prod{width:100%;border-collapse:separate;border-spacing:0;font-size:13px;min-width:960px;}
+  .tbl-prod thead th{position:sticky;top:0;z-index:2;background:var(--surface-2);color:var(--ink-soft);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.03em;padding:10px 9px;border-bottom:1px solid var(--border);text-align:left;white-space:nowrap;vertical-align:bottom;}
+  .tbl-prod thead th small{display:block;text-transform:none;letter-spacing:0;font-weight:400;color:var(--ink-faint);font-size:10.5px;margin-top:1px;}
+  .tbl-prod th.r,.tbl-prod td.r{text-align:right;}
+  .tbl-prod th.c,.tbl-prod td.c{text-align:center;}
+  .tbl-prod tbody td{padding:9px 9px;border-bottom:1px solid var(--border);vertical-align:middle;}
+  .tbl-prod td:first-child,.tbl-prod th:first-child{min-width:185px;padding-left:14px;}
+  .tbl-prod td.acts .btn-ghost{font-size:12px;padding:4px 9px;}
+  .tbl-prod td.r{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap;}
+  .tbl-prod td .nom{font-weight:600;}
+  .tbl-prod td .code{font-family:var(--mono);font-size:11px;color:var(--ink-faint);}
+  .tbl-prod td.parc{font-family:var(--mono);font-size:12px;color:var(--ink-soft);white-space:nowrap;}
+  .tbl-prod td.reste{font-weight:700;color:var(--ink);}
+  .tbl-prod td.reste.zero{color:var(--danger);}
+  .tbl-prod tr.ligne-warn td:first-child{box-shadow:inset 3px 0 0 var(--warn);}
+  .tbl-prod tr.ligne-danger td:first-child{box-shadow:inset 3px 0 0 var(--danger);}
+  .tbl-prod td.acts{text-align:right;white-space:nowrap;padding-right:14px;}
+  .tbl-prod td.acts .acts-col{display:flex;flex-direction:column;align-items:flex-end;gap:4px;}
+  .tbl-prod td.acts .btn-ghost{margin-left:0;}
+  .tbl-prod tr.detail-row td{background:var(--surface-2);padding:0;}
+  .pbar{position:relative;height:12px;border-radius:6px;overflow:hidden;background:var(--gray-bg);min-width:120px;}
+  .pbar .z{position:absolute;top:0;bottom:0;}
+  .pbar .z1{background:var(--ok-bg);} .pbar .z2{background:var(--warn-bg);} .pbar .z3{background:var(--danger-bg);}
+  .pbar .fill{position:absolute;left:0;top:2px;bottom:2px;border-radius:4px;min-width:2px;}
+  .pbar .tick{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:var(--ink-soft);opacity:.55;}
+  .legende-prod{padding:12px 18px;font-size:12.5px;color:var(--ink-soft);background:var(--surface-2);border-bottom:1px solid var(--border);line-height:1.6;}
+  .legende-prod b{color:var(--ink);}
+  .legende-prod .pastille{display:inline-block;width:10px;height:10px;border-radius:3px;margin:0 4px 0 10px;vertical-align:-1px;}
   .p-name .name{font-weight:500;}
   .p-name .coop{font-size:12px;color:var(--ink-soft);}
   .num{font-family:var(--mono);font-size:13.5px;}
@@ -1970,7 +2000,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-71';
+const APP_VERSION = '2026-10-02-74';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -10125,6 +10155,112 @@ function fichesEnAttenteAchat(){
     .filter(f=>f.coopId);
 }
 
+// ---- Tableau des producteurs (tableau de bord ET fiche d'une cooperative) ----
+// Colonnes alignees (texte a gauche, nombres a droite, en-tetes alignes comme leurs donnees). La barre montre la part du POTENTIEL deja
+// livree, avec des reperes a l'alerte (50 %) et a la limite (70 % en periode principale, 100 % en periode intermediaire) ; le « reste a
+// livrer » (limite - deja livre) est une colonne a part, arrondi vers le bas par prudence (comme le message d'alerte aux cooperatives).
+function parametresBarreProducteur(r){
+  const pot = r.pot, ceiling = r.ceiling;
+  const periodePrincipale = state.campagneFilter!=='all' && state.periodeFilter==='principale';
+  const seuil = Number(state.settings.seuil)||50;
+  const limitePct = pot>0 && ceiling>0 ? Math.min(ceiling/pot*100, 100) : 100;
+  const alertePct = periodePrincipale ? 50 : limitePct*seuil/100;
+  const pctPot = pot>0 ? r.cumul/pot*100 : null;
+  const reste = ceiling>0 ? Math.max(Math.floor(ceiling - r.cumul + 1e-9), 0) : null;
+  return { pctPot, limitePct, alertePct, reste };
+}
+function renderBarreProducteur(r){
+  const b = parametresBarreProducteur(r);
+  if (b.pctPot==null) return '<span class="hint">—</span>';
+  const largeur = Math.max(0, Math.min(b.pctPot, 100));
+  const couleur = r.st.key==='danger' ? 'var(--danger)' : r.st.key==='warn' ? 'var(--warn)' : r.st.key==='ok' ? 'var(--ok)' : 'var(--ink-faint)';
+  const titre = 'Déjà livré : '+fmtKg(r.cumul)+' = '+b.pctPot.toFixed(0)+' % du potentiel ('+fmtKg(r.pot)+'). Alerte à '+b.alertePct.toFixed(0)+' %, limite à '+b.limitePct.toFixed(0)+' % ('+fmtKg(r.ceiling)+').';
+  return '<div class="pbar" title="'+esc(titre)+'">'
+    + '<span class="z z1" style="left:0;width:'+b.alertePct+'%"></span>'
+    + '<span class="z z2" style="left:'+b.alertePct+'%;width:'+(b.limitePct-b.alertePct)+'%"></span>'
+    + '<span class="z z3" style="left:'+b.limitePct+'%;right:0"></span>'
+    + '<span class="fill" style="width:'+largeur+'%;background:'+couleur+'"></span>'
+    + '<span class="tick" style="left:'+b.alertePct+'%"></span>'
+    + (b.limitePct<100 ? '<span class="tick" style="left:'+b.limitePct+'%"></span>' : '')
+    + '</div>';
+}
+function legendeTableauProducteurs(){
+  const principale = state.campagneFilter!=='all' && state.periodeFilter==='principale';
+  const interm = state.campagneFilter!=='all' && state.periodeFilter==='intermediaire';
+  const limite = principale ? '70 %' : interm ? '100 %' : '100 %';
+  const alerte = principale ? '50 %' : (Number(state.settings.seuil)||50)+' % de la limite';
+  return '<div class="legende-prod">'
+    + '<b>Comment lire ce tableau.</b> <b>Potentiel</b> = production estimée du producteur. <b>Limite</b> = '+limite+' du potentiel'+(principale?' (période principale)':interm?' (période intermédiaire, cumul de la campagne)':'')+'. '
+    + '<b>Déjà livré</b> = achats enregistrés. <b>Reste à livrer</b> = limite − déjà livré (arrondi vers le bas). '
+    + 'La <b>barre</b> montre la part du potentiel déjà livrée, avec un trait à l\'alerte ('+alerte+') et à la limite ('+limite+') :'
+    + '<span class="pastille" style="background:var(--ok)"></span>conforme'
+    + '<span class="pastille" style="background:var(--warn)"></span>alerte précoce'
+    + '<span class="pastille" style="background:var(--danger)"></span>limite atteinte ou dépassée.'
+    + '</div>';
+}
+function renderTableauProducteurs(rows, opts){
+  opts = opts || {};
+  const montrerCoop = !!opts.montrerCoop;
+  const principale = state.campagneFilter!=='all' && state.periodeFilter==='principale';
+  const interm = state.campagneFilter!=='all' && state.periodeFilter==='intermediaire';
+  const limiteLabel = principale ? 'Limite 70 %' : interm ? 'Limite 100 %' : 'Limite';
+  const nbCol = 9 + (montrerCoop?1:0);
+  let html = legendeTableauProducteurs()
+    + '<div class="tbl-prod-wrap"><table class="tbl-prod"><thead><tr>'
+    + '<th>Producteur</th>'
+    + '<th>Parcelle</th>'
+    + (montrerCoop ? '<th>Coopérative</th>' : '')
+    + '<th class="r">Potentiel<small>kg</small></th>'
+    + '<th class="r">'+limiteLabel+'<small>kg</small></th>'
+    + '<th class="r">Déjà livré<small>kg</small></th>'
+    + '<th class="r">% potentiel<small>déjà livré</small></th>'
+    + '<th style="min-width:140px">Progression<small>traits : alerte et limite</small></th>'
+    + '<th class="r">Reste à livrer<small>kg</small></th>'
+    + '<th class="c">Statut</th>'
+    + '<th class="r"></th>'
+    + '</tr></thead><tbody>';
+  rows.forEach(r=>{
+    const b = parametresBarreProducteur(r);
+    const coop = montrerCoop ? coopById(r.p.cooperative_id) : null;
+    const danger = r.st.key==='danger';
+    const libelleStatut = danger ? (r.cumul > r.ceiling + 0.001 ? 'Dépassement' : 'Limite atteinte') : String(r.st.label||'').replace(/\s*\(\d+%\)/,'');
+    const actions = (opts.alerter && (r.st.key==='danger'||r.st.key==='warn') ? '<button class="btn-ghost" onclick="alerterCooperative(\''+r.p.id+'\')">Alerter la coopérative</button>' : '')
+      + (opts.versDashboard
+          ? '<button class="btn-ghost" onclick="goToTabForCoop(\'dashboard\');toggleExpand(\''+r.p.id+'\')">Détail</button>'
+          : '<button class="btn-ghost" onclick="toggleExpand(\''+r.p.id+'\')">'+(state.expanded.has(r.p.id)?'Fermer':'Détail')+'</button>');
+    html += '<tr class="'+(r.st.key==='warn'?'ligne-warn':danger?'ligne-danger':'')+'">'
+      + '<td><div class="nom">'+esc(r.p.nom)+'</div>'+(r.p.code?'<div class="code">'+esc(r.p.code)+'</div>':'')+'</td>'
+      + '<td class="parc">'+esc(r.p.farm_id||'—')+'</td>'
+      + (montrerCoop ? '<td>'+esc(coop?coop.nom:'Coopérative inconnue')+'</td>' : '')
+      + '<td class="r">'+(r.pot>0?fmtNum(r.pot):'—')+'</td>'
+      + '<td class="r">'+(r.ceiling>0?fmtNum(r.ceiling):'—')+'</td>'
+      + '<td class="r">'+fmtNum(r.cumul)+'</td>'
+      + '<td class="r">'+(b.pctPot==null?'—':b.pctPot.toFixed(0)+' %')+'</td>'
+      + '<td>'+renderBarreProducteur(r)+'</td>'
+      + '<td class="r reste'+(b.reste===0?' zero':'')+'">'+(b.reste==null?'—':fmtNum(b.reste))+'</td>'
+      + '<td class="c"><span class="badge '+r.st.key+'">'+esc(libelleStatut)+'</span></td>'
+      + '<td class="acts"><div class="acts-col">'+actions+'</div></td>'
+      + '</tr>';
+    if (opts.detail && state.expanded.has(r.p.id)){
+        const list = achatsProducteur(r.p.farm_id, state.campagneFilter, state.periodeFilter, r.p.cooperative_id)
+          .sort((a,b)=> a.date.localeCompare(b.date));
+        const detailHtml = '<div class="detail"><div class="detail-grid">'
+          + '<div><div class="hint" style="margin-bottom:8px;">Livraisons (issues du fichier de traçabilité)</div><div class="achat-list">'
+          + (list.length===0 ? '<div class="achat-item"><span class="hint">Aucune livraison enregistrée pour ce filtre.</span></div>' :
+             list.map(a=>{ const acamp = state.campagnes.find(x=>x.id===a.campagne_id); return '<div class="achat-item"><span>'+esc(a.date)+' — <span class="num">'+fmtKg(a.quantite_kg)+'</span>'+(a.nombre_sacs?' · '+esc(a.nombre_sacs)+' sacs':'')+(a.connaissement?' · '+esc(a.connaissement):'')+(a.type_cacao?' · <span class="badge neutral">'+esc(a.type_cacao)+'</span>':'')+(acamp?' · <span class="hint">'+esc(acamp.nom)+(a.periode?' ('+(a.periode==='principale'?'principale':'intermédiaire')+')':'')+'</span>':'')+'</span><button class="btn-danger-text" onclick="deleteAchat(\''+a.id+'\')">Supprimer</button></div>'; }).join(''))
+          + '</div>'
+          + '<div style="margin-top:10px;font-size:12px;color:var(--ink-soft)">Surface : <span class="num">'+esc(r.p.surface_ha||0)+' ha</span>'+(r.p.volume_estime_kg?' · Volume estimé : <span class="num">'+fmtKg(r.p.volume_estime_kg)+'</span>':(r.p.rendement_kg_ha?' · Rendement : <span class="num">'+esc(r.p.rendement_kg_ha)+' kg/ha</span>':''))+(r.p.matricule_ccc?' · ID traçabilité : <span class="num">'+esc(r.p.matricule_ccc)+'</span>':'')+(r.p.farm_id?' · Farm ID : <span class="num">'+esc(r.p.farm_id)+'</span>':'')+(r.p.village_district||r.p.pays?' · '+esc([r.p.village_district,r.p.pays].filter(Boolean).join(', ')):'')+'</div>'
+          + '<div class="hint" style="margin-top:10px;">Les achats se font au niveau de la coopérative — les livraisons par producteur proviennent du fichier de traçabilité importé.</div>'
+          + '<div style="margin-top:6px;"><button class="btn-danger-text" onclick="deleteProducteur(\''+r.p.id+'\')">Supprimer le producteur</button></div>'
+          + '</div>'
+          + '<div><div class="hint" style="margin-bottom:8px;">Évolution du cumul vs plafond applicable</div>'+evolutionSvg(list, r.ceiling)+'</div>'
+          + '</div></div>';
+      html += '<tr class="detail-row"><td colspan="'+nbCol+'">'+detailHtml+'</td></tr>';
+    }
+  });
+  return html + '</tbody></table></div>';
+}
+
 function renderDashboardTab(){
   const rows = computeRows();
   const nAlert = rows.filter(r=>r.st.key==='warn'||r.st.key==='danger').length;
@@ -10210,7 +10346,7 @@ function renderDashboardTab(){
 
   html += '<div class="panel">';
   html += '<div class="panel-head"><h2>Producteurs ('+fmtNum(rows.length)+')</h2>'+sectionToggleHtml('producteurs', rows.length)+'</div>';
-  html += '<div class="panel-note">Potentiel, achats cumulés et statut par producteur — clique sur « Détail » pour voir l\'historique complet de ses livraisons.</div>';
+  html += '<div class="panel-note">Clique sur « Détail » pour voir l\'historique complet des livraisons d\'un producteur.</div>';
 
   if (rows.length===0){
     html += '<div class="empty">'+(state.cooperatives.length===0
@@ -10219,35 +10355,7 @@ function renderDashboardTab(){
   } else if (!sectionIsOpen('producteurs', rows.length)){
     html += '<div class="empty">Liste repliée ('+fmtNum(rows.length)+' producteurs) — clique sur « Dérouler » ci-dessus pour l\'afficher.</div>';
   } else {
-    html += '<div class="row row-head"><div>Producteur</div><div>Potentiel</div><div>Acheté</div><div>Réalisation</div><div>Statut</div><div></div></div>';
-    rows.forEach(r=>{
-      const pct = r.st.pct==null ? 0 : Math.min(r.st.pct,100);
-      const barColor = r.st.key==='danger' ? 'var(--danger)' : r.st.key==='warn' ? 'var(--warn)' : r.st.key==='ok' ? 'var(--ok)' : 'var(--ink-faint)';
-      const coop = coopById(r.p.cooperative_id);
-      html += '<div class="row">'
-        + '<div class="p-name"><div class="name">'+esc(r.p.nom)+(r.p.code?' <span class="num" style="font-size:11px;color:var(--ink-faint)">('+esc(r.p.code)+')</span>':'')+'</div>'+(r.p.farm_id?'<div class="hint" style="font-size:11px;">Parcelle '+esc(r.p.farm_id)+'</div>':'')+'<div class="coop">'+esc(coop?coop.nom:'Coopérative inconnue')+'</div></div>'
-        + '<div><span class="stat-label">Potentiel</span><span class="num">'+fmtKg(r.pot)+'</span>'+(r.periode?' <span class="hint">(plafond '+(r.periode==='principale'?'70%':'100% continu')+' : '+fmtKg(r.ceiling)+')</span>':'')+'</div>'
-        + '<div><span class="stat-label">Acheté</span><span class="num">'+fmtKg(r.cumul)+'</span></div>'
-        + '<div class="bar-wrap"><div class="bar-track"><div class="bar-fill" style="width:'+pct+'%;background:'+barColor+'"></div></div><span class="bar-pct">'+(r.st.pct==null?'—':r.st.pct.toFixed(0)+'%')+'</span></div>'
-        + '<div><span class="badge '+r.st.key+'">'+r.st.label+'</span></div>'
-        + '<div class="row-actions">'+((r.st.key==='danger'||r.st.key==='warn')?'<button class="btn-ghost" onclick="alerterCooperative(\''+r.p.id+'\')">Alerter la coopérative</button>':'')+'<button class="btn-ghost" onclick="toggleExpand(\''+r.p.id+'\')">'+(state.expanded.has(r.p.id)?'Fermer':'Détail')+'</button></div>'
-        + '</div>';
-      if (state.expanded.has(r.p.id)){
-        const list = achatsProducteur(r.p.farm_id, state.campagneFilter, state.periodeFilter, r.p.cooperative_id)
-          .sort((a,b)=> a.date.localeCompare(b.date));
-        html += '<div class="detail"><div class="detail-grid">'
-          + '<div><div class="hint" style="margin-bottom:8px;">Livraisons (issues du fichier de traçabilité)</div><div class="achat-list">'
-          + (list.length===0 ? '<div class="achat-item"><span class="hint">Aucune livraison enregistrée pour ce filtre.</span></div>' :
-             list.map(a=>{ const acamp = state.campagnes.find(x=>x.id===a.campagne_id); return '<div class="achat-item"><span>'+esc(a.date)+' — <span class="num">'+fmtKg(a.quantite_kg)+'</span>'+(a.nombre_sacs?' · '+esc(a.nombre_sacs)+' sacs':'')+(a.connaissement?' · '+esc(a.connaissement):'')+(a.type_cacao?' · <span class="badge neutral">'+esc(a.type_cacao)+'</span>':'')+(acamp?' · <span class="hint">'+esc(acamp.nom)+(a.periode?' ('+(a.periode==='principale'?'principale':'intermédiaire')+')':'')+'</span>':'')+'</span><button class="btn-danger-text" onclick="deleteAchat(\''+a.id+'\')">Supprimer</button></div>'; }).join(''))
-          + '</div>'
-          + '<div style="margin-top:10px;font-size:12px;color:var(--ink-soft)">Surface : <span class="num">'+esc(r.p.surface_ha||0)+' ha</span>'+(r.p.volume_estime_kg?' · Volume estimé : <span class="num">'+fmtKg(r.p.volume_estime_kg)+'</span>':(r.p.rendement_kg_ha?' · Rendement : <span class="num">'+esc(r.p.rendement_kg_ha)+' kg/ha</span>':''))+(r.p.matricule_ccc?' · ID traçabilité : <span class="num">'+esc(r.p.matricule_ccc)+'</span>':'')+(r.p.farm_id?' · Farm ID : <span class="num">'+esc(r.p.farm_id)+'</span>':'')+(r.p.village_district||r.p.pays?' · '+esc([r.p.village_district,r.p.pays].filter(Boolean).join(', ')):'')+'</div>'
-          + '<div class="hint" style="margin-top:10px;">Les achats se font au niveau de la coopérative — les livraisons par producteur proviennent du fichier de traçabilité importé.</div>'
-          + '<div style="margin-top:6px;"><button class="btn-danger-text" onclick="deleteProducteur(\''+r.p.id+'\')">Supprimer le producteur</button></div>'
-          + '</div>'
-          + '<div><div class="hint" style="margin-bottom:8px;">Évolution du cumul vs plafond applicable</div>'+evolutionSvg(list, r.ceiling)+'</div>'
-          + '</div></div>';
-      }
-    });
+    html += renderTableauProducteurs(rows, { montrerCoop: state.coopFilter==='all', detail:true, alerter:true });
   }
   html += '</div>';
   }
@@ -10320,19 +10428,7 @@ function renderCoopDashboard(){
   } else if (!sectionIsOpen('coopdash-prod-'+coop.id, rows.length)){
     html += '<div class="empty">Liste repliée ('+fmtNum(rows.length)+' producteurs) — clique sur « Dérouler » ci-dessus.</div>';
   } else {
-    html += '<div class="row row-head"><div>Producteur</div><div>Potentiel</div><div>Acheté</div><div>Réalisation</div><div>Statut</div><div></div></div>';
-    rows.forEach(r=>{
-      const pct = r.st.pct==null ? 0 : Math.min(r.st.pct,100);
-      const barColor = r.st.key==='danger' ? 'var(--danger)' : r.st.key==='warn' ? 'var(--warn)' : r.st.key==='ok' ? 'var(--ok)' : 'var(--ink-faint)';
-      html += '<div class="row">'
-        + '<div class="p-name"><div class="name">'+esc(r.p.nom)+(r.p.code?' <span class="num" style="font-size:11px;color:var(--ink-faint)">('+esc(r.p.code)+')</span>':'')+'</div>'+(r.p.farm_id?'<div class="hint" style="font-size:11px;">Parcelle '+esc(r.p.farm_id)+'</div>':'')+'</div>'
-        + '<div><span class="stat-label">Potentiel</span><span class="num">'+fmtKg(r.pot)+'</span></div>'
-        + '<div><span class="stat-label">Acheté</span><span class="num">'+fmtKg(r.cumul)+'</span></div>'
-        + '<div class="bar-wrap"><div class="bar-track"><div class="bar-fill" style="width:'+pct+'%;background:'+barColor+'"></div></div><span class="bar-pct">'+(r.st.pct==null?'—':r.st.pct.toFixed(0)+'%')+'</span></div>'
-        + '<div><span class="badge '+r.st.key+'">'+r.st.label+'</span></div>'
-        + '<div class="row-actions"><button class="btn-ghost" onclick="goToTabForCoop(\'dashboard\');toggleExpand(\''+r.p.id+'\')">Détail</button></div>'
-        + '</div>';
-    });
+    html += renderTableauProducteurs(rows, { montrerCoop:false, versDashboard:true });
   }
   html += '</div>';
 
