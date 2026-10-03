@@ -854,13 +854,7 @@ function openContratRAModal(coopId){
   const coop = coopById(coopId);
   if (!coop) return;
   if (coop.statut==='Non certifiée'){ showToast("Cette coopérative n'est pas certifiée."); return; }
-  const missing = [];
-  if (!coop.rccm) missing.push('N° RCCM');
-  if (!coop.ccc_num) missing.push('N° agrément CCC');
-  if (!coop.identifiant_certification) missing.push('Identifiant de certification');
-  if (!coop.volume_certificat) missing.push('Volume certificat');
-  if (!coop.representant_legal_nom) missing.push('Nom du représentant légal');
-  if (!coop.siege_social && !coop.ville) missing.push('Ville ou Siège social');
+  const missing = champsManquantsContrat(coop);
   if (missing.length>0){
     // Les donnees de certification ne s'affichent dans la fiche que pour « Certifiée » : on l'indique pour ne pas bloquer.
     const manqueCertif = missing.includes('Identifiant de certification') || missing.includes('Volume certificat');
@@ -870,7 +864,7 @@ function openContratRAModal(coopId){
           : 'Complète la fiche coopérative (Modifier) avant de continuer.'));
     return;
   }
-  state.modal = {type:'contratRA', payload:{coopId, campagne_label:'2026-2027', periode_label:'Septembre 2026 à août 2027', date_debut:'2026-09-01'}};
+  state.modal = {type:'contratRA', payload:Object.assign({coopId}, contratParametresParDefaut())};
   render();
 }
 
@@ -941,34 +935,407 @@ async function genererContratDepuisModele(coop, campagne_label, periode_label, d
   return await zip.generateAsync({type:'blob', mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'});
 }
 
-function genererContratRA(){
-  const m = state.modal;
-  if (!m || m.type!=='contratRA') return;
-  const coop = coopById(m.payload.coopId);
-  if (!coop) return;
-  const campagne_label = fv('campagne_label').trim() || '—';
-  const periode_label = fv('periode_label').trim() || '—';
-  const date_debut_raw = fv('date_debut');
-  if (typeof JSZip === 'undefined'){ showToast("La bibliothèque de compression n'a pas pu se charger (connexion internet requise). Réessaie dans un instant."); return; }
-  const dateDebut = date_debut_raw ? new Date(date_debut_raw+'T00:00:00').toLocaleDateString('fr-FR') : '—';
-  // Volume conforme RDUE = potentiel cumule du registre (base sur laquelle portent
-  // les alertes a 50% et le blocage a 70%). Capacite totale fournisseur = volume
-  // inscrit sur le certificat de la cooperative, renseigne sur sa fiche.
+// =====================================================================================================================
+// Modeles de documents integres a ORIGEN
+//  - Contrat d'approvisionnement RAINFOREST ALLIANCE : genere en PDF (modele Word integre + donnees de la fiche coop).
+//  - Procuration ECORIGINE, Code de conduite : modele Word/fichier joint tel quel (la cooperative le remplit).
+// Chaque document est propose dans la liste deroulante « Document demande » d'une demande « Autres documents » ; la
+// plateforme adapte alors le nom, le message, la nature (a signer) et le fichier joint.
+// =====================================================================================================================
+const DOCUMENTS_DEMANDABLES = [
+  { id:'contrat_ra', nom:"Contrat d'Approvisionnement RAINFOREST ALLIANCE", nature:'signer', genere:true,
+    message:"Merci de nous transmettre le Contrat d'approvisionnement RAINFOREST ALLIANCE paraphé, signé et cacheté par le Responsable de la Coopérative." },
+  { id:'procuration', nom:'Procuration ECORIGINE', nature:'signer', modele:'procuration_ecorigine', wordObligatoire:true,
+    message:"Merci de nous transmettre le document signé par au moins trois membres du Comité de Gestion, cacheté et légalisé à la Mairie. Veuillez également renseigner les informations de votre Coopérative en en-tête." },
+  { id:'code_conduite', nom:'Code de conduite ECORIGINE', nature:'signer', modele:'code_conduite_ecorigine',
+    message:"Merci de nous transmettre le Code de conduite signé par au moins trois membres du Comité de Gestion ou du Conseil d'Administration et cacheté." },
+];
+function documentDemandable(id){ return DOCUMENTS_DEMANDABLES.find(d=>d.id===id) || null; }
+
+// ---- Bibliotheques de rendu / PDF, chargees seulement quand on en a besoin ----
+const CDN_PDF = {
+  docx:   ['https://cdn.jsdelivr.net/npm/docx-preview@0.3.3/dist/docx-preview.min.js', 'https://unpkg.com/docx-preview@0.3.3/dist/docx-preview.min.js'],
+  canvas: ['https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js', 'https://unpkg.com/html2canvas@1.4.1/dist/html2canvas.min.js'],
+  jspdf:  ['https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js', 'https://unpkg.com/jspdf@2.5.1/dist/jspdf.umd.min.js'],
+};
+function chargerScriptExterne(urls){
+  return new Promise((resolve, reject)=>{
+    let i = 0;
+    const essai = ()=>{
+      if (i >= urls.length){ reject(new Error('chargement impossible')); return; }
+      const s = document.createElement('script');
+      s.src = urls[i++];
+      s.onload = ()=>resolve();
+      s.onerror = ()=>{ s.remove(); essai(); };
+      document.head.appendChild(s);
+    };
+    essai();
+  });
+}
+let _bibliosPdf = null;
+function chargerBibliothequesPdf(){
+  if (_bibliosPdf) return _bibliosPdf;
+  _bibliosPdf = (async()=>{
+    if (typeof JSZip === 'undefined') throw new Error('JSZip absent');
+    if (!window.docx) await chargerScriptExterne(CDN_PDF.docx);
+    if (!window.html2canvas) await chargerScriptExterne(CDN_PDF.canvas);
+    if (!(window.jspdf && window.jspdf.jsPDF)) await chargerScriptExterne(CDN_PDF.jspdf);
+  })().catch(()=>{ _bibliosPdf = null; throw new Error("Impossible de charger les outils de génération du PDF (connexion internet requise). Réessaie dans un instant."); });
+  return _bibliosPdf;
+}
+
+// ---- Contrat : fabrication du PDF ----
+// Debut de chaque page du contrat (texte du 1er paragraphe), releve sur le rendu Word : le navigateur ne pagine pas
+// automatiquement comme Word, on lui indique donc ou chaque page commence.
+const CONTRAT_RA_DEBUTS_PAGES = ['Article 2 — Obligations des parties', 'Article 3 — Livraison du cacao', '4.4 Le présent article constitue', 'Article 9 — Élection de domicile', 'Critères Qualité'];
+// Position des paraphes (pages 1 a 4) et du cachet (pages 5 et 6), en mm depuis le coin haut-gauche de la page, releves sur le
+// modele d'origine ; ces images sont posees a ces endroits fixes, derriere le texte.
+const CONTRAT_RA_PARAPHES_MM = { 1:[182.4,260.6], 2:[183.6,258.3], 3:[178.6,256.5], 4:[177.3,260.1] };
+const CONTRAT_RA_CACHETS_MM  = { 5:[39.9,71.1], 6:[48.0,127.8] };
+const CONTRAT_DECALAGE_ENCRE_MM = { paraphe:[1.52,2.0], cachet:[2.03,1.65] };   // trace de l'image par rapport a sa boite
+
+async function contratInsererSautsDePage(docxBlob){
+  const zip = await JSZip.loadAsync(await docxBlob.arrayBuffer());
+  const xml = await zip.file('word/document.xml').async('string');
+  const dom = new DOMParser().parseFromString(xml, 'application/xml');
+  const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+  const corps = dom.getElementsByTagNameNS(W, 'body')[0];
+  const norm = t => t.replace(/[\u202f\u00a0]/g, ' ').replace(/\s+/g, ' ').trim();
+  const paragraphes = Array.from(corps.children).filter(n=>n.localName === 'p');
+  CONTRAT_RA_DEBUTS_PAGES.forEach(debut=>{
+    const p = paragraphes.find(par=>norm(Array.from(par.getElementsByTagNameNS(W, 't')).map(t=>t.textContent).join('')).startsWith(debut));
+    if (!p) return;
+    const r = dom.createElementNS(W, 'w:r'), br = dom.createElementNS(W, 'w:br');
+    br.setAttributeNS(W, 'w:type', 'page'); r.appendChild(br);
+    const ppr = Array.from(p.children).find(n=>n.localName === 'pPr');
+    if (ppr && ppr.nextSibling) p.insertBefore(r, ppr.nextSibling); else if (ppr) p.appendChild(r); else p.insertBefore(r, p.firstChild);
+  });
+  zip.file('word/document.xml', new XMLSerializer().serializeToString(dom));
+  return await zip.generateAsync({ type:'blob' });
+}
+// Une page dont le contenu deborde de la feuille (le navigateur est un peu moins compact que Word) est resserree : on reduit
+// legerement les espaces entre paragraphes et l'interligne jusqu'a ce qu'elle tienne, sans toucher a la taille du texte.
+function contratAjusterDebordement(page){
+  const hMax = 792*96/72;
+  for (let essai=0; essai<16 && page.offsetHeight > hMax+1; essai++){
+    page.querySelectorAll('article p').forEach(p=>{
+      const cs = page.ownerDocument.defaultView.getComputedStyle(p);
+      const mb = parseFloat(cs.marginBottom)||0; if (mb > 0.5) p.style.marginBottom = (mb*0.88)+'px';
+      const fs = parseFloat(cs.fontSize)||12, lh = (parseFloat(cs.lineHeight)||fs*1.2)/fs;
+      if (lh > 1.05) p.style.lineHeight = String(Math.max(1.05, lh*0.985));
+    });
+  }
+}
+// Retouches du rendu avant capture : cadre du titre, numero de chaque page, paraphes et cachets a position fixe.
+function contratRetoucherPages(pages){
+  const k = 96/25.4;
+  const doc = pages[0].ownerDocument, vue = doc.defaultView;
+  let paraphe = null, cachet = null;
+  pages.forEach(page=>{
+    page.querySelectorAll('article div[style*="position: relative"][style*="width: 0px"]').forEach(d=>{
+      const img = d.querySelector('img'); if (!img) return;
+      const w = parseFloat(img.style.width), h = parseFloat(img.style.height);            // en pt
+      const cible = { src: img.src, w: w*96/72, h: h*96/72 };
+      if (w > 100){ if (!cachet) cachet = cible; } else { if (!paraphe) paraphe = cible; }
+      d.remove();
+    });
+  });
+  pages.forEach((page, i)=>{
+    const n = i+1;
+    contratAjusterDebordement(page);
+    const pr = page.getBoundingClientRect();
+    if (vue.getComputedStyle(page).position === 'static') page.style.position = 'relative';
+    page.style.zIndex = '0';   // contexte d'empilement : les images placees derriere le texte restent au-dessus du fond blanc
+    // Le rectangle VML du titre devient une simple boite a bordure (plus fiable a la capture qu'un SVG).
+    page.querySelectorAll('svg[style*="position:absolute"]').forEach(svg=>{
+      const sr = svg.getBoundingClientRect();
+      const boite = doc.createElement('div');
+      boite.style.cssText = 'position:absolute;box-sizing:border-box;border:2px solid #b3e5a1;background:transparent;pointer-events:none;'
+        + 'left:'+(sr.left-pr.left)+'px;top:'+(sr.top-pr.top)+'px;width:'+sr.width+'px;height:'+sr.height+'px;';
+      page.appendChild(boite);
+      svg.style.display = 'none';
+    });
+    const pied = page.querySelector('footer');
+    if (pied){
+      const spans = Array.from(pied.querySelectorAll('span')).filter(s=>/^\s*\d+\s*$/.test(s.textContent));
+      if (spans.length) spans[spans.length-1].textContent = String(n);
+    }
+    const poser = (img, pos, enc)=>{
+      if (!img || !pos) return;
+      const im = doc.createElement('img'); im.src = img.src;
+      im.style.cssText = 'position:absolute;z-index:-1;width:'+img.w+'px;height:'+img.h+'px;left:'+((pos[0]-enc[0])*k)+'px;top:'+((pos[1]-enc[1])*k)+'px;';
+      page.appendChild(im);
+    };
+    poser(paraphe, CONTRAT_RA_PARAPHES_MM[n], CONTRAT_DECALAGE_ENCRE_MM.paraphe);
+    poser(cachet, CONTRAT_RA_CACHETS_MM[n], CONTRAT_DECALAGE_ENCRE_MM.cachet);
+  });
+}
+// Convertit le contrat Word rempli en PDF (une image nette par page, format Lettre comme le modele). Le rendu se fait dans un
+// cadre invisible : les styles de la plateforme n'interferent pas avec la mise en page du contrat.
+async function contratEnPdf(docxBlob){
+  await chargerBibliothequesPdf();
+  const avecSauts = await contratInsererSautsDePage(docxBlob);
+  const cadre = document.createElement('iframe');
+  cadre.setAttribute('aria-hidden', 'true');
+  cadre.style.cssText = 'position:fixed;left:-10000px;top:0;width:900px;height:1200px;border:0;visibility:hidden;';
+  document.body.appendChild(cadre);
+  try{
+    const d = cadre.contentDocument;
+    d.open(); d.write('<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0;background:#fff"><div id="hote"></div></body></html>'); d.close();
+    const hote = d.getElementById('hote');
+    await window.docx.renderAsync(avecSauts, hote, null, { inWrapper:true, breakPages:true, renderHeaders:true, renderFooters:true, ignoreLastRenderedPageBreak:true });
+    const pages = Array.from(hote.querySelectorAll('section.docx'));
+    if (pages.length === 0) throw new Error("rendu du contrat vide");
+    contratRetoucherPages(pages);
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ unit:'mm', format:'letter', orientation:'portrait', compress:true });
+    for (let i=0; i<pages.length; i++){
+      const canvas = await window.html2canvas(pages[i], { scale:2.5, backgroundColor:'#ffffff', useCORS:true, logging:false });
+      if (i > 0) pdf.addPage('letter', 'portrait');
+      pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, 215.9, 279.4, undefined, 'FAST');
+    }
+    return pdf.output('blob');
+  } finally {
+    cadre.remove();
+  }
+}
+function champsManquantsContrat(coop){
+  const m = [];
+  if (!coop.rccm) m.push('N° RCCM');
+  if (!coop.ccc_num) m.push('N° agrément CCC');
+  if (!coop.identifiant_certification) m.push('Identifiant de certification');
+  if (!coop.volume_certificat) m.push('Volume certificat');
+  if (!coop.representant_legal_nom) m.push('Nom du représentant légal');
+  if (!coop.siege_social && !coop.ville) m.push('Ville ou Siège social');
+  return m;
+}
+function contratParametresParDefaut(){ return { campagne_label:'2026-2027', periode_label:'Septembre 2026 à août 2027', date_debut:'2026-09-01' }; }
+function nomFichierContrat(coop, campagneLabel){
+  const sigle = coop.certifications==='Fairtrade' ? 'FT' : coop.certifications==='Cocoa Horizon' ? 'CH' : 'RA';
+  return 'Contrat_'+sigle+'_'+String(coop.nom).replace(/[^a-z0-9]+/gi,'_')+'_'+String(campagneLabel).replace(/[^a-z0-9]+/gi,'_');
+}
+// Contrat d'une cooperative : verifie la fiche, remplit le modele integre, le convertit en PDF.
+async function contratPdfPourCooperative(coop, p){
+  if (coop.statut === 'Non certifiée') throw new Error("coopérative non certifiée");
+  const manquants = champsManquantsContrat(coop);
+  if (manquants.length) throw new Error('fiche incomplète ('+manquants.join(', ')+')');
+  const dateDebut = p.date_debut ? new Date(p.date_debut+'T00:00:00').toLocaleDateString('fr-FR') : '—';
   const volumeRDUE = fmtNum(Math.round(coopStats(coop.id).potentiel));
   const capaciteTotale = fmtNum(Math.round(coop.volume_certificat||0));
-  const fonctionRepresentant = fonctionRepresentantFor(coop.nom);
-  genererContratDepuisModele(coop, campagne_label, periode_label, dateDebut, volumeRDUE, capaciteTotale, fonctionRepresentant).then(blob=>{
-    const url = URL.createObjectURL(blob);
-    const aTag = document.createElement('a');
-    aTag.href = url;
-    aTag.download = 'Contrat_'+(coop.certifications==='Fairtrade'?'FT':coop.certifications==='Cocoa Horizon'?'CH':'RA')+'_'+coop.nom.replace(/[^a-z0-9]+/gi,'_')+'_'+campagne_label.replace(/[^a-z0-9]+/gi,'_')+'.docx';
-    document.body.appendChild(aTag); aTag.click(); document.body.removeChild(aTag);
-    URL.revokeObjectURL(url);
-    showToast('Contrat Word généré et téléchargé.', 'success');
-    closeModal();
-  }).catch(err=>{
-    showToast("Erreur lors de la génération du contrat Word : "+err.message);
+  const docxBlob = await genererContratDepuisModele(coop, p.campagne_label, p.periode_label, dateDebut, volumeRDUE, capaciteTotale, fonctionRepresentantFor(coop.nom));
+  const pdf = await contratEnPdf(docxBlob);
+  return { fichier: pdf, nom: nomFichierContrat(coop, p.campagne_label)+'.pdf', docxBlob };
+}
+
+// ---- Modeles Word / fichiers memorises dans ORIGEN (procuration, code de conduite) ----
+// Le modele est enregistre une seule fois dans le stockage (dossier « modeles ») puis joint automatiquement a chaque demande.
+async function modeleDocumentStocke(modeleId){
+  try{
+    const { data, error } = await supabaseClient.storage.from('documents-coop').list('modeles/'+modeleId, { limit: 10 });
+    if (error || !data) return null;
+    const f = data.find(x=>x && x.name && x.name !== '.emptyFolderPlaceholder');
+    return f ? { path:'modeles/'+modeleId+'/'+f.name, nom:f.name } : null;
+  }catch(e){ return null; }
+}
+async function rafraichirModeleDocument(modeleId){
+  state.modelesDocuments = state.modelesDocuments || {};
+  state.modelesDocuments[modeleId] = await modeleDocumentStocke(modeleId);
+}
+async function memoriserModeleDocument(modeleId, fichier){
+  const ancien = await modeleDocumentStocke(modeleId);
+  if (ancien) await supabaseClient.storage.from('documents-coop').remove([ancien.path]);
+  const path = 'modeles/'+modeleId+'/'+assainirNomFichier(fichier.name);
+  const { error } = await supabaseClient.storage.from('documents-coop').upload(path, fichier, { upsert:true });
+  if (error) throw new Error(error.message);
+  await rafraichirModeleDocument(modeleId);
+}
+async function lireModeleDocument(stocke){
+  const { data, error } = await supabaseClient.storage.from('documents-coop').download(stocke.path);
+  if (error || !data) throw new Error((error && error.message) || 'téléchargement du modèle impossible');
+  return data;
+}
+function remplacerModeleDocument(modeleId){
+  const doc = DOCUMENTS_DEMANDABLES.find(d=>d.modele === modeleId);
+  askConfirm('Remplacer le modèle « '+(doc?doc.nom:modeleId)+' » ? Le modèle actuel sera retiré ; tu joindras le nouveau fichier lors de la prochaine création de cette demande.', async ()=>{
+    const ancien = await modeleDocumentStocke(modeleId);
+    if (ancien){
+      const { error } = await supabaseClient.storage.from('documents-coop').remove([ancien.path]);
+      if (error){ showToast('Échec : '+error.message); return; }
+    }
+    await rafraichirModeleDocument(modeleId);
+    showToast('Modèle retiré : joins le nouveau fichier.', 'success');
+    render();
   });
+}
+function estFichierWord(nom){ return /\.(docx?|dotx?)$/i.test(String(nom||'')); }
+
+// ---- Enregistrement d'une demande avec son fichier source (utilise par le bouton « Generer le contrat ») ----
+async function enregistrerDemandeAvecFichier(coop, o, fichier, nomFichier){
+  const newId = 'req_'+Date.now()+'_'+coop.id;
+  let path = null;
+  if (fichier){
+    path = coop.id+'/demandes/'+newId+'/source/'+assainirNomFichier(nomFichier);
+    const { error: errUp } = await supabaseClient.storage.from('documents-coop').upload(path, fichier, { upsert:true });
+    if (errUp) return { ok:false, erreur:"envoi du document : "+errUp.message };
+  }
+  const demandeObj = {
+    id: newId, name: o.name, cooperative_id: coop.id, statut: 'demandee', types: o.types || ['autres'],
+    deadline: o.deadline || null, requested_at: new Date().toISOString().slice(0,10),
+    demandeur_nom: o.demandeurNom || (state.session && state.session.user ? state.session.user.email : 'ECORIGINE'),
+    message: o.message || null,
+    document_a_signer: fichier ? (o.nature === 'signer') : null,
+    fichier_source_path: path, fichier_source_nom: fichier ? nomFichier : null,
+    connaissement: null, masterdata_scope: null,
+  };
+  const { error } = await supabaseClient.from('demandes').insert(demandeObj);
+  if (error) return { ok:false, erreur:'création de la demande : '+error.message };
+  let erreurEmail = null;
+  try{
+    const { error: errEmail } = await supabaseClient.functions.invoke('email-nouvelle-demande', { body:{ demande_id:newId } });
+    if (errEmail) erreurEmail = errEmail.message;
+  }catch(e){ erreurEmail = e.message; }
+  return { ok:true, demandeObj, erreurEmail };
+}
+function telechargerBlob(blob, nom){
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = nom;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 2000);
+}
+
+// Fenetre « Generer le contrat » : 3 actions.
+//  envoyer = PDF genere + demande « Contrat d'Approvisionnement RAINFOREST ALLIANCE » creee pour la cooperative (email envoye)
+//  pdf     = telecharge seulement le PDF (aucune demande)
+//  word    = telecharge seulement le Word (comme avant)
+async function genererContratRA(mode){
+  const m = state.modal;
+  if (!m || m.type!=='contratRA') return;
+  mode = mode || 'envoyer';
+  const coop = coopById(m.payload.coopId);
+  if (!coop) return;
+  const params = {
+    campagne_label: fv('campagne_label').trim() || '—',
+    periode_label: fv('periode_label').trim() || '—',
+    date_debut: fv('date_debut'),
+  };
+  const echeance = fv('date_echeance');
+  const boutons = Array.from(document.querySelectorAll('.modal .actions button'));
+  const etat = (texte)=>{ boutons.forEach(b=>{ b.disabled = !!texte; }); const t = document.getElementById('contrat-etat'); if (t) t.textContent = texte || ''; };
+  try{
+    etat(mode==='word' ? 'Génération du Word…' : 'Génération du PDF… (quelques secondes)');
+    if (mode === 'word'){
+      const dateDebut = params.date_debut ? new Date(params.date_debut+'T00:00:00').toLocaleDateString('fr-FR') : '—';
+      const blob = await genererContratDepuisModele(coop, params.campagne_label, params.periode_label, dateDebut,
+        fmtNum(Math.round(coopStats(coop.id).potentiel)), fmtNum(Math.round(coop.volume_certificat||0)), fonctionRepresentantFor(coop.nom));
+      telechargerBlob(blob, nomFichierContrat(coop, params.campagne_label)+'.docx');
+      showToast('Contrat Word généré et téléchargé.', 'success');
+      closeModal(); return;
+    }
+    const g = await contratPdfPourCooperative(coop, params);
+    if (mode === 'pdf'){
+      telechargerBlob(g.fichier, g.nom);
+      showToast('Contrat PDF généré et téléchargé.', 'success');
+      closeModal(); return;
+    }
+    const doc = documentDemandable('contrat_ra');
+    etat('Création de la demande…');
+    const r = await enregistrerDemandeAvecFichier(coop, { name:doc.nom, types:['autres'], deadline:echeance, message:doc.message, nature:doc.nature }, g.fichier, g.nom);
+    if (!r.ok){ etat(''); showToast('Échec : '+r.erreur); return; }
+    closeModal();
+    showToast(r.erreurEmail
+      ? 'Contrat PDF joint à la demande pour '+coop.nom+', mais l\'email n\'a pas pu être envoyé ('+r.erreurEmail+'). Utilise « ✉ Relancer ».'
+      : 'Contrat PDF généré et joint à une demande « '+doc.nom+' » pour '+coop.nom+'. Email envoyé.', r.erreurEmail ? 'error' : 'success');
+    await refreshDemandesTab();
+  }catch(err){
+    etat('');
+    showToast('Erreur lors de la génération du contrat : '+err.message);
+  }
+}
+
+// ---- Formulaire « Nouvelle demande » : liste deroulante des documents demandables ----
+// Releve tous les champs du formulaire (y compris le document choisi et les parametres du contrat) pour pouvoir redessiner
+// la fenetre sans rien perdre de ce qui a ete saisi.
+function capturerFormulaireDemande(){
+  const ancien = (state.modal && state.modal.payload) || {};
+  const fileInput = document.getElementById('demande_fichier_source_input');
+  const fichierSelectionne = (fileInput && fileInput.files[0]) ? fileInput.files[0] : ancien.fichierSource;
+  const garde = (nom)=>{ const el = document.querySelector('#modal-fields [name="'+nom+'"]'); return el ? el.value : (ancien[nom]||''); };
+  return {
+    demande_name: fv('demande_name'),
+    demande_cooperative_id: fv('demande_cooperative_id'),
+    demande_deadline: fv('demande_deadline'),
+    demande_demandeur_nom: fv('demande_demandeur_nom'),
+    demande_message: fv('demande_message'),
+    demande_doc_nature: fvRadio('demande_doc_nature'),
+    demande_numero_livraison: fv('demande_numero_livraison'),
+    demande_masterdata_scope: fvRadio('demande_masterdata_scope'),
+    demande_message_auto: ancien.demande_message_auto,
+    demande_doc_choix: garde('demande_doc_choix'),
+    demande_contrat_campagne: garde('demande_contrat_campagne'),
+    demande_contrat_periode: garde('demande_contrat_periode'),
+    demande_contrat_date: garde('demande_contrat_date'),
+    fichierSource: fichierSelectionne,
+  };
+}
+function selecteurDocumentAutres(nd){
+  const choix = nd.demande_doc_choix || '';
+  return '<label class="field">Document demandé<select name="demande_doc_choix" onchange="choisirDocumentAutres(this.value)">'
+    + '<option value="">— Autre document (je le joins moi-même) —</option>'
+    + DOCUMENTS_DEMANDABLES.map(d=>'<option value="'+d.id+'"'+(choix===d.id?' selected':'')+'>'+esc(d.nom)+'</option>').join('')
+    + '</select></label>';
+}
+// Bloc affiche sous la liste quand un document connu est choisi : ORIGEN fournit lui-meme le fichier.
+function blocDocumentRegistre(doc, nd){
+  if (doc.genere){
+    const p = contratParametresParDefaut();
+    return '<div class="hint" style="margin:-4px 0 12px;">Le contrat est généré automatiquement en <strong>PDF</strong> pour chaque coopérative, à partir du modèle intégré à ORIGEN et des informations de sa fiche, puis joint à la demande (à signer et retourner). Les coopératives dont la fiche est incomplète sont signalées et ignorées.</div>'
+      + '<label class="field">Campagne (libellé court)<input type="text" name="demande_contrat_campagne" value="'+esc(nd.demande_contrat_campagne||p.campagne_label)+'" placeholder="ex : 2026-2027"></label>'
+      + '<label class="field">Période (texte affiché)<input type="text" name="demande_contrat_periode" value="'+esc(nd.demande_contrat_periode||p.periode_label)+'" placeholder="ex : Septembre 2026 à août 2027"></label>'
+      + '<label class="field">Date de début du contrat<input type="date" name="demande_contrat_date" value="'+esc(nd.demande_contrat_date||p.date_debut)+'"></label>';
+  }
+  const stocke = (state.modelesDocuments || {})[doc.modele];
+  if (stocke){
+    return '<div class="hint" style="margin:-4px 0 12px;">✓ Modèle intégré à ORIGEN : <strong>'+esc(stocke.nom)+'</strong>. Il sera joint tel quel à la demande'
+      + (doc.wordObligatoire ? ' (en Word, pour que la coopérative le remplisse)' : '')+'. '
+      + '<button type="button" class="btn-ghost btn-compact" onclick="remplacerModeleDocument(\''+doc.modele+'\')">Remplacer le modèle</button></div>';
+  }
+  return '<div class="hint" style="margin:-4px 0 12px;">Le modèle de ce document n\'est pas encore enregistré dans ORIGEN. Joins-le <strong>une seule fois</strong>'
+    + (doc.wordObligatoire ? ' (fichier Word)' : '')+' : il sera mémorisé et joint automatiquement à toutes les prochaines demandes.</div>'
+    + '<label class="field">Modèle à enregistrer<input type="file" id="demande_fichier_source_input"'+(doc.wordObligatoire ? ' accept=".doc,.docx"' : '')+'></label>';
+}
+async function choisirDocumentAutres(id){
+  if (!(state.modal && state.modal.type === 'nouvelleDemande')) return;
+  const pl = capturerFormulaireDemande();
+  const doc = documentDemandable(id);
+  const messagesStandards = DOCUMENTS_DEMANDABLES.map(d=>d.message);
+  const nomsStandards = DOCUMENTS_DEMANDABLES.map(d=>d.nom);
+  pl.demande_doc_choix = id || '';
+  if (doc){
+    pl.demande_name = doc.nom;
+    const msg = String(pl.demande_message||'').trim();
+    if (!msg || messagesStandards.includes(msg)) pl.demande_message = doc.message;
+    pl.demande_doc_nature = doc.nature;
+    pl.fichierSource = null;
+    if (doc.genere){
+      const p = contratParametresParDefaut();
+      pl.demande_contrat_campagne = pl.demande_contrat_campagne || p.campagne_label;
+      pl.demande_contrat_periode = pl.demande_contrat_periode || p.periode_label;
+      pl.demande_contrat_date = pl.demande_contrat_date || p.date_debut;
+    }
+    if (doc.modele) await rafraichirModeleDocument(doc.modele);
+  } else {
+    if (nomsStandards.includes(String(pl.demande_name||'').trim())) pl.demande_name = '';
+    if (messagesStandards.includes(String(pl.demande_message||'').trim())) pl.demande_message = '';
+    pl.fichierSource = null;
+  }
+  if (!(state.modal && state.modal.type === 'nouvelleDemande')) return;
+  state.newDemandeTypes.add('autres');
+  state.modal.payload = pl;
+  const fenetre = document.querySelector('.modal');
+  const haut = fenetre ? fenetre.scrollTop : 0;
+  render();
+  const apres = document.querySelector('.modal');
+  if (apres) apres.scrollTop = haut;
 }
 
 // Propose un nom complet selon la regle : "La Societe Cooperative [nom]" par defaut.
@@ -1535,7 +1902,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-61';
+const APP_VERSION = '2026-10-02-62';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -2563,18 +2930,7 @@ function prefixeConnaissementPourCoop(coop){
 // numero a plusieurs chiffres (ex: "10") sans recliquer entre chaque touche.
 function majNomDemandeTracabilite(){
   if (!(state.modal && state.modal.type==='nouvelleDemande')) return;
-  const fileInput = document.getElementById('demande_fichier_source_input');
-  const fichierSelectionne = (fileInput && fileInput.files[0]) ? fileInput.files[0] : (state.modal.payload && state.modal.payload.fichierSource);
-  state.modal.payload = {
-    demande_name: fv('demande_name'),
-    demande_cooperative_id: fv('demande_cooperative_id'),
-    demande_deadline: fv('demande_deadline'),
-    demande_demandeur_nom: fv('demande_demandeur_nom'),
-    demande_message: fv('demande_message'),
-    demande_doc_nature: fvRadio('demande_doc_nature'),
-    demande_numero_livraison: fv('demande_numero_livraison'),
-    fichierSource: fichierSelectionne,
-  };
+  state.modal.payload = capturerFormulaireDemande();
   render();
 }
 
@@ -2611,21 +2967,7 @@ function majNumeroLivraison(){
 }
 
 function toggleDemandeType(type){
-  if (state.modal && state.modal.type==='nouvelleDemande'){
-    const fileInput = document.getElementById('demande_fichier_source_input');
-    const fichierSelectionne = (fileInput && fileInput.files[0]) ? fileInput.files[0] : (state.modal.payload && state.modal.payload.fichierSource);
-    state.modal.payload = {
-      demande_name: fv('demande_name'),
-      demande_cooperative_id: fv('demande_cooperative_id'),
-      demande_deadline: fv('demande_deadline'),
-      demande_demandeur_nom: fv('demande_demandeur_nom'),
-      demande_message: fv('demande_message'),
-      demande_doc_nature: fvRadio('demande_doc_nature'),
-      demande_numero_livraison: fv('demande_numero_livraison'),
-      demande_masterdata_scope: fvRadio('demande_masterdata_scope'),
-      fichierSource: fichierSelectionne,
-    };
-  }
+  if (state.modal && state.modal.type==='nouvelleDemande') state.modal.payload = capturerFormulaireDemande();
   const s = state.newDemandeTypes;
   if (s.has(type)) s.delete(type); else s.add(type);
   // La fenetre est redessinee (des champs apparaissent selon les types) : on conserve sa position de defilement.
@@ -2680,15 +3022,7 @@ async function creerDemande(){
   // Sauvegarde immediate des champs dans le payload de la modale : si une validation
   // echoue plus bas, showToast() va redessiner la modale, et c'est ce payload qui
   // repeuple les champs -- sans ca, tout ce qui a ete tape disparait au premier echec.
-  if (state.modal && state.modal.type==='nouvelleDemande'){
-    const fileInput = document.getElementById('demande_fichier_source_input');
-    const fichierSelectionne = (fileInput && fileInput.files[0]) ? fileInput.files[0] : (state.modal.payload && state.modal.payload.fichierSource);
-    state.modal.payload = {
-      demande_name: name, demande_cooperative_id: coopId, demande_deadline: deadline,
-      demande_demandeur_nom: demandeurNom, demande_message: message, demande_doc_nature: docNature,
-      fichierSource: fichierSelectionne,
-    };
-  }
+  if (state.modal && state.modal.type==='nouvelleDemande') state.modal.payload = capturerFormulaireDemande();
   if (!name || !coopId){ showToast('Renseigne au moins un nom et une coopérative.'); restaurerFichierSourceInput(); return; }
   if (state.newDemandeTypes.size===0){ showToast('Sélectionne au moins un type de données.'); restaurerFichierSourceInput(); return; }
 
@@ -2696,22 +3030,55 @@ async function creerDemande(){
   const fichierSource = (fileInput && fileInput.files[0]) ? fileInput.files[0] : (state.modal.payload && state.modal.payload.fichierSource);
   const typesArr = Array.from(state.newDemandeTypes);
 
+  // Document connu (liste deroulante « Autres documents ») : ORIGEN fournit lui-meme le fichier.
+  const docReg = state.newDemandeTypes.has('autres') ? documentDemandable(fv('demande_doc_choix')) : null;
+  let genererPour = null, modeleAMemoriser = null;
+  if (docReg && docReg.genere){
+    const paramsContrat = {
+      campagne_label: fv('demande_contrat_campagne').trim(),
+      periode_label: fv('demande_contrat_periode').trim(),
+      date_debut: fv('demande_contrat_date'),
+    };
+    if (!paramsContrat.campagne_label || !paramsContrat.periode_label || !paramsContrat.date_debut){ showToast('Renseigne la campagne, la période et la date de début du contrat.'); return; }
+    genererPour = (coop)=>contratPdfPourCooperative(coop, paramsContrat);
+  } else if (docReg && docReg.modele){
+    let blobModele = null, nomModele = null;
+    const stocke = await modeleDocumentStocke(docReg.modele);
+    if (stocke){
+      try{ blobModele = await lireModeleDocument(stocke); nomModele = stocke.nom; }
+      catch(eModele){ showToast('Impossible de lire le modèle enregistré : '+eModele.message); return; }
+    } else if (fichierSource){
+      if (docReg.wordObligatoire && !estFichierWord(fichierSource.name)){ showToast('Ce document doit rester un fichier Word (.doc ou .docx) pour que la coopérative puisse le remplir.'); restaurerFichierSourceInput(); return; }
+      blobModele = fichierSource; nomModele = fichierSource.name; modeleAMemoriser = fichierSource;
+    } else {
+      showToast('Joins le modèle de « '+docReg.nom+' » : il sera mémorisé pour les prochaines demandes.'); return;
+    }
+    genererPour = async ()=>({ fichier: blobModele, nom: nomModele });
+  }
+  const natureFinale = docReg ? docReg.nature : docNature;
+
   const targetCoops = coopId==='__all__' ? state.cooperatives.slice() : [coopById(coopId)].filter(Boolean);
   if (targetCoops.length===0){ showToast('Aucune coopérative à cibler.'); return; }
 
   const btn = document.querySelector('.modal .actions .btn-primary');
   if (btn){ btn.disabled = true; btn.textContent = targetCoops.length>1 ? 'Création en cours… (0/'+targetCoops.length+')' : 'Création…'; }
 
-  let created = 0, sansEmail = [], echecsEmail = [], lastCreated = null;
+  let created = 0, sansEmail = [], echecsEmail = [], echecsGeneration = [], lastCreated = null;
   for (const coop of targetCoops){
     const newId = 'req_'+Date.now()+'_'+coop.id;
     let fichier_source_path = null, fichier_source_nom = null;
-    if (fichierSource){
-      const path = coop.id + '/demandes/' + newId + '/source/' + assainirNomFichier(fichierSource.name);
-      const { error: upErr } = await supabaseClient.storage.from('documents-coop').upload(path, fichierSource, { upsert: true });
+    let fichierCoop = docReg ? null : fichierSource, nomFichierCoop = (!docReg && fichierSource) ? fichierSource.name : null;
+    if (genererPour){
+      if (btn) btn.textContent = docReg.genere ? 'Génération du contrat — '+coop.nom+'…' : 'Création…';
+      try{ const g = await genererPour(coop); fichierCoop = g.fichier; nomFichierCoop = g.nom; }
+      catch(eGen){ echecsGeneration.push(coop.nom+' ('+eGen.message+')'); continue; }
+    }
+    if (fichierCoop){
+      const path = coop.id + '/demandes/' + newId + '/source/' + assainirNomFichier(nomFichierCoop);
+      const { error: upErr } = await supabaseClient.storage.from('documents-coop').upload(path, fichierCoop, { upsert: true });
       if (upErr){ showToast("Échec de l'envoi du document pour "+coop.nom+" : "+upErr.message); continue; }
       fichier_source_path = path;
-      fichier_source_nom = fichierSource.name;
+      fichier_source_nom = nomFichierCoop;
     }
     const demandeObj = {
       id: newId,
@@ -2722,7 +3089,7 @@ async function creerDemande(){
       requested_at: new Date().toISOString().slice(0,10),
       demandeur_nom: demandeurNom || (state.session && state.session.user ? state.session.user.email : 'ECORIGINE'),
       message: message || null,
-      document_a_signer: fichierSource ? (docNature==='signer') : null,
+      document_a_signer: fichierCoop ? (natureFinale==='signer') : null,
       fichier_source_path, fichier_source_nom,
       connaissement: connaissementComplet,
       masterdata_scope: masterdataScope,
@@ -2743,6 +3110,14 @@ async function creerDemande(){
   }
 
   if (btn){ btn.disabled = false; btn.textContent = 'Créer la demande'; }
+  if (created===0 && echecsGeneration.length>0){
+    showToast('Aucune demande créée — '+echecsGeneration.join(' · ')+'. Complète la fiche puis réessaie.');
+    return;
+  }
+  if (modeleAMemoriser && created>0){
+    try{ await memoriserModeleDocument(docReg.modele, modeleAMemoriser); }
+    catch(eMem){ showToast('Demande créée, mais le modèle n\'a pas pu être mémorisé : '+eMem.message); }
+  }
   state.newDemandeTypes = new Set();
   closeModal();
 
@@ -2757,9 +3132,10 @@ async function creerDemande(){
     }
   } else {
     let msg = created+' demande(s) créée(s) sur '+targetCoops.length+' coopérative(s).';
+    if (echecsGeneration.length>0) msg += ' ⚠ Document non généré : '+echecsGeneration.join(' · ')+'.';
     if (sansEmail.length>0) msg += ' ⚠ Sans email enregistré : '+sansEmail.join(', ')+'.';
     if (echecsEmail.length>0) msg += ' ⚠ Échec d\'envoi de l\'email : '+echecsEmail.join(' · ')+'. Utilisez « ✉ Relancer » pour ces coopératives.';
-    showToast(msg, (created>0 && echecsEmail.length===0) ? 'success' : 'error');
+    showToast(msg, (created>0 && echecsEmail.length===0 && echecsGeneration.length===0) ? 'success' : 'error');
   }
 
   await refreshDemandesTab();
@@ -10448,7 +10824,8 @@ function _renderBrut(){
           : '')
       + '<label class="field">Échéance<input type="date" name="demande_deadline" value="'+esc(nd.demande_deadline||'')+'"></label>'
       + (state.newDemandeTypes.has('autres')
-          ? '<label class="field">Document à joindre (optionnel)<input type="file" id="demande_fichier_source_input"></label>'
+          ? selecteurDocumentAutres(nd)
+            + (documentDemandable(nd.demande_doc_choix||'') ? blocDocumentRegistre(documentDemandable(nd.demande_doc_choix), nd) : ('<label class="field">Document à joindre (optionnel)<input type="file" id="demande_fichier_source_input"></label>'
             + '<div class="field" style="margin:4px 0 14px;"><label style="font-weight:600;font-size:13px;display:block;margin-bottom:6px;">Nature du document joint</label>'
             + '<div class="choix-grille une-colonne">'
             + [['signer','À signer et retourner','La coopérative le télécharge, le signe, puis soumet la version signée en retour (contrat, code de conduite…).'],['transmettre','À transmettre simplement','La coopérative le télécharge pour information, aucun retour n\'est nécessaire.']].map(([val,titre,sous])=>{
@@ -10457,7 +10834,7 @@ function _renderBrut(){
                   + '<span class="choix-carte"><span class="choix-puce ronde"></span><span class="choix-texte"><span class="choix-titre">'+titre+'</span><span class="choix-sous">'+sous+'</span></span></span></label>';
               }).join('')
             + '</div>'
-            + '</div>'
+            + '</div>'))
           : '')
       + '<label class="field">Ton nom (affiché à la coopérative)<input type="text" name="demande_demandeur_nom" value="'+esc(nd.demande_demandeur_nom||'')+'" placeholder="ex : Nabi Ouague"></label>'
       + '<label class="field">Message pour la coopérative<textarea name="demande_message" rows="3" placeholder="'+esc(placeholderMessageDemande(state.newDemandeTypes))+'">'+esc(nd.demande_message||'')+'</textarea></label>'
@@ -10522,10 +10899,15 @@ function _renderBrut(){
       + '<label class="field">Campagne (libellé court)<input type="text" name="campagne_label" value="'+esc(pl.campagne_label)+'" placeholder="ex : 2026-2027"></label>'
       + '<label class="field">Période (texte affiché)<input type="text" name="periode_label" value="'+esc(pl.periode_label)+'" placeholder="ex : Septembre 2026 à août 2027"></label>'
       + '<label class="field">Date de début du contrat<input type="date" name="date_debut" value="'+esc(pl.date_debut)+'"></label>'
+      + '<label class="field">Échéance de la demande (optionnel)<input type="date" name="date_echeance" value=""></label>'
       + '</div>'
+      + '<div class="hint" style="margin:0 0 12px;">« Générer et envoyer » crée le PDF, le joint à une demande <strong>Contrat d\'Approvisionnement RAINFOREST ALLIANCE</strong> et prévient la coopérative par email.</div>'
+      + '<div id="contrat-etat" class="hint" style="min-height:16px;color:var(--accent);font-weight:600;"></div>'
       + '<div class="actions">'
       + '<button type="button" class="btn" onclick="closeModal()">Annuler</button>'
-      + '<button type="button" class="btn btn-primary" onclick="genererContratRA()">Générer le contrat</button>'
+      + '<button type="button" class="btn" onclick="genererContratRA(\'word\')">Word seulement</button>'
+      + '<button type="button" class="btn" onclick="genererContratRA(\'pdf\')">PDF seulement</button>'
+      + '<button type="button" class="btn btn-primary" onclick="genererContratRA(\'envoyer\')">Générer et envoyer</button>'
       + '</div></div></div>';
   }
 
