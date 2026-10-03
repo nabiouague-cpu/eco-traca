@@ -853,7 +853,8 @@ const ICON_DEMANDES = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor
 function openContratRAModal(coopId){
   const coop = coopById(coopId);
   if (!coop) return;
-  if (coop.statut==='Non certifiée'){ showToast("Cette coopérative n'est pas certifiée."); return; }
+  const certContrat = certificationContrat(coop);
+  if (certContrat !== 'Rainforest Alliance'){ showToast("Le modèle de contrat "+(certContrat ? certContrat : "pour une coopérative non certifiée")+" n'est pas encore intégré à ORIGEN : seul le contrat Rainforest Alliance peut être généré pour le moment."); return; }
   const missing = champsManquantsContrat(coop);
   if (missing.length>0){
     // Les donnees de certification ne s'affichent dans la fiche que pour « Certifiée » : on l'indique pour ne pas bloquer.
@@ -942,16 +943,31 @@ async function genererContratDepuisModele(coop, campagne_label, periode_label, d
 // Chaque document est propose dans la liste deroulante « Document demande » d'une demande « Autres documents » ; la
 // plateforme adapte alors le nom, le message, la nature (a signer) et le fichier joint.
 // =====================================================================================================================
+// Certification d'une cooperative pour le NOM du contrat : « Rainforest Alliance », « Fairtrade »... ou rien si elle n'est pas certifiee.
+function certificationContrat(coop){
+  if (!coop || coop.statut==='Non certifiée') return '';
+  const c = String(coop.certifications||'').trim();
+  if (/rainforest/i.test(c)) return 'Rainforest Alliance';
+  if (/fairtrade/i.test(c)) return 'Fairtrade';
+  return c;
+}
+function nomContratPourCoop(coop){
+  const cert = certificationContrat(coop);
+  return "Contrat d'approvisionnement"+(cert ? ' '+cert : '');
+}
+// Documents proposes dans la liste « Document demande » : le nom et le message sont AUTOMATIQUES (rien a saisir).
 const DOCUMENTS_DEMANDABLES = [
-  { id:'contrat_ra', nom:"Contrat d'Approvisionnement RAINFOREST ALLIANCE", nature:'signer', genere:true,
-    message:"Merci de nous transmettre le Contrat d'approvisionnement RAINFOREST ALLIANCE paraphé, signé et cacheté par le Responsable de la Coopérative." },
+  { id:'contrat_ra', nom:"Contrat d'approvisionnement", nomPourCoop:nomContratPourCoop, nature:'signer', genere:true,
+    message:"Merci de nous transmettre le contrat d'approvisionnement paraphé, signé et cacheté par le responsable de la coopérative." },
   { id:'procuration', nom:'Procuration ECORIGINE', nature:'signer', wordObligatoire:true,
     fichierModele:{ url:'modeles/procuration_ecorigine_26-27.docx', nom:'Projet de procuration ECORIGINE 26-27.docx' },
-    message:"Merci de nous transmettre le document signé par au moins trois membres du Comité de Gestion, cacheté et légalisé à la Mairie. Veuillez également renseigner les informations de votre Coopérative en en-tête." },
+    message:"Merci de nous transmettre la procuration ECORIGINE.\n\nVeuillez :\n• renseigner en en-tête les informations de la coopérative ;\n• faire signer cette procuration par au moins trois membres du comité de gestion (pour les SCOOPS) ou par au moins trois membres du conseil d'administration (pour les COOP-CA) ;\n• la faire légaliser à la mairie ;\n• nous la transmettre." },
   { id:'code_conduite', nom:'Code de conduite ECORIGINE', nature:'signer',
     fichierModele:{ url:'modeles/code_de_conduite_ecorigine_v1.2.pdf', nom:'CODE_DE_CONDUITE_ECORIGINE_V1.2.pdf' },
-    message:"Merci de nous transmettre le Code de conduite signé par au moins trois membres du Comité de Gestion ou du Conseil d'Administration et cacheté." },
+    message:"Merci de nous transmettre le code de conduite signé par au moins trois membres du comité de gestion (pour les SCOOPS) ou du conseil d'administration (pour les COOP-CA)." },
 ];
+// Nom de la demande pour UNE cooperative (le contrat suit sa certification ; les autres documents gardent leur nom).
+function nomDemandeDocument(doc, coop){ return (doc && doc.nomPourCoop) ? doc.nomPourCoop(coop) : (doc ? doc.nom : ''); }
 function documentDemandable(id){ return DOCUMENTS_DEMANDABLES.find(d=>d.id===id) || null; }
 
 // ---- Bibliotheques de rendu / PDF, chargees seulement quand on en a besoin ----
@@ -1118,7 +1134,9 @@ function nomFichierContrat(coop, campagneLabel){
 }
 // Contrat d'une cooperative : verifie la fiche, remplit le modele integre, le convertit en PDF.
 async function contratPdfPourCooperative(coop, p){
-  if (coop.statut === 'Non certifiée') throw new Error("coopérative non certifiée");
+  const cert = certificationContrat(coop);
+  if (cert !== 'Rainforest Alliance')
+    throw new Error("le modèle de contrat "+(cert ? cert : "pour une coopérative non certifiée")+" n'est pas encore intégré à ORIGEN");
   const manquants = champsManquantsContrat(coop);
   if (manquants.length) throw new Error('fiche incomplète ('+manquants.join(', ')+')');
   const dateDebut = p.date_debut ? new Date(p.date_debut+'T00:00:00').toLocaleDateString('fr-FR') : '—';
@@ -1241,12 +1259,13 @@ async function genererContratRA(mode){
     }
     const doc = documentDemandable('contrat_ra');
     etat('Création de la demande…');
-    const r = await enregistrerDemandeAvecFichier(coop, { name:doc.nom, types:['autres'], deadline:echeance, message:doc.message, nature:doc.nature }, g.fichier, g.nom);
+    const nomDemande = nomDemandeDocument(doc, coop);
+    const r = await enregistrerDemandeAvecFichier(coop, { name:nomDemande, types:['autres'], deadline:echeance, message:doc.message, nature:doc.nature }, g.fichier, g.nom);
     if (!r.ok){ etat(''); showToast('Échec : '+r.erreur); return; }
     closeModal();
     showToast(r.erreurEmail
       ? 'Contrat PDF joint à la demande pour '+coop.nom+', mais l\'email n\'a pas pu être envoyé ('+r.erreurEmail+'). Utilise « ✉ Relancer ».'
-      : 'Contrat PDF généré et joint à une demande « '+doc.nom+' » pour '+coop.nom+'. Email envoyé.', r.erreurEmail ? 'error' : 'success');
+      : 'Contrat PDF généré et joint à une demande « '+nomDemande+' » pour '+coop.nom+'. Email envoyé.', r.erreurEmail ? 'error' : 'success');
     await refreshDemandesTab();
   }catch(err){
     etat('');
@@ -1290,7 +1309,9 @@ function selecteurDocumentAutres(nd){
 function blocDocumentRegistre(doc, nd){
   if (doc.genere){
     const p = contratParametresParDefaut();
-    return '<div class="hint" style="margin:-4px 0 12px;">Le contrat est généré automatiquement en <strong>PDF</strong> pour chaque coopérative, à partir du modèle intégré à ORIGEN et des informations de sa fiche, puis joint à la demande (à signer et retourner). Les coopératives dont la fiche est incomplète sont signalées et ignorées.</div>'
+    return '<div class="hint" style="margin:-4px 0 12px;">Le contrat est généré automatiquement en <strong>PDF</strong> pour chaque coopérative, à partir du modèle intégré à ORIGEN et des informations de sa fiche, puis joint à la demande (à signer et retourner). '
+      + 'Le <strong>nom de la demande</strong> suit la certification de chaque coopérative : « Contrat d\'approvisionnement Rainforest Alliance », « … Fairtrade », ou « Contrat d\'approvisionnement » si elle n\'est pas certifiée. '
+      + 'Seul le modèle <strong>Rainforest Alliance</strong> est intégré pour le moment : les autres coopératives sont signalées et ignorées, tout comme celles dont la fiche est incomplète.</div>'
       + '<label class="field">Campagne (libellé court)<input type="text" name="demande_contrat_campagne" value="'+esc(nd.demande_contrat_campagne||p.campagne_label)+'" placeholder="ex : 2026-2027"></label>'
       + '<label class="field">Période (texte affiché)<input type="text" name="demande_contrat_periode" value="'+esc(nd.demande_contrat_periode||p.periode_label)+'" placeholder="ex : Septembre 2026 à août 2027"></label>'
       + '<label class="field">Date de début du contrat<input type="date" name="demande_contrat_date" value="'+esc(nd.demande_contrat_date||p.date_debut)+'"></label>';
@@ -1314,7 +1335,7 @@ async function choisirDocumentAutres(id){
   const pl = capturerFormulaireDemande();
   const doc = documentDemandable(id);
   const messagesStandards = DOCUMENTS_DEMANDABLES.map(d=>d.message);
-  const nomsStandards = DOCUMENTS_DEMANDABLES.map(d=>d.nom);
+  const nomsStandards = DOCUMENTS_DEMANDABLES.map(d=>d.nom).concat(["Contrat d'approvisionnement Rainforest Alliance", "Contrat d'approvisionnement Fairtrade"]);
   pl.demande_doc_choix = id || '';
   if (doc){
     pl.demande_name = doc.nom;
@@ -1908,7 +1929,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-69';
+const APP_VERSION = '2026-10-02-70';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3024,7 +3045,8 @@ async function creerDemande(){
     if (!numeroSaisi){ showToast('Indique le numéro de livraison.'); return; }
     if (coopPourNom && !coopPourNom.code_court){ showToast('Cette coopérative n\'a pas de code court renseigné — ajoute-le sur sa fiche avant de créer cette demande.'); return; }
   }
-  const message = fv('demande_message').trim();
+  const docRegistre = state.newDemandeTypes.has('autres') ? documentDemandable(fv('demande_doc_choix')) : null;
+  const message = fv('demande_message').trim() || (docRegistre ? docRegistre.message : '');   // message automatique si rien n'est saisi
   const demandeurNom = fv('demande_demandeur_nom').trim();
   const docNature = fvRadio('demande_doc_nature') || 'signer';
   const masterdataScope = state.newDemandeTypes.has('masterdata') ? (fvRadio('demande_masterdata_scope') || 'les-deux') : null;
@@ -3101,7 +3123,7 @@ async function creerDemande(){
     }
     const demandeObj = {
       id: newId,
-      name, cooperative_id: coop.id,
+      name: docReg ? nomDemandeDocument(docReg, coop) : name, cooperative_id: coop.id,
       statut: 'demandee',
       types: typesArr,
       deadline: deadline || null,
@@ -11072,7 +11094,7 @@ function _renderBrut(){
       + '<label class="field">Date de début du contrat<input type="date" name="date_debut" value="'+esc(pl.date_debut)+'"></label>'
       + '<label class="field">Échéance de la demande (optionnel)<input type="date" name="date_echeance" value=""></label>'
       + '</div>'
-      + '<div class="hint" style="margin:0 0 12px;">« Générer et envoyer » crée le PDF, le joint à une demande <strong>Contrat d\'Approvisionnement RAINFOREST ALLIANCE</strong> et prévient la coopérative par email.</div>'
+      + '<div class="hint" style="margin:0 0 12px;">« Générer et envoyer » crée le PDF, le joint à une demande <strong>'+esc(nomContratPourCoop(coop))+'</strong> avec le message habituel, et prévient la coopérative par email.</div>'
       + '<div id="contrat-etat" class="hint" style="min-height:16px;color:var(--accent);font-weight:600;"></div>'
       + '<div class="actions">'
       + '<button type="button" class="btn" onclick="closeModal()">Annuler</button>'
