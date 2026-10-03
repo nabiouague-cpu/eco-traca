@@ -955,17 +955,42 @@ function nomContratPourCoop(coop){
   const cert = certificationContrat(coop);
   return "Contrat d'approvisionnement"+(cert ? ' '+cert : '');
 }
-// Documents proposes dans la liste « Document demande » : le nom et le message sont AUTOMATIQUES (rien a saisir).
+// Forme juridique d'une cooperative, lue dans son NOM (« COOP CA », « COOP-CA », « SCOOPS »), puis dans son nom complet.
+// Renvoie 'coop-ca' (conseil d'administration), 'scoops' (comite de gestion) ou null si rien ne permet de le dire.
+function formeJuridiqueCoop(coop){
+  const nom = String((coop && coop.nom) || '');
+  if (/\bCOOP[\s-]?CA\b/i.test(nom)) return 'coop-ca';
+  if (/SCOOPS?\b/i.test(nom)) return 'scoops';
+  const complet = String((coop && coop.nom_complet) || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+  if (/CONSEIL D.?ADMINISTRATION/.test(complet)) return 'coop-ca';
+  if (/SIMPLIFI/.test(complet)) return 'scoops';
+  return null;
+}
+// Qui doit signer : le comite de gestion pour une SCOOPS, le conseil d'administration pour une COOP-CA.
+function signatairesPourCoop(coop){
+  const f = formeJuridiqueCoop(coop);
+  if (f==='coop-ca') return "au moins trois membres du conseil d'administration";
+  if (f==='scoops') return "au moins trois membres du comité de gestion";
+  return "au moins trois membres du comité de gestion (pour les SCOOPS) ou du conseil d'administration (pour les COOP-CA)";
+}
+// Documents proposes dans la liste « Document demande » : le nom et le message sont AUTOMATIQUES (rien a saisir) et le message
+// s'adapte a la forme juridique de chaque cooperative.
 const DOCUMENTS_DEMANDABLES = [
   { id:'contrat_ra', nom:"Contrat d'approvisionnement", nomPourCoop:nomContratPourCoop, nature:'signer', genere:true,
-    message:"Merci de nous transmettre le contrat d'approvisionnement paraphé, signé et cacheté par le responsable de la coopérative." },
+    messagePourCoop:()=>"Merci de nous transmettre le contrat d'approvisionnement paraphé, signé et cacheté par le responsable de la coopérative." },
   { id:'procuration', nom:'Procuration ECORIGINE', nature:'signer', wordObligatoire:true,
     fichierModele:{ url:'modeles/procuration_ecorigine_26-27.docx', nom:'Projet de procuration ECORIGINE 26-27.docx' },
-    message:"Merci de nous transmettre la procuration ECORIGINE.\n\nVeuillez :\n• renseigner en en-tête les informations de la coopérative ;\n• faire signer cette procuration par au moins trois membres du comité de gestion (pour les SCOOPS) ou par au moins trois membres du conseil d'administration (pour les COOP-CA) ;\n• la faire légaliser à la mairie ;\n• nous la transmettre." },
+    messagePourCoop:(coop)=>"Merci de nous transmettre la procuration ECORIGINE.\n\nVeuillez :\n• renseigner en en-tête les informations de la coopérative ;\n• faire signer cette procuration par "+signatairesPourCoop(coop)+" ;\n• la faire légaliser à la mairie ;\n• nous la transmettre." },
   { id:'code_conduite', nom:'Code de conduite ECORIGINE', nature:'signer',
     fichierModele:{ url:'modeles/code_de_conduite_ecorigine_v1.2.pdf', nom:'CODE_DE_CONDUITE_ECORIGINE_V1.2.pdf' },
-    message:"Merci de nous transmettre le code de conduite signé par au moins trois membres du comité de gestion (pour les SCOOPS) ou du conseil d'administration (pour les COOP-CA)." },
+    messagePourCoop:(coop)=>"Merci de nous transmettre le code de conduite signé par "+signatairesPourCoop(coop)+"." },
 ];
+// Message automatique d'un document pour UNE cooperative.
+function messageDocumentPourCoop(doc, coop){ return doc && doc.messagePourCoop ? doc.messagePourCoop(coop) : ''; }
+// Toutes les formulations automatiques possibles d'un document (pour reconnaitre un texte non modifie a la main).
+function variantesMessageDocument(doc){
+  return ['coop-ca','scoops',null].map(f=>messageDocumentPourCoop(doc, f==='coop-ca' ? {nom:'X COOP-CA'} : f==='scoops' ? {nom:'X SCOOPS'} : {nom:'X'}));
+}
 // Nom de la demande pour UNE cooperative (le contrat suit sa certification ; les autres documents gardent leur nom).
 function nomDemandeDocument(doc, coop){ return (doc && doc.nomPourCoop) ? doc.nomPourCoop(coop) : (doc ? doc.nom : ''); }
 function documentDemandable(id){ return DOCUMENTS_DEMANDABLES.find(d=>d.id===id) || null; }
@@ -1260,7 +1285,7 @@ async function genererContratRA(mode){
     const doc = documentDemandable('contrat_ra');
     etat('Création de la demande…');
     const nomDemande = nomDemandeDocument(doc, coop);
-    const r = await enregistrerDemandeAvecFichier(coop, { name:nomDemande, types:['autres'], deadline:echeance, message:doc.message, nature:doc.nature }, g.fichier, g.nom);
+    const r = await enregistrerDemandeAvecFichier(coop, { name:nomDemande, types:['autres'], deadline:echeance, message:messageDocumentPourCoop(doc, coop), nature:doc.nature }, g.fichier, g.nom);
     if (!r.ok){ etat(''); showToast('Échec : '+r.erreur); return; }
     closeModal();
     showToast(r.erreurEmail
@@ -1306,7 +1331,24 @@ function selecteurDocumentAutres(nd){
     + '</select></label>';
 }
 // Bloc affiche sous la liste quand un document connu est choisi : ORIGEN fournit lui-meme le fichier.
+function apercuMessageDocument(doc, nd){
+  const coop = (nd.demande_cooperative_id && nd.demande_cooperative_id!=='__all__') ? coopById(nd.demande_cooperative_id) : null;
+  const bloc = (titre, texte)=>'<div style="margin:6px 0;"><div style="font-size:11.5px;color:var(--ink-soft);">'+titre+'</div>'
+    + '<div style="white-space:pre-wrap;font-size:12.5px;background:var(--surface-2);border-left:3px solid var(--accent-line);padding:8px 12px;border-radius:6px;">'+esc(texte)+'</div></div>';
+  let corps;
+  if (coop) corps = bloc('Message automatique pour '+esc(coop.nom)+' :', messageDocumentPourCoop(doc, coop));
+  else {
+    const variantes = variantesMessageDocument(doc);
+    if (new Set(variantes).size===1) corps = bloc('Message automatique :', variantes[0]);
+    else corps = bloc('Message automatique pour une COOP-CA :', variantes[0]) + bloc('Message automatique pour une SCOOPS :', variantes[1])
+      + '<div class="hint">La forme juridique est lue dans le nom de chaque coopérative.</div>';
+  }
+  return '<div style="margin:0 0 12px;">'+corps+'<div class="hint">Laisse le champ « Message » vide pour envoyer ce message automatique ; saisis un texte seulement pour le remplacer.</div></div>';
+}
 function blocDocumentRegistre(doc, nd){
+  return blocDocumentRegistreCorps(doc, nd) + apercuMessageDocument(doc, nd);
+}
+function blocDocumentRegistreCorps(doc, nd){
   if (doc.genere){
     const p = contratParametresParDefaut();
     return '<div class="hint" style="margin:-4px 0 12px;">Le contrat est généré automatiquement en <strong>PDF</strong> pour chaque coopérative, à partir du modèle intégré à ORIGEN et des informations de sa fiche, puis joint à la demande (à signer et retourner). '
@@ -1334,13 +1376,12 @@ async function choisirDocumentAutres(id){
   if (!(state.modal && state.modal.type === 'nouvelleDemande')) return;
   const pl = capturerFormulaireDemande();
   const doc = documentDemandable(id);
-  const messagesStandards = DOCUMENTS_DEMANDABLES.map(d=>d.message);
+  const messagesStandards = DOCUMENTS_DEMANDABLES.flatMap(d=>variantesMessageDocument(d));
   const nomsStandards = DOCUMENTS_DEMANDABLES.map(d=>d.nom).concat(["Contrat d'approvisionnement Rainforest Alliance", "Contrat d'approvisionnement Fairtrade"]);
   pl.demande_doc_choix = id || '';
   if (doc){
     pl.demande_name = doc.nom;
-    const msg = String(pl.demande_message||'').trim();
-    if (!msg || messagesStandards.includes(msg)) pl.demande_message = doc.message;
+    if (messagesStandards.includes(String(pl.demande_message||'').trim())) pl.demande_message = '';   // vide = message automatique
     pl.demande_doc_nature = doc.nature;
     pl.fichierSource = null;
     if (doc.genere){
@@ -1929,7 +1970,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-70';
+const APP_VERSION = '2026-10-02-71';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3046,7 +3087,7 @@ async function creerDemande(){
     if (coopPourNom && !coopPourNom.code_court){ showToast('Cette coopérative n\'a pas de code court renseigné — ajoute-le sur sa fiche avant de créer cette demande.'); return; }
   }
   const docRegistre = state.newDemandeTypes.has('autres') ? documentDemandable(fv('demande_doc_choix')) : null;
-  const message = fv('demande_message').trim() || (docRegistre ? docRegistre.message : '');   // message automatique si rien n'est saisi
+  const message = fv('demande_message').trim();   // vide pour un document de la liste = message automatique, adapte a chaque cooperative
   const demandeurNom = fv('demande_demandeur_nom').trim();
   const docNature = fvRadio('demande_doc_nature') || 'signer';
   const masterdataScope = state.newDemandeTypes.has('masterdata') ? (fvRadio('demande_masterdata_scope') || 'les-deux') : null;
@@ -3129,7 +3170,7 @@ async function creerDemande(){
       deadline: deadline || null,
       requested_at: new Date().toISOString().slice(0,10),
       demandeur_nom: demandeurNom || (state.session && state.session.user ? state.session.user.email : 'ECORIGINE'),
-      message: message || null,
+      message: message || (docReg ? messageDocumentPourCoop(docReg, coop) : '') || null,
       document_a_signer: fichierCoop ? (natureFinale==='signer') : null,
       fichier_source_path, fichier_source_nom,
       connaissement: connaissementComplet,
@@ -11030,7 +11071,7 @@ function _renderBrut(){
             + '</div>'))
           : '')
       + '<label class="field">Ton nom (affiché à la coopérative)<input type="text" name="demande_demandeur_nom" value="'+esc(nd.demande_demandeur_nom||'')+'" placeholder="ex : Nabi Ouague"></label>'
-      + '<label class="field">Message pour la coopérative<textarea name="demande_message" rows="3" placeholder="'+esc(placeholderMessageDemande(state.newDemandeTypes))+'">'+esc(nd.demande_message||'')+'</textarea></label>'
+      + '<label class="field">Message pour la coopérative<textarea name="demande_message" rows="3" placeholder="'+esc(documentDemandable(nd.demande_doc_choix||'') ? 'Laisser vide : le message automatique ci-dessus est envoyé à chaque coopérative.' : placeholderMessageDemande(state.newDemandeTypes))+'">'+esc(nd.demande_message||'')+'</textarea></label>'
       + '</div>'
       + '<div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="creerDemande()">Créer la demande</button></div>'
       + '</div></div>';
