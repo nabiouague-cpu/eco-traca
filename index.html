@@ -1902,7 +1902,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-67';
+const APP_VERSION = '2026-10-02-68';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -2518,6 +2518,9 @@ function fichiersParTypePourCoop(coopId){
     if (cleType==='registre' || cleType==='geolocalisation'){
       titreType = (cleType==='registre' ? 'Registre des membres' : 'Données de géolocalisation') + ' — renvoyé par la coopérative';
       cleType = 'masterdata';
+    } else if (cleType==='connaissement'){
+      titreType = 'Connaissement (PDF)' + (f.connaissement ? ' — '+f.connaissement : '') + ' — renvoyé par la coopérative';
+      cleType = 'product_movements';
     }
     if (!dossiers[cleType]) dossiers[cleType] = { label: cleType, fichiers: [] };
     dossiers[cleType].fichiers.push({ path:f.path, nom:f.nom||f.path.split('/').pop(), date:f.uploaded_at, titre:titreType, source:'demande_fichiers', sourceId:f.id });
@@ -9810,6 +9813,26 @@ function achatsFiltered(){
   });
 }
 
+// Transport lu AUTOMATIQUEMENT sur le connaissement PDF (QR code + texte) a la reception de la fiche, avec acces au PDF.
+function blocTransportConnaissement(a){
+  const pdf = (state.demandeFichiers||[]).find(f=>f.type==='connaissement' && String(f.connaissement||'').toUpperCase()===String(a.connaissement||'').toUpperCase()
+    && (state.demandesCoop||[]).some(d=>d.id===f.demande_id && d.cooperative_id===a.cooperative_id));
+  const infos = [];
+  if (a.nom_transporteur) infos.push('<span><span class="lbl">Transporteur</span> '+esc(a.nom_transporteur)+'</span>');
+  if (a.immat_vehicule) infos.push('<span><span class="lbl">Véhicule</span> '+esc(a.immat_vehicule)+(a.immat_remorque?' / remorque '+esc(a.immat_remorque):'')+'</span>');
+  if (a.nom_chauffeur) infos.push('<span><span class="lbl">Chauffeur</span> '+esc(a.nom_chauffeur)+'</span>');
+  if (a.lieu_origine) infos.push('<span><span class="lbl">Départ</span> '+esc(a.lieu_origine)+'</span>');
+  if (a.distance_km) infos.push('<span><span class="lbl">Distance</span> '+fmtNum(a.distance_km)+' km</span>');
+  if (a.tkm) infos.push('<span><span class="lbl">TKM</span> '+fmtNum(a.tkm)+'</span>');
+  if (a.cout_transport_theorique) infos.push('<span><span class="lbl">Coût théorique</span> '+fmtNum(a.cout_transport_theorique)+' FCFA</span>');
+  if (a.usine_dechargement) infos.push('<span><span class="lbl">Usine</span> '+esc(a.usine_dechargement)+'</span>');
+  if (infos.length===0 && !pdf) return '';
+  return '<div style="margin:6px 0 10px;padding:8px 10px;background:var(--surface-2);border-radius:8px;font-size:12.5px;display:flex;flex-wrap:wrap;gap:6px 18px;align-items:center;">'
+    + (a.connaissement_lu ? '<span class="badge ok" title="Informations lues automatiquement sur le connaissement PDF, vérifiées par rapport à la fiche de traçabilité">✓ Lu sur le connaissement</span>' : '')
+    + infos.join('')
+    + (pdf ? '<button class="btn-ghost btn-compact" onclick="telechargerFichierDemande(\''+escJs(pdf.path)+'\',\''+escJs(pdf.nom||'connaissement.pdf')+'\')">Télécharger le connaissement (PDF)</button>' : '')
+    + '</div>';
+}
 // Niveau 2 : achats par connaissement — un chargement, saisi au niveau de la coopérative (pas de detail producteur ici)
 function renderAchatsConnaissementPanel(){
   const list = achatsFiltered().filter(a=>!a.producteur_id);
@@ -9855,6 +9878,7 @@ function renderAchatsConnaissementPanel(){
           + '<div><div class="name">'+esc(a.connaissement||'(sans numéro)')+(a.type_cacao?' <span class="badge neutral">'+esc(a.type_cacao)+'</span>':'')+(a.declare_par_coop?' <span class="badge neutral" title="Cette vente a été déclarée directement par la coopérative depuis son portail">Déclaré par la coop.</span>':'')+(verifBadge?' '+verifBadge:'')+'</div><div class="coop">'+esc(coop?coop.nom:'—')+' · '+esc(a.date)+(a.periode?' · '+(a.periode==='principale'?'principale':'intermédiaire'):'')+(prime>0?' · <span class="num">prime '+fmtNum(prime)+' FCFA</span>':'')+(a.lieu_origine?' · origine '+esc(a.lieu_origine):'')+(a.usine_dechargement?' · usine '+esc(a.usine_dechargement):'')+(a.tkm?' · TKM '+fmtNum(a.tkm):'')+'</div></div>'
           + '<div class="row-actions"><button class="btn-primary" style="padding:4px 10px;font-size:12px;" onclick="ouvrirFinalisationPaiement(\''+a.id+'\')">Réception à l\'usine</button><button class="btn-ghost" onclick="openModal(\'achat\','+esc(JSON.stringify(a)).replace(/&#39;/g,"&apos;")+')">Modifier</button><button class="btn-danger-text" onclick="'+(a.connaissement?'annulerConnaissementRefoule':'deleteAchat')+'(\''+a.id+'\')">'+(a.connaissement?'Camion refoulé / annuler':'Supprimer')+'</button></div>'
           + '</div>'
+          + blocTransportConnaissement(a)
           + '<div class="achat-compare">'
           + '<div class="achat-compare-col"><h4>Déclaré à l\'émission</h4>'
             + fld('Sacs déclarés', a.nombre_sacs, '')
