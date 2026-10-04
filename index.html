@@ -334,9 +334,8 @@
   .rec-champ.obligatoire .rec-input input{border-color:var(--accent-line);background:#FBFEFD;font-size:17px;font-weight:600;}
   .rec-champ .aide{margin-top:5px;font-size:12px;color:var(--ink-soft);line-height:1.45;}
   .rec-erreur{display:none;margin-top:6px;font-size:12.5px;color:var(--danger);font-weight:600;}
-  .rec-resume{display:grid;grid-template-columns:1fr 1fr;border-top:1px solid var(--border);background:#F4F9F7;}
+  .rec-resume{display:grid;grid-template-columns:1fr;border-top:1px solid var(--border);background:#F4F9F7;}
   .rec-resume > div{padding:14px 28px;}
-  .rec-resume > div:first-child{border-right:1px solid var(--border);}
   .rec-resume .k{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint);font-weight:600;}
   .rec-resume .v{font-family:var(--mono);font-size:20px;font-weight:600;margin-top:5px;min-height:26px;}
   .rec-resume .v small{font-family:var(--sans);font-size:12px;font-weight:500;color:var(--ink-soft);}
@@ -2218,7 +2217,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-113';
+const APP_VERSION = '2026-10-02-114';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -10427,14 +10426,11 @@ async function extraireVolumeCertificat(path){
   if (btn){ btn.disabled = false; btn.textContent = '🔎 Extraire automatiquement depuis le certificat fourni'; }
 }
 
-// Resultat en direct de la fenetre « Reception a l'usine » : ecart avec le poids net declare et prime de certification, pendant la saisie.
+// Resultat en direct de la fenetre « Reception a l'usine » : prime de certification calculee sur le poids net paye, pendant la saisie.
 function resultatReception(a, poids){
-  poids = Number(poids)||0; const decl = Number(a.quantite_kg)||0;
+  poids = Number(poids)||0;
   const attente = '<span class="vide">À déterminer</span>';
   return {
-    ecart: (poids>0 && decl>0)
-      ? '<span class="ecart '+((poids-decl)<0?'neg':(poids-decl)>0?'pos':'')+'">'+fmtEcartAchat(poids-decl)+' kg</span> <small>'+fmtPctAchat((poids-decl)/decl*100)+'</small>'
-      : attente,
     prime: poids>0
       ? (tauxPrimeAchat(a)>0 ? fmtNum(primeSurPoids(a, poids))+' <small>FCFA</small>' : '<span class="vide">Taux de prime non renseigné</span>')
       : attente,
@@ -10449,8 +10445,7 @@ function majApercuReception(achatId, silencieux){
     inp.classList.remove('invalide');
   }
   const r = resultatReception(a, inp.value);
-  const e = document.getElementById('rec-ecart'), c = document.getElementById('fp-prime-apercu');
-  if (e) e.innerHTML = r.ecart;
+  const c = document.getElementById('fp-prime-apercu');
   if (c) c.innerHTML = r.prime;
 }
 function majApercuPrime(achatId){ majApercuReception(achatId); }   // ancien nom conserve
@@ -10564,14 +10559,6 @@ function etatAchat(a){
   if (recu) return { cle:'recu', label:"Reçu à l'usine", cls:'info' };
   return { cle:'attente', label:'En attente de pesée', cls:'neutral' };
 }
-function ecartPoidsAchat(a){
-  const decl = Number(a.quantite_kg)||0, paye = Number(a.poids_net_produit)||0;
-  if (!(decl>0 && paye>0)) return null;
-  return { kg: paye-decl, pct: (paye-decl)/decl*100 };
-}
-function signeAchat(n){ return n>0 ? '+' : n<0 ? '−' : ''; }
-function fmtEcartAchat(d){ return signeAchat(d)+fmtNum(Math.abs(Math.round(d))); }
-function fmtPctAchat(p){ return signeAchat(p)+Math.abs(p).toFixed(1).replace('.',',')+' %'; }
 function pdfDuConnaissement(a){
   return (state.demandeFichiers||[]).find(f=>f.type==='connaissement' && String(f.connaissement||'').toUpperCase()===String(a.connaissement||'').toUpperCase()
     && (state.demandesCoop||[]).some(d=>d.id===f.demande_id && d.cooperative_id===a.cooperative_id)) || null;
@@ -10683,18 +10670,17 @@ function construireRapportLivraisons(){
   const decl = (a,k)=>{ if (plateformesDeclaration(a).indexOf(k)<0) return ['Sans objet','','']; const d = dateDeclaration(a,k); if (d) return ['Déclaré', dateExcel(d), a['declaration_'+k+'_par']==='cooperative' ? 'Coopérative' : 'ECORIGINE']; return ['Non déclaré','','']; };
   const avecFt = livraisons.some(a=>plateformesDeclaration(a).indexOf('ft')>=0);   // colonnes Fairtrace seulement s'il y a des achats Fairtrade
   const entetes = ['Coopérative','N° CCC','Connaissement','Date','Campagne','Période','Type de cacao',
-    'Sacs déclarés','Poids brut déclaré (kg)','Poids net déclaré (kg)','Sacs acceptés','Poids net livré (kg)','Poids net payé (kg)','Écart payé − déclaré (kg)','Écart (%)',
+    'Sacs déclarés','Poids brut déclaré (kg)','Poids net déclaré (kg)','Sacs acceptés','Poids net livré (kg)','Poids net payé (kg)',
     'Avancement','Fiche de traçabilité','Prime de certification (FCFA)','Montant à payer (FCFA)',
     'Déclaration Multitrace','Date déclaration Multitrace','Déclaré par (Multitrace)',
     ...(avecFt ? ['Déclaration Fairtrace','Date déclaration Fairtrace','Déclaré par (Fairtrace)'] : []),
     'Transporteur','Véhicule','Remorque','Chauffeur','Départ','Usine','Distance (km)','TKM','N° de chèque','Banque'];
   const aoa = [entetes].concat(livraisons.map(a=>{
-    const coop = coopById(a.cooperative_id), etat = etatAchat(a), ec = ecartPoidsAchat(a), ra = decl(a,'ra'), ft = decl(a,'ft');
+    const coop = coopById(a.cooperative_id), etat = etatAchat(a), ra = decl(a,'ra'), ft = decl(a,'ft');
     const poidsPese = Number(a.poids_net_produit)>0;
     const prime = poidsPese ? (tauxPrimeAchat(a)>0 ? calcPrime(a) : 'Taux non renseigné') : 'À déterminer';
     return [coop?coop.nom:'', coop?(coop.ccc_num||''):'', a.connaissement||'', dateExcel(a.date), nomCamp(a.campagne_id), a.periode ? (a.periode==='principale'?'Principale':'Intermédiaire') : '', a.type_cacao||'',
       nombre(a.nombre_sacs), nombre(a.poids_brut), nombre(a.quantite_kg), nombre(a.nombre_sacs_accepte), nombre(a.poids_brut_accepte), nombre(a.poids_net_produit),
-      ec ? Math.round(ec.kg) : '', ec ? Math.round(ec.pct*10)/10 : '',
       etat.label, libelleVerifAchat(a), prime, (function(){ const m = calcMontantPaiement(a); return !m ? 'À déterminer' : m.manque==='prix' ? 'Prix non renseigné' : m.manque==='tkm' ? 'TKM manquant' : m.montant; })(),
       ra[0], ra[1], ra[2], ...(avecFt ? [ft[0], ft[1], ft[2]] : []),
       a.nom_transporteur||'', a.immat_vehicule||'', a.immat_remorque||'', a.nom_chauffeur||'', a.lieu_origine||'', a.usine_dechargement||'', nombre(a.distance_km), nombre(a.tkm), a.numero_cheque||'', a.banque||''];
@@ -10786,18 +10772,16 @@ function detailAchatHtml(a, etat){
     + dl('Distance', a.distance_km ? fmtNum(a.distance_km)+' km' : '')
     + dl('TKM', a.tkm ? fmtNum(a.tkm) : '')
     + dl('Coût théorique', a.cout_transport_theorique ? fmtNum(a.cout_transport_theorique)+' FCFA' : '');
-  const lignePesee = (lbl, decl, usine, unite, diff)=>{
+  // Volume declare (ce que la cooperative a achete a ses producteurs) et poids retenus a l'usine : deux informations distinctes, sans comparaison ni ecart.
+  const lignePesee = (lbl, decl, usine, unite)=>{
     const f = v=> v>0 ? fmtNum(v) : '<span class="vide">—</span>';
-    const d = (decl>0 && usine>0) ? '<span class="ecart '+(usine-decl<0?'neg':usine-decl>0?'pos':'')+'">'+fmtEcartAchat(usine-decl)+'</span>' : '<span class="vide">—</span>';
-    return '<tr><th scope="row">'+lbl+(unite?' <small>'+unite+'</small>':'')+'</th><td>'+f(decl)+'</td><td>'+f(usine)+'</td><td>'+(diff===false?'<span class="vide">—</span>':d)+'</td></tr>';
+    return '<tr><th scope="row">'+lbl+(unite?' <small>'+unite+'</small>':'')+'</th><td>'+f(decl)+'</td><td>'+f(usine)+'</td></tr>';
   };
-  const ec = ecartPoidsAchat(a);
-  const pesee = '<table class="pesee"><thead><tr><th></th><th>Déclaré<small>à l\'émission</small></th><th>Usine<small>reçu / retenu</small></th><th>Écart</th></tr></thead><tbody>'
-    + lignePesee('Sacs', Number(a.nombre_sacs)||0, Number(a.nombre_sacs_accepte)||0, '', true)
-    + lignePesee('Poids brut', Number(a.poids_brut)||0, 0, 'kg', false)
-    + lignePesee('Poids net', Number(a.quantite_kg)||0, Number(a.poids_brut_accepte)||0, 'kg', true)
-    + '<tr class="final"><th scope="row">Poids net payé <small>kg · final</small></th><td><span class="vide">—</span></td><td>'+(Number(a.poids_net_produit)>0 ? '<b>'+fmtNum(a.poids_net_produit)+'</b>' : '<span class="vide">—</span>')+'</td><td>'
-    + (ec ? '<span class="ecart '+(ec.kg<0?'neg':ec.kg>0?'pos':'')+'">'+fmtEcartAchat(ec.kg)+'</span><small class="pct">'+fmtPctAchat(ec.pct)+'</small>' : '<span class="vide">—</span>')+'</td></tr>'
+  const pesee = '<table class="pesee"><thead><tr><th></th><th>Déclaré<small>par la coopérative</small></th><th>Usine<small>reçu / retenu</small></th></tr></thead><tbody>'
+    + lignePesee('Sacs', Number(a.nombre_sacs)||0, Number(a.nombre_sacs_accepte)||0, '')
+    + lignePesee('Poids brut', Number(a.poids_brut)||0, 0, 'kg')
+    + lignePesee('Poids net', Number(a.quantite_kg)||0, Number(a.poids_brut_accepte)||0, 'kg')
+    + '<tr class="final"><th scope="row">Poids net payé <small>kg · final</small></th><td><span class="vide">—</span></td><td>'+(Number(a.poids_net_produit)>0 ? '<b>'+fmtNum(a.poids_net_produit)+'</b>' : '<span class="vide">—</span>')+'</td></tr>'
     + '</tbody></table>'
     + (etat.cle==='attente' ? '<div class="attente-note">En attente de la pesée à l\'usine : saisir la réception pour renseigner les poids retenus.</div>' : '')
     + (peseeVerrouillee(a) ? '<div class="attente-note">Pesée verrouillée : le volume a été déclaré. Pour la modifier, retire d\'abord la déclaration.</div>' : '');
@@ -10887,11 +10871,9 @@ function renderAchatsConnaissementPanel(){
   const totalKg = list.reduce((t,a)=>t+(Number(a.quantite_kg)||0),0);
   const totalSacs = list.reduce((t,a)=>t+(Number(a.nombre_sacs)||0),0);
   const totalPaye = list.reduce((t,a)=>t+(Number(a.poids_net_produit)||0),0);
-  const declareDesPeses = list.filter(a=>Number(a.poids_net_produit)>0).reduce((t,a)=>t+(Number(a.quantite_kg)||0),0);
   const totalPrime = list.reduce((t,a)=>t+calcPrime(a),0);
   const sansPoidsPese = list.filter(a=>!(Number(a.poids_net_produit)>0)).length;
   const nbRetardDecl = list.filter(a=>{ const e = echeanceEnCours(a,'ra'); return !!e && e.jours<0; }).length;
-  const ecartGlobal = totalPaye>0 && declareDesPeses>0 ? { kg: totalPaye-declareDesPeses, pct: (totalPaye-declareDesPeses)/declareDesPeses*100 } : null;
   const montrerCoop = state.coopFilter==='all';
   if (!(state.achatsOuverts instanceof Set)) state.achatsOuverts = new Set();
   // plateformes concernees par les achats affiches : Multitrace (cacao RA) ; Fairtrace seulement s'il y a des achats Fairtrade
@@ -10908,7 +10890,7 @@ function renderAchatsConnaissementPanel(){
   html += '<div class="achats-resume">'
     + '<div><div class="k">Connaissements</div><div class="v">'+fmtNum(list.length)+'</div><div class="s">'+(nb.attente>0 ? fmtNum(nb.attente)+' en attente de pesée' : 'Toutes les pesées sont saisies')+(nb.nondecl>0 ? ' · '+fmtNum(nb.nondecl)+' à déclarer'+(nbRetardDecl>0 ? ' ('+fmtNum(nbRetardDecl)+' en retard)' : '') : '')+'</div></div>'
     + '<div><div class="k">Poids net déclaré</div><div class="v">'+fmtKg(totalKg)+'</div><div class="s">'+(totalSacs>0 ? fmtNum(Math.round(totalSacs))+' sacs' : '&nbsp;')+'</div></div>'
-    + '<div><div class="k">Volume acheté · net payé</div><div class="v">'+(totalPaye>0 ? fmtKg(totalPaye) : '—')+'</div><div class="s">'+(ecartGlobal ? 'Écart <span class="ecart '+(ecartGlobal.kg<0?'neg':ecartGlobal.kg>0?'pos':'')+'">'+fmtEcartAchat(ecartGlobal.kg)+' kg ('+fmtPctAchat(ecartGlobal.pct)+')</span>' : 'En attente des pesées')+'</div></div>'
+    + '<div><div class="k">Volume acheté · net payé</div><div class="v">'+(totalPaye>0 ? fmtKg(totalPaye) : '—')+'</div><div class="s">'+(totalPaye>0 ? 'poids retenu à l\'usine' : 'En attente des pesées')+'</div></div>'
     + '<div><div class="k">Prime de certification</div><div class="v">'+(totalPrime>0 ? fmtNum(totalPrime)+' <small>FCFA</small>' : (!tauxPrimeRenseignes() ? '—' : '<span class="a-determiner">À déterminer</span>'))+'</div><div class="s">'
       + (!tauxPrimeRenseignes() ? 'Aucun taux de prime renseigné'
          : sansPoidsPese===list.length ? 'Calculée sur le poids pesé à l\'usine'
@@ -11869,7 +11851,6 @@ function _renderBrut(){
         + '</section></div>'
         // ---- resultat en direct ----
         + '<div class="rec-resume">'
-        + '<div><div class="k">Écart avec le poids net déclaré</div><div class="v" id="rec-ecart">'+resultatReception(a, a.poids_net_produit).ecart+'</div><div class="s">Poids net payé − poids net déclaré</div></div>'
         + '<div><div class="k">Prime de certification</div><div class="v" id="fp-prime-apercu">'+resultatReception(a, a.poids_net_produit).prime+'</div><div class="s">Calculée sur le poids net payé'+(a.type_cacao?' · '+esc(a.type_cacao):'')+'</div></div>'
         + '</div>'
         + '<div class="rec-actions"><button type="button" class="btn" onclick="closeModal()">Annuler</button><button type="button" class="btn btn-primary" onclick="enregistrerReceptionUsine()">Enregistrer la réception</button></div>'
