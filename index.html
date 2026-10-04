@@ -349,6 +349,8 @@
   .pa-auto{display:grid;grid-template-columns:auto 1fr;gap:5px 16px;font-size:13px;margin:0;}
   .pa-auto dt{color:var(--ink-soft);} .pa-auto dd{margin:0;font-weight:600;text-align:right;}
   .pa-note{display:none;margin:0 0 10px;padding:8px 10px;border-radius:6px;background:var(--warn-bg);color:var(--warn);font-size:12.5px;}
+  .pa-note.rouge{background:var(--danger-bg);color:var(--danger);}
+  .detail-bloc .lien-param{font:inherit;font-size:12px;background:none;border:none;color:var(--accent);text-decoration:underline;cursor:pointer;padding:0;margin-left:6px;}
   .modal input.invalide{border-color:var(--danger);box-shadow:0 0 0 2px var(--danger-bg);}
   .tbl-achats .lien-param{font:inherit;font-size:12px;background:none;border:none;color:var(--accent);text-decoration:underline;cursor:pointer;padding:0;}
   .tbl-achats .decl{align-items:center;}
@@ -2207,7 +2209,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-106';
+const APP_VERSION = '2026-10-02-107';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -10071,47 +10073,73 @@ async function enregistrerParametresPaiement(){
 }
 
 // ====================== PAIEMENT D'UN CONNAISSEMENT + ATTESTATION DE PAIEMENT ======================
-// Un paiement (un cheque) par connaissement, stocke dans la table paiements et recopie sur le connaissement (numero_cheque, banque, libelle_cheque)
-// pour que l'avancement « Paiement enregistre » reste juste. Le montant a payer est FIGE au moment du paiement (montant_a_payer) : une
-// evolution des prix ne modifie jamais une attestation deja emise.
-function paiementDeAchat(achatId){ return (state.paiements||[]).find(p=>p.achat_id===achatId) || null; }
+// Une livraison peut etre payee EN PLUSIEURS FOIS (acompte puis solde) : chaque cheque est un « paiement » de la table paiements. Le montant a payer est
+// FIGE des le premier paiement (montant_a_payer) : une evolution des prix ne modifie jamais une attestation deja emise. Le dernier cheque saisi est recopie
+// sur le connaissement (numero_cheque, banque, libelle_cheque) pour que l'avancement « Paiement enregistre » reste juste.
+function paiementsDeAchat(achatId){
+  return (state.paiements||[]).filter(p=>p.achat_id===achatId)
+    .sort((x,y)=> String(x.date_paiement||'').localeCompare(String(y.date_paiement||'')) || String(x.created_at||'').localeCompare(String(y.created_at||'')) || String(x.id).localeCompare(String(y.id)));
+}
+function aPayerFige(achatId){ const l = paiementsDeAchat(achatId).find(p=>p.montant_a_payer!==null && p.montant_a_payer!==undefined); return l ? Number(l.montant_a_payer) : null; }
+// Situation de paiement d'une livraison : du (montant a payer), paye (somme des cheques), reste, complet. null tant qu'aucun paiement n'est enregistre.
+function soldeAchat(a){
+  const ps = paiementsDeAchat(a.id); if (!ps.length) return null;
+  const fige = aPayerFige(a.id), m = calcMontantPaiement(a);
+  const du = fige!==null ? fige : (m && m.montant!==null ? m.montant : 0);
+  const paye = ps.reduce((t,p)=>t+(Number(p.montant_paye)||0), 0);
+  return { du, paye, reste: Math.max(0, du-paye), complet: du>0 && paye>=du };
+}
 function aujourdhuiIso(){ return new Date().toISOString().slice(0,10); }
-function ouvrirPaiement(achatId){
+function ouvrirPaiement(achatId, paiementId){
   const a = state.achats.find(x=>x.id===achatId); if (!a) return;
   if (!(Number(a.poids_net_produit)>0)){ showToast('Le paiement se renseigne après la pesée à l\'usine.'); return; }
-  state.modal = { type:'paiementConnaissement', payload:{ achatId } }; render();
+  const sd = soldeAchat(a);
+  if (!paiementId && sd && sd.complet){ showToast('Cette livraison est entièrement payée. Pour corriger un chèque, utilise « Modifier » dans le détail du connaissement.'); return; }
+  state.modal = { type:'paiementConnaissement', payload:{ achatId, paiementId: paiementId||null } }; render();
 }
 function majNotePaiement(){
   const n = document.getElementById('pa-note'); if (!n) return;
-  const ap = Math.round(Number((document.querySelector('[name="pa_montant_a_payer"]')||{}).value)||0), pa = Math.round(Number((document.querySelector('[name="pa_montant_paye"]')||{}).value)||0);
-  n.style.display = (ap>0 && pa>0 && ap!==pa) ? 'block' : 'none';
+  const lire = (nom)=>Math.round(Number((document.querySelector('[name="'+nom+'"]')||{}).value)||0);
+  const ap = lire('pa_montant_a_payer'), pa = lire('pa_montant_paye'), deja = Number(n.getAttribute('data-deja'))||0;
+  n.classList.remove('rouge');
+  if (ap>0 && pa>0 && deja+pa>ap){ n.textContent = 'Le montant payé dépasse le montant restant à payer ('+fmtNum(ap-deja)+' FCFA).'; n.classList.add('rouge'); n.style.display = 'block'; }
+  else if (ap>0 && pa>0 && deja+pa<ap){ n.textContent = 'Paiement partiel : il restera '+fmtNum(ap-deja-pa)+' FCFA à payer. Tu pourras ajouter un autre paiement (chèque) plus tard ; l\'attestation indiquera ce qui a été payé.'; n.style.display = 'block'; }
+  else n.style.display = 'none';
 }
 async function enregistrerPaiementConnaissement(){
   const pl = state.modal && state.modal.payload; const a = pl && state.achats.find(x=>x.id===pl.achatId); if (!a) return;
+  const tous = paiementsDeAchat(a.id), edit = pl.paiementId ? tous.find(p=>p.id===pl.paiementId) : null, autres = tous.filter(p=>!edit || p.id!==edit.id);
+  const deja = autres.reduce((t,p)=>t+(Number(p.montant_paye)||0), 0);
   const aPayer = Math.round(Number(fv('pa_montant_a_payer'))||0), paye = Math.round(Number(fv('pa_montant_paye'))||0);
   const date = fv('pa_date') || aujourdhuiIso(), banque = fv('pa_banque').trim(), libelle = fv('pa_libelle').trim(), cheque = fv('pa_cheque').trim();
   const refuse = (msg, champ)=>{ showToast(msg); const e = document.querySelector('[name="'+champ+'"]'); if (e){ e.classList.add('invalide'); e.focus(); } };
   if (!(aPayer>0)) return refuse('Indique le montant à payer.', 'pa_montant_a_payer');
   if (!(paye>0)) return refuse('Indique le montant payé.', 'pa_montant_paye');
+  if (deja+paye>aPayer) return refuse('Le montant payé dépasse le montant restant à payer ('+fmtNum(Math.max(0,aPayer-deja))+' FCFA).', 'pa_montant_paye');
   if (!banque) return refuse('Indique la banque.', 'pa_banque');
   if (!libelle) return refuse('Indique le libellé du chèque.', 'pa_libelle');
   if (!cheque) return refuse('Indique le numéro du chèque.', 'pa_cheque');
-  const ancien = paiementDeAchat(a.id);
-  const ligne = { id: ancien ? ancien.id : 'pai_'+a.id, achat_id:a.id, date_paiement:date, montant_paye:paye, montant_a_payer:aPayer, banque, libelle_cheque:libelle, numero_cheque:cheque };
+  const ligne = { id: edit ? edit.id : 'pai_'+a.id+'_'+Date.now().toString(36), achat_id:a.id, date_paiement:date, montant_paye:paye, montant_a_payer:aPayer, banque, libelle_cheque:libelle, numero_cheque:cheque };
   const r1 = await supabaseClient.from('paiements').upsert(ligne);
   if (r1.error){ showToast('Échec de l\'enregistrement du paiement : '+r1.error.message); return; }
-  const r2 = await supabaseClient.from('achats').update({ numero_cheque:cheque, banque, libelle_cheque:libelle }).eq('id', a.id);
+  const apres = autres.concat([ligne]).sort((x,y)=> String(x.date_paiement||'').localeCompare(String(y.date_paiement||'')) || String(x.id).localeCompare(String(y.id)));
+  const dernier = apres[apres.length-1];
+  const r2 = await supabaseClient.from('achats').update({ numero_cheque:dernier.numero_cheque, banque:dernier.banque, libelle_cheque:dernier.libelle_cheque }).eq('id', a.id);
   if (r2.error){
-    if (!ancien) await supabaseClient.from('paiements').delete().eq('id', ligne.id);
+    if (!edit) await supabaseClient.from('paiements').delete().eq('id', ligne.id);
     showToast('Échec de l\'enregistrement : '+r2.error.message); return;
   }
-  state.paiements = (state.paiements||[]).filter(p=>p.achat_id!==a.id).concat([ligne]);
-  a.numero_cheque = cheque; a.banque = banque; a.libelle_cheque = libelle;
+  // le montant a payer est le meme pour tous les cheques d'une livraison
+  const autresLignes = autres.filter(p=>Number(p.montant_a_payer)!==aPayer);
+  if (autresLignes.length) await supabaseClient.from('paiements').update({ montant_a_payer:aPayer }).eq('achat_id', a.id);
+  state.paiements = (state.paiements||[]).filter(p=>p.achat_id!==a.id).concat(autres.map(p=>Object.assign({}, p, { montant_a_payer:aPayer })), [ligne]);
+  a.numero_cheque = dernier.numero_cheque; a.banque = dernier.banque; a.libelle_cheque = dernier.libelle_cheque;
+  const sd = soldeAchat(a);
   closeModal();
-  showToast('Paiement enregistré : chèque n° '+cheque+'.', 'success');
+  showToast('Paiement enregistré : chèque n° '+cheque+(sd && !sd.complet ? ' · reste '+fmtNum(sd.reste)+' FCFA à payer.' : ' · livraison soldée.'), 'success');
 }
 
-// ---- Attestation de paiement (Word) : une attestation par cooperative et par campagne, CUMULATIVE (une ligne par livraison payee) ----
+// ---- Attestation de paiement (Word) : une attestation par cooperative et par campagne, CUMULATIVE (une ligne par cheque) ----
 const CDN_DOCX_GEN = ['https://cdn.jsdelivr.net/npm/docx@9.6.1/dist/index.iife.js', 'https://unpkg.com/docx@9.6.1/dist/index.iife.js'];
 let _libDocx = null;
 function chargerBibliothequeDocx(){
@@ -10129,28 +10157,32 @@ function chargerBibliothequeDocx(){
 }
 function libelleCampagneCourt(nom){ const m = /(\d{4})\D+(\d{4})/.exec(String(nom||'')); return m ? m[1].slice(2)+'-'+m[2].slice(2) : String(nom||'').trim(); }
 function montantAttestation(n){ return String(Math.round(Number(n)||0)).replace(/\B(?=(\d{3})+(?!\d))/g, '\u00A0'); }
-function adresseCoopAttestation(coop){
-  const vals = [coop && coop.siege_social, coop && coop.adresse_postale].map(x=>String(x||'').trim()).filter(x=>x && !/^CI-[A-Z]{2,4}-\d{4}/i.test(x));
-  const uniq = []; vals.forEach(v=>{ if (!uniq.some(u=>u.toLowerCase()===v.toLowerCase())) uniq.push(v); });
-  return uniq.join(', ');
-}
-// Livraisons PAYEES d'une cooperative pour une campagne, de la plus ancienne a la plus recente.
+// Cheques d'une cooperative pour une campagne : une ligne par cheque, de la livraison la plus ancienne a la plus recente. Le poids et le montant a payer
+// ne figurent que sur la 1re ligne d'une livraison (ils ne sont pas comptes deux fois dans les totaux).
 function lignesAttestation(coopId, campagneId){
-  return state.achats.filter(a=>!a.producteur_id && a.cooperative_id===coopId && (a.campagne_id||'')===(campagneId||'') && paiementDeAchat(a.id))
+  const lignes = [];
+  state.achats.filter(a=>!a.producteur_id && a.cooperative_id===coopId && (a.campagne_id||'')===(campagneId||'') && paiementsDeAchat(a.id).length)
     .sort((x,y)=> String(x.date).localeCompare(String(y.date)) || String(x.connaissement).localeCompare(String(y.connaissement)))
-    .map(a=>{ const p = paiementDeAchat(a.id); return { date:a.date, conn:a.connaissement||'', usine:a.usine_dechargement||'', poidsKg:Number(a.poids_net_produit)||0, aPayer:Number(p.montant_a_payer)||0, paye:Number(p.montant_paye)||0, banque:p.banque||'', libelle:p.libelle_cheque||'', cheque:p.numero_cheque||'' }; });
+    .forEach(a=>{ const du = aPayerFige(a.id);
+      paiementsDeAchat(a.id).forEach((p,i)=>{
+        lignes.push({ date:a.date, conn:a.connaissement||'', usine:a.usine_dechargement||'', poidsKg: i===0 ? (Number(a.poids_net_produit)||0) : null, aPayer: i===0 ? (du||0) : null,
+          paye:Number(p.montant_paye)||0, banque:p.banque||'', libelle:p.libelle_cheque||'', cheque:p.numero_cheque||'' });
+      }); });
+  return lignes;
 }
-// d = { coop, campagne (libelle court, ex. « 24-25 »), lignes:[...] }. Reproduit le modele « ATTESTATION DE PAIEMENT DES LIVRAISONS EFFECTUEES ».
+// d = { coop, campagne (libelle court, ex. « 26-27 »), lignes:[...] }. Reproduit le modele « ATTESTATION DE PAIEMENT DES LIVRAISONS EFFECTUEES ».
+// Les coordonnees de la cooperative (adresse, telephone, e-mail, ville, date) sont a completer PAR LA COOPERATIVE : elles restent comme dans le modele.
 function construireAttestationDocx(lib, d){
   const { Document, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, AlignmentType, BorderStyle, VerticalAlign, Header, HeightRule, ShadingType } = lib;
   const FONT = 'Century Gothic', coop = d.coop || {};
   const run = (t, o)=>new TextRun(Object.assign({ text:t, font:FONT }, o||{}));
   const ph = (t)=>run(t, { shading:{ type:ShadingType.CLEAR, fill:'FFFF00', color:'auto' } });   // a completer par la cooperative (surligne en jaune comme dans le modele)
+  const rouge = (t)=>run(t, { bold:true, color:'FF0000' });
   const para = (children, o)=>new Paragraph(Object.assign({ children, alignment:AlignmentType.JUSTIFIED }, o||{}));
   const trait = { style:BorderStyle.SINGLE, size:6, color:'000000' }, aucun = { style:BorderStyle.NONE, size:0, color:'FFFFFF' };
   const bordures = { top:trait, bottom:trait, left:trait, right:trait }, sansBordure = { top:aucun, bottom:aucun, left:aucun, right:aucun };
   const total = (k)=>d.lignes.reduce((t,l)=>t+(Number(l[k])||0), 0);
-  const totalDu = total('aPayer');
+  const totalDu = total('aPayer'), totalPaye = total('paye'), solde = Math.max(0, totalDu-totalPaye), complet = totalDu>0 && totalPaye>=totalDu;
 
   // --- cadre du titre : tableau a une cellule (un cadre de paragraphe n'est pas conforme a l'ordre des bordures attendu par Word)
   const cadre = { style:BorderStyle.SINGLE, size:8, color:'092A38' };
@@ -10166,16 +10198,17 @@ function construireAttestationDocx(lib, d){
     children:[ new Paragraph({ alignment:o.align||AlignmentType.CENTER, spacing:{ before:0, after:0, line:240 }, children: (texte===''||texte===null||texte===undefined) ? [] : [ new TextRun({ text:String(texte), font:'Arial', size:16, bold:!!o.gras, color:o.couleur }) ] }) ] }); };
   const C = AlignmentType.CENTER, R = AlignmentType.RIGHT, alignes = [C, C, C, R, R, R, C, C, C];
   const entetes = ['Date de livraison', 'Numéro connaissement', 'Usine de déchargement', 'Poids net payé (kg)', 'Montant à payer FCFA', 'Montant payé FCFA', 'Banque', 'Libellé du chèque', 'Numéro du chèque'];
+  const nombre = (v)=>(v===null||v===undefined) ? '' : montantAttestation(v);
   const lignesTab = [ new TableRow({ cantSplit:true, tableHeader:true, height:{ value:660, rule:HeightRule.ATLEAST }, children: entetes.map((t,i)=>cellule(t, L[i], { align:C })) }) ];
   d.lignes.forEach(l=>{
-    const v = [dateFr(l.date)||'', l.conn, l.usine, montantAttestation(l.poidsKg), montantAttestation(l.aPayer), montantAttestation(l.paye), l.banque, l.libelle, l.cheque];
+    const v = [dateFr(l.date)||'', l.conn, l.usine, nombre(l.poidsKg), nombre(l.aPayer), nombre(l.paye), l.banque, l.libelle, l.cheque];
     lignesTab.push(new TableRow({ cantSplit:true, height:{ value:400, rule:HeightRule.ATLEAST }, children: v.map((t,i)=>cellule(t, L[i], { align:alignes[i] })) }));
   });
   lignesTab.push(new TableRow({ cantSplit:true, height:{ value:380, rule:HeightRule.ATLEAST }, children:[
     cellule('TOTAL', L[0]+L[1]+L[2], { span:3, align:C }),
     cellule(montantAttestation(total('poidsKg')), L[3], { align:R, gras:true, couleur:'FF0000' }),
-    cellule(montantAttestation(total('aPayer')), L[4], { align:R, gras:true, couleur:'FF0000' }),
-    cellule(montantAttestation(total('paye')), L[5], { align:R, gras:true, couleur:'FF0000' }),
+    cellule(montantAttestation(totalDu), L[4], { align:R, gras:true, couleur:'FF0000' }),
+    cellule(montantAttestation(totalPaye), L[5], { align:R, gras:true, couleur:'FF0000' }),
     cellule('', L[6], { borders:sansBordure }), cellule('', L[7], { borders:sansBordure }), cellule('', L[8], { borders:sansBordure }) ] }));
   const tableauRecap = new Table({ width:{ size:11360, type:WidthType.DXA }, columnWidths:L, alignment:AlignmentType.CENTER, rows:lignesTab });
 
@@ -10187,19 +10220,22 @@ function construireAttestationDocx(lib, d){
     new TableRow({ cantSplit:true, height:{ value:1012, rule:HeightRule.ATLEAST }, children: sigEntetes.map((t,i)=>cs(t,i)) }),
     ...[0,1,2].map(()=>new TableRow({ cantSplit:true, height:{ value:505, rule:HeightRule.ATLEAST }, children: LS.map((_,i)=>cs('',i)) })) ] });
 
-  // --- coordonnees de la cooperative : pre-remplies quand on les connait, sinon a completer (surlignees comme dans le modele)
-  const tel = String(coop.contact_contact||coop.responsable_contact||coop.representant_legal_contact||'').trim(), mail = String(coop.email1||'').trim(), adr = adresseCoopAttestation(coop), ville = String(coop.ville||'').trim();
+  // --- paragraphe de certification : livraisons soldees = texte du modele ; paiement partiel = montants recus et solde restant (sans renonciation aux poursuites)
+  const certification = complet
+    ? para([ run('Nous certifions que le montant total dû, soit '), rouge(montantAttestation(totalDu)+' Fcfa'), run(', a été réglé en totalité par '), run('Ecorigine', { bold:true }), run('. En conséquence, aucune réclamation ou poursuite judiciaire ne peuvent être engagées contre notre client Ecorigine pour ces livraisons ci-dessus.') ], { spacing:{ before:360, after:240 } })
+    : para([ run('Nous certifions que, sur le montant total dû de '), rouge(montantAttestation(totalDu)+' Fcfa'), run(', la somme de '), rouge(montantAttestation(totalPaye)+' Fcfa'), run(' a été réglée par '), run('Ecorigine', { bold:true }), run('. Le solde de '), rouge(montantAttestation(solde)+' Fcfa'), run(' reste à régler pour ces livraisons.') ], { spacing:{ before:360, after:240 } });
+  // coordonnees de la cooperative : TOUJOURS a completer par la cooperative (surlignees comme dans le modele)
   const enfants = [
     new Paragraph({ spacing:{ before:0, after:120 }, children:[] }), cadreTitre,
     para([ run('Nous soussigné(e)s '), run(coop.nom||'', { bold:true }), run(', certifions par la présente que les paiements relatifs aux livraisons effectuées pour le compte d’'), run('Ecorigine', { bold:true }), run(' ont été réglés conformément aux termes convenus et à l’ordre des bénéficiaires mandatés par la coopérative.') ], { spacing:{ before:360, after:160 } }),
     para([ run('Vous trouverez ci-dessous, le récapitulatif des livraisons effectuées et les montants correspondants :') ]),
     tableauRecap,
-    para([ run('Nous certifions que le montant total dû, soit '), run(montantAttestation(totalDu)+' Fcfa', { bold:true, color:'FF0000' }), run(', a été réglé en totalité par '), run('Ecorigine', { bold:true }), run('. En conséquence, aucune réclamation ou poursuite judiciaire ne peuvent être engagées contre notre client Ecorigine pour ces livraisons ci-dessus.') ], { spacing:{ before:360, after:240 } }),
-    para([ coop.nom ? run(coop.nom) : ph('[Nom de la Coopérative]') ]),
-    para([ adr ? run(adr) : ph('[Adresse de la Coopérative]') ]),
-    para([ tel ? run(tel) : ph('[Numéro de téléphone]') ]),
-    para([ mail ? run(mail) : ph('[Adresse e-mail]') ]),
-    para([ run('Fait à '), ville ? run(ville) : ph('[Ville]'), run(', le '), ph('[Date]'), run('.') ]),
+    certification,
+    para([ ph('[Nom de la Coopérative]') ]),
+    para([ ph('[Adresse de la Coopérative]') ]),
+    para([ ph('[Numéro de téléphone]') ]),
+    para([ ph('[Adresse e-mail]') ]),
+    para([ run('Fait à '), ph('[Ville]'), run(', le '), ph('[Date]'), run('.') ]),
     para([ run('Signatures des membres du Comité de Gestion :', { bold:true }) ], { spacing:{ before:240, after:160 }, keepNext:true }),
     tableauSignatures,
     new Paragraph({ children:[] }),
@@ -10213,16 +10249,15 @@ function nomFichierSur(t){ return String(t||'').normalize('NFD').replace(/[\u030
 async function genererAttestation(achatId){
   const a0 = state.achats.find(x=>x.id===achatId); if (!a0) return;
   const coop = coopById(a0.cooperative_id), camp = state.campagnes.find(c=>c.id===a0.campagne_id);
-  if (!paiementDeAchat(a0.id)){ showToast('Aucun paiement enregistré pour ce connaissement : renseigne d\'abord le paiement.'); return; }
+  if (!paiementsDeAchat(a0.id).length){ showToast('Aucun paiement enregistré pour ce connaissement : renseigne d\'abord le paiement.'); return; }
   const lignes = lignesAttestation(a0.cooperative_id, a0.campagne_id);
-  const ecarts = lignes.filter(l=>Math.round(l.paye)!==Math.round(l.aPayer));
-  if (ecarts.length>0){ showToast('Attestation impossible : pour '+ecarts.map(l=>l.conn).join(', ')+', le montant payé est différent du montant à payer (l\'attestation certifie un règlement en totalité).'); return; }
   let lib; try{ lib = await chargerBibliothequeDocx(); }catch(e){ showToast(e.message); return; }
   try{
     const doc = construireAttestationDocx(lib, { coop, campagne: libelleCampagneCourt(camp ? camp.nom : ''), lignes });
     const blob = await lib.Packer.toBlob(doc);
     telechargerBlob(blob, 'Attestation_paiement_'+nomFichierSur(coop ? coop.nom : '')+'_campagne_'+nomFichierSur(libelleCampagneCourt(camp ? camp.nom : ''))+'.docx');
-    showToast('Attestation générée : '+lignes.length+' livraison'+(lignes.length>1?'s':'')+' · '+montantAttestation(lignes.reduce((t,l)=>t+l.aPayer,0))+' FCFA.', 'success');
+    const paye = lignes.reduce((t,l)=>t+l.paye,0), nbLiv = lignes.filter(l=>l.poidsKg!==null).length;
+    showToast('Attestation générée : '+nbLiv+' livraison'+(nbLiv>1?'s':'')+' · '+montantAttestation(paye)+' FCFA payés.', 'success');
   }catch(e){ showToast('Échec de la génération de l\'attestation : '+(e && e.message ? e.message : e)); }
 }
 
@@ -10390,7 +10425,7 @@ function nrmAchat(t){ return String(t==null?'':t).normalize('NFD').replace(/[\u0
 function etatAchat(a){
   const recu = Number(a.poids_net_produit)>0 || Number(a.poids_brut_accepte)>0 || Number(a.nombre_sacs_accepte)>0;
   const paye = !!String(a.numero_cheque||'').trim();
-  if (paye) return { cle:'paye', label:'Paiement enregistré', cls:'ok' };
+  if (paye){ const sd = soldeAchat(a); if (sd && !sd.complet) return { cle:'paye', label:'Paiement partiel', cls:'warn' }; return { cle:'paye', label:'Paiement enregistré', cls:'ok' }; }
   if (recu) return { cle:'recu', label:"Reçu à l'usine", cls:'info' };
   return { cle:'attente', label:'En attente de pesée', cls:'neutral' };
 }
@@ -10647,14 +10682,17 @@ function detailAchatHtml(a, etat){
           + (m.commission>0 ? dl('Commission', fmtNum(m.commission)+' FCFA/kg') : '')
           + dl('Retenue BIC', m.aBic ? '<span class="vide">Aucune (BIC fourni)</span>' : (m.tauxBic>0 ? fmtNum(m.retenueBic)+' FCFA' : '<span class="vide">Aucune</span>'))
           + dl('Montant à payer', m.montant!==null ? '<b>'+fmtNum(m.montant)+' FCFA</b>' : '<span class="vide">'+(m.manque==='prix' ? 'Prix d\'entrée usine à renseigner' : 'TKM à compléter')+'</span>'); })()
-    + (function(){ const p = paiementDeAchat(a.id);
-        if (!String(a.numero_cheque||'').trim() && !p) return dl('Paiement', '<span class="vide">Non enregistré</span>');
-        return dl('Paiement', 'Chèque n° '+esc(a.numero_cheque || (p ? p.numero_cheque : ''))) + dl('Banque', (a.banque||(p&&p.banque)) ? esc(a.banque || p.banque) : '') + dl('Libellé', (a.libelle_cheque||(p&&p.libelle_cheque)) ? esc(a.libelle_cheque || p.libelle_cheque) : '')
-          + (p ? dl('Montant payé', '<b>'+fmtNum(p.montant_paye)+' FCFA</b>') + (p.date_paiement ? dl('Date du paiement', esc(dateFr(p.date_paiement)||p.date_paiement)) : '') : ''); })()
+    + (function(){ const ps = paiementsDeAchat(a.id), sd = soldeAchat(a);
+        if (!ps.length && !String(a.numero_cheque||'').trim()) return dl('Paiement', '<span class="vide">Non enregistré</span>');
+        if (!ps.length) return dl('Paiement', 'Chèque n° '+esc(a.numero_cheque)) + dl('Banque', a.banque ? esc(a.banque) : '') + dl('Libellé', a.libelle_cheque ? esc(a.libelle_cheque) : '');
+        return ps.map((p,i)=>dl('Chèque'+(ps.length>1 ? ' '+(i+1) : ''), 'n° '+esc(p.numero_cheque)+' · '+esc(p.banque||'—')+' · '+esc(p.libelle_cheque||'—'))
+            + dl('Montant payé', '<b>'+fmtNum(p.montant_paye)+' FCFA</b>'+(p.date_paiement ? ' · '+esc(dateFr(p.date_paiement)||p.date_paiement) : '')+' <button type="button" class="lien-param" onclick="ouvrirPaiement(\''+a.id+'\',\''+esc(p.id)+'\')">Modifier</button>')).join('')
+          + (sd ? dl('Reste à payer', sd.reste>0 ? '<b>'+fmtNum(sd.reste)+' FCFA</b> <span class="vide">sur '+fmtNum(sd.du)+'</span>' : '<span class="vide">Soldé</span>') : ''); })()
     + declarations;
   const actionsDetail = '<div class="detail-actions">'
-    + (Number(a.poids_net_produit)>0 ? '<button type="button" class="btn-ghost btn-compact" onclick="ouvrirPaiement(\''+a.id+'\')">'+(etat.cle==='paye' ? 'Modifier le paiement' : 'Enregistrer le paiement')+'</button>' : '')
-    + (paiementDeAchat(a.id) ? '<button type="button" class="btn-ghost btn-compact" onclick="genererAttestation(\''+a.id+'\')">Attestation de paiement (Word)</button>' : '')
+    + (function(){ const sd = soldeAchat(a);
+        return (Number(a.poids_net_produit)>0 && (!sd || !sd.complet) ? '<button type="button" class="btn-ghost btn-compact" onclick="ouvrirPaiement(\''+a.id+'\')">'+(sd ? 'Ajouter un paiement' : 'Enregistrer le paiement')+'</button>' : '')
+          + (sd ? '<button type="button" class="btn-ghost btn-compact" onclick="genererAttestation(\''+a.id+'\')">Attestation de paiement (Word)</button>' : ''); })()
     + '<button type="button" class="btn-ghost btn-compact" onclick="openModal(\'achat\','+esc(JSON.stringify(a)).replace(/&#39;/g,"&apos;")+')">Modifier le connaissement</button>'
     + '<button type="button" class="btn-danger-text btn-compact" onclick="'+(a.connaissement?'annulerConnaissementRefoule':'deleteAchat')+'(\''+a.id+'\')">'+(a.connaissement?'Camion refoulé / annuler':'Supprimer')+'</button></div>';
   return '<tr class="detail-achat" data-for="'+esc(a.id)+'"><td colspan="10">'
@@ -10695,10 +10733,10 @@ function ligneAchatHtml(a, montrerCoop, ouvert, avecNomPlateforme){
     + '<td>'+verif+'</td>'
     + '<td>'+celluleDeclarationHtml(a, avecNomPlateforme)+'</td>'
     + '<td class="acts">'+(function(){
-        const bt = [];
+        const bt = [], sd = soldeAchat(a);
         if (!peseeVerrouillee(a)) bt.push(reception);
-        if (Number(a.poids_net_produit)>0 && etat.cle!=='paye') bt.push('<button type="button" class="btn-ghost btn-compact" onclick="ouvrirPaiement(\''+a.id+'\')" title="Enregistrer le chèque de paiement de cette livraison">Paiement</button>');
-        if (paiementDeAchat(a.id)) bt.push('<button type="button" class="btn-ghost btn-compact" onclick="genererAttestation(\''+a.id+'\')" title="Attestation de paiement de la coopérative pour cette campagne (toutes ses livraisons payées)">Attestation</button>');
+        if (Number(a.poids_net_produit)>0 && (!sd || !sd.complet)) bt.push('<button type="button" class="btn-ghost btn-compact" onclick="ouvrirPaiement(\''+a.id+'\')" title="'+(sd ? 'Ajouter un chèque : il reste '+fmtNum(sd.reste)+' FCFA à payer' : 'Enregistrer le chèque de paiement de cette livraison')+'">Paiement</button>');
+        if (sd) bt.push('<button type="button" class="btn-ghost btn-compact" onclick="genererAttestation(\''+a.id+'\')" title="Attestation de paiement de la coopérative pour cette campagne (tous ses chèques enregistrés)">Attestation</button>');
         return '<div class="acts-ligne'+(bt.length>1 ? ' pile' : '')+'">'+(bt.length ? bt.join('') : reception)+'</div>';
       })()+'</td></tr>'
     + (ouvert ? detailAchatHtml(a, etat).replace('<tr class="detail-achat"', '<tr class="detail-achat"'+(cache?' style="display:none"':'')) : '');
@@ -11604,30 +11642,34 @@ function _renderBrut(){
     const a = state.achats.find(x=>x.id===state.modal.payload.achatId);
     if (!a){ closeModal(); }
     else {
-      const coop = coopById(a.cooperative_id), ex = paiementDeAchat(a.id), m = calcMontantPaiement(a);
-      const calcule = (m && m.montant!==null) ? m.montant : '';
-      const aPayerDef = ex && ex.montant_a_payer!=null ? ex.montant_a_payer : calcule, payeDef = ex ? ex.montant_paye : calcule;
+      const coop = coopById(a.cooperative_id), m = calcMontantPaiement(a), tous = paiementsDeAchat(a.id);
+      const edit = state.modal.payload.paiementId ? tous.find(p=>p.id===state.modal.payload.paiementId) : null, autres = tous.filter(p=>!edit || p.id!==edit.id);
+      const deja = autres.reduce((t,p)=>t+(Number(p.montant_paye)||0), 0), fige = aPayerFige(a.id), calcule = (m && m.montant!==null) ? m.montant : '';
+      const aPayerDef = fige!==null ? fige : calcule, fixe = autres.length>0;     // le montant a payer ne change plus des qu'un autre cheque existe
+      const resteDef = aPayerDef!=='' ? Math.max(0, aPayerDef-deja) : '', payeDef = edit ? edit.montant_paye : resteDef;
       const uniques = (champ)=>[...new Set((state.paiements||[]).map(p=>String(p[champ]||'').trim()).filter(Boolean))];
       html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
-        + '<h3>Paiement du connaissement</h3><div id="modal-fields">'
+        + '<h3>'+(edit ? 'Modifier le paiement' : (autres.length ? 'Ajouter un paiement' : 'Paiement du connaissement'))+'</h3><div id="modal-fields">'
         + '<fieldset><legend>Renseigné automatiquement</legend><dl class="pa-auto">'
         + '<dt>Coopérative</dt><dd>'+esc(coop ? coop.nom : '—')+'</dd>'
         + '<dt>Connaissement</dt><dd>'+esc(a.connaissement||'(sans numéro)')+'</dd>'
         + '<dt>Date de livraison</dt><dd>'+esc(dateFr(a.date)||'—')+'</dd>'
         + '<dt>Usine de déchargement</dt><dd>'+(a.usine_dechargement ? esc(a.usine_dechargement) : '<span class="vide">Non renseignée</span>')+'</dd>'
-        + '<dt>Poids net payé</dt><dd>'+fmtKg(a.poids_net_produit)+'</dd></dl></fieldset>'
-        + ((m && m.manque) ? '<div class="error-banner" style="margin-top:10px;"><span>Le montant à payer ne peut pas être calculé automatiquement ('+(m.manque==='prix' ? 'prix d\'entrée usine à renseigner pour cette campagne' : 'TKM du connaissement à compléter')+'). Saisis-le ci-dessous.</span></div>' : '')
+        + '<dt>Poids net payé</dt><dd>'+fmtKg(a.poids_net_produit)+'</dd>'
+        + (autres.length ? '<dt>Déjà payé</dt><dd>'+fmtNum(deja)+' FCFA ('+autres.length+' chèque'+(autres.length>1?'s':'')+')</dd>' : '')
+        + '</dl></fieldset>'
+        + ((m && m.manque && !fixe) ? '<div class="error-banner" style="margin-top:10px;"><span>Le montant à payer ne peut pas être calculé automatiquement ('+(m.manque==='prix' ? 'prix d\'entrée usine à renseigner pour cette campagne' : 'TKM du connaissement à compléter')+'). Saisis-le ci-dessous.</span></div>' : '')
         + '<fieldset style="margin-top:12px;"><legend>À renseigner</legend>'
-        + '<label class="field">Montant à payer (FCFA)<input type="number" step="1" min="0" name="pa_montant_a_payer" value="'+esc(aPayerDef)+'" oninput="majNotePaiement()"></label>'
-        + (m && m.montant!==null ? '<span class="hint">Calculé : (('+fmtNum(m.prixEntreeUsine)+' + '+fmtNum(m.tkm)+' TKM + '+fmtNum(m.commission)+' commission) × '+fmtNum(m.poids)+' kg) − '+fmtNum(m.retenueBic)+' retenue BIC.</span>' : '')
-        + '<label class="field">Montant payé (FCFA)<input type="number" step="1" min="0" name="pa_montant_paye" value="'+esc(payeDef)+'" oninput="majNotePaiement()"></label>'
-        + '<div class="pa-note" id="pa-note" style="display:none;">Le montant payé est différent du montant à payer : l\'attestation de paiement certifie un règlement en totalité et ne pourra pas être générée tant que les deux montants ne sont pas égaux.</div>'
-        + '<label class="field">Date du paiement<input type="date" name="pa_date" value="'+esc(ex && ex.date_paiement ? ex.date_paiement : aujourdhuiIso())+'"></label>'
-        + '<label class="field">Banque<input type="text" name="pa_banque" list="pa-banques" value="'+esc(ex ? ex.banque||'' : '')+'" placeholder="ex : Ecobank"></label>'
+        + '<label class="field">Montant à payer (FCFA)<input type="number" step="1" min="0" name="pa_montant_a_payer" value="'+esc(aPayerDef)+'"'+(fixe ? ' readonly' : '')+' oninput="majNotePaiement()"></label>'
+        + (m && m.montant!==null && !fixe ? '<span class="hint">Calculé : (('+fmtNum(m.prixEntreeUsine)+' + '+fmtNum(m.tkm)+' TKM + '+fmtNum(m.commission)+' commission) × '+fmtNum(m.poids)+' kg) − '+fmtNum(m.retenueBic)+' retenue BIC.</span>' : '')
+        + '<label class="field">Montant payé par ce chèque (FCFA)<input type="number" step="1" min="0" name="pa_montant_paye" value="'+esc(payeDef)+'" oninput="majNotePaiement()"></label>'
+        + '<div class="pa-note" id="pa-note" data-deja="'+deja+'" style="display:none;"></div>'
+        + '<label class="field">Date du paiement<input type="date" name="pa_date" value="'+esc(edit && edit.date_paiement ? edit.date_paiement : aujourdhuiIso())+'"></label>'
+        + '<label class="field">Banque<input type="text" name="pa_banque" list="pa-banques" value="'+esc(edit ? edit.banque||'' : '')+'" placeholder="ex : Ecobank"></label>'
         + '<datalist id="pa-banques">'+uniques('banque').map(b=>'<option value="'+esc(b)+'">').join('')+'</datalist>'
-        + '<label class="field">Libellé du chèque (bénéficiaire)<input type="text" name="pa_libelle" list="pa-libelles" value="'+esc(ex ? ex.libelle_cheque||'' : '')+'" placeholder="ex : Allou Anet Denis"></label>'
+        + '<label class="field">Libellé du chèque (bénéficiaire)<input type="text" name="pa_libelle" list="pa-libelles" value="'+esc(edit ? edit.libelle_cheque||'' : '')+'" placeholder="ex : Allou Anet Denis"></label>'
         + '<datalist id="pa-libelles">'+uniques('libelle_cheque').map(b=>'<option value="'+esc(b)+'">').join('')+'</datalist>'
-        + '<label class="field">Numéro du chèque<input type="text" name="pa_cheque" value="'+esc(ex ? ex.numero_cheque||'' : '')+'"></label>'
+        + '<label class="field">Numéro du chèque<input type="text" name="pa_cheque" value="'+esc(edit ? edit.numero_cheque||'' : '')+'"></label>'
         + '</fieldset></div>'
         + '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Annuler</button><button type="button" class="btn btn-primary" onclick="enregistrerPaiementConnaissement()">Enregistrer le paiement</button></div>'
         + '</div></div>';
