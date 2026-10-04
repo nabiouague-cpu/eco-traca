@@ -343,7 +343,13 @@
   .decl-nom.ra{color:#2E7D46;} .decl-nom.ft{color:#1B6CA8;}
   .tbl-achats .decl{display:inline-flex;border:1px solid transparent;border-radius:12px;cursor:pointer;font:inherit;font-size:12px;padding:0;line-height:1.2;overflow:hidden;white-space:nowrap;}
   .tbl-achats .decl:hover{box-shadow:0 0 0 2px var(--accent-line);}
-  .tbl-achats .decl .st{padding:4px 12px;font-weight:600;}
+  .tbl-achats .decl{align-items:center;}
+  .tbl-achats .decl .st{padding:4px 11px;font-weight:600;}
+  .tbl-achats .decl .knob{width:12px;height:12px;border-radius:50%;background:#fff;box-shadow:0 0 0 1.5px currentColor;flex-shrink:0;}
+  .tbl-achats .decl.non .knob{margin-left:8px;} .tbl-achats .decl.oui .knob{margin-right:8px;}
+  .tbl-achats .decl.non .st{padding-left:7px;} .tbl-achats .decl.oui .st{padding-right:7px;}
+  .tbl-achats .decl.non.attente{background:var(--gray-bg);color:var(--ink-soft);opacity:.85;cursor:help;}
+  .tbl-achats .decl.non.attente:hover{box-shadow:none;}
   .tbl-achats .decl.oui{background:var(--ok-bg);color:var(--ok);}
   .tbl-achats .decl.non{background:var(--warn-bg);color:var(--warn);}
   .decl-bloc .sous{margin-top:0;}
@@ -2191,7 +2197,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-96';
+const APP_VERSION = '2026-10-02-97';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -10235,13 +10241,17 @@ function nbADeclarer(a){ return declarable(a) ? plateformesDeclaration(a).filter
 function celluleDeclarationHtml(a, avecNom){
   const ks = plateformesDeclaration(a);
   if (ks.length===0) return '<span class="vide" title="'+(a.type_cacao ? esc('Cacao '+a.type_cacao+' : aucune déclaration sur une plateforme de certification') : 'Type de cacao non renseigné')+'">—</span>';
-  const visibles = ks.filter(k=>dateDeclaration(a,k) || declarable(a));
-  if (visibles.length===0) return '<span class="vide" title="La déclaration n\'est possible qu\'après la pesée à l\'usine (poids net payé)">—</span>';
-  return '<div class="decl-liste">'+visibles.map(k=>{
+  const pese = declarable(a);
+  return '<div class="decl-liste">'+ks.map(k=>{
     const d = dateDeclaration(a,k), p = PLATEFORMES_DECLARATION[k], parCoop = a['declaration_'+k+'_par']==='cooperative';
+    const attente = !d && !pese;   // non declare ET pas encore pese : la declaration est impossible pour le moment
+    const titre = d ? 'Déclaré '+p.sur+' le '+(dateFr(d)||d)+(parCoop?' (saisi par la coopérative)':'')+' — cliquer pour modifier'
+      : attente ? 'Non déclaré — la déclaration n\'est possible qu\'après la pesée à l\'usine (poids net payé)'
+      : 'Non déclaré '+p.sur+' — cliquer pour le marquer comme déclaré';
     return '<div class="decl-bloc">'+(avecNom ? '<div class="decl-nom '+k+'">'+esc(p.nom)+'</div>' : '')
-      + '<button type="button" class="decl '+(d?'oui':'non')+'" onclick="ouvrirDeclaration(\''+a.id+'\',\''+k+'\')" title="'+esc((d ? 'Déclaré '+p.sur+' le '+(dateFr(d)||d)+(parCoop?' (saisi par la coopérative)':'') : 'Non déclaré '+p.sur)+' — cliquer pour modifier')+'">'
-      + '<span class="st">'+(d ? 'Déclaré · '+esc(dateFr(d)||d) : 'Non déclaré')+'</span></button></div>';
+      + '<button type="button" class="decl '+(d?'oui':attente?'non attente':'non')+'" onclick="ouvrirDeclaration(\''+a.id+'\',\''+k+'\')" title="'+esc(titre)+'">'
+      + (d ? '<span class="st">Déclaré · '+esc(dateFr(d)||d)+'</span><span class="knob"></span>' : '<span class="knob"></span><span class="st">Non déclaré</span>')
+      + '</button></div>';
   }).join('')+'</div>';
 }
 function ouvrirDeclaration(achatId, k){
@@ -10295,7 +10305,7 @@ function construireRapportLivraisons(){
     String(y.date||'').localeCompare(String(x.date||'')) || String(coopById(x.cooperative_id)?.nom||'').localeCompare(String(coopById(y.cooperative_id)?.nom||''),'fr') || String(y.connaissement||'').localeCompare(String(x.connaissement||'')));
   const nomCamp = id => { const c = state.campagnes.find(x=>x.id===id); return c ? c.nom : ''; };
   const nombre = v => Number(v)>0 ? Number(v) : '';
-  const decl = (a,k)=>{ if (plateformesDeclaration(a).indexOf(k)<0) return ['Sans objet','','']; const d = dateDeclaration(a,k); if (d) return ['Déclaré', dateExcel(d), a['declaration_'+k+'_par']==='cooperative' ? 'Coopérative' : 'ECORIGINE']; return [declarable(a) ? 'Non déclaré' : 'En attente de la pesée','','']; };
+  const decl = (a,k)=>{ if (plateformesDeclaration(a).indexOf(k)<0) return ['Sans objet','','']; const d = dateDeclaration(a,k); if (d) return ['Déclaré', dateExcel(d), a['declaration_'+k+'_par']==='cooperative' ? 'Coopérative' : 'ECORIGINE']; return ['Non déclaré','','']; };
   const avecFt = livraisons.some(a=>plateformesDeclaration(a).indexOf('ft')>=0);   // colonnes Fairtrace seulement s'il y a des achats Fairtrade
   const entetes = ['Coopérative','N° CCC','Connaissement','Date','Campagne','Période','Type de cacao',
     'Sacs déclarés','Poids brut déclaré (kg)','Poids net déclaré (kg)','Sacs acceptés','Poids net livré (kg)','Poids net payé (kg)','Écart payé − déclaré (kg)','Écart (%)',
@@ -10335,7 +10345,7 @@ function construireRapportLivraisons(){
     ['Déclarations Multitrace (cacao RA)', nbDeclare('ra')+' déclarée(s) sur '+nbConcerne('ra')+' à déclarer'],
     ...(avecFt ? [['Déclarations Fairtrace (cacao Fairtrade)', nbDeclare('ft')+' déclarée(s) sur '+nbConcerne('ft')+' à déclarer']] : []),
     [],
-    ['Déclaration'+(avecFt ? ' Multitrace / Fairtrace' : ' Multitrace'), 'La déclaration se fait sur la base du poids net payé à l\'usine : elle n\'est possible qu\'après la pesée (« En attente de la pesée » tant que l\'usine n\'a pas pesé). « Déclaré » ou « Non déclaré » : statut saisi dans ORIGEN, par ECORIGINE ou par la coopérative depuis son portail (colonne « Déclaré par »). « Sans objet » : ce cacao n\'est pas concerné par cette plateforme (cacao ordinaire, ou type de cacao sans cette certification).'],
+    ['Déclaration'+(avecFt ? ' Multitrace / Fairtrace' : ' Multitrace'), 'La déclaration se fait sur la base du poids net payé à l\'usine : elle n\'est possible qu\'après la pesée (la colonne « Avancement » indique si la livraison attend encore la pesée). « Déclaré » ou « Non déclaré » : statut saisi dans ORIGEN, par ECORIGINE ou par la coopérative depuis son portail (colonne « Déclaré par »). « Sans objet » : ce cacao n\'est pas concerné par cette plateforme (cacao ordinaire, ou type de cacao sans cette certification).'],
     ['Prime de certification', 'Calculée sur le poids net payé (pesé à l\'usine), jamais sur le poids du connaissement. « À déterminer » tant que l\'usine n\'a rien pesé.'],
     ['Avancement', 'En attente de pesée → Reçu à l\'usine (pesée saisie) → Paiement enregistré (n° de chèque saisi).'],
     ['Astuce', 'Utilise les filtres de la première ligne de la feuille « Livraisons » pour isoler une coopérative, une campagne ou les livraisons non déclarées.'],
@@ -10419,7 +10429,7 @@ function detailAchatHtml(a, etat){
   const base = poidsBaseForPrime(a);
   const declarations = plateformesDeclaration(a).map(k=>{
     const d = dateDeclaration(a,k), p = PLATEFORMES_DECLARATION[k], par = a['declaration_'+k+'_par'];
-    return dl('Déclaration '+esc(p.nom), d ? 'Déclaré le '+esc(dateFr(d)||d)+(par==='cooperative' ? ' (par la coopérative)' : par==='admin' ? ' (par ECORIGINE)' : '') : (declarable(a) ? 'Non déclaré' : '<span class="vide">Possible après la pesée</span>'));
+    return dl('Déclaration '+esc(p.nom), d ? 'Déclaré le '+esc(dateFr(d)||d)+(par==='cooperative' ? ' (par la coopérative)' : par==='admin' ? ' (par ECORIGINE)' : '') : (declarable(a) ? 'Non déclaré' : 'Non déclaré <span class="vide">(possible après la pesée)</span>'));
   }).join('');
   const paiement = dl('Type de cacao', a.type_cacao ? esc(a.type_cacao) : '')
     + dl('Poids pesé à l\'usine', base>0 ? fmtKg(base) : '<span class="vide">En attente de la pesée</span>')
@@ -10454,7 +10464,7 @@ function ligneAchatHtml(a, montrerCoop, ouvert, avecNomPlateforme){
     : a.verification_tracabilite==='ecart' ? '<span class="badge warn" title="Écart entre le poids déclaré et le total de la fiche de traçabilité pour ce connaissement">⚠ Écart '+(a.ecart_kg>0?'+':'')+fmtKg(a.ecart_kg)+'</span>'
     : a.verification_tracabilite==='non_trouve' ? '<span class="badge neutral" title="Aucune fiche de traçabilité correspondante trouvée pour ce connaissement">Pas de fiche liée</span>'
     : '<span class="vide">—</span>';
-  const declTexte = plateformesDeclaration(a).map(k=>PLATEFORMES_DECLARATION[k].sigle+' '+(dateDeclaration(a,k)?'declare':(declarable(a)?'non declare':'attente pesee'))).join(' ');
+  const declTexte = plateformesDeclaration(a).map(k=>PLATEFORMES_DECLARATION[k].sigle+' '+(dateDeclaration(a,k)?'declare':'non declare'+(declarable(a)?'':' attente pesee'))).join(' ');
   const q = nrmAchat([a.connaissement, coop&&coop.nom, a.type_cacao, a.date, dateFr(a.date), a.nom_transporteur, a.immat_vehicule, a.nom_chauffeur, a.lieu_origine, etat.label, declTexte].join(' '));
   const cache = nrmAchat(state.achatsRecherche).trim() && q.indexOf(nrmAchat(state.achatsRecherche).trim())<0;
   const reception = peseeVerrouillee(a) ? '<span class="vide" title="'+esc(MSG_PESEE_VERROUILLEE)+'">—</span>' : '<button type="button" class="'+(etat.cle==='attente'?'btn-primary':'btn-ghost')+' btn-compact" onclick="ouvrirFinalisationPaiement(\''+a.id+'\')">Réception à l\'usine</button>';
