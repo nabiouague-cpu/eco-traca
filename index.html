@@ -299,6 +299,7 @@
   table.pesee tr.final th, table.pesee tr.final td{border-bottom:none;border-top:2px solid var(--border);background:#F0F7F4;font-weight:600;}
   table.pesee tr.final th{color:var(--ink);}
   table.pesee .pct{display:block;font-family:var(--sans);font-size:11px;font-weight:400;color:var(--ink-soft);}
+  .achats-resume .a-determiner{font-family:var(--sans);font-size:17px;font-weight:600;color:var(--ink-faint);}
   .attente-note{margin-top:10px;padding:8px 10px;border:1px dashed var(--border);border-radius:8px;font-size:12px;color:var(--ink-soft);background:var(--surface);}
   /* ---- Tableau des producteurs : vraies colonnes alignees (texte a gauche, nombres a droite) ---- */
   .tbl-prod-wrap{max-height:74vh;overflow:auto;border-top:1px solid var(--border);}
@@ -2125,7 +2126,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-88';
+const APP_VERSION = '2026-10-02-89';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -9898,20 +9899,23 @@ function renderCooperativesTab(){
   return html;
 }
 
+// La prime de certification (comme le paiement de la cooperative) se calcule sur le POIDS NET PESE A L'USINE, jamais sur le poids du connaissement.
+// Tant que l'usine n'a rien pese, le poids de base est 0 : la prime n'est pas encore connue.
 function poidsBaseForPrime(a){
-  return Number(a.poids_net_produit)>0 ? Number(a.poids_net_produit) : Number(a.quantite_kg)||0;
+  return Number(a.poids_net_produit)>0 ? Number(a.poids_net_produit) : 0;
 }
-function calcPrime(a){
-  const poids = poidsBaseForPrime(a);
+function tauxPrimeAchat(a){
   const tauxRA = Number(state.settings.prime_ra)||0;
   const tauxFT = Number(state.settings.prime_ft)||0;
   const t = a.type_cacao || '';
-  let taux = 0;
-  if (t==='RA') taux = tauxRA;
-  else if (t==='Fairtrade') taux = tauxFT;
-  else if (t==='RA+FT' || t==='RA+Fairtrade') taux = tauxRA+tauxFT;
-  return Math.round(poids*taux);
+  if (t==='RA') return tauxRA;
+  if (t==='Fairtrade') return tauxFT;
+  if (t==='RA+FT' || t==='RA+Fairtrade') return tauxRA+tauxFT;
+  return 0;
 }
+function tauxPrimeRenseignes(){ return (Number(state.settings.prime_ra)||0)>0 || (Number(state.settings.prime_ft)||0)>0; }
+function calcPrime(a){ return Math.round(poidsBaseForPrime(a)*tauxPrimeAchat(a)); }
+function primeSurPoids(a, poids){ return Math.round((Number(poids)||0)*tauxPrimeAchat(a)); }
 async function savePrimes(){
   state.settings.prime_ra = Number(document.getElementById('prime-ra-input').value)||0;
   state.settings.prime_ft = Number(document.getElementById('prime-ft-input').value)||0;
@@ -9983,6 +9987,13 @@ async function extraireVolumeCertificat(path){
   if (btn){ btn.disabled = false; btn.textContent = '🔎 Extraire automatiquement depuis le certificat fourni'; }
 }
 
+// Apercu en direct de la prime pendant la saisie du poids net pese a l'usine.
+function majApercuPrime(achatId){
+  const a = state.achats.find(x=>x.id===achatId); const c = document.getElementById('fp-prime-apercu'); const inp = document.querySelector('[name="fp_poids_net"]');
+  if (!a || !c || !inp) return;
+  const poids = Number(inp.value)||0;
+  c.innerHTML = poids>0 ? (tauxPrimeAchat(a)>0 ? fmtNum(primeSurPoids(a, poids))+' FCFA' : '<span style="color:var(--ink-faint);font-weight:400;">taux de prime non renseigné</span>') : '<span style="color:var(--ink-faint);font-weight:400;">à déterminer : saisis le poids net pesé à l\'usine</span>';
+}
 function ouvrirFinalisationPaiement(achatId){
   if (!achatId){
     const premier = state.achats.slice().sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')))[0];
@@ -10167,8 +10178,8 @@ function detailAchatHtml(a, etat){
   const prime = calcPrime(a);
   const base = poidsBaseForPrime(a);
   const paiement = dl('Type de cacao', a.type_cacao ? esc(a.type_cacao) : '')
-    + dl('Poids retenu pour la prime', base>0 ? fmtKg(base) : '')
-    + dl('Prime de certification', prime>0 ? '<b>'+fmtNum(prime)+' FCFA</b>' : '')
+    + dl('Poids pesé à l\'usine', base>0 ? fmtKg(base) : '<span class="vide">En attente de la pesée</span>')
+    + dl('Prime de certification', base>0 ? (prime>0 ? '<b>'+fmtNum(prime)+' FCFA</b>' : '<span class="vide">Taux de prime non renseigné</span>') : '<span class="vide">À déterminer</span>')
     + (String(a.numero_cheque||'').trim()
         ? dl('Paiement', 'Chèque n° '+esc(a.numero_cheque)) + dl('Banque', a.banque ? esc(a.banque) : '') + dl('Libellé', a.libelle_cheque ? esc(a.libelle_cheque) : '')
         : dl('Paiement', '<span class="vide">Non enregistré</span>'));
@@ -10182,7 +10193,9 @@ function detailAchatHtml(a, etat){
       + (pdf ? '<button class="btn-ghost btn-compact" style="margin-top:10px;" onclick="telechargerFichierDemande(\''+escJs(pdf.path)+'\',\''+escJs(pdf.nom||'connaissement.pdf')+'\')">⬇ Connaissement (PDF)</button>' : '')
     + '</div>'
     + '<div class="detail-bloc"><h4>Pesée : déclaré et usine</h4>'+pesee+'</div>'
-    + '<div class="detail-bloc"><h4>Prime et paiement</h4><dl>'+paiement+'</dl></div>'
+    + '<div class="detail-bloc"><h4>Prime et paiement</h4><dl>'+paiement+'</dl>'
+      + (base>0 ? '' : '<div class="attente-note">La prime est calculée sur le poids net pesé à l\'usine, pas sur le poids du connaissement : elle sera connue après la pesée.</div>')
+    + '</div>'
     + '</div></td></tr>';
 }
 function ligneAchatHtml(a, montrerCoop, ouvert){
@@ -10226,6 +10239,7 @@ function renderAchatsConnaissementPanel(){
   const totalPaye = list.reduce((t,a)=>t+(Number(a.poids_net_produit)||0),0);
   const declareDesPeses = list.filter(a=>Number(a.poids_net_produit)>0).reduce((t,a)=>t+(Number(a.quantite_kg)||0),0);
   const totalPrime = list.reduce((t,a)=>t+calcPrime(a),0);
+  const sansPoidsPese = list.filter(a=>!(Number(a.poids_net_produit)>0)).length;
   const ecartGlobal = totalPaye>0 && declareDesPeses>0 ? { kg: totalPaye-declareDesPeses, pct: (totalPaye-declareDesPeses)/declareDesPeses*100 } : null;
   const montrerCoop = state.coopFilter==='all';
   if (!(state.achatsOuverts instanceof Set)) state.achatsOuverts = new Set();
@@ -10240,7 +10254,11 @@ function renderAchatsConnaissementPanel(){
     + '<div><div class="k">Connaissements</div><div class="v">'+fmtNum(list.length)+'</div><div class="s">'+(nb.attente>0 ? fmtNum(nb.attente)+' en attente de pesée' : 'Toutes les pesées sont saisies')+'</div></div>'
     + '<div><div class="k">Poids net déclaré</div><div class="v">'+fmtKg(totalKg)+'</div><div class="s">'+(totalSacs>0 ? fmtNum(Math.round(totalSacs))+' sacs' : '&nbsp;')+'</div></div>'
     + '<div><div class="k">Poids net payé · usine</div><div class="v">'+(totalPaye>0 ? fmtKg(totalPaye) : '—')+'</div><div class="s">'+(ecartGlobal ? 'Écart <span class="ecart '+(ecartGlobal.kg<0?'neg':ecartGlobal.kg>0?'pos':'')+'">'+fmtEcartAchat(ecartGlobal.kg)+' kg ('+fmtPctAchat(ecartGlobal.pct)+')</span>' : 'En attente des pesées')+'</div></div>'
-    + '<div><div class="k">Prime de certification</div><div class="v">'+(totalPrime>0 ? fmtNum(totalPrime)+' <small>FCFA</small>' : '—')+'</div><div class="s">'+(totalPrime>0 ? 'Selon les taux de prime en vigueur' : 'Aucun taux de prime renseigné')+'</div></div>'
+    + '<div><div class="k">Prime de certification</div><div class="v">'+(totalPrime>0 ? fmtNum(totalPrime)+' <small>FCFA</small>' : (!tauxPrimeRenseignes() ? '—' : '<span class="a-determiner">À déterminer</span>'))+'</div><div class="s">'
+      + (!tauxPrimeRenseignes() ? 'Aucun taux de prime renseigné'
+         : sansPoidsPese===list.length ? 'Calculée sur le poids pesé à l\'usine'
+         : sansPoidsPese>0 ? fmtNum(sansPoidsPese)+' connaissement'+(sansPoidsPese>1?'s':'')+' sans pesée : prime à déterminer'
+         : 'Calculée sur le poids net payé à l\'usine')+'</div></div>'
     + '</div>';
   html += '<div class="achats-barre"><input type="search" placeholder="Rechercher : n°, coopérative, transporteur…" value="'+esc(state.achatsRecherche||'')+'" oninput="filtrerAchats(this.value)">'
     + '<div class="achats-filtres">'
@@ -10261,7 +10279,7 @@ function renderAchatsConnaissementPanel(){
     const camp = key==='__none__' ? null : state.campagnes.find(x=>x.id===key);
     const items = groupes.get(key).slice().sort((x,y)=> String(y.date).localeCompare(String(x.date)) || String(y.connaissement).localeCompare(String(x.connaissement)));
     const kg = items.reduce((t,a)=>t+(Number(a.quantite_kg)||0),0), paye = items.reduce((t,a)=>t+(Number(a.poids_net_produit)||0),0), pr = items.reduce((t,a)=>t+calcPrime(a),0);
-    html += '<tr class="groupe"><td colspan="9"><b>'+(camp?esc(camp.nom):'Sans campagne (à corriger)')+'</b> <span>'+fmtNum(items.length)+' connaissement'+(items.length>1?'s':'')+' · '+fmtKg(kg)+' déclarés'+(paye>0?' · '+fmtKg(paye)+' payés':'')+(pr>0?' · prime '+fmtNum(pr)+' FCFA':'')+'</span></td></tr>';
+    html += '<tr class="groupe"><td colspan="9"><b>'+(camp?esc(camp.nom):'Sans campagne (à corriger)')+'</b> <span>'+fmtNum(items.length)+' connaissement'+(items.length>1?'s':'')+' · '+fmtKg(kg)+' déclarés'+(paye>0?' · '+fmtKg(paye)+' payés':'')+(pr>0 ? ' · prime '+fmtNum(pr)+' FCFA' : (tauxPrimeRenseignes() ? ' · prime à déterminer' : ''))+(pr>0 && items.some(a=>!(Number(a.poids_net_produit)>0)) ? ' (hors connaissements sans pesée)' : '')+'</span></td></tr>';
     items.forEach(a=>{ html += ligneAchatHtml(a, montrerCoop, state.achatsOuverts.has(a.id)); });
   });
   html += '</tbody></table></div></div>';
@@ -11108,11 +11126,11 @@ function _renderBrut(){
         + '</select></label>'
         + '<div id="modal-fields">'
         + '<label class="field">Date de livraison<input type="date" name="fp_date_livraison" value="'+esc(a.date||'')+'"></label>'
-        + '<label class="field">Poids net (kg)<input type="number" step="1" min="0" name="fp_poids_net" value="'+esc(a.poids_net_produit||'')+'"></label>'
+        + '<label class="field">Poids net pesé à l\'usine (kg)<input type="number" step="1" min="0" name="fp_poids_net" value="'+esc(a.poids_net_produit||'')+'" oninput="majApercuPrime(\''+a.id+'\')"></label>'
         + '<label class="field">Nombre de sacs<input type="number" step="1" min="0" name="fp_sacs" value="'+esc(a.nombre_sacs_accepte||'')+'"></label>'
         + '</div>'
         + '<div class="info-grid" style="margin:10px 0 4px;background:var(--surface-2);padding:10px;border-radius:8px;">'
-        + '<div><span>Prime (calcul automatique'+(a.type_cacao?', '+esc(a.type_cacao):'')+') :</span> '+fmtNum(prime)+' FCFA</div>'
+        + '<div><span>Prime de certification (calculée sur le poids net pesé à l\'usine'+(a.type_cacao?', '+esc(a.type_cacao):'')+') :</span> <b id="fp-prime-apercu">'+(Number(a.poids_net_produit)>0 ? fmtNum(prime)+' FCFA' : '<span style="color:var(--ink-faint);font-weight:400;">à déterminer : saisis le poids net pesé à l\'usine</span>')+'</b></div>'
         + '</div>'
         + '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Fermer</button><button type="button" class="btn btn-primary" onclick="enregistrerReceptionUsine()">Enregistrer</button></div>'
         + '</div></div>';
