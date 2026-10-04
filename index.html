@@ -348,6 +348,7 @@
   .tbl-achats .decl .knob{width:12px;height:12px;border-radius:50%;background:#fff;box-shadow:0 0 0 1.5px currentColor;flex-shrink:0;}
   .tbl-achats .decl.non .knob{margin-left:8px;} .tbl-achats .decl.oui .knob{margin-right:8px;}
   .tbl-achats .decl.non .st{padding-left:7px;} .tbl-achats .decl.oui .st{padding-right:7px;}
+  .tbl-achats .decl.non.retard{background:var(--danger-bg);color:var(--danger);}
   .tbl-achats .decl.non.attente{background:var(--gray-bg);color:var(--ink-soft);opacity:.85;cursor:help;}
   .tbl-achats .decl.non.attente:hover{box-shadow:none;}
   .tbl-achats .decl.oui{background:var(--ok-bg);color:var(--ok);}
@@ -2197,7 +2198,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-97';
+const APP_VERSION = '2026-10-02-99';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -10235,6 +10236,17 @@ function dateDeclaration(a, k){ return a['declaration_'+k+'_le'] || null; }
 function declarable(a){ return Number(a.poids_net_produit)>0; }
 // Une fois le volume DECLARE (sur Multitrace et/ou Fairtrace), la pesee de l'usine est VERROUILLEE : le volume declare doit rester celui du poids net paye.
 // Pour la corriger, on retire d'abord la declaration (la pesee redevient alors modifiable).
+// Echeance de declaration sur Multitrace (cacao RA) : dernier jour du trimestre civil de livraison + 14 jours (livraison en octobre -> 14 janvier).
+// jours = jours restants (negatif = en retard). Meme regle que les rappels envoyes aux cooperatives.
+function echeanceDeclaration(dateIso, aujourdhui){
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateIso||'')); if (!m) return null;
+  const mois = Number(m[2]); if (!(mois>=1 && mois<=12)) return null;
+  const fin = Date.UTC(Number(m[1]), Math.ceil(mois/3)*3, 0), ech = fin + 14*86400000, auj = aujourdhui || new Date();
+  return { echeance: new Date(ech).toISOString().slice(0,10), jours: Math.round((ech - Date.UTC(auj.getUTCFullYear(), auj.getUTCMonth(), auj.getUTCDate()))/86400000) };
+}
+function libelleResteDeclaration(j){ return j<0 ? 'en retard de '+(-j)+' jour'+(-j>1?'s':'') : j===0 ? 'dernier jour' : 'dans '+j+' jour'+(j>1?'s':''); }
+// Compte a rebours applicable : cacao RA (Multitrace), volume pese et pas encore declare.
+function echeanceEnCours(a, k){ return (k==='ra' && plateformesDeclaration(a).indexOf('ra')>=0 && !dateDeclaration(a,k) && declarable(a)) ? echeanceDeclaration(a.date) : null; }
 function peseeVerrouillee(a){ return plateformesDeclaration(a).some(k=>!!dateDeclaration(a,k)); }
 const MSG_PESEE_VERROUILLEE = "Réception clôturée : le volume a été déclaré. Pour modifier la pesée, retire d'abord la déclaration.";
 function nbADeclarer(a){ return declarable(a) ? plateformesDeclaration(a).filter(k=>!dateDeclaration(a,k)).length : 0; }
@@ -10245,11 +10257,12 @@ function celluleDeclarationHtml(a, avecNom){
   return '<div class="decl-liste">'+ks.map(k=>{
     const d = dateDeclaration(a,k), p = PLATEFORMES_DECLARATION[k], parCoop = a['declaration_'+k+'_par']==='cooperative';
     const attente = !d && !pese;   // non declare ET pas encore pese : la declaration est impossible pour le moment
+    const ech = echeanceEnCours(a,k), retard = !!ech && ech.jours<0;
     const titre = d ? 'Déclaré '+p.sur+' le '+(dateFr(d)||d)+(parCoop?' (saisi par la coopérative)':'')+' — cliquer pour modifier'
       : attente ? 'Non déclaré — la déclaration n\'est possible qu\'après la pesée à l\'usine (poids net payé)'
-      : 'Non déclaré '+p.sur+' — cliquer pour le marquer comme déclaré';
+      : 'Non déclaré '+p.sur+(ech ? ' — échéance '+dateFr(ech.echeance)+' ('+libelleResteDeclaration(ech.jours)+')' : '')+' — cliquer pour le marquer comme déclaré';
     return '<div class="decl-bloc">'+(avecNom ? '<div class="decl-nom '+k+'">'+esc(p.nom)+'</div>' : '')
-      + '<button type="button" class="decl '+(d?'oui':attente?'non attente':'non')+'" onclick="ouvrirDeclaration(\''+a.id+'\',\''+k+'\')" title="'+esc(titre)+'">'
+      + '<button type="button" class="decl '+(d?'oui':attente?'non attente':'non'+(retard?' retard':''))+'" onclick="ouvrirDeclaration(\''+a.id+'\',\''+k+'\')" title="'+esc(titre)+'">'
       + (d ? '<span class="st">Déclaré · '+esc(dateFr(d)||d)+'</span><span class="knob"></span>' : '<span class="knob"></span><span class="st">Non déclaré</span>')
       + '</button></div>';
   }).join('')+'</div>';
@@ -10429,7 +10442,9 @@ function detailAchatHtml(a, etat){
   const base = poidsBaseForPrime(a);
   const declarations = plateformesDeclaration(a).map(k=>{
     const d = dateDeclaration(a,k), p = PLATEFORMES_DECLARATION[k], par = a['declaration_'+k+'_par'];
-    return dl('Déclaration '+esc(p.nom), d ? 'Déclaré le '+esc(dateFr(d)||d)+(par==='cooperative' ? ' (par la coopérative)' : par==='admin' ? ' (par ECORIGINE)' : '') : (declarable(a) ? 'Non déclaré' : 'Non déclaré <span class="vide">(possible après la pesée)</span>'));
+    const ligne = dl('Déclaration '+esc(p.nom), d ? 'Déclaré le '+esc(dateFr(d)||d)+(par==='cooperative' ? ' (par la coopérative)' : par==='admin' ? ' (par ECORIGINE)' : '') : (declarable(a) ? 'Non déclaré' : 'Non déclaré <span class="vide">(possible après la pesée)</span>'));
+    const ech = (k==='ra' && !d) ? echeanceDeclaration(a.date) : null;
+    return ligne + (ech ? dl('Échéance '+esc(p.nom), esc(dateFr(ech.echeance)||ech.echeance)+' · <span class="'+(ech.jours<0 && declarable(a) ? 'ecart neg' : '')+'">'+esc(libelleResteDeclaration(ech.jours))+'</span>'+(declarable(a) ? '' : ' <span class="vide">(après la pesée)</span>')) : '');
   }).join('');
   const paiement = dl('Type de cacao', a.type_cacao ? esc(a.type_cacao) : '')
     + dl('Poids pesé à l\'usine', base>0 ? fmtKg(base) : '<span class="vide">En attente de la pesée</span>')
@@ -10495,6 +10510,7 @@ function renderAchatsConnaissementPanel(){
   const declareDesPeses = list.filter(a=>Number(a.poids_net_produit)>0).reduce((t,a)=>t+(Number(a.quantite_kg)||0),0);
   const totalPrime = list.reduce((t,a)=>t+calcPrime(a),0);
   const sansPoidsPese = list.filter(a=>!(Number(a.poids_net_produit)>0)).length;
+  const nbRetardDecl = list.filter(a=>{ const e = echeanceEnCours(a,'ra'); return !!e && e.jours<0; }).length;
   const ecartGlobal = totalPaye>0 && declareDesPeses>0 ? { kg: totalPaye-declareDesPeses, pct: (totalPaye-declareDesPeses)/declareDesPeses*100 } : null;
   const montrerCoop = state.coopFilter==='all';
   if (!(state.achatsOuverts instanceof Set)) state.achatsOuverts = new Set();
@@ -10510,7 +10526,7 @@ function renderAchatsConnaissementPanel(){
     return html;
   }
   html += '<div class="achats-resume">'
-    + '<div><div class="k">Connaissements</div><div class="v">'+fmtNum(list.length)+'</div><div class="s">'+(nb.attente>0 ? fmtNum(nb.attente)+' en attente de pesée' : 'Toutes les pesées sont saisies')+(nb.nondecl>0 ? ' · '+fmtNum(nb.nondecl)+' à déclarer' : '')+'</div></div>'
+    + '<div><div class="k">Connaissements</div><div class="v">'+fmtNum(list.length)+'</div><div class="s">'+(nb.attente>0 ? fmtNum(nb.attente)+' en attente de pesée' : 'Toutes les pesées sont saisies')+(nb.nondecl>0 ? ' · '+fmtNum(nb.nondecl)+' à déclarer'+(nbRetardDecl>0 ? ' ('+fmtNum(nbRetardDecl)+' en retard)' : '') : '')+'</div></div>'
     + '<div><div class="k">Poids net déclaré</div><div class="v">'+fmtKg(totalKg)+'</div><div class="s">'+(totalSacs>0 ? fmtNum(Math.round(totalSacs))+' sacs' : '&nbsp;')+'</div></div>'
     + '<div><div class="k">Poids net payé · usine</div><div class="v">'+(totalPaye>0 ? fmtKg(totalPaye) : '—')+'</div><div class="s">'+(ecartGlobal ? 'Écart <span class="ecart '+(ecartGlobal.kg<0?'neg':ecartGlobal.kg>0?'pos':'')+'">'+fmtEcartAchat(ecartGlobal.kg)+' kg ('+fmtPctAchat(ecartGlobal.pct)+')</span>' : 'En attente des pesées')+'</div></div>'
     + '<div><div class="k">Prime de certification</div><div class="v">'+(totalPrime>0 ? fmtNum(totalPrime)+' <small>FCFA</small>' : (!tauxPrimeRenseignes() ? '—' : '<span class="a-determiner">À déterminer</span>'))+'</div><div class="s">'
@@ -10523,7 +10539,7 @@ function renderAchatsConnaissementPanel(){
     + '<div class="achats-filtres">'
     + [['tous','Tous'],['attente','En attente de pesée'],['recu',"Reçus à l'usine"],['paye','Paiement enregistré'],['ecart','Écarts avec la fiche'],['nondecl','À déclarer']].map(([k,l])=>'<button type="button" class="chip-coop'+(statut===k?' actif':'')+'" onclick="setAchatsStatut(\''+k+'\')">'+esc(l)+' <small>('+nb[k]+')</small></button>').join('')
     + '</div><span class="hint" id="achats-compte"></span></div>';
-  html += '<div class="achats-note">Poids net payé : poids retenu par l\'usine après analyse qualité et réfraction éventuelle (validé par le Conseil Café-Cacao). C\'est la base du paiement de la coopérative et de la prime de certification.</div>';
+  html += '<div class="achats-note">Poids net payé : poids retenu par l\'usine après analyse qualité et réfaction éventuelle (validé par le Conseil Café-Cacao). C\'est la base du paiement de la coopérative et de la prime de certification.</div>';
 
   const groupes = new Map();
   visibles.forEach(a=>{ const key = a.campagne_id || '__none__'; if (!groupes.has(key)) groupes.set(key, []); groupes.get(key).push(a); });
@@ -11281,7 +11297,7 @@ function _renderBrut(){
       + '<fieldset style="margin-top:12px;"><legend>Accepté / produit à l\'usine (après pesée)</legend>'
       + '<label class="field">Nombre de sacs acceptés<input type="number" step="1" min="0" name="sacs_accepte" value="'+esc(a.nombre_sacs_accepte||'')+'"'+(peseeVerrouillee(a)?' disabled':'')+'></label>'
       + '<label class="field">Poids net livré<input type="number" step="0.1" min="0" name="poids_brut_accepte" value="'+esc(a.poids_brut_accepte||'')+'"'+(peseeVerrouillee(a)?' disabled':'')+'></label>'
-      + '<label class="field">Poids net payé (après analyse/réfraction — base de paiement à la coopérative)<input type="number" step="0.1" min="0" name="poids_net_produit" value="'+esc(a.poids_net_produit||'')+'"'+(peseeVerrouillee(a)?' disabled':'')+'></label>'
+      + '<label class="field">Poids net payé (après analyse/réfaction — base de paiement à la coopérative)<input type="number" step="0.1" min="0" name="poids_net_produit" value="'+esc(a.poids_net_produit||'')+'"'+(peseeVerrouillee(a)?' disabled':'')+'></label>'
       + (peseeVerrouillee(a) ? '<span class="hint" style="color:var(--warn);">Pesée verrouillée : le volume a été déclaré. Retire d\'abord la déclaration pour modifier ces valeurs.</span>' : '<span class="hint">Ces 3 valeurs sont souvent connues seulement après l\'arrivée du camion — reviens compléter avec « Modifier ».</span>')
       + '</fieldset>'
       + '<label class="field">N° de connaissement<input type="text" name="connaissement" value="'+esc(a.connaissement||'')+'"></label>'
@@ -11410,7 +11426,7 @@ function _renderBrut(){
           + '<div class="aide">Poids net constaté à l\'arrivée à l\'usine.</div></div>'
         + '<div class="rec-champ obligatoire"><label for="fp_poids_net">Poids net payé (final) <b class="req">obligatoire</b></label>'
           + '<div class="rec-input"><input type="number" id="fp_poids_net" name="fp_poids_net" step="0.1" min="0" inputmode="decimal" placeholder="0" value="'+esc(a.poids_net_produit||'')+'" oninput="majApercuReception(\''+a.id+'\')"><span class="unite">kg</span></div>'
-          + '<div class="aide">Poids pesé à l\'usine après analyse qualité et réfraction éventuelle. C\'est la base du paiement et de la prime de certification.</div>'
+          + '<div class="aide">Poids pesé à l\'usine après analyse qualité et réfaction éventuelle. C\'est la base du paiement et de la prime de certification.</div>'
           + '<div class="rec-erreur" id="rec-erreur" role="alert"></div></div>'
         + '</section></div>'
         // ---- resultat en direct ----
