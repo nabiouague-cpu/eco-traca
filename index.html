@@ -2191,7 +2191,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-95';
+const APP_VERSION = '2026-10-02-96';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8231,6 +8231,11 @@ async function submitAchat(){
     tkm: Number(fv('tkm'))||null,
     commission: Number(fv('commission'))||0,
   };
+  // pesee verrouillee (volume deja declare) : les trois valeurs de la pesee ne changent pas
+  const avantModif = editId ? state.achats.find(a=>a.id===editId) : null;
+  if (avantModif && peseeVerrouillee(avantModif)){
+    data.poids_brut_accepte = Number(avantModif.poids_brut_accepte)||0; data.poids_net_produit = Number(avantModif.poids_net_produit)||0; data.nombre_sacs_accepte = Number(avantModif.nombre_sacs_accepte)||0;
+  }
   let achatId;
   if (editId){
     const existing = state.achats.find(a=>a.id===editId);
@@ -8671,7 +8676,7 @@ async function confirmImportRapportCCC(){
   const campagneId = fv('rapport_ccc_campagne') || pi.campagneId;
   if (!campagneId){ showToast('Sélectionne la campagne correspondant à ce rapport avant de confirmer.'); return; }
 
-  let created = 0, updated = 0, unchanged = 0;
+  let created = 0, updated = 0, unchanged = 0, verrouilles = 0;
   const aEnregistrer = [];
   Object.values(pi.parCoop).forEach(({coop, rows})=>{
     rows.forEach(r=>{
@@ -8685,6 +8690,7 @@ async function confirmImportRapportCCC(){
       const existing = r.connaissement ? state.achats.find(a=>a.cooperative_id===coop.id && a.connaissement===r.connaissement) : null;
       if (existing){
         const changed = Number(existing.nombre_sacs_accepte||0)!==r.sacs || Number(existing.poids_brut_accepte||0)!==r.poids_accepte || Number(existing.poids_net_produit||0)!==r.poids_accepte;
+        if (peseeVerrouillee(existing)){ if (changed) verrouilles++; else unchanged++; return; }   // volume deja declare : la pesee ne change plus
         if (changed){
           existing.nombre_sacs_accepte = r.sacs;
           existing.poids_brut_accepte = r.poids_accepte;
@@ -8723,7 +8729,7 @@ async function confirmImportRapportCCC(){
   state.pendingRapportCCC = null;
   closeModal();
   if (ok){
-    showToast(created+' nouveau(x) achat(s), '+updated+' mis à jour, '+unchanged+' déjà à jour.', 'success');
+    showToast(created+' nouveau(x) achat(s), '+updated+' mis à jour, '+unchanged+' déjà à jour.'+(verrouilles>0 ? ' '+verrouilles+' ignoré(s) : volume déjà déclaré (pesée verrouillée).' : ''), 'success');
   } else {
     showToast("Les données ont été mises à jour à l'écran, mais l'enregistrement a échoué : "+(state.storageErrorMsg||'erreur inconnue'));
   }
@@ -10083,6 +10089,7 @@ async function enregistrerReceptionUsine(){
   const pl = state.modal && state.modal.payload;
   const a = pl && state.achats.find(x=>x.id===pl.achatId);
   if (!a) return;
+  if (peseeVerrouillee(a)){ showToast(MSG_PESEE_VERROUILLEE); return; }
   const dateLivraison = fv('fp_date_livraison');
   const poidsNet = Number(fv('fp_poids_net'))||0;
   const sacs = Number(fv('fp_sacs'))||0;
@@ -10111,6 +10118,7 @@ function ouvrirFinalisationPaiement(achatId){
   if (!achatId){ showToast('Aucun achat à finaliser pour le moment.'); return; }
   const a = state.achats.find(x=>x.id===achatId);
   if (!a) return;
+  if (peseeVerrouillee(a)){ showToast(MSG_PESEE_VERROUILLEE); return; }
   state.modal = { type:'finaliserPaiement', payload:{ achatId } };
   render();
 }
@@ -10219,6 +10227,10 @@ function plateformesDeclaration(a){
 function dateDeclaration(a, k){ return a['declaration_'+k+'_le'] || null; }
 // La declaration se fait sur le POIDS NET PAYE a l'usine : impossible tant que l'usine n'a pas pese.
 function declarable(a){ return Number(a.poids_net_produit)>0; }
+// Une fois le volume DECLARE (sur Multitrace et/ou Fairtrace), la pesee de l'usine est VERROUILLEE : le volume declare doit rester celui du poids net paye.
+// Pour la corriger, on retire d'abord la declaration (la pesee redevient alors modifiable).
+function peseeVerrouillee(a){ return plateformesDeclaration(a).some(k=>!!dateDeclaration(a,k)); }
+const MSG_PESEE_VERROUILLEE = "Réception clôturée : le volume a été déclaré. Pour modifier la pesée, retire d'abord la déclaration.";
 function nbADeclarer(a){ return declarable(a) ? plateformesDeclaration(a).filter(k=>!dateDeclaration(a,k)).length : 0; }
 function celluleDeclarationHtml(a, avecNom){
   const ks = plateformesDeclaration(a);
@@ -10265,7 +10277,7 @@ async function enregistrerDeclaration(){
   if (error){ a[col] = avant; a[colPar] = avantPar; showToast('Échec de l\'enregistrement : '+error.message); return; }
   closeModal();
   showToast(oui ? 'Déclaration '+p.nom+' enregistrée : '+(a.connaissement||'connaissement')+' — déclaré le '+dateFr(date)+'.'
-                : 'Déclaration '+p.nom+' retirée : '+(a.connaissement||'connaissement')+' — non déclaré.', 'success');
+                : 'Déclaration '+p.nom+' retirée : '+(a.connaissement||'connaissement')+' — non déclaré.'+(peseeVerrouillee(a)?'':' La pesée est de nouveau modifiable.'), 'success');
 }
 
 // ============================================================
@@ -10401,7 +10413,8 @@ function detailAchatHtml(a, etat){
     + '<tr class="final"><th scope="row">Poids net payé <small>kg · final</small></th><td><span class="vide">—</span></td><td>'+(Number(a.poids_net_produit)>0 ? '<b>'+fmtNum(a.poids_net_produit)+'</b>' : '<span class="vide">—</span>')+'</td><td>'
     + (ec ? '<span class="ecart '+(ec.kg<0?'neg':ec.kg>0?'pos':'')+'">'+fmtEcartAchat(ec.kg)+'</span><small class="pct">'+fmtPctAchat(ec.pct)+'</small>' : '<span class="vide">—</span>')+'</td></tr>'
     + '</tbody></table>'
-    + (etat.cle==='attente' ? '<div class="attente-note">En attente de la pesée à l\'usine : saisir la réception pour renseigner les poids retenus.</div>' : '');
+    + (etat.cle==='attente' ? '<div class="attente-note">En attente de la pesée à l\'usine : saisir la réception pour renseigner les poids retenus.</div>' : '')
+    + (peseeVerrouillee(a) ? '<div class="attente-note">Pesée verrouillée : le volume a été déclaré. Pour la modifier, retire d\'abord la déclaration.</div>' : '');
   const prime = calcPrime(a);
   const base = poidsBaseForPrime(a);
   const declarations = plateformesDeclaration(a).map(k=>{
@@ -10444,7 +10457,7 @@ function ligneAchatHtml(a, montrerCoop, ouvert, avecNomPlateforme){
   const declTexte = plateformesDeclaration(a).map(k=>PLATEFORMES_DECLARATION[k].sigle+' '+(dateDeclaration(a,k)?'declare':(declarable(a)?'non declare':'attente pesee'))).join(' ');
   const q = nrmAchat([a.connaissement, coop&&coop.nom, a.type_cacao, a.date, dateFr(a.date), a.nom_transporteur, a.immat_vehicule, a.nom_chauffeur, a.lieu_origine, etat.label, declTexte].join(' '));
   const cache = nrmAchat(state.achatsRecherche).trim() && q.indexOf(nrmAchat(state.achatsRecherche).trim())<0;
-  const reception = '<button type="button" class="'+(etat.cle==='attente'?'btn-primary':'btn-ghost')+' btn-compact" onclick="ouvrirFinalisationPaiement(\''+a.id+'\')">Réception à l\'usine</button>';
+  const reception = peseeVerrouillee(a) ? '<span class="vide" title="'+esc(MSG_PESEE_VERROUILLEE)+'">—</span>' : '<button type="button" class="'+(etat.cle==='attente'?'btn-primary':'btn-ghost')+' btn-compact" onclick="ouvrirFinalisationPaiement(\''+a.id+'\')">Réception à l\'usine</button>';
   return '<tr class="ligne-achat'+(ouvert?' ouvert':'')+'" data-id="'+esc(a.id)+'" data-q="'+esc(q)+'"'+(cache?' style="display:none"':'')+'>'
     + '<td class="chev-cell" onclick="toggleAchatDetail(\''+a.id+'\')" title="Afficher le détail"><span class="chev">▸</span></td>'
     + '<td class="g cliquable" onclick="toggleAchatDetail(\''+a.id+'\')"><div class="num-conn">'+esc(a.connaissement||'(sans numéro)')+'</div>'
@@ -11256,10 +11269,10 @@ function _renderBrut(){
       + '<label class="field">Commission (FCFA/kg — rare, laisser à 0 sauf cas particulier)<input type="number" step="0.1" name="commission" value="'+esc(a.commission||0)+'"></label>'
       + '</fieldset>'
       + '<fieldset style="margin-top:12px;"><legend>Accepté / produit à l\'usine (après pesée)</legend>'
-      + '<label class="field">Nombre de sacs acceptés<input type="number" step="1" min="0" name="sacs_accepte" value="'+esc(a.nombre_sacs_accepte||'')+'"></label>'
-      + '<label class="field">Poids net livré<input type="number" step="0.1" min="0" name="poids_brut_accepte" value="'+esc(a.poids_brut_accepte||'')+'"></label>'
-      + '<label class="field">Poids net payé (après analyse/réfraction — base de paiement à la coopérative)<input type="number" step="0.1" min="0" name="poids_net_produit" value="'+esc(a.poids_net_produit||'')+'"></label>'
-      + '<span class="hint">Ces 3 valeurs sont souvent connues seulement après l\'arrivée du camion — reviens compléter avec « Modifier ».</span>'
+      + '<label class="field">Nombre de sacs acceptés<input type="number" step="1" min="0" name="sacs_accepte" value="'+esc(a.nombre_sacs_accepte||'')+'"'+(peseeVerrouillee(a)?' disabled':'')+'></label>'
+      + '<label class="field">Poids net livré<input type="number" step="0.1" min="0" name="poids_brut_accepte" value="'+esc(a.poids_brut_accepte||'')+'"'+(peseeVerrouillee(a)?' disabled':'')+'></label>'
+      + '<label class="field">Poids net payé (après analyse/réfraction — base de paiement à la coopérative)<input type="number" step="0.1" min="0" name="poids_net_produit" value="'+esc(a.poids_net_produit||'')+'"'+(peseeVerrouillee(a)?' disabled':'')+'></label>'
+      + (peseeVerrouillee(a) ? '<span class="hint" style="color:var(--warn);">Pesée verrouillée : le volume a été déclaré. Retire d\'abord la déclaration pour modifier ces valeurs.</span>' : '<span class="hint">Ces 3 valeurs sont souvent connues seulement après l\'arrivée du camion — reviens compléter avec « Modifier ».</span>')
       + '</fieldset>'
       + '<label class="field">N° de connaissement<input type="text" name="connaissement" value="'+esc(a.connaissement||'')+'"></label>'
       + '<label class="field">Type de cacao<select name="type_cacao">'
@@ -11361,7 +11374,7 @@ function _renderBrut(){
         + '<div class="rec-head"><div><div class="rec-titre">Réception à l\'usine</div>'
         + '<div class="rec-sous">'+esc(coop?coop.nom:'')+(camp?' · Campagne '+esc(camp.nom):'')+(a.periode?' · Période '+(a.periode==='principale'?'principale':'intermédiaire'):'')+'</div></div>'
         + '<div class="rec-choix"><label>Connaissement<select onchange="ouvrirFinalisationPaiement(this.value)">'
-        + achatsCoop.map(a2=>'<option value="'+a2.id+'"'+(a2.id===a.id?' selected':'')+'>'+esc(a2.connaissement||'(sans numéro)')+(a2.date?' — '+esc(dateFr(a2.date)||a2.date):'')+'</option>').join('')
+        + achatsCoop.map(a2=>'<option value="'+a2.id+'"'+(a2.id===a.id?' selected':'')+(peseeVerrouillee(a2)?' disabled':'')+'>'+esc(a2.connaissement||'(sans numéro)')+(a2.date?' — '+esc(dateFr(a2.date)||a2.date):'')+(peseeVerrouillee(a2)?' — clôturé (déclaré)':'')+'</option>').join('')
         + '</select></label><span class="badge '+etat.cls+'">'+esc(etat.label)+'</span></div></div>'
         + '<div class="rec-corps">'
         // ---- volet gauche : ce qui a ete declare (lecture seule) ----
@@ -11415,7 +11428,7 @@ function _renderBrut(){
         + '<div class="rec-sous">'+esc(a.connaissement||'(sans numéro)')+' · '+esc(coop?coop.nom:'')+(a.type_cacao?' · '+esc(a.type_cacao):'')+'</div></div></div>'
         + '<div class="decl-corps" id="modal-fields">'
         + '<div class="decl-question">La coopérative a-t-elle déclaré le volume de ce connaissement '+esc(p.sur)+' ?</div>'
-        + (declarable(a) ? '<div class="decl-base">Volume à déclarer : <b>'+fmtKg(a.poids_net_produit)+'</b> (poids net payé à l\'usine).</div>' : '')
+        + (declarable(a) ? '<div class="decl-base">'+(d ? 'Volume déclaré : <b>'+fmtKg(a.poids_net_produit)+'</b> (poids net payé à l\'usine). Tant que le volume est déclaré, la pesée est verrouillée.' : 'Volume à déclarer : <b>'+fmtKg(a.poids_net_produit)+'</b> (poids net payé à l\'usine).')+'</div>' : '')
         + (d && parCoop ? '<div class="decl-info">Déclaration saisie par la coopérative depuis son portail (le '+esc(dateFr(d)||d)+').</div>' : '')
         + '<div class="decl-choix">'
         + '<label class="choix non"><input type="radio" name="decl_statut" value="non"'+(d?'':' checked')+' onchange="majFormDeclaration()"><span>Non déclaré</span></label>'
