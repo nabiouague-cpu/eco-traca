@@ -245,6 +245,7 @@
   .tbl-achats .type{display:inline-block;padding:0 7px;border-radius:9px;background:var(--gray-bg);color:var(--ink-soft);font-weight:600;font-size:11px;}
   .tbl-achats tr.groupe td{background:var(--accent-soft);color:var(--accent);padding:9px 20px;text-align:left;border-bottom:1px solid var(--accent-line);font-size:12.5px;}
   .tbl-achats tr.groupe td b{font-size:13px;margin-right:8px;}
+.achats-defile .tbl-achats + .tbl-achats{margin-top:18px;}
   .tbl-achats tr.groupe td span{color:var(--ink-soft);}
   .tbl-achats tr.ligne-achat:hover td{background:#F4F9F7;}
   .tbl-achats tr.ligne-achat.ouvert td{background:#EEF6F3;border-bottom-color:transparent;}
@@ -2201,7 +2202,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-101';
+const APP_VERSION = '2026-10-02-102';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -10580,19 +10581,23 @@ function renderAchatsConnaissementPanel(){
   visibles.forEach(a=>{ const key = a.campagne_id || '__none__'; if (!groupes.has(key)) groupes.set(key, []); groupes.get(key).push(a); });
   const cles = state.campagnes.map(x=>x.id).filter(id=>groupes.has(id));
   if (groupes.has('__none__')) cles.push('__none__');
-  html += '<div class="achats-defile"><table class="tbl-achats"><colgroup>'+[3,15,8,8,8,11,10,10,14,13].map(w=>'<col style="width:'+w+'%">').join('')+'</colgroup>'
-    + '<thead><tr><th></th><th class="g">Connaissement</th><th>Date</th><th>Poids net déclaré<small>kg</small></th><th>Poids net payé<small>kg · usine</small></th><th>Montant à payer<small>FCFA</small></th><th>Avancement</th><th>Fiche de traçabilité</th><th>Déclaration<small>'+plateformesListe.map(k=>PLATEFORMES_DECLARATION[k].nom).join(' · ')+'</small></th><th>Actions</th></tr></thead><tbody>';
+  // Un tableau par campagne : la bande verte de la campagne est AU-DESSUS des titres de colonnes (puis les titres, puis les lignes), pour que les titres
+  // restent directement au-dessus des chiffres qu'ils decrivent.
+  const colgroup = '<colgroup>'+[3,15,8,8,8,11,10,10,14,13].map(w=>'<col style="width:'+w+'%">').join('')+'</colgroup>';
+  const entete = '<tr><th></th><th class="g">Connaissement</th><th>Date</th><th>Poids net déclaré<small>kg</small></th><th>Poids net payé<small>kg · usine</small></th><th>Montant à payer<small>FCFA</small></th><th>Avancement</th><th>Fiche de traçabilité</th><th>Déclaration<small>'+plateformesListe.map(k=>PLATEFORMES_DECLARATION[k].nom).join(' · ')+'</small></th><th>Actions</th></tr>';
+  html += '<div class="achats-defile">';
   if (visibles.length===0){
-    html += '<tr><td colspan="10" class="vide-ligne">Aucun connaissement ne correspond à ce filtre.</td></tr>';
+    html += '<table class="tbl-achats">'+colgroup+'<thead>'+entete+'</thead><tbody><tr><td colspan="10" class="vide-ligne">Aucun connaissement ne correspond à ce filtre.</td></tr></tbody></table>';
   }
   cles.forEach(key=>{
     const camp = key==='__none__' ? null : state.campagnes.find(x=>x.id===key);
     const items = groupes.get(key).slice().sort((x,y)=> String(y.date).localeCompare(String(x.date)) || String(y.connaissement).localeCompare(String(x.connaissement)));
     const kg = items.reduce((t,a)=>t+(Number(a.quantite_kg)||0),0), paye = items.reduce((t,a)=>t+(Number(a.poids_net_produit)||0),0), pr = items.reduce((t,a)=>t+calcPrime(a),0);
-    html += '<tr class="groupe"><td colspan="10"><b>'+(camp?esc(camp.nom):'Sans campagne (à corriger)')+'</b> <span>'+fmtNum(items.length)+' connaissement'+(items.length>1?'s':'')+' · '+fmtKg(kg)+' déclarés'+(paye>0?' · '+fmtKg(paye)+' payés':'')+(pr>0 ? ' · prime '+fmtNum(pr)+' FCFA' : (tauxPrimeRenseignes() ? ' · prime à déterminer' : ''))+(pr>0 && items.some(a=>!(Number(a.poids_net_produit)>0)) ? ' (hors connaissements sans pesée)' : '')+'</span></td></tr>';
+    html += '<table class="tbl-achats">'+colgroup+'<thead><tr class="groupe"><td colspan="10"><b>'+(camp?esc(camp.nom):'Sans campagne (à corriger)')+'</b> <span>'+fmtNum(items.length)+' connaissement'+(items.length>1?'s':'')+' · '+fmtKg(kg)+' déclarés'+(paye>0?' · '+fmtKg(paye)+' payés':'')+(pr>0 ? ' · prime '+fmtNum(pr)+' FCFA' : (tauxPrimeRenseignes() ? ' · prime à déterminer' : ''))+(pr>0 && items.some(a=>!(Number(a.poids_net_produit)>0)) ? ' (hors connaissements sans pesée)' : '')+'</span></td></tr>'+entete+'</thead><tbody>';
     items.forEach(a=>{ html += ligneAchatHtml(a, montrerCoop, state.achatsOuverts.has(a.id), plateformesListe.length>1); });
+    html += '</tbody></table>';
   });
-  html += '</tbody></table></div></div>';
+  html += '</div></div>';
   return html;
 }
 
