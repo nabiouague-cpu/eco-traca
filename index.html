@@ -232,12 +232,6 @@
   .achats-filtres{display:flex;gap:6px;flex-wrap:wrap;}
   .achats-filtres .chip-coop{padding:6px 12px;font-size:12.5px;}
   .achats-note{padding:9px 20px;font-size:12px;color:var(--ink-soft);border-bottom:1px solid var(--border);background:var(--surface);}
-  .mt-resume{display:grid;grid-template-columns:repeat(5,1fr);margin:10px 0;border:1px solid var(--border);border-radius:10px;background:var(--surface);overflow:hidden;}
-  .mt-resume > div{padding:10px 14px;border-right:1px solid var(--border);} .mt-resume > div:last-child{border-right:none;}
-  .mt-resume .k{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-soft);} .mt-resume .v{font-size:19px;font-weight:700;margin-top:3px;font-variant-numeric:tabular-nums;} .mt-resume .v.rouge, .tbl-mt td.rouge{color:var(--danger);} .mt-resume .s{font-size:12px;color:var(--ink-soft);}
-  .mt-defile{max-height:340px;overflow:auto;border:1px solid var(--border);border-radius:8px;margin-top:10px;} .tbl-mt{width:100%;border-collapse:collapse;font-size:12.5px;}
-  .tbl-mt th{position:sticky;top:0;background:var(--surface-2);color:var(--ink-soft);font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.03em;padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);}
-  .tbl-mt td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:top;} .tbl-mt td.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;}
   .stock-vues{display:flex;gap:8px;margin-bottom:14px;} .stock-vues button{font:inherit;font-size:13px;padding:7px 16px;border:1px solid var(--border);border-radius:20px;background:var(--surface);color:var(--ink-soft);cursor:pointer;}
   .stock-vues button small{opacity:.75;} .stock-vues button.actif{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600;}
   .stock-resume{display:grid;grid-template-columns:repeat(4,1fr);margin:0 18px 14px;border:1px solid var(--border);border-radius:10px;background:var(--surface);overflow:hidden;}
@@ -455,7 +449,6 @@
   .modal-overlay{position:fixed;inset:0;background:rgba(36,31,25,0.45);display:flex;align-items:center;justify-content:center;z-index:50;padding:20px;}
   .modal{background:var(--surface);border-radius:12px;padding:22px 24px;width:100%;max-width:460px;max-height:86vh;overflow:auto;}
   .modal.wide{max-width:600px;}
-  .modal.xl{max-width:1180px;}
   .modal h3{margin:0 0 16px;font-size:16px;font-weight:600;}
   .modal form{display:flex;flex-direction:column;gap:12px;}
   .modal .field input, .modal .field select{width:100%;}
@@ -2225,7 +2218,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-112';
+const APP_VERSION = '2026-10-02-113';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8195,148 +8188,12 @@ function renderOcNcTraitement(id){
 }
 function ocNcApercuExigence(code){ state.ocNcNewExigenceApercu = code; render(); }
 
-// ====================== RAPPROCHEMENT AVEC L'EXPORT MULTITRACE (Rainforest Alliance) ======================
-// ORIGEN ne se connecte pas a Multitrace (aucune API publique) : l'administrateur depose l'EXPORT des activites (Excel). ORIGEN compare chaque vente
-// « coopérative -> ECORIGINE » au POIDS NET PAYE du connaissement correspondant, marque « Déclaré » les volumes identiques et signale tout le reste.
-// Cle de rapprochement : « Seller Reference » = numéro de connaissement ; a defaut meme cooperative + meme volume + date proche (a verifier).
-const MT_COLONNES = ['ActivityID','Status','Activity Type','From Account Name','To Account Name','Volume In KG','Activity Date','Seller Reference','From Account ID','Reported On'];
-const MT_STATUTS = {
-  ok:{ l:'Identique · à marquer déclarée', c:'ok' }, probable:{ l:'Identique · rapprochée par volume et date (à vérifier)', c:'warn' }, deja:{ l:'Identique · déjà déclarée', c:'neutral' },
-  ecart:{ l:'Écart de volume', c:'danger' }, pesee_manquante:{ l:'Poids net payé non saisi', c:'warn' }, introuvable:{ l:'Introuvable dans ORIGEN', c:'danger' },
-  coop_inconnue:{ l:'Coopérative à associer', c:'warn' }, annulee:{ l:'Annulée sur Multitrace', c:'neutral' } };
-function mtIso(v){
-  if (typeof v==='number' && isFinite(v)) return new Date(Date.UTC(1899,11,30) + Math.floor(v)*86400000).toISOString().slice(0,10);    // numero de serie Excel (sans fuseau horaire)
-  if (v instanceof Date && !isNaN(v)){ const w = new Date(v.getTime()+12*3600*1000); return w.getFullYear()+'-'+String(w.getMonth()+1).padStart(2,'0')+'-'+String(w.getDate()).padStart(2,'0'); }
-  const t = String(v||'').trim(); let m = /^(\d{4})-(\d{2})-(\d{2})/.exec(t); if (m) return m[1]+'-'+m[2]+'-'+m[3];
-  m = /^(\d{2})\/(\d{2})\/(\d{4})/.exec(t); return m ? m[3]+'-'+m[2]+'-'+m[1] : '';
-}
-function mtNormRef(t){ return String(t||'').toUpperCase().replace(/[^A-Z0-9]/g,''); }
-function mtNormNom(t){ return String(t||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(); }
-// Lit l'export des activites Multitrace (une ligne = une transaction ; la ligne de total sans ActivityID est ignoree).
-function lireExportMultitrace(buf){
-  const wb = XLSX.read(buf, { type:'array' }), ws = wb.Sheets[wb.SheetNames[0]];
-  const lignes = XLSX.utils.sheet_to_json(ws, { header:1, raw:true, defval:null });
-  const iEnt = lignes.findIndex(r=>Array.isArray(r) && r.indexOf('ActivityID')>=0 && r.indexOf('Seller Reference')>=0);
-  if (iEnt<0) throw new Error('Ce fichier n\'est pas un export d\'activités Multitrace : les colonnes « ActivityID » et « Seller Reference » sont introuvables.');
-  const ent = lignes[iEnt], c = {}; MT_COLONNES.forEach(n=>{ c[n] = ent.indexOf(n); });
-  const manque = MT_COLONNES.filter(n=>c[n]<0); if (manque.length) throw new Error('Colonnes manquantes dans l\'export : '+manque.join(', ')+'.');
-  const rows = [];
-  lignes.slice(iEnt+1).forEach(r=>{
-    if (!Array.isArray(r) || r[c['ActivityID']]==null || String(r[c['ActivityID']]).trim()==='') return;
-    const kg = Number(r[c['Volume In KG']]), txt = (n)=>String(r[c[n]]==null ? '' : r[c[n]]).trim();
-    rows.push({ id:txt('ActivityID'), statut:txt('Status'), type:txt('Activity Type'), deNom:txt('From Account Name'), deId:txt('From Account ID'), versNom:txt('To Account Name'),
-      kg:isFinite(kg) ? kg : 0, dateActivite:mtIso(r[c['Activity Date']]), dateDeclaration:mtIso(r[c['Reported On']]), ref:txt('Seller Reference') });
-  });
-  if (rows.length===0) throw new Error('Aucune transaction trouvée dans ce fichier.');
-  return rows;
-}
-// Quelle cooperative d'ORIGEN correspond a un compte RA ? association manuelle > identifiant RA memorise > numero d'agrement lu dans les references > nom.
-function mtCoopDeCompte(compte, mapping){
-  if (mapping && mapping[compte.id]){ const c = coopById(mapping[compte.id]); if (c) return { coop:c, via:'association manuelle' }; }
-  const parId = state.cooperatives.find(c=>c.ra_account_id && c.ra_account_id===compte.id); if (parId) return { coop:parId, via:'identifiant RA mémorisé' };
-  const votes = {}; compte.lignes.forEach(r=>{ const m = /^(SC\d{6})/i.exec(r.ref); if (m){ const k = m[1].toUpperCase(); votes[k] = (votes[k]||0)+1; } });
-  const code = Object.keys(votes).sort((a,b)=>votes[b]-votes[a])[0];
-  if (code){ const c = state.cooperatives.find(x=>String(x.ccc_num||'').toUpperCase().replace(/\s/g,'')===code); if (c) return { coop:c, via:'numéro d\'agrément '+code }; }
-  const n = mtNormNom(compte.nom);
-  const parNom = state.cooperatives.find(x=>[x.nom_complet, x.nom, x.code_court].some(t=>{ const k = mtNormNom(t); return k.length>=5 && (k===n || (n.length>=8 && (n.indexOf(k)>=0 || k.indexOf(n)>=0))); }));
-  return parNom ? { coop:parNom, via:'nom' } : { coop:null, via:'' };
-}
-// Rapprochement (fonction pure : ne modifie rien). mapping = associations manuelles { identifiantRA: idCooperative }.
-function rapprocherMultitrace(rows, mapping){
-  const retenues = rows.filter(r=>/^sell$/i.test(r.type) && /ecorigine/i.test(r.versNom));
-  const comptes = {};
-  retenues.forEach(r=>{ (comptes[r.deId] = comptes[r.deId] || { id:r.deId, nom:r.deNom, lignes:[] }).lignes.push(r); });
-  Object.values(comptes).forEach(c=>{ const x = mtCoopDeCompte(c, mapping); c.coop = x.coop; c.via = x.via; });
-  const livraisons = state.achats.filter(a=>!a.producteur_id), pris = new Set();
-  const lignes = retenues.map(r=>({ r, compte:comptes[r.deId], coop:comptes[r.deId].coop, achat:null, methode:'', statut:'' }));
-  lignes.forEach(x=>{   // 1) par reference
-    const k = mtNormRef(x.r.ref); if (!x.coop || !k) return;
-    const a = livraisons.find(a=>a.cooperative_id===x.coop.id && !pris.has(a.id) && mtNormRef(a.connaissement)===k);
-    if (a){ x.achat = a; x.methode = 'référence'; pris.add(a.id); }
-  });
-  lignes.forEach(x=>{   // 2) a defaut : meme cooperative, meme volume, date proche, un seul candidat
-    if (!x.coop || x.achat || !x.r.dateActivite) return;
-    const t = Date.parse(x.r.dateActivite+'T00:00:00Z');
-    const cand = livraisons.filter(a=>a.cooperative_id===x.coop.id && !pris.has(a.id) && a.date
-      && (Math.abs((Number(a.poids_net_produit)||0)-x.r.kg)<0.5 || Math.abs((Number(a.quantite_kg)||0)-x.r.kg)<0.5)
-      && Math.abs(Date.parse(String(a.date).slice(0,10)+'T00:00:00Z')-t) <= 15*86400000);
-    if (cand.length===1){ x.achat = cand[0]; x.methode = 'volume + date'; pris.add(cand[0].id); }
-  });
-  lignes.forEach(x=>{
-    const r = x.r, a = x.achat, annulee = /reject|withdraw|revers|cancel|declin/i.test(r.statut);
-    x.aConfirmer = !/^confirmed$/i.test(r.statut) && !annulee;
-    const ech = r.dateActivite ? echeanceDeclaration(r.dateActivite) : null;
-    x.echeance = ech ? ech.echeance : ''; x.retardJours = (ech && r.dateDeclaration && r.dateDeclaration>ech.echeance) ? Math.round((Date.parse(r.dateDeclaration)-Date.parse(ech.echeance))/86400000) : 0;
-    if (annulee) x.statut = 'annulee';
-    else if (!x.coop) x.statut = 'coop_inconnue';
-    else if (!a) x.statut = 'introuvable';
-    else {
-      x.paye = Number(a.poids_net_produit)||0; x.ecart = r.kg - x.paye;
-      if (!(x.paye>0)) x.statut = 'pesee_manquante';
-      else if (Math.abs(x.ecart)>=0.5) x.statut = 'ecart';
-      else if (a.declaration_ra_le) x.statut = 'deja';
-      else x.statut = x.methode==='référence' ? 'ok' : 'probable';
-    }
-  });
-  const coopsVues = new Set(lignes.filter(x=>x.coop).map(x=>x.coop.id));
-  const absentes = livraisons.filter(a=>coopsVues.has(a.cooperative_id) && !pris.has(a.id) && plateformesDeclaration(a).indexOf('ra')>=0 && Number(a.poids_net_produit)>0 && !a.declaration_ra_le);
-  const n = {}; Object.keys(MT_STATUTS).forEach(k=>{ n[k] = lignes.filter(x=>x.statut===k).length; });
-  return { lignes, comptes:Object.values(comptes), absentes, ignorees:rows.length-retenues.length, n };
-}
-function recalculerMultitrace(){ const pm = state.pendingMultitrace; if (pm) pm.res = rapprocherMultitrace(pm.rows, pm.mapping); }
-async function handleMultitraceFile(input){
-  const f = input.files && input.files[0]; if (!f) return;
-  try{
-    const rows = lireExportMultitrace(await f.arrayBuffer());
-    state.pendingMultitrace = { fileName:f.name, rows, mapping:{}, inclureProbables:false }; recalculerMultitrace(); render();
-  }catch(e){ showToast(e && e.message ? e.message : 'Lecture impossible de ce fichier.'); input.value = ''; }
-}
-function associerCompteMultitrace(raId, coopId){ const pm = state.pendingMultitrace; if (!pm) return; if (coopId) pm.mapping[raId] = coopId; else delete pm.mapping[raId]; recalculerMultitrace(); render(); }
-function basculerProbablesMultitrace(oui){ if (state.pendingMultitrace){ state.pendingMultitrace.inclureProbables = !!oui; render(); } }
-function ouvrirRapprochementMultitrace(){ state.pendingMultitrace = null; openModal('importMultitrace'); }
-// Marque « Déclaré » (confirmé sur Multitrace) les livraisons dont le volume est identique ; memorise l'identifiant RA des cooperatives.
-async function appliquerMultitrace(){
-  const pm = state.pendingMultitrace; if (!pm || !pm.res) return;
-  const aMarquer = pm.res.lignes.filter(x=>x.statut==='ok' || (pm.inclureProbables && x.statut==='probable'));
-  if (aMarquer.length===0){ showToast('Aucune livraison à marquer.'); return; }
-  const auj = new Date().toISOString().slice(0,10); let ok = 0, echec = 0;
-  for (const x of aMarquer){
-    const date = (x.r.dateDeclaration && x.r.dateDeclaration<=auj) ? x.r.dateDeclaration : auj;
-    const { error } = await supabaseClient.from('achats').update({ declaration_ra_le:date, declaration_ra_par:'ra' }).eq('id', x.achat.id);
-    if (error){ echec++; continue; }
-    x.achat.declaration_ra_le = date; x.achat.declaration_ra_par = 'ra'; ok++;
-  }
-  for (const c of pm.res.comptes){
-    if (!c.coop || c.coop.ra_account_id===c.id || !aMarquer.some(x=>x.compte===c)) continue;
-    const { error } = await supabaseClient.from('cooperatives').update({ ra_account_id:c.id }).eq('id', c.coop.id); if (!error) c.coop.ra_account_id = c.id;
-  }
-  state.pendingMultitrace = null; closeModal();
-  showToast(ok+' livraison(s) marquée(s) « Déclaré » (confirmé sur Multitrace)'+(echec ? ' — '+echec+' échec(s)' : '')+'.', echec ? 'error' : 'success');
-}
-function telechargerRapportMultitrace(){
-  const pm = state.pendingMultitrace; if (!pm || !pm.res) return;
-  const entete = ['Résultat','Coopérative (ORIGEN)','Coopérative (Multitrace)','Référence vendeur','Activité n°','Statut Multitrace','Date de livraison (RA)','Déclarée le','Échéance de déclaration','Retard (jours)','Volume déclaré (kg)','Connaissement ORIGEN','Poids net payé (kg)','Écart (kg)','Méthode'];
-  const lignes = pm.res.lignes.map(x=>[ (MT_STATUTS[x.statut]||{}).l||x.statut, x.coop ? x.coop.nom : '', x.compte.nom, x.r.ref, x.r.id, x.r.statut, dateFr(x.r.dateActivite)||'', dateFr(x.r.dateDeclaration)||'', dateFr(x.echeance)||'', x.retardJours||0, x.r.kg,
-    x.achat ? (x.achat.connaissement||'') : '', x.achat && x.paye>0 ? x.paye : '', x.achat && x.paye>0 ? x.ecart : '', x.methode ]);
-  const wb = XLSX.utils.book_new(), ws = XLSX.utils.aoa_to_sheet([entete].concat(lignes)); ws['!cols'] = [34,30,34,26,12,12,14,14,16,12,16,24,16,12,14].map(w=>({ wch:w }));
-  XLSX.utils.book_append_sheet(wb, ws, 'Rapprochement');
-  const wa = XLSX.utils.aoa_to_sheet([['Coopérative','Connaissement','Date','Poids net payé (kg)']].concat(pm.res.absentes.map(a=>[ (coopById(a.cooperative_id)||{}).nom||'', a.connaissement||'', dateFr(String(a.date||'').slice(0,10))||'', Number(a.poids_net_produit)||0 ])));
-  wa['!cols'] = [34,26,14,18].map(w=>({ wch:w })); XLSX.utils.book_append_sheet(wb, wa, 'Pesées non déclarées sur RA');
-  const n = pm.res.n, tardives = pm.res.lignes.filter(x=>x.retardJours>0).length;
-  const wi = XLSX.utils.aoa_to_sheet([['Rapport','Rapprochement de l\'export Multitrace avec ORIGEN'],['Fichier',pm.fileName],['Établi le',new Date().toLocaleDateString('fr-FR')],
-    ['Ventes à ECORIGINE lues',pm.res.lignes.length],['Identiques (à marquer déclarées)',n.ok],['Identiques rapprochées par volume et date',n.probable],['Identiques déjà déclarées',n.deja],['Écarts de volume',n.ecart],['Poids net payé non saisi',n.pesee_manquante],['Introuvables dans ORIGEN',n.introuvable],['Coopérative à associer',n.coop_inconnue],
-    ['Déclarations faites après l\'échéance (fin de trimestre + 14 jours)',tardives],[],
-    ['Règle','Le volume acheté par ECORIGINE est le poids net payé à l\'usine : une vente Multitrace est « identique » si son volume est égal, au kilo près, au poids net payé du connaissement. La référence vendeur (Seller Reference) doit contenir le numéro de connaissement.']]);
-  wi['!cols'] = [{ wch:52 },{ wch:110 }]; XLSX.utils.book_append_sheet(wb, wi, 'Informations');
-  XLSX.writeFile(wb, 'Rapprochement_Multitrace_'+new Date().toISOString().slice(0,10)+'.xlsx');
-}
-
 function openModal(type, payload){ state.modal = {type, payload: payload||{}}; render(); }
 function closeModal(){
   // libere le fichier charge pour l'apercu (sinon il reste en memoire tant que la page est ouverte)
   const p = state.modal && state.modal.payload;
   if (p && typeof p.url === 'string' && p.url.startsWith('blob:')){ try{ URL.revokeObjectURL(p.url); }catch(e){} }
-  state.modal = null; state.pendingImport = null; state.pendingRapportCCC = null; state.pendingMultitrace = null; render();
+  state.modal = null; state.pendingImport = null; state.pendingRapportCCC = null; render();
 }
 
 function toggleCertifFields(){
@@ -10763,7 +10620,7 @@ function celluleDeclarationHtml(a, avecNom){
     const d = dateDeclaration(a,k), p = PLATEFORMES_DECLARATION[k], parCoop = a['declaration_'+k+'_par']==='cooperative';
     const attente = !d && !pese;   // non declare ET pas encore pese : la declaration est impossible pour le moment
     const ech = echeanceEnCours(a,k), retard = !!ech && ech.jours<0;
-    const titre = d ? 'Déclaré '+p.sur+' le '+(dateFr(d)||d)+(parCoop?' (saisi par la coopérative)':a['declaration_'+k+'_par']==='ra'?' (confirmé sur Multitrace)':'')+' — cliquer pour modifier'
+    const titre = d ? 'Déclaré '+p.sur+' le '+(dateFr(d)||d)+(parCoop?' (saisi par la coopérative)':'')+' — cliquer pour modifier'
       : attente ? 'Non déclaré — la déclaration n\'est possible qu\'après la pesée à l\'usine (poids net payé)'
       : 'Non déclaré '+p.sur+(ech ? ' — échéance '+dateFr(ech.echeance)+' ('+libelleResteDeclaration(ech.jours)+')' : '')+' — cliquer pour le marquer comme déclaré';
     return '<div class="decl-bloc">'+(avecNom ? '<div class="decl-nom '+k+'">'+esc(p.nom)+'</div>' : '')
@@ -10823,7 +10680,7 @@ function construireRapportLivraisons(){
     String(y.date||'').localeCompare(String(x.date||'')) || String(coopById(x.cooperative_id)?.nom||'').localeCompare(String(coopById(y.cooperative_id)?.nom||''),'fr') || String(y.connaissement||'').localeCompare(String(x.connaissement||'')));
   const nomCamp = id => { const c = state.campagnes.find(x=>x.id===id); return c ? c.nom : ''; };
   const nombre = v => Number(v)>0 ? Number(v) : '';
-  const decl = (a,k)=>{ if (plateformesDeclaration(a).indexOf(k)<0) return ['Sans objet','','']; const d = dateDeclaration(a,k); if (d) return ['Déclaré', dateExcel(d), a['declaration_'+k+'_par']==='cooperative' ? 'Coopérative' : a['declaration_'+k+'_par']==='ra' ? 'Multitrace (rapprochement)' : 'ECORIGINE']; return ['Non déclaré','','']; };
+  const decl = (a,k)=>{ if (plateformesDeclaration(a).indexOf(k)<0) return ['Sans objet','','']; const d = dateDeclaration(a,k); if (d) return ['Déclaré', dateExcel(d), a['declaration_'+k+'_par']==='cooperative' ? 'Coopérative' : 'ECORIGINE']; return ['Non déclaré','','']; };
   const avecFt = livraisons.some(a=>plateformesDeclaration(a).indexOf('ft')>=0);   // colonnes Fairtrace seulement s'il y a des achats Fairtrade
   const entetes = ['Coopérative','N° CCC','Connaissement','Date','Campagne','Période','Type de cacao',
     'Sacs déclarés','Poids brut déclaré (kg)','Poids net déclaré (kg)','Sacs acceptés','Poids net livré (kg)','Poids net payé (kg)','Écart payé − déclaré (kg)','Écart (%)',
@@ -10948,7 +10805,7 @@ function detailAchatHtml(a, etat){
   const base = poidsBaseForPrime(a);
   const declarations = plateformesDeclaration(a).map(k=>{
     const d = dateDeclaration(a,k), p = PLATEFORMES_DECLARATION[k], par = a['declaration_'+k+'_par'];
-    const ligne = dl('Déclaration '+esc(p.nom), d ? 'Déclaré le '+esc(dateFr(d)||d)+(par==='cooperative' ? ' (par la coopérative)' : par==='admin' ? ' (par ECORIGINE)' : par==='ra' ? ' (confirmé sur Multitrace)' : '') : (declarable(a) ? 'Non déclaré' : 'Non déclaré <span class="vide">(possible après la pesée)</span>'));
+    const ligne = dl('Déclaration '+esc(p.nom), d ? 'Déclaré le '+esc(dateFr(d)||d)+(par==='cooperative' ? ' (par la coopérative)' : par==='admin' ? ' (par ECORIGINE)' : '') : (declarable(a) ? 'Non déclaré' : 'Non déclaré <span class="vide">(possible après la pesée)</span>'));
     const ech = (k==='ra' && !d) ? echeanceDeclaration(a.date) : null;
     return ligne + (ech ? dl('Échéance '+esc(p.nom), esc(dateFr(ech.echeance)||ech.echeance)+' · <span class="'+(ech.jours<0 && declarable(a) ? 'ecart neg' : '')+'">'+esc(libelleResteDeclaration(ech.jours))+'</span>'+(declarable(a) ? '' : ' <span class="vide">(après la pesée)</span>')) : '');
   }).join('');
@@ -11043,8 +10900,7 @@ function renderAchatsConnaissementPanel(){
 
   let html = '<div class="panel panel-achats">';
   html += '<div class="panel-head"><h2>Achats par connaissement ('+fmtNum(list.length)+')</h2>'
-    + '<div style="display:flex;gap:8px;flex-wrap:wrap;"><button type="button" class="btn" onclick="ouvrirRapprochementMultitrace()" title="Déposer l\'export des activités de Multitrace : ORIGEN compare chaque vente au poids net payé et marque « Déclaré » les volumes identiques">⇄ Rapprocher avec Multitrace</button>'
-    + '<button type="button" class="btn" onclick="telechargerRapportLivraisons()" title="Toutes les livraisons de toutes les coopératives et de toutes les campagnes, avec leur statut de déclaration Multitrace / Fairtrace">⬇ Rapport des livraisons (Excel)</button></div></div>';
+    + '<button type="button" class="btn" onclick="telechargerRapportLivraisons()" title="Toutes les livraisons de toutes les coopératives et de toutes les campagnes, avec leur statut de déclaration Multitrace / Fairtrace">⬇ Rapport des livraisons (Excel)</button></div>';
   if (list.length===0){
     html += '<div class="empty">Aucun achat par connaissement pour ce filtre.<br><button class="btn" '+((state.cooperatives.length===0||state.campagnes.length===0)?'disabled title="Crée une coopérative et une campagne d\'abord"':'onclick="openModal(\'achat\')"')+'>+ Achat (connaissement)</button></div></div>';
     return html;
@@ -11869,50 +11725,6 @@ function _renderBrut(){
       + '<label class="field">Fin (optionnel)<input type="date" name="fin"></label>'
       + '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Fermer</button><button type="button" class="btn btn-primary" onclick="submitCampagne()">Ajouter la campagne</button></div>'
       + '</div></div></div>';
-  }
-
-  if (state.modal && state.modal.type==='importMultitrace'){
-    const pm = state.pendingMultitrace;
-    html += '<div class="modal-overlay"><div class="modal xl">';
-    if (!pm || !pm.res){
-      html += '<h3>Rapprocher avec l\'export Multitrace</h3>'
-        + '<p class="hint" style="margin-bottom:14px;">Dépose l\'export des activités de Multitrace (Rainforest Alliance, fichier Excel). ORIGEN compare chaque vente « coopérative → ECORIGINE » au <b>poids net payé</b> du connaissement correspondant (référence vendeur = numéro de connaissement). Les volumes identiques sont marqués « Déclaré » ; les écarts et les ventes introuvables sont signalés. Rien n\'est modifié avant ta confirmation.</p>'
-        + '<label class="field">Export Multitrace (.xlsx)<input type="file" accept=".xlsx,.xls" onchange="handleMultitraceFile(this)"></label>'
-        + '<div class="actions" style="margin-top:14px;"><button type="button" class="btn" onclick="closeModal()">Annuler</button></div>';
-    } else {
-      const r = pm.res, n = r.n, aMarquer = n.ok + (pm.inclureProbables ? n.probable : 0), tardives = r.lignes.filter(x=>x.retardJours>0).length;
-      const aAssocier = r.comptes.filter(c=>!c.coop);
-      html += '<h3>Rapprochement — '+esc(pm.fileName)+'</h3>'
-        + '<p style="font-size:13px;color:var(--ink-soft)">'+fmtNum(r.lignes.length)+' vente(s) à ECORIGINE lue(s)'+(r.ignorees>0 ? ' ('+fmtNum(r.ignorees)+' autre(s) transaction(s) ignorée(s))' : '')+', de '+fmtNum(r.comptes.length)+' coopérative(s).'+(tardives>0 ? ' <b style="color:var(--warn);">'+fmtNum(tardives)+' déclaration(s) faite(s) après l\'échéance</b> (fin de trimestre + 14 jours).' : '')+'</p>'
-        + '<div class="mt-resume">'
-        + '<div><div class="k">À marquer déclarées</div><div class="v">'+fmtNum(n.ok)+'</div><div class="s">volume identique</div></div>'
-        + '<div><div class="k">Déjà déclarées</div><div class="v">'+fmtNum(n.deja)+'</div><div class="s">volume identique</div></div>'
-        + '<div><div class="k">Écarts de volume</div><div class="v'+(n.ecart>0?' rouge':'')+'">'+fmtNum(n.ecart)+'</div><div class="s">à vérifier</div></div>'
-        + '<div><div class="k">Introuvables</div><div class="v'+(n.introuvable>0?' rouge':'')+'">'+fmtNum(n.introuvable)+'</div><div class="s">'+fmtNum(n.pesee_manquante)+' sans poids net payé</div></div>'
-        + '<div><div class="k">À associer</div><div class="v">'+fmtNum(n.coop_inconnue)+'</div><div class="s">'+fmtNum(aAssocier.length)+' coopérative(s)</div></div>'
-        + '</div>';
-      if (aAssocier.length>0){
-        html += '<div class="error-banner" style="margin-top:10px;display:block;"><b>Associe ces coopératives de Multitrace à celles d\'ORIGEN</b> (une seule fois : ORIGEN s\'en souviendra) :'
-          + aAssocier.map(c=>'<div style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;"><span style="min-width:260px;">'+esc(c.nom)+' <span class="hint">('+fmtNum(c.lignes.length)+' vente(s))</span></span><select onchange="associerCompteMultitrace(\''+escJs(c.id)+'\', this.value)"><option value="">Choisir…</option>'
-              + state.cooperatives.slice().sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr')).map(k=>'<option value="'+esc(k.id)+'">'+esc(k.nom)+'</option>').join('')+'</select></div>').join('')
-          + '</div>';
-      }
-      html += '<div class="mt-defile"><table class="tbl-mt"><thead><tr><th>Coopérative</th><th>Référence vendeur</th><th>Volume RA (kg)</th><th>Connaissement ORIGEN</th><th>Poids net payé (kg)</th><th>Écart (kg)</th><th>Déclarée le</th><th>Résultat</th></tr></thead><tbody>'
-        + r.lignes.map(x=>{
-            const st = MT_STATUTS[x.statut] || { l:x.statut, c:'neutral' };
-            return '<tr><td>'+esc(x.coop ? x.coop.nom : x.compte.nom)+'</td><td>'+esc(x.r.ref||'—')+'</td><td class="n">'+fmtNum(x.r.kg)+'</td><td>'+esc(x.achat ? (x.achat.connaissement||'') : '—')+(x.methode==='volume + date' ? ' <span class="hint">(volume + date)</span>' : '')+'</td>'
-              + '<td class="n">'+(x.achat && x.paye>0 ? fmtNum(x.paye) : '—')+'</td><td class="n'+(x.statut==='ecart' ? ' rouge' : '')+'">'+(x.achat && x.paye>0 ? (x.ecart>0?'+':'')+fmtNum(x.ecart) : '—')+'</td>'
-              + '<td>'+esc(dateFr(x.r.dateDeclaration)||'—')+(x.retardJours>0 ? '<div class="hint" style="color:var(--warn);">+'+x.retardJours+' j de retard</div>' : '')+'</td>'
-              + '<td><span class="badge '+st.c+'">'+esc(st.l)+'</span>'+(x.aConfirmer ? '<div class="hint">à confirmer sur Multitrace</div>' : '')+'</td></tr>';
-          }).join('')
-        + '</tbody></table></div>'
-        + (r.absentes.length>0 ? '<p class="hint" style="margin-top:10px;"><b>'+fmtNum(r.absentes.length)+' livraison(s) pesée(s) d\'ORIGEN</b> (cacao RA, non déclarées) de ces coopératives <b>ne figurent pas dans l\'export</b> : à relancer. Elles sont listées dans le rapport Excel.</p>' : '')
-        + (n.probable>0 ? '<label style="display:flex;gap:8px;align-items:center;margin-top:10px;font-size:13px;cursor:pointer;"><input type="checkbox" '+(pm.inclureProbables?'checked':'')+' onchange="basculerProbablesMultitrace(this.checked)"> Inclure aussi les '+fmtNum(n.probable)+' rapprochement(s) par volume et date (référence vendeur absente ou différente)</label>' : '')
-        + '<div class="actions" style="margin-top:14px;"><button type="button" class="btn" onclick="closeModal()">Annuler</button>'
-        + '<button type="button" class="btn" onclick="telechargerRapportMultitrace()">⬇ Rapport (Excel)</button>'
-        + '<button type="button" class="btn btn-primary" '+(aMarquer>0 ? 'onclick="appliquerMultitrace()"' : 'disabled')+'>Marquer '+fmtNum(aMarquer)+' livraison(s) comme déclarée(s)</button></div>';
-    }
-    html += '</div></div>';
   }
 
   if (state.modal && state.modal.type==='importRapportCCC'){
