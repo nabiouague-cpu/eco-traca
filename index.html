@@ -343,6 +343,8 @@
   .decl-nom.ra{color:#2E7D46;} .decl-nom.ft{color:#1B6CA8;}
   .tbl-achats .decl{display:inline-flex;border:1px solid transparent;border-radius:12px;cursor:pointer;font:inherit;font-size:12px;padding:0;line-height:1.2;overflow:hidden;white-space:nowrap;}
   .tbl-achats .decl:hover{box-shadow:0 0 0 2px var(--accent-line);}
+  .tbl-achats .montant{font-weight:600;}
+  .tbl-achats .lien-param{font:inherit;font-size:12px;background:none;border:none;color:var(--accent);text-decoration:underline;cursor:pointer;padding:0;}
   .tbl-achats .decl{align-items:center;}
   .tbl-achats .decl .st{padding:4px 11px;font-weight:600;}
   .tbl-achats .decl .knob{width:12px;height:12px;border-radius:50%;background:#fff;box-shadow:0 0 0 1.5px currentColor;flex-shrink:0;}
@@ -889,6 +891,7 @@ let state = {
   demandesFocusStatus: null,
   newDemandeTypes: new Set(),
   settings: { seuil: 50 },
+  parametresPaiement: [],          // prix d'entree usine et retenue BIC par campagne et par periode
   campagneFilter: 'all',
   periodeFilter: 'principale',
   coopFilter: 'all',
@@ -1991,7 +1994,7 @@ async function genererContratsGroupe(){
 function contexteEcran(){
   return JSON.stringify([state.modal ? state.modal.type : null, state.tab || null, state.view || null,
     state.detailId || null, state.espaceChoisi || null, state.coopDashboardId || null,
-    (state.modal && state.modal.payload && state.modal.payload.achatId) || null]);
+    (state.modal && state.modal.payload && (state.modal.payload.achatId || state.modal.payload.campagneId)) || null]);
 }
 function selecteurChamp(el){
   if (el.name) return '[name="'+String(el.name).replace(/"/g,'\\"')+'"]';
@@ -2198,7 +2201,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-99';
+const APP_VERSION = '2026-10-02-100';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3813,6 +3816,7 @@ async function loadAll(silencieux){
     state.coopDatabaseFiles = coopDatabaseFilesResult.error ? [] : (coopDatabaseFilesResult.data || []);
     state.settings = settings;
     state.docVersions = (versionsResult && !versionsResult.error) ? (versionsResult.data || []) : [];
+    { const { data: pp, error: ppErr } = await supabaseClient.from('parametres_paiement').select('*'); state.parametresPaiement = ppErr ? (state.parametresPaiement||[]) : (pp || []); }
 
     { const ids = state.demandesCoop.map(d=>d.id);
       if (ids.length>0){
@@ -10002,36 +10006,62 @@ async function savePrimes(){
   closeModal();
 }
 
-async function saveParametresPaiement(){
-  state.settings.prix_entree_usine = Number(document.getElementById('prix-entree-usine-input').value)||0;
-  state.settings.taux_bic = Number(document.getElementById('taux-bic-input').value)||0;
-  await saveKey(KEY_SETTINGS, state.settings);
-  showToast('Paramètres de paiement enregistrés.', 'success');
-  closeModal();
-}
-
 // Coop a-t-elle fourni son document BIC ? Si oui, la retenue ne s'applique pas.
 function coopABic(coopId){
   return (state.docCheck||[]).some(d=>d.cooperative_id===coopId && d.doc==='BIC (si disponible)' && d.disponible);
 }
 
+// Parametres de paiement (prix d'entree usine, retenue BIC) de la campagne et de la periode d'un achat.
+function parametresPaiementPour(a){
+  const per = a.periode==='intermediaire' ? 'intermediaire' : 'principale';
+  return (state.parametresPaiement||[]).find(p=>p.campagne_id===a.campagne_id && p.periode===per) || null;
+}
 // Calcule le montant a payer a la cooperative pour un achat, selon la formule :
 // Montant = ((Prix entree usine + TKM + Commission) x Poids) - Retenue BIC
-// Le poids utilise est le poids net PAYE (apres analyse/refraction a l'usine)
-// une fois connu -- jamais le poids declare au connaissement, qui ne sert qu'a
-// un cout de transport theorique, pas au paiement final (poidsBaseForPrime
-// applique deja cette priorite, reutilisee ici pour rester coherent avec les primes).
+// Le poids utilise est le poids net PAYE a l'usine, jamais le poids du connaissement (voir poidsBaseForPrime).
+// Retourne null tant que le poids net paye est inconnu ; sinon un objet dont « manque » vaut 'prix' (prix d'entree usine non renseigne
+// pour cette campagne et cette periode) ou 'tkm' (TKM du connaissement manquant) quand le montant ne peut pas etre calcule.
 function calcMontantPaiement(a){
   const poids = poidsBaseForPrime(a);
   if (poids<=0) return null;
-  const prixEntreeUsine = Number(state.settings.prix_entree_usine)||0;
+  const par = parametresPaiementPour(a);
+  const prixEntreeUsine = Number(par && par.prix_entree_usine)||0;
   const tkm = Number(a.tkm)||0;
   const commission = Number(a.commission)||0;
-  const tauxBic = Number(state.settings.taux_bic)||0;
+  const tauxBic = Number(par && par.taux_bic)||0;
   const aBic = coopABic(a.cooperative_id);
   const retenueBic = aBic ? 0 : Math.round(tauxBic*poids);
-  const montant = Math.round(((prixEntreeUsine+tkm+commission)*poids) - retenueBic);
-  return { poids, prixEntreeUsine, tkm, commission, tauxBic, retenueBic, aBic, montant };
+  const base = { poids, prixEntreeUsine, tkm, commission, tauxBic, retenueBic, aBic, campagneId:a.campagne_id, periode: a.periode==='intermediaire' ? 'intermediaire' : 'principale' };
+  if (!(prixEntreeUsine>0)) return Object.assign(base, { manque:'prix', montant:null });
+  if (!(tkm>0)) return Object.assign(base, { manque:'tkm', montant:null });
+  return Object.assign(base, { manque:null, montant: Math.round(((prixEntreeUsine+tkm+commission)*poids) - retenueBic) });
+}
+function infoBulleMontant(m){
+  return '(('+fmtNum(m.prixEntreeUsine)+' + '+fmtNum(m.tkm)+' TKM + '+fmtNum(m.commission)+' commission) × '+fmtNum(m.poids)+' kg) − '+fmtNum(m.retenueBic)+' retenue BIC = '+fmtNum(m.montant)+' FCFA';
+}
+function celluleMontantHtml(a){
+  const m = calcMontantPaiement(a);
+  if (!m) return '<span class="vide" title="Le poids net payé par l\'usine n\'est pas encore connu : le montant se calcule dessus">—</span>';
+  if (m.manque==='prix') return '<button type="button" class="lien-param" onclick="ouvrirParametresPaiement(\''+esc(a.campagne_id||'')+'\')" title="Renseigne le prix d\'entrée usine de cette campagne pour calculer le montant">Prix à renseigner</button>';
+  if (m.manque==='tkm') return '<span class="vide" title="Le TKM de ce connaissement n\'est pas renseigné : utilise « Modifier le connaissement »">TKM à compléter</span>';
+  return '<span class="montant" title="'+esc(infoBulleMontant(m))+'">'+fmtNum(m.montant)+'</span>';
+}
+function ouvrirParametresPaiement(campagneId){ state.modal = { type:'parametresPaiement', payload:{ campagneId: campagneId || '' } }; render(); }
+async function enregistrerParametresPaiement(){
+  const campId = (document.getElementById('pp-campagne')||{}).value;
+  if (!campId){ showToast('Choisis la campagne concernée.'); return; }
+  const lues = ['principale','intermediaire'].map(per=>({ campagne_id:campId, periode:per,
+    prix_entree_usine: Number((document.getElementById('pp-prix-'+per)||{}).value)||0, taux_bic: Number((document.getElementById('pp-bic-'+per)||{}).value)||0 }));
+  if (lues.some(l=>l.prix_entree_usine<0 || l.taux_bic<0)){ showToast('Les montants ne peuvent pas être négatifs.'); return; }
+  const aSauver = lues.filter(l=> l.prix_entree_usine>0 || l.taux_bic>0 || (state.parametresPaiement||[]).some(p=>p.campagne_id===l.campagne_id && p.periode===l.periode))
+    .map(l=>Object.assign({}, l, { maj_le:new Date().toISOString() }));
+  if (aSauver.length>0){
+    const { error } = await supabaseClient.from('parametres_paiement').upsert(aSauver);
+    if (error){ showToast('Échec de l\'enregistrement : '+error.message); return; }
+    state.parametresPaiement = (state.parametresPaiement||[]).filter(p=>!(p.campagne_id===campId)).concat(aSauver);
+  }
+  closeModal();
+  showToast('Paramètres de paiement enregistrés.', 'success');
 }
 
 // Appelle la fonction edge qui lit le certificat via l'API Claude et en
@@ -10322,7 +10352,7 @@ function construireRapportLivraisons(){
   const avecFt = livraisons.some(a=>plateformesDeclaration(a).indexOf('ft')>=0);   // colonnes Fairtrace seulement s'il y a des achats Fairtrade
   const entetes = ['Coopérative','N° CCC','Connaissement','Date','Campagne','Période','Type de cacao',
     'Sacs déclarés','Poids brut déclaré (kg)','Poids net déclaré (kg)','Sacs acceptés','Poids net livré (kg)','Poids net payé (kg)','Écart payé − déclaré (kg)','Écart (%)',
-    'Avancement','Fiche de traçabilité','Prime de certification (FCFA)',
+    'Avancement','Fiche de traçabilité','Prime de certification (FCFA)','Montant à payer (FCFA)',
     'Déclaration Multitrace','Date déclaration Multitrace','Déclaré par (Multitrace)',
     ...(avecFt ? ['Déclaration Fairtrace','Date déclaration Fairtrace','Déclaré par (Fairtrace)'] : []),
     'Transporteur','Véhicule','Remorque','Chauffeur','Départ','Usine','Distance (km)','TKM','N° de chèque','Banque'];
@@ -10333,7 +10363,7 @@ function construireRapportLivraisons(){
     return [coop?coop.nom:'', coop?(coop.ccc_num||''):'', a.connaissement||'', dateExcel(a.date), nomCamp(a.campagne_id), a.periode ? (a.periode==='principale'?'Principale':'Intermédiaire') : '', a.type_cacao||'',
       nombre(a.nombre_sacs), nombre(a.poids_brut), nombre(a.quantite_kg), nombre(a.nombre_sacs_accepte), nombre(a.poids_brut_accepte), nombre(a.poids_net_produit),
       ec ? Math.round(ec.kg) : '', ec ? Math.round(ec.pct*10)/10 : '',
-      etat.label, libelleVerifAchat(a), prime,
+      etat.label, libelleVerifAchat(a), prime, (function(){ const m = calcMontantPaiement(a); return !m ? 'À déterminer' : m.manque==='prix' ? 'Prix non renseigné' : m.manque==='tkm' ? 'TKM manquant' : m.montant; })(),
       ra[0], ra[1], ra[2], ...(avecFt ? [ft[0], ft[1], ft[2]] : []),
       a.nom_transporteur||'', a.immat_vehicule||'', a.immat_remorque||'', a.nom_chauffeur||'', a.lieu_origine||'', a.usine_dechargement||'', nombre(a.distance_km), nombre(a.tkm), a.numero_cheque||'', a.banque||''];
   }));
@@ -10449,6 +10479,12 @@ function detailAchatHtml(a, etat){
   const paiement = dl('Type de cacao', a.type_cacao ? esc(a.type_cacao) : '')
     + dl('Poids pesé à l\'usine', base>0 ? fmtKg(base) : '<span class="vide">En attente de la pesée</span>')
     + dl('Prime de certification', base>0 ? (prime>0 ? '<b>'+fmtNum(prime)+' FCFA</b>' : '<span class="vide">Taux de prime non renseigné</span>') : '<span class="vide">À déterminer</span>')
+    + (function(){ const m = calcMontantPaiement(a); if (!m) return dl('Montant à payer', '<span class="vide">À déterminer</span>');
+        return dl('Prix d\'entrée usine', m.prixEntreeUsine>0 ? fmtNum(m.prixEntreeUsine)+' FCFA/kg' : '<span class="vide">Non renseigné</span>')
+          + dl('TKM', m.tkm>0 ? fmtNum(m.tkm)+' FCFA/kg' : '<span class="vide">Non renseigné</span>')
+          + (m.commission>0 ? dl('Commission', fmtNum(m.commission)+' FCFA/kg') : '')
+          + dl('Retenue BIC', m.aBic ? '<span class="vide">Aucune (BIC fourni)</span>' : (m.tauxBic>0 ? fmtNum(m.retenueBic)+' FCFA' : '<span class="vide">Aucune</span>'))
+          + dl('Montant à payer', m.montant!==null ? '<b>'+fmtNum(m.montant)+' FCFA</b>' : '<span class="vide">'+(m.manque==='prix' ? 'Prix d\'entrée usine à renseigner' : 'TKM à compléter')+'</span>'); })()
     + (String(a.numero_cheque||'').trim()
         ? dl('Paiement', 'Chèque n° '+esc(a.numero_cheque)) + dl('Banque', a.banque ? esc(a.banque) : '') + dl('Libellé', a.libelle_cheque ? esc(a.libelle_cheque) : '')
         : dl('Paiement', '<span class="vide">Non enregistré</span>'))
@@ -10474,7 +10510,6 @@ function detailAchatHtml(a, etat){
 function ligneAchatHtml(a, montrerCoop, ouvert, avecNomPlateforme){
   const coop = coopById(a.cooperative_id);
   const etat = etatAchat(a);
-  const ec = ecartPoidsAchat(a);
   const verif = a.verification_tracabilite==='concordant' ? '<span class="badge ok" title="La quantité déclarée concorde avec la fiche de traçabilité soumise pour ce connaissement">✓ Concordant</span>'
     : a.verification_tracabilite==='ecart' ? '<span class="badge warn" title="Écart entre le poids déclaré et le total de la fiche de traçabilité pour ce connaissement">⚠ Écart '+(a.ecart_kg>0?'+':'')+fmtKg(a.ecart_kg)+'</span>'
     : a.verification_tracabilite==='non_trouve' ? '<span class="badge neutral" title="Aucune fiche de traçabilité correspondante trouvée pour ce connaissement">Pas de fiche liée</span>'
@@ -10490,7 +10525,7 @@ function ligneAchatHtml(a, montrerCoop, ouvert, avecNomPlateforme){
     + '<td class="n">'+esc(dateFr(a.date)||'—')+'<div class="sous">'+(a.periode ? (a.periode==='principale' ? 'Principale' : 'Intermédiaire') : '')+'</div></td>'
     + '<td class="n">'+(Number(a.quantite_kg)>0 ? fmtNum(a.quantite_kg) : '<span class="vide">—</span>')+'</td>'
     + '<td class="n">'+(Number(a.poids_net_produit)>0 ? '<b>'+fmtNum(a.poids_net_produit)+'</b>' : '<span class="vide">—</span>')+'</td>'
-    + '<td class="n">'+(ec ? '<span class="ecart '+(ec.kg<0?'neg':ec.kg>0?'pos':'')+'">'+fmtEcartAchat(ec.kg)+'</span><div class="sous">'+fmtPctAchat(ec.pct)+'</div>' : '<span class="vide">—</span>')+'</td>'
+    + '<td class="n">'+celluleMontantHtml(a)+'</td>'
     + '<td><span class="badge '+etat.cls+'">'+esc(etat.label)+'</span></td>'
     + '<td>'+verif+'</td>'
     + '<td>'+celluleDeclarationHtml(a, avecNomPlateforme)+'</td>'
@@ -10545,8 +10580,8 @@ function renderAchatsConnaissementPanel(){
   visibles.forEach(a=>{ const key = a.campagne_id || '__none__'; if (!groupes.has(key)) groupes.set(key, []); groupes.get(key).push(a); });
   const cles = state.campagnes.map(x=>x.id).filter(id=>groupes.has(id));
   if (groupes.has('__none__')) cles.push('__none__');
-  html += '<div class="achats-defile"><table class="tbl-achats"><colgroup>'+[3,17,8,8,8,7,11,11,15,12].map(w=>'<col style="width:'+w+'%">').join('')+'</colgroup>'
-    + '<thead><tr><th></th><th class="g">Connaissement</th><th>Date</th><th>Poids net déclaré<small>kg</small></th><th>Poids net payé<small>kg · usine</small></th><th>Écart<small>payé − déclaré</small></th><th>Avancement</th><th>Fiche de traçabilité</th><th>Déclaration<small>'+plateformesListe.map(k=>PLATEFORMES_DECLARATION[k].nom).join(' · ')+'</small></th><th>Actions</th></tr></thead><tbody>';
+  html += '<div class="achats-defile"><table class="tbl-achats"><colgroup>'+[3,16,8,8,8,10,10,10,14,13].map(w=>'<col style="width:'+w+'%">').join('')+'</colgroup>'
+    + '<thead><tr><th></th><th class="g">Connaissement</th><th>Date</th><th>Poids net déclaré<small>kg</small></th><th>Poids net payé<small>kg · usine</small></th><th>Montant à payer<small>FCFA</small></th><th>Avancement</th><th>Fiche de traçabilité</th><th>Déclaration<small>'+plateformesListe.map(k=>PLATEFORMES_DECLARATION[k].nom).join(' · ')+'</small></th><th>Actions</th></tr></thead><tbody>';
   if (visibles.length===0){
     html += '<tr><td colspan="10" class="vide-ligne">Aucun connaissement ne correspond à ce filtre.</td></tr>';
   }
@@ -10900,6 +10935,7 @@ function renderDashboardTab(){
     + '</select></label>'
     + '<button class="btn" onclick="openModal(\'campagnes\')">Gérer les campagnes</button>'
     + '<button class="btn" onclick="openModal(\'primes\')">Gérer les primes</button>'
+    + '<button class="btn" onclick="ouvrirParametresPaiement(state.campagneFilter!==\'all\' ? state.campagneFilter : \'\')">Paramètres de paiement</button>'
     // Bouton "Parametres de paiement" retire de l'affichage -- desactive avec
     // le reste de l'attestation, fonction/modale conservees pour plus tard.
     + '<div style="display:flex;align-items:flex-end;gap:6px;">'
@@ -11372,13 +11408,20 @@ function _renderBrut(){
   }
 
   if (state.modal && state.modal.type==='parametresPaiement'){
+    const pl = state.modal.payload || {};
+    const camps = state.campagnes.slice().sort((x,y)=>String(y.nom||'').localeCompare(String(x.nom||''),'fr'));
+    const campId = pl.campagneId || (state.campagneFilter!=='all' ? state.campagneFilter : (camps[0] ? camps[0].id : ''));
+    const val = (per, champ)=>{ const r = (state.parametresPaiement||[]).find(p=>p.campagne_id===campId && p.periode===per); return r ? (r[champ]||'') : ''; };
+    const bloc = (per, titre)=>'<fieldset style="margin-top:10px;"><legend>'+titre+'</legend>'
+      + '<label class="field">Prix entrée usine (FCFA/kg)<input type="number" step="1" min="0" id="pp-prix-'+per+'" value="'+esc(val(per,'prix_entree_usine'))+'"></label>'
+      + '<label class="field">Retenue BIC (FCFA/kg)<input type="number" step="0.1" min="0" id="pp-bic-'+per+'" value="'+esc(val(per,'taux_bic'))+'"></label></fieldset>';
     html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
       + '<h3>Paramètres de paiement</h3>'
-      + '<p class="hint" style="margin-bottom:10px;">Utilisés pour calculer automatiquement le montant à payer à la coopérative pour chaque achat (attestation de paiement). Le prix entrée usine est celui publié par le Conseil Café-Cacao ; il change à chaque nouvelle traite ou campagne.</p>'
-      + '<label class="field">Prix entrée usine (FCFA/kg)<input type="number" step="1" min="0" id="prix-entree-usine-input" value="'+esc(state.settings.prix_entree_usine||0)+'"></label>'
-      + '<label class="field">Taux de retenue BIC (FCFA/kg)<input type="number" step="0.1" min="0" id="taux-bic-input" value="'+esc(state.settings.taux_bic||0)+'"></label>'
-      + '<p class="hint" style="margin-top:4px;">La retenue BIC n\'est appliquée que si la coopérative n\'a pas fourni son document BIC dans sa checklist de conformité.</p>'
-      + '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Annuler</button><button type="button" class="btn btn-primary" onclick="saveParametresPaiement()">Enregistrer</button></div>'
+      + '<p class="hint" style="margin-bottom:10px;">Montant à payer à la coopérative = ((prix entrée usine + TKM + commission) × poids net payé) − retenue BIC. Le prix entrée usine est celui fixé par le Conseil Café-Cacao ; il change à chaque campagne et à chaque période : il est donc mémorisé séparément, sans modifier les paiements des autres campagnes.</p>'
+      + '<label class="field">Campagne<select id="pp-campagne" onchange="ouvrirParametresPaiement(this.value)">'+(camps.length ? '' : '<option value="">Aucune campagne</option>')+camps.map(c=>'<option value="'+c.id+'"'+(c.id===campId?' selected':'')+'>'+esc(c.nom)+'</option>').join('')+'</select></label>'
+      + bloc('principale','Période principale') + bloc('intermediaire','Période intermédiaire')
+      + '<p class="hint" style="margin-top:8px;">La retenue BIC ne s\'applique que si la coopérative n\'a pas fourni son document BIC dans sa checklist de conformité. Laisse 0 si elle ne s\'applique pas.</p>'
+      + '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Annuler</button><button type="button" class="btn btn-primary" onclick="enregistrerParametresPaiement()">Enregistrer</button></div>'
       + '</div></div>';
   }
 
