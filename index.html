@@ -133,6 +133,7 @@
   input[type=checkbox]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
 
   .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px;}
+  .cards.cinq{grid-template-columns:repeat(5,1fr);}
   .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;}
   .card .label{font-size:12px;color:var(--ink-soft);margin-bottom:6px;}
   .card .value{font-family:var(--mono);font-size:22px;font-weight:500;}
@@ -743,7 +744,7 @@
   .doc-relances{margin-top:6px;}
 
   @media (max-width:820px){
-    .cards{grid-template-columns:repeat(2,1fr);}
+    .cards, .cards.cinq{grid-template-columns:repeat(2,1fr);}
     .row-head{display:none;}
     .row{grid-template-columns:1fr;gap:8px;padding:14px;}
     .row.coop-row{grid-template-columns:1fr;}
@@ -2210,7 +2211,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-108';
+const APP_VERSION = '2026-10-02-109';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8532,7 +8533,7 @@ async function importBackupFile(input){
 
 function exportCsv(){
   const rows = computeRows();
-  const header = ['Nom','Code','Farm ID (parcelle)','Coopérative','Surface (ha)','Rendement (kg/ha)','Potentiel (kg)','Achats cumulés (kg)','Pourcentage (%)','Statut'];
+  const header = ['Nom','Code','Farm ID (parcelle)','Coopérative','Surface (ha)','Rendement (kg/ha)','Potentiel (kg)','Net déclaré cumulé (kg)','Pourcentage (%)','Statut'];
   const wsData = [header];
   rows.forEach(r=>{
     const coop = coopById(r.p.cooperative_id);
@@ -9766,7 +9767,7 @@ function renderCoopCard(c){
     + '<div><span class="lbl">Producteurs</span><span class="val">'+fmtNum(stats.count)+'</span></div>'
     + '<div><span class="lbl">Potentiel</span><span class="val">'+fmtKg(stats.potentiel)+'</span></div>'
     + '<div><span class="lbl">Net déclaré</span><span class="val">'+fmtKg(stats.achete)+(stats.pct!=null?' <span class="hint">('+stats.pct.toFixed(0)+'%)</span>':'')+'</span></div>'
-    + '<div><span class="lbl">Net payé</span><span class="val">'+(stats.netProduit>0?fmtKg(stats.netProduit):'—')+'</span>'+(stats.netProduitPending>0?'<div class="hint" style="color:var(--warn);margin-top:2px;">'+stats.netProduitPending+' en attente de pesée</div>':'')+'</div>'
+    + '<div title="Volume acheté par ECORIGINE = poids net payé à l\'usine"><span class="lbl">Volume acheté</span><span class="val">'+(stats.netProduit>0?fmtKg(stats.netProduit):'—')+'</span>'+(stats.netProduitPending>0?'<div class="hint" style="color:var(--warn);margin-top:2px;">'+stats.netProduitPending+' en attente de pesée</div>':'')+'</div>'
     + '</div>'
     + '<div class="coop-card-actions">'
     + (aVerifier ? '<button class="btn btn-primary" onclick="verifierCooperative(\''+c.id+'\')">Marquer comme vérifiée</button>' : '')
@@ -10589,11 +10590,12 @@ function construireRapportLivraisons(){
     ['Périmètre', 'Toutes les coopératives et toutes les campagnes (les filtres de l\'écran ne s\'appliquent pas).'],
     ['Nombre de livraisons', livraisons.length],
     ['Poids net déclaré total (kg)', Math.round(somme('quantite_kg'))],
-    ['Poids net payé total (kg)', Math.round(somme('poids_net_produit'))],
+    ['Volume acheté par ECORIGINE = poids net payé total (kg)', Math.round(somme('poids_net_produit'))],
     ['Déclarations Multitrace (cacao RA)', nbDeclare('ra')+' déclarée(s) sur '+nbConcerne('ra')+' à déclarer'],
     ...(avecFt ? [['Déclarations Fairtrace (cacao Fairtrade)', nbDeclare('ft')+' déclarée(s) sur '+nbConcerne('ft')+' à déclarer']] : []),
     [],
     ['Déclaration'+(avecFt ? ' Multitrace / Fairtrace' : ' Multitrace'), 'La déclaration se fait sur la base du poids net payé à l\'usine : elle n\'est possible qu\'après la pesée (la colonne « Avancement » indique si la livraison attend encore la pesée). « Déclaré » ou « Non déclaré » : statut saisi dans ORIGEN, par ECORIGINE ou par la coopérative depuis son portail (colonne « Déclaré par »). « Sans objet » : ce cacao n\'est pas concerné par cette plateforme (cacao ordinaire, ou type de cacao sans cette certification).'],
+    ['Volume acheté', 'Le volume acheté par ECORIGINE est le POIDS NET PAYÉ à l\'usine (après pesée finale, analyse et réfaction éventuelle) : c\'est lui qui sert au paiement, à la prime, à la déclaration et à la constitution des lots. Le poids net déclaré (connaissement) est le volume acheté par la coopérative à ses producteurs : il ne rentre pas dans les comptes d\'ECORIGINE.'],
     ['Prime de certification', 'Calculée sur le poids net payé (pesé à l\'usine), jamais sur le poids du connaissement. « À déterminer » tant que l\'usine n\'a rien pesé.'],
     ['Avancement', 'En attente de pesée → Reçu à l\'usine (pesée saisie) → Paiement enregistré (n° de chèque saisi).'],
     ['Astuce', 'Utilise les filtres de la première ligne de la feuille « Livraisons » pour isoler une coopérative, une campagne ou les livraisons non déclarées.'],
@@ -10780,7 +10782,7 @@ function renderAchatsConnaissementPanel(){
   html += '<div class="achats-resume">'
     + '<div><div class="k">Connaissements</div><div class="v">'+fmtNum(list.length)+'</div><div class="s">'+(nb.attente>0 ? fmtNum(nb.attente)+' en attente de pesée' : 'Toutes les pesées sont saisies')+(nb.nondecl>0 ? ' · '+fmtNum(nb.nondecl)+' à déclarer'+(nbRetardDecl>0 ? ' ('+fmtNum(nbRetardDecl)+' en retard)' : '') : '')+'</div></div>'
     + '<div><div class="k">Poids net déclaré</div><div class="v">'+fmtKg(totalKg)+'</div><div class="s">'+(totalSacs>0 ? fmtNum(Math.round(totalSacs))+' sacs' : '&nbsp;')+'</div></div>'
-    + '<div><div class="k">Poids net payé · usine</div><div class="v">'+(totalPaye>0 ? fmtKg(totalPaye) : '—')+'</div><div class="s">'+(ecartGlobal ? 'Écart <span class="ecart '+(ecartGlobal.kg<0?'neg':ecartGlobal.kg>0?'pos':'')+'">'+fmtEcartAchat(ecartGlobal.kg)+' kg ('+fmtPctAchat(ecartGlobal.pct)+')</span>' : 'En attente des pesées')+'</div></div>'
+    + '<div><div class="k">Volume acheté · net payé</div><div class="v">'+(totalPaye>0 ? fmtKg(totalPaye) : '—')+'</div><div class="s">'+(ecartGlobal ? 'Écart <span class="ecart '+(ecartGlobal.kg<0?'neg':ecartGlobal.kg>0?'pos':'')+'">'+fmtEcartAchat(ecartGlobal.kg)+' kg ('+fmtPctAchat(ecartGlobal.pct)+')</span>' : 'En attente des pesées')+'</div></div>'
     + '<div><div class="k">Prime de certification</div><div class="v">'+(totalPrime>0 ? fmtNum(totalPrime)+' <small>FCFA</small>' : (!tauxPrimeRenseignes() ? '—' : '<span class="a-determiner">À déterminer</span>'))+'</div><div class="s">'
       + (!tauxPrimeRenseignes() ? 'Aucun taux de prime renseigné'
          : sansPoidsPese===list.length ? 'Calculée sur le poids pesé à l\'usine'
@@ -10937,7 +10939,7 @@ async function rattraperFichesRecues(){
       }catch(e){ echecs.push((coop?coop.nom+' — ':'')+f.connaissement+' ('+e.message+')'); }
     }
   } finally { state._rattrapageFiches = false; }
-  if (nb>0){ showToast(nb+' fiche(s) de traçabilité reçue(s) enregistrée(s) automatiquement : '+fmtKg(kg)+' ajoutés aux volumes achetés.', 'success'); render(); }
+  if (nb>0){ showToast(nb+' fiche(s) de traçabilité reçue(s) enregistrée(s) automatiquement : '+fmtKg(kg)+' ajoutés aux volumes déclarés (traçabilité).', 'success'); render(); }
   else if (echecs.length>0 && !state._rattrapageFichesAvertie){ state._rattrapageFichesAvertie = true; showToast('Enregistrement automatique impossible pour : '+echecs.join(' ; ')); }
   await alertesPlafondManquantesAdmin();
 }
@@ -11130,7 +11132,11 @@ function renderDashboardTab(){
   const nAlert = rows.filter(r=>r.st.key==='warn'||r.st.key==='danger').length;
   const nQueueCoops = pendingAlertCoopIds().length;
   const potTotal = rows.reduce((s,r)=>s+r.pot,0);
-  const achTotal = rows.reduce((s,r)=>s+r.cumul,0);
+  const achTotal = rows.reduce((s,r)=>s+r.cumul,0);   // volumes declares par les producteurs (tracabilite, point de vue de la cooperative)
+  // VOLUME ACHETE par ECORIGINE = POIDS NET PAYE a l'usine (pas le poids du connaissement, qui est le volume achete par la cooperative a ses producteurs)
+  const connAchetes = achatsFiltered().filter(a=>!a.producteur_id);
+  const volumeAchete = connAchetes.reduce((t,a)=>t+(Number(a.poids_net_produit)>0 ? Number(a.poids_net_produit) : 0), 0);
+  const volumeEnAttente = connAchetes.filter(a=>!(Number(a.poids_net_produit)>0)).length;
   const campSel = state.campagnes.find(x=>x.id===state.campagneFilter);
   const campLabel = state.campagneFilter==='all' ? 'toutes campagnes' : (campSel?campSel.nom:'campagne inconnue');
   const periodeLabel = state.campagneFilter==='all' ? '' : (state.periodeFilter==='principale' ? ' — Principale (plafond 70%)' : ' — Intermédiaire (cumul continu, plafond 100%)');
@@ -11170,10 +11176,11 @@ function renderDashboardTab(){
     + (nQueueCoops>0 ? '<button class="btn" style="border-color:var(--warn);color:var(--warn);" onclick="openAlertQueue()">Traiter toutes les alertes (' + nQueueCoops + ' coopérative' + (nQueueCoops>1?'s':'') + ')</button>' : '')
     + '</div>';
 
-  html += '<div class="cards">'
+  html += '<div class="cards cinq">'
     + '<div class="card"><div class="label">Producteurs suivis</div><div class="value">'+fmtNum(rows.length)+'</div></div>'
     + '<div class="card"><div class="label">Potentiel total</div><div class="value">'+fmtKg(potTotal)+'</div></div>'
-    + '<div class="card"><div class="label">Acheté ('+esc(campLabel)+esc(periodeLabel)+')</div><div class="value">'+fmtKg(achTotal)+'</div></div>'
+    + '<div class="card" title="Volumes déclarés par les producteurs (fiches de traçabilité) — '+esc(campLabel)+esc(periodeLabel)+'"><div class="label">Net déclaré (traçabilité)</div><div class="value">'+fmtKg(achTotal)+'</div></div>'
+    + '<div class="card" title="Volume acheté par ECORIGINE = poids net payé à l\'usine — '+esc(campLabel)+esc(periodeLabel)+'"><div class="label">Volume acheté (net payé)</div><div class="value">'+(volumeAchete>0 ? fmtKg(volumeAchete) : '—')+'</div>'+(volumeEnAttente>0 ? '<div class="hint" style="margin-top:4px;color:var(--warn);">'+fmtNum(volumeEnAttente)+' en attente de pesée</div>' : '')+'</div>'
     + '<div class="card'+(nAlert>0?' alert':'')+'"><div class="label">En alerte</div><div class="value">'+fmtNum(nAlert)+'</div></div>'
     + '</div>';
 
@@ -11277,7 +11284,7 @@ function renderCoopDashboard(){
     + '<div class="card'+(nAlert>0?' alert':'')+'"><div class="label">Producteurs en alerte</div><div class="value">'+fmtNum(nAlert)+'</div></div>'
     + '</div>';
   html += '<div class="cards">'
-    + '<div class="card"><div class="label">Net payé</div><div class="value">'+(stats.netProduit>0?fmtKg(stats.netProduit):'—')+'</div>'+(stats.netProduitPending>0?'<div class="hint" style="margin-top:4px;color:var(--warn);">'+stats.netProduitPending+' connaissement(s) en attente de pesée usine</div>':'')+'</div>'
+    + '<div class="card" title="Volume acheté par ECORIGINE = poids net payé à l\'usine"><div class="label">Volume acheté (net payé)</div><div class="value">'+(stats.netProduit>0?fmtKg(stats.netProduit):'—')+'</div>'+(stats.netProduitPending>0?'<div class="hint" style="margin-top:4px;color:var(--warn);">'+stats.netProduitPending+' connaissement(s) en attente de pesée usine</div>':'')+'</div>'
     + '<div class="card'+(missing.length>0?' alert':'')+'" style="cursor:pointer;" onclick="goToTabForCoop(\'conformite\')"><div class="label">Documents manquants</div><div class="value">'+fmtNum(missing.length)+'/'+DOCS_REQUIS.length+'</div></div>'
     + '<div class="card'+(nOuvertes>0?' alert':'')+'" style="cursor:pointer;" onclick="goToTabForCoop(\'conformite\')"><div class="label">Non-conformités ouvertes</div><div class="value">'+fmtNum(nOuvertes)+'</div></div>'
     + '<div class="card'+(gapsCount>0?' alert':'')+'" style="cursor:pointer;" onclick="goToTabForCoop(\'conformite\')"><div class="label">Données manquantes</div><div class="value">'+fmtNum(gapsCount)+'</div></div>'
