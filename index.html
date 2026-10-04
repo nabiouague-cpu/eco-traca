@@ -350,7 +350,8 @@
   .pa-auto dt{color:var(--ink-soft);} .pa-auto dd{margin:0;font-weight:600;text-align:right;}
   .pa-note{display:none;margin:0 0 10px;padding:8px 10px;border-radius:6px;background:var(--warn-bg);color:var(--warn);font-size:12.5px;}
   .pa-note.rouge{background:var(--danger-bg);color:var(--danger);}
-  .detail-bloc .lien-param{font:inherit;font-size:12px;background:none;border:none;color:var(--accent);text-decoration:underline;cursor:pointer;padding:0;margin-left:6px;}
+  .detail-bloc .lien-param, .modal .lien-param{font:inherit;font-size:12px;background:none;border:none;color:var(--accent);text-decoration:underline;cursor:pointer;padding:0;margin-left:6px;}
+  .modal .hint{display:block;margin:-4px 0 10px;}
   .modal input.invalide{border-color:var(--danger);box-shadow:0 0 0 2px var(--danger-bg);}
   .tbl-achats .lien-param{font:inherit;font-size:12px;background:none;border:none;color:var(--accent);text-decoration:underline;cursor:pointer;padding:0;}
   .tbl-achats .decl{align-items:center;}
@@ -2209,7 +2210,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-107';
+const APP_VERSION = '2026-10-02-108';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -10097,6 +10098,13 @@ function ouvrirPaiement(achatId, paiementId){
   if (!paiementId && sd && sd.complet){ showToast('Cette livraison est entièrement payée. Pour corriger un chèque, utilise « Modifier » dans le détail du connaissement.'); return; }
   state.modal = { type:'paiementConnaissement', payload:{ achatId, paiementId: paiementId||null } }; render();
 }
+function remplirChampPaiement(nom, valeur){ const e = document.querySelector('[name="'+nom+'"]'); if (e && !e.readOnly){ e.value = valeur; majNotePaiement(); } }
+function payerLeResteChamp(){
+  const n = document.getElementById('pa-note'), deja = Number(n && n.getAttribute('data-deja'))||0, ap = Math.round(Number((document.querySelector('[name="pa_montant_a_payer"]')||{}).value)||0);
+  if (!(ap>0)){ showToast('Indique d\'abord le montant à payer.'); return; }
+  if (ap<=deja){ showToast('Il ne reste rien à payer.'); return; }
+  remplirChampPaiement('pa_montant_paye', ap-deja);
+}
 function majNotePaiement(){
   const n = document.getElementById('pa-note'); if (!n) return;
   const lire = (nom)=>Math.round(Number((document.querySelector('[name="'+nom+'"]')||{}).value)||0);
@@ -10223,11 +10231,11 @@ function construireAttestationDocx(lib, d){
   // --- paragraphe de certification : livraisons soldees = texte du modele ; paiement partiel = montants recus et solde restant (sans renonciation aux poursuites)
   const certification = complet
     ? para([ run('Nous certifions que le montant total dû, soit '), rouge(montantAttestation(totalDu)+' Fcfa'), run(', a été réglé en totalité par '), run('Ecorigine', { bold:true }), run('. En conséquence, aucune réclamation ou poursuite judiciaire ne peuvent être engagées contre notre client Ecorigine pour ces livraisons ci-dessus.') ], { spacing:{ before:360, after:240 } })
-    : para([ run('Nous certifions que, sur le montant total dû de '), rouge(montantAttestation(totalDu)+' Fcfa'), run(', la somme de '), rouge(montantAttestation(totalPaye)+' Fcfa'), run(' a été réglée par '), run('Ecorigine', { bold:true }), run('. Le solde de '), rouge(montantAttestation(solde)+' Fcfa'), run(' reste à régler pour ces livraisons.') ], { spacing:{ before:360, after:240 } });
+    : para([ run('Nous certifions que le montant total dû, soit '), rouge(montantAttestation(totalDu)+' Fcfa'), run(', a été réglé en partie à hauteur de '), rouge(montantAttestation(totalPaye)+' Fcfa'), run(' par '), run('Ecorigine', { bold:true }), run('. Il reste '), rouge(montantAttestation(solde)+' Fcfa'), run(' à régler pour ces livraisons.') ], { spacing:{ before:360, after:240 } });
   // coordonnees de la cooperative : TOUJOURS a completer par la cooperative (surlignees comme dans le modele)
   const enfants = [
     new Paragraph({ spacing:{ before:0, after:120 }, children:[] }), cadreTitre,
-    para([ run('Nous soussigné(e)s '), run(coop.nom||'', { bold:true }), run(', certifions par la présente que les paiements relatifs aux livraisons effectuées pour le compte d’'), run('Ecorigine', { bold:true }), run(' ont été réglés conformément aux termes convenus et à l’ordre des bénéficiaires mandatés par la coopérative.') ], { spacing:{ before:360, after:160 } }),
+    para([ run('Nous soussigné(e)s '), run(coop.nom||'', { bold:true }), run(complet ? ', certifions par la présente que les paiements relatifs aux livraisons effectuées pour le compte d’' : ', certifions par la présente que des paiements relatifs aux livraisons effectuées pour le compte d’'), run('Ecorigine', { bold:true }), run(complet ? ' ont été réglés conformément aux termes convenus et à l’ordre des bénéficiaires mandatés par la coopérative.' : ' ont été réglés à l’ordre des bénéficiaires mandatés par la coopérative.') ], { spacing:{ before:360, after:160 } }),
     para([ run('Vous trouverez ci-dessous, le récapitulatif des livraisons effectuées et les montants correspondants :') ]),
     tableauRecap,
     certification,
@@ -11645,8 +11653,10 @@ function _renderBrut(){
       const coop = coopById(a.cooperative_id), m = calcMontantPaiement(a), tous = paiementsDeAchat(a.id);
       const edit = state.modal.payload.paiementId ? tous.find(p=>p.id===state.modal.payload.paiementId) : null, autres = tous.filter(p=>!edit || p.id!==edit.id);
       const deja = autres.reduce((t,p)=>t+(Number(p.montant_paye)||0), 0), fige = aPayerFige(a.id), calcule = (m && m.montant!==null) ? m.montant : '';
-      const aPayerDef = fige!==null ? fige : calcule, fixe = autres.length>0;     // le montant a payer ne change plus des qu'un autre cheque existe
-      const resteDef = aPayerDef!=='' ? Math.max(0, aPayerDef-deja) : '', payeDef = edit ? edit.montant_paye : resteDef;
+      // Aucune case n'est pre-remplie : rien n'a encore ete paye, c'est l'administrateur qui saisit chaque paiement. Le montant calcule par ORIGEN n'est
+      // qu'une AIDE (bouton « Utiliser ce montant »). Seul un montant a payer DEJA enregistre (2e cheque d'une livraison) est repris, verrouille.
+      const aPayerDef = fige!==null ? fige : '', fixe = autres.length>0;     // le montant a payer ne change plus des qu'un autre cheque existe
+      const payeDef = edit ? edit.montant_paye : '';
       const uniques = (champ)=>[...new Set((state.paiements||[]).map(p=>String(p[champ]||'').trim()).filter(Boolean))];
       html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
         + '<h3>'+(edit ? 'Modifier le paiement' : (autres.length ? 'Ajouter un paiement' : 'Paiement du connaissement'))+'</h3><div id="modal-fields">'
@@ -11661,10 +11671,11 @@ function _renderBrut(){
         + ((m && m.manque && !fixe) ? '<div class="error-banner" style="margin-top:10px;"><span>Le montant à payer ne peut pas être calculé automatiquement ('+(m.manque==='prix' ? 'prix d\'entrée usine à renseigner pour cette campagne' : 'TKM du connaissement à compléter')+'). Saisis-le ci-dessous.</span></div>' : '')
         + '<fieldset style="margin-top:12px;"><legend>À renseigner</legend>'
         + '<label class="field">Montant à payer (FCFA)<input type="number" step="1" min="0" name="pa_montant_a_payer" value="'+esc(aPayerDef)+'"'+(fixe ? ' readonly' : '')+' oninput="majNotePaiement()"></label>'
-        + (m && m.montant!==null && !fixe ? '<span class="hint">Calculé : (('+fmtNum(m.prixEntreeUsine)+' + '+fmtNum(m.tkm)+' TKM + '+fmtNum(m.commission)+' commission) × '+fmtNum(m.poids)+' kg) − '+fmtNum(m.retenueBic)+' retenue BIC.</span>' : '')
+        + (m && m.montant!==null && !fixe && !edit ? '<span class="hint">Calculé par ORIGEN : (('+fmtNum(m.prixEntreeUsine)+' + '+fmtNum(m.tkm)+' TKM + '+fmtNum(m.commission)+' commission) × '+fmtNum(m.poids)+' kg) − '+fmtNum(m.retenueBic)+' retenue BIC = <b>'+fmtNum(m.montant)+' FCFA</b> <button type="button" class="lien-param" onclick="remplirChampPaiement(\'pa_montant_a_payer\','+m.montant+')">Utiliser ce montant</button></span>' : '')
         + '<label class="field">Montant payé par ce chèque (FCFA)<input type="number" step="1" min="0" name="pa_montant_paye" value="'+esc(payeDef)+'" oninput="majNotePaiement()"></label>'
+        + '<span class="hint">Pour payer tout ce qui reste : <button type="button" class="lien-param" onclick="payerLeResteChamp()">Payer le reste</button></span>'
         + '<div class="pa-note" id="pa-note" data-deja="'+deja+'" style="display:none;"></div>'
-        + '<label class="field">Date du paiement<input type="date" name="pa_date" value="'+esc(edit && edit.date_paiement ? edit.date_paiement : aujourdhuiIso())+'"></label>'
+        + '<label class="field">Date du paiement (aujourd\'hui si laissée vide)<input type="date" name="pa_date" value="'+esc(edit && edit.date_paiement ? edit.date_paiement : '')+'"></label>'
         + '<label class="field">Banque<input type="text" name="pa_banque" list="pa-banques" value="'+esc(edit ? edit.banque||'' : '')+'" placeholder="ex : Ecobank"></label>'
         + '<datalist id="pa-banques">'+uniques('banque').map(b=>'<option value="'+esc(b)+'">').join('')+'</datalist>'
         + '<label class="field">Libellé du chèque (bénéficiaire)<input type="text" name="pa_libelle" list="pa-libelles" value="'+esc(edit ? edit.libelle_cheque||'' : '')+'" placeholder="ex : Allou Anet Denis"></label>'
