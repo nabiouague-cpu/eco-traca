@@ -2252,7 +2252,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-125';
+const APP_VERSION = '2026-10-02-126';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3229,6 +3229,48 @@ function fmtOctets(n){
   return n+' o';
 }
 
+// ====================== DOSSIER « FICHES DE TRACABILITE » : le tableau des fiches ======================
+// Une ligne par fiche : connaissement, fichier (nomme comme sa DEMANDE), date d'ajout au stockage, taille, etat des volumes, « Telecharger ».
+async function chargerFichesTracabilite(forcer){
+  if (state.fichesChargement) return;
+  if (state.fichesTracabilite!==null && state.fichesTracabilite!==undefined && !forcer) return;
+  state.fichesChargement = true; state.fichesErreur = null; render();
+  try{
+    const r = await supabaseClient.rpc('stockage_fiches_tracabilite');
+    if (r.error) throw new Error(r.error.message);
+    state.fichesTracabilite = r.data || [];
+  }catch(e){ state.fichesErreur = e.message; state.fichesTracabilite = []; }
+  state.fichesChargement = false; render();
+}
+function nomFicheAffiche(f){
+  const df = (state.demandeFichiers||[]).find(x=>x.id===f.id), dem = df && (state.demandesCoop||[]).find(d=>d.id===df.demande_id);
+  if (!dem || !dem.name) return f.nom || '';
+  const fiches = (state.demandeFichiers||[]).filter(x=>x.demande_id===dem.id && x.type==='product_movements').sort((a,b)=>String(a.uploaded_at||'').localeCompare(String(b.uploaded_at||''))||String(a.id).localeCompare(String(b.id)));
+  return nomFicheDeDemande(dem.name, f.nom || '', fiches.findIndex(x=>x.id===f.id));
+}
+function fichesDeCoop(coopId){
+  return (state.fichesTracabilite||[]).filter(f=>f.cooperative_id===coopId)
+    .slice().sort((a,b)=>String(dateAjoutStockage(b)).localeCompare(String(dateAjoutStockage(a))));   // la plus recente d'abord (date d'ajout au stockage)
+}
+function renderFichesTracabilite(coopId){
+  if (state.fichesTracabilite===null || state.fichesTracabilite===undefined || state.fichesChargement){
+    if (!state.fichesChargement) chargerFichesTracabilite();
+    return '<div class="fiches-panneau"><div class="empty">Chargement des fiches de traçabilité…</div></div>';
+  }
+  const fiches = fichesDeCoop(coopId);
+  const erreur = state.fichesErreur ? '<div class="error-banner" style="margin:0 0 10px;"><span>Lecture impossible : '+esc(state.fichesErreur)+'</span></div>' : '';
+  if (fiches.length===0) return erreur + '<div class="stock-empty">Aucune fiche de traçabilité pour le moment.</div>';
+  return erreur + '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th>Connaissement</th><th>Fichier</th><th>Ajoutée le</th><th>Taille</th><th>État</th><th></th></tr></thead><tbody>'
+    + fiches.map(f=>{
+        const nom = nomFicheAffiche(f);
+        const etat = !f.volumes_enregistres ? '<span class="badge warn" title="Les volumes de cette fiche ne sont pas encore enregistrés">Volumes à enregistrer</span>' : '<span class="badge neutral">Volumes enregistrés</span>';
+        return '<tr data-id="'+esc(f.id)+'"><td><b>'+esc(f.connaissement||'—')+'</b></td><td class="nom-fichier" title="'+esc(nom)+'">'+esc(nom)+'</td>'
+          + '<td>'+esc(dateFr(String(dateAjoutStockage(f)).slice(0,10))||'—')+'</td><td>'+fmtOctets(f.taille)+'</td><td>'+etat+'</td>'
+          + '<td><button class="doc-btn" onclick="telechargerFichierDemande(\''+escJs(f.path)+'\',\''+escJs(nom||'fiche')+'\')">Télécharger</button></td></tr>';
+      }).join('')
+    + '</tbody></table></div>';
+}
+
 function dateAjoutStockage(f){ const d = (state.stockageDates||{})[f && f.path]; return d || (f && (f.date || f.uploaded_at)) || ''; }
 async function chargerDatesStockage(chemins){
   state.stockageDates = state.stockageDates || {}; state.stockageDatesTentes = state.stockageDatesTentes || new Set();
@@ -3268,14 +3310,7 @@ function renderStockageTab(){
   // Dossier « Fiches de traçabilité » : UNIQUEMENT les fiches, chacune nommée comme sa demande — rien d'autre (ni tuiles, ni colonnes, ni boutons d'archivage).
   const modeFiches = cleActive==='product_movements';
   const afficherListe = !modeFiches;
-  const htmlFiches = !modeFiches ? '' : (dossierActif.fichiers.length===0
-    ? '<div class="stock-empty">Aucune fiche de traçabilité pour le moment.</div>'
-    : dossierActif.fichiers.slice().sort((a,b)=>String(dateAjoutStockage(b)).localeCompare(String(dateAjoutStockage(a)))).map(f=>{
-        const d = dateAjoutStockage(f), dt = d ? new Date(d).toLocaleDateString('fr-FR') : '';
-        return '<div class="stock-file-row"><div class="stock-file-name" title="'+esc(f.nom)+'">'+esc(f.nom)+'</div>'
-          + (dt ? '<div class="stock-file-date">Ajoutée le '+esc(dt)+'</div>' : '')
-          + '<div class="stock-file-actions"><button class="doc-btn" onclick="telechargerFichierDemande(\''+escJs(f.path)+'\',\''+escJs(f.nom)+'\')">Télécharger</button></div></div>';
-      }).join(''));
+  const htmlFiches = modeFiches ? renderFichesTracabilite(coopId) : '';
   const filtreOrigine = state.stockageOrigine || 'tous';
   const nbEc = autresFichiers.filter(f=>f.origine==='ecorigine').length, nbCo = autresFichiers.filter(f=>f.origine==='coop').length;
   let fichiersAffiches = autresFichiers.filter(f=>(filtreOrigine==='tous' || f.origine===filtreOrigine) && (!recherche || f.nom.toLowerCase().includes(recherche) || String(f.nomDonne||'').toLowerCase().includes(recherche)));
