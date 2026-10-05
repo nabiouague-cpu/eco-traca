@@ -2220,7 +2220,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-117';
+const APP_VERSION = '2026-10-02-118';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -2993,6 +2993,58 @@ async function supprimerFichiersStockageSelection(coopId){
 // Exporte un ou plusieurs dossiers (ou tous, si cles est null) d'une
 // cooperative en une seule archive ZIP, chaque dossier devenant un
 // sous-dossier dans l'archive.
+// ====================== EXPORTS PLUS LEGERS ======================
+// 1) Compression adaptee a chaque type de fichier (les exports etaient jusqu'ici stockes SANS compression).
+// 2) Allegement SANS PERTE VISIBLE des PDF : les scanners / Photoshop y ajoutent des donnees privees d'editeur (/PieceInfo) qui peuvent peser plus de 4 fois
+//    l'image du scan elle-meme et ne sont jamais affichees. On les retire, ainsi que les objets devenus inutiles ; le rendu des pages reste identique.
+//    Les fichiers ORIGINAUX du stockage ne sont jamais modifies : seule la COPIE placee dans le ZIP est allegee. En cas de doute (PDF protege, illisible,
+//    aucun gain), le fichier d'origine est conserve tel quel.
+const PDFLIB_CDN = ['https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js', 'https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js'];
+let _pdfLib = null;
+function chargerPdfLib(){
+  if (_pdfLib) return _pdfLib;
+  _pdfLib = (async()=>{ if (typeof PDFLib==='undefined') await chargerScriptExterne(PDFLIB_CDN); if (typeof PDFLib==='undefined') throw new Error('pdf-lib indisponible'); return PDFLib; })().catch(e=>{ _pdfLib = null; throw e; });
+  return _pdfLib;
+}
+function optionsCompressionZip(nom){
+  if (/\.(jpe?g|png|gif|webp|zip|7z|rar|gz|mp4|mov)$/i.test(nom)) return { compression:'STORE' };                       // deja compresses : inutile de les recompresser
+  if (/\.(geojson|json|csv|tsv|txt|xml|kml|svg|html?|md)$/i.test(nom)) return { compression:'DEFLATE', compressionOptions:{ level:9 } };   // texte : jusqu'a 80 % de gain
+  return { compression:'DEFLATE', compressionOptions:{ level:6 } };                                                  // PDF, Excel, Word...
+}
+// Retourne { octets, gain } ; octets = null si le fichier d'origine doit etre conserve.
+async function allegerPdfSansPerte(octetsOrigine){
+  try{
+    const lib = await chargerPdfLib(), { PDFDocument, PDFName, PDFDict, PDFArray, PDFRef, PDFStream } = lib;
+    const doc = await PDFDocument.load(octetsOrigine, { updateMetadata:false });
+    const ctx = doc.context, nbPages = doc.getPageCount();
+    doc.getPages().forEach(p=>p.node.delete(PDFName.of('PieceInfo')));
+    const racine = ctx.lookup(ctx.trailerInfo.Root, PDFDict); if (racine) racine.delete(PDFName.of('PieceInfo'));
+    // objets encore atteignables depuis la racine du document : tout le reste est supprime
+    const atteints = new Set(), pile = [ctx.trailerInfo.Root, ctx.trailerInfo.Info, ctx.trailerInfo.Encrypt];
+    while (pile.length){
+      const o = pile.pop(); if (!o) continue;
+      if (o instanceof PDFRef){ const k = o.toString(); if (atteints.has(k)) continue; atteints.add(k); pile.push(ctx.lookup(o)); }
+      else if (o instanceof PDFDict) o.entries().forEach(e=>pile.push(e[1]));
+      else if (o instanceof PDFArray) o.asArray().forEach(x=>pile.push(x));
+      else if (o instanceof PDFStream) pile.push(o.dict);
+    }
+    ctx.enumerateIndirectObjects().forEach(e=>{ if (!atteints.has(e[0].toString())) ctx.delete(e[0]); });
+    const sortie = await doc.save({ useObjectStreams:true });
+    if (sortie.length >= octetsOrigine.length*0.98) return { octets:null, gain:0 };                 // pas de gain reel : on garde l'original
+    const verif = await PDFDocument.load(sortie, { updateMetadata:false });
+    if (verif.getPageCount()!==nbPages) return { octets:null, gain:0 };                               // le nombre de pages doit rester identique
+    return { octets:sortie, gain:octetsOrigine.length-sortie.length };
+  }catch(_e){ return { octets:null, gain:0 }; }                                                       // protege, illisible... : original conserve
+}
+// Prepare un fichier pour le ZIP : allege (si PDF et option active) puis renvoie ce qu'il faut ajouter.
+async function preparerFichierPourZip(nom, blob, alleger){
+  if (alleger && /\.pdf$/i.test(nom)){
+    const buf = new Uint8Array(await blob.arrayBuffer()), r = await allegerPdfSansPerte(buf);
+    if (r.octets) return { donnees:r.octets, gain:r.gain, allege:true };
+  }
+  return { donnees:blob, gain:0, allege:false };
+}
+
 async function exporterDossiersStockage(coopId, cles){
   const coop = coopById(coopId);
   const dossiers = fichiersParTypePourCoop(coopId);
@@ -3007,8 +3059,8 @@ async function exporterDossiersStockage(coopId, cles){
   const btn = document.getElementById(unSeul ? 'stock-export-dossier-btn' : cles ? 'stock-export-selection-btn' : 'stock-export-tout-btn');
   if (btn){ btn.disabled = true; btn.textContent = 'Préparation…'; }
   try{
-    const zip = new JSZip();
-    let ok = 0;
+    const zip = new JSZip(), alleger = state.stockageAllegerPdf!==false;
+    let ok = 0, octetsOrigine = 0, nbAlleges = 0;
     for (const cle of clesAExporter){
       const d = dossiers[cle];
       if (!d || d.fichiers.length===0) continue;
@@ -3024,18 +3076,21 @@ async function exporterDossiersStockage(coopId, cles){
           name = parts.join('.') + '_' + Math.random().toString(36).slice(2,7) + ext;
         }
         usedNames.add(name);
-        zip.file(nomSousDossier+'/'+name, data);
+        octetsOrigine += data.size||0;
+        const prep = await preparerFichierPourZip(name, data, alleger); if (prep.allege) nbAlleges++;
+        zip.file(nomSousDossier+'/'+name, prep.donnees, optionsCompressionZip(name));
         ok++;
       }
     }
     if (ok===0){ showToast("Aucun fichier n'a pu être récupéré."); if(btn){btn.disabled=false;render();} return; }
     const blob = await zip.generateAsync({type:'blob'});
     const url = URL.createObjectURL(blob);
+    const bilan = octetsOrigine>0 && blob.size<octetsOrigine ? ' · ZIP de '+fmtOctets(blob.size)+' au lieu de '+fmtOctets(octetsOrigine)+' (−'+Math.round(100*(1-blob.size/octetsOrigine))+' %)'+(nbAlleges>0 ? ' · '+nbAlleges+' PDF allégé'+(nbAlleges>1?'s':'')+' sans changement visible' : '') : '';
     const suffixe = unSeul ? '_'+propre(dossiers[cles[0]].label) : cles ? '_selection' : '_complet';
     const a = document.createElement('a'); a.href = url; a.download = 'stockage_'+propre(coop?coop.nom:coopId)+suffixe+'.zip';
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    showToast(ok+' fichier(s) exporté(s).', 'success');
+    showToast(ok+' fichier(s) exporté(s)'+bilan+'.', 'success');
   }catch(e){
     showToast('Échec de l\'export : '+e.message);
   }
@@ -3088,7 +3143,7 @@ async function archiverFichesTracabilite(coopId){
       const sous = propre((coopById(f.cooperative_id)||{}).nom || f.cooperative_id);
       let nom = f.nom || f.path.split('/').pop(); const cle = sous+'/'+nom;
       if (utilises.has(cle)){ const p = nom.split('.'); const ext = p.length>1 ? '.'+p.pop() : ''; nom = p.join('.')+'_'+f.id.slice(0,6)+ext; }
-      utilises.add(sous+'/'+nom); zip.file(dossier+'/'+sous+'/'+nom, data); reussies.push(f);
+      utilises.add(sous+'/'+nom); zip.file(dossier+'/'+sous+'/'+nom, data, optionsCompressionZip(nom)); reussies.push(f);
     }
     if (reussies.length===0){ showToast('Aucune fiche n\'a pu être récupérée : rien n\'est archivé.'); return; }
     zip.file(dossier+'/LISEZMOI.txt', ['Fiches de traçabilité archivées depuis ORIGEN le '+new Date().toLocaleDateString('fr-FR'), '',
@@ -3209,7 +3264,8 @@ function renderStockageTab(){
     + '</div>';
 
   html += '<div class="panel" id="stock-panel"><div class="panel-head"><h2>'+esc(coop?coop.nom:'')+' — '+fmtNum(totalFichiers)+' fichier(s) au total</h2>'
-    + '<div style="display:flex;gap:8px;">'
+    + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
+    + '<label style="display:flex;gap:6px;align-items:center;font-size:12.5px;color:var(--ink-soft);cursor:pointer;" title="Retire des PDF les données internes inutiles (Photoshop, scanner) qui peuvent représenter 80 % de leur poids. Le rendu des pages est identique. Les fichiers du stockage ne sont pas modifiés, seule la copie du ZIP est allégée."><input type="checkbox" id="stock-alleger-pdf" '+(state.stockageAllegerPdf!==false?'checked':'')+' onchange="state.stockageAllegerPdf=this.checked"> Alléger les PDF dans les exports</label>'
     + '<button class="btn" id="stock-export-selection-btn" '+(selection.length>0?'onclick="exporterDossiersStockage(\''+coopId+'\', ['+selection.map(c=>"'"+c+"'").join(',')+'])"':'disabled')+'>Exporter la sélection ('+selection.length+')</button>'
     + '<button class="btn btn-primary" id="stock-export-tout-btn" '+(totalFichiers>0?'onclick="exporterDossiersStockage(\''+coopId+'\', null)"':'disabled')+' title="Tous les sous-dossiers de cette coopérative">Tout exporter (ZIP)</button>'
     + '</div></div>'
