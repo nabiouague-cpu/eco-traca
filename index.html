@@ -2258,7 +2258,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-132';
+const APP_VERSION = '2026-10-02-133';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -10786,7 +10786,10 @@ async function enregistrerReceptionUsine(){
   if (poidsLivre>0) data.poids_brut_accepte = poidsLivre;      // le poids livre deja saisi n'est jamais efface
   const avant = {}; Object.keys(data).forEach(k=>{ avant[k] = a[k]; });
   Object.assign(a, data);
-  const { error } = await supabaseClient.from('achats').upsert(a);
+  // Seulement les champs modifies (+ id pour cibler la ligne) : jamais tout l'objet, pour qu'un champ
+  // numerique vide ailleurs sur cette meme ligne (ex. achat cree via Tracer un volume) ne fasse pas
+  // echouer l'enregistrement de la reception.
+  const { error } = await supabaseClient.from('achats').update(data).eq('id', a.id);
   if (error){ Object.assign(a, avant); showToast('Échec de l\'enregistrement : '+error.message); return; }
   closeModal();
   showToast('Réception enregistrée : '+(a.connaissement||'connaissement')+' — poids net payé '+fmtNum(poidsNet)+' kg.', 'success');
