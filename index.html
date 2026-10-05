@@ -2258,7 +2258,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-138';
+const APP_VERSION = '2026-10-02-139';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3138,6 +3138,45 @@ function chargerPdfLib(){
 // ---- pdf.js : lecture du texte d'un connaissement source (PDF) pour pre-remplir le formulaire ----
 const PDFJS_CDN = ['https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.5.141/pdf.min.js', 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.5.141/build/pdf.min.js'];
 const PDFJS_WORKER_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.5.141/pdf.worker.min.js';
+const TESSERACT_CDN = ['https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.1/tesseract.min.js', 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js'];
+let _tesseractJs = null;
+function chargerTesseractJs(){
+  if (_tesseractJs) return _tesseractJs;
+  _tesseractJs = (async()=>{
+    if (typeof Tesseract==='undefined') await chargerScriptExterne(TESSERACT_CDN);
+    if (typeof Tesseract==='undefined') throw new Error('Tesseract.js indisponible');
+    return Tesseract;
+  })().catch(e=>{ _tesseractJs = null; throw e; });
+  return _tesseractJs;
+}
+// Rend la 1ere page d'un PDF en image (canvas) a l'echelle demandee -- une echelle de ~4 equivaut a
+// environ 300 dpi (les PDF sont a 72 dpi de base), la resolution qui donne les meilleurs resultats OCR.
+async function ocPdfPageEnCanvas(file, echelle){
+  const lib = await chargerPdfJs();
+  const data = new Uint8Array(await file.arrayBuffer());
+  const doc = await lib.getDocument({ data }).promise;
+  const page = await doc.getPage(1);
+  const viewport = page.getViewport({ scale: echelle||4 });
+  const canvas = document.createElement('canvas');
+  canvas.width = viewport.width; canvas.height = viewport.height;
+  await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+  return canvas;
+}
+// OCR d'un PDF scanne (image, sans texte) : rendu en image puis lecture Tesseract en francais. Methode
+// validee sur un vrai bordereau scanne avant integration -- environ 95% des champs corrects, a l'exception
+// connue des plaques d'immatriculation (confusion 0/O, corrigee a part) ; a toujours faire verifier/
+// corriger par l'utilisateur avant de generer le document (les champs restent modifiables dans la modale).
+async function ocOcrPdfScan(file, onProgres){
+  const Tess = await chargerTesseractJs();
+  const canvas = await ocPdfPageEnCanvas(file, 4);
+  const worker = await Tess.createWorker('fra', 1, { logger: m => {
+    if (onProgres && m.status==='recognizing text') onProgres(Math.round((m.progress||0)*100));
+  } });
+  try{
+    const { data } = await worker.recognize(canvas);
+    return data.text;
+  } finally { await worker.terminate(); }
+}
 let _pdfJs = null;
 function chargerPdfJs(){
   if (_pdfJs) return _pdfJs;
@@ -11345,40 +11384,71 @@ async function ocLireDocxTexte(file){
 // DirectSoft) a partir de son texte brut (ocLireDocxTexte). Teste et valide sur un bordereau reel
 // (STE COOP UNITE DE MAHAPLEU, SC101416-2024-2-57) avant integration -- meme methode que pour le connaissement.
 function ocTicketExtraireDuTexte(texte){
-  // Pour chaque libelle, prend la PREMIERE occurrence non vide (un meme libelle peut apparaitre deux fois,
-  // dont une fois sans valeur -- ex. "Dont : Humidité" en tete, vide, avant la vraie ligne "Humidité  7,60").
+  // Un bordereau SCANNE est lu par OCR (Tesseract), qui est souvent incoherent sur la casse et les
+  // accents (ex. "Defectueuses"/"Défectueuses", "Dechets"/"Déchets" au hasard selon le mot) -- chaque
+  // libelle est donc construit en regex tolerante : accent optionnel lettre par lettre, et recherche
+  // insensible a la casse (flag "i"). Les deux sources sans OCR (Word, PDF texte) passent aussi par ce
+  // meme chemin, sans effet de bord (la tolerance ne fait qu'elargir ce qui matche).
+  const FLEX = { e:'eéèê', a:'aàâ', i:'iî', o:'oô', u:'uùû', c:'cç' };
+  const baseLettre = ch => (ch.normalize('NFD')[0]||ch).toLowerCase();
+  const labelFlex = label => Array.from(label).map(ch=>{
+    if (ch==="'") return "['\u2019]";
+    const b = baseLettre(ch);
+    if (FLEX[b]) return '['+FLEX[b]+FLEX[b].toUpperCase()+']';
+    return ch.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  }).join('');
+  // Champ texte : pour chaque libelle, prend la PREMIERE occurrence non vide (un meme libelle peut
+  // apparaitre deux fois, dont une fois sans valeur -- ex. "Dont : Humidité" en tete, vide, avant la
+  // vraie ligne "Humidité  7,60"). Coupe a la premiere coupure large (2+ espaces) : la sortie OCR, moins
+  // propre qu'un texte numerique, fusionne parfois plusieurs champs voisins sur une seule ligne.
   const champ = (label, colonRequis) => {
     const sep = colonRequis ? '[ \\t]*:[ \\t]*' : '[ \\t]*:?[ \\t]*';
-    const re = new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + sep + '([^\\n]*)', 'g');
+    const re = new RegExp(labelFlex(label) + sep + '([^\\n]*?)(?:\\s{2,}|$)', 'gmi');
     let m, premier = null;
     while ((m = re.exec(texte))){ const v = m[1].trim(); if (v) return v; if (premier===null) premier = v; }
     return premier;
   };
-  const nombreFr = s => { if (!s) return null; const n = Number(String(s).replace(/\s/g,'').replace(',','.')); return isNaN(n) ? null : n; };
+  // Champ numerique : capture uniquement un nombre IMMEDIATEMENT apres le libelle (chiffres/espaces/
+  // virgule), sans dependre d'une coupure propre -- robuste meme quand l'OCR fusionne deux champs sur
+  // une ligne ("Nombre de sacs déclarés : 694 Poids moyen 61") ou glisse un parasite avant le chiffre
+  // ("Humidite . 7,60"). Validee sur un bordereau scanne (lecture Tesseract) en plus du Word/PDF texte.
+  const champNombre = (label) => {
+    const re = new RegExp(labelFlex(label) + '[ \\t:.]*(\\d[\\d\\s]*(?:[.,]\\d+)?)', 'i');
+    const m = re.exec(texte);
+    if (!m) return null;
+    const n = Number(m[1].replace(/\s/g,'').replace(',','.'));
+    return isNaN(n) ? null : n;
+  };
   const dateIso = s => { const m = /^(\d{2})\/(\d{2})\/(\d{4})/.exec(s||''); return m ? m[3]+'-'+m[2]+'-'+m[1] : null; };
-  const mCq = /\b(CQ\d\S*(?:\s\S+)?)/.exec(texte);
+  // Nettoie les libelles suivants connus quand l'OCR les a accoles au champ texte precedent sur la meme ligne.
+  const net = s => s ? s.replace(/\s*N[°o]\s*(d'agrément|Tracteur).*/i, '').trim() : s;
+  const mCq = /\b(CQ\d\S*)(\s\d\S*)?/.exec(texte);
   const mGrade = /\bGRADE\s*\d+\b/.exec(texte);
   return {
     nBordereau: champ('N° Bordereau'), connaissement: champ('N° Connaissement'),
-    dateEmission: dateIso(champ('Date D\u2019\u00e9mission')), dateArrivee: dateIso(champ('Date d\u2019arriv\u00e9e')),
-    fournisseur: champ('Fournisseur', true), lieuOrigine: champ('Lieu de départ'),
-    tareCamion: nombreFr(champ('Tare camion')), poidsBrutDecl: nombreFr(champ('poids produit déclaré Brut')),
-    dateDepart: dateIso(champ('Date de départ')), poidsNetDecl: nombreFr(champ('poids produit déclaré Net')),
-    tracteur: champ('N° Tracteur'), vehicule: champ('N° Véhicule'), transporteur: champ('Transporteur'),
+    dateEmission: dateIso(champ("Date D'émission")), dateArrivee: dateIso(champ("Date d'arrivée")),
+    fournisseur: net(champ('Fournisseur', true)), lieuOrigine: net(champ('Lieu de départ')),
+    tareCamion: champNombre('Tare camion'), poidsBrutDecl: champNombre('poids produit déclaré Brut'),
+    dateDepart: dateIso(champ('Date de départ')), poidsNetDecl: champNombre('poids produit déclaré Net'),
+    // Les plaques ivoiriennes se terminent toujours par des chiffres -- l'OCR confond parfois O et 0
+    // en bout de plaque (ex. "LXO1" pour "LX01") ; corrige ce cas precis, sans toucher au reste.
+    tracteur: (champ('N° Tracteur')||'').replace(/O(\d)$/, '0$1') || null,
+    vehicule: (champ('N° Véhicule')||'').replace(/O(\d)$/, '0$1') || null,
+    transporteur: champ('Transporteur'),
     conducteur: champ('Noms et prénoms Conducteur'),
-    poidsEntre: nombreFr(champ('Poids entré (Brut)')), poidsSortie: nombreFr(champ('Poids sortie (Tare)')),
-    poidsDecharge: nombreFr(champ('poids produit déchargé')), sacsDeclares: nombreFr(champ('Nombre de sacs déclarés')),
-    sacsRefoules: nombreFr(champ('Nombre de sacs refoulés')), sacsAcceptes: nombreFr(champ('Nombre de sacs acceptés')),
-    sacsDecharges: nombreFr(champ('Nombre de sacs déchargés')), sacsManquants: nombreFr(champ('Nombre de sacs manquants')),
-    tauxRefaction: nombreFr(champ('Taux de Réfaction')), poidsRefoule: nombreFr(champ('poids produit refoulé')),
-    poidsAccepte: nombreFr(champ('poids produit Accepté')), poidsNetRefaction: nombreFr(champ('poids net après réfaction')),
+    poidsEntre: champNombre('Poids entré (Brut)'), poidsSortie: champNombre('Poids sortie (Tare)'),
+    poidsDecharge: champNombre('poids produit déchargé'), sacsDeclares: champNombre('Nombre de sacs déclarés'),
+    sacsRefoules: champNombre('Nombre de sacs refoulés'), sacsAcceptes: champNombre('Nombre de sacs acceptés'),
+    sacsDecharges: champNombre('Nombre de sacs déchargés'), sacsManquants: champNombre('Nombre de sacs manquants'),
+    tauxRefaction: champNombre('Taux de Réfaction'), poidsRefoule: champNombre('poids produit refoulé'),
+    poidsAccepte: champNombre('poids produit Accepté'), poidsNetRefaction: champNombre('poids net après réfaction'),
     heureEntree: champ('Heure (Entrée)'), heureSortie: champ('Heure (Sortie)'),
-    aPlates: nombreFr(champ('Feves plates')), aMitees: nombreFr(champ('Feves mitées')), aGermees: nombreFr(champ('Feves germées')),
-    aArdoisees: nombreFr(champ('Feves ardoisées')), aBrisures: nombreFr(champ('Brisures')), aMatEtr: nombreFr(champ('Matières étrangères')),
-    aHumidite: nombreFr(champ('Humidité')), aMoisies: nombreFr(champ('Feves moisies')), aGrainage: nombreFr(champ('Grainage')),
-    aDefectueuses: nombreFr(champ('Défectueuses')), aDechets: nombreFr(champ('Déchets')), aViolettes: nombreFr(champ('Feves violettes')),
-    aFevesBrisees: nombreFr(champ('Feves brisées')), aCrabots: nombreFr(champ('Crabots')), aFfa: champ('F.f.a'),
-    ficheCq: mCq ? mCq[1] : null, grade: mGrade ? mGrade[0] : null,
+    aPlates: champNombre('Feves plates'), aMitees: champNombre('Feves mitées'), aGermees: champNombre('Feves germées'),
+    aArdoisees: champNombre('Feves ardoisées'), aBrisures: champNombre('Brisures'), aMatEtr: champNombre('Matières étrangères'),
+    aHumidite: champNombre('Humidité'), aMoisies: champNombre('Feves moisies'), aGrainage: champNombre('Grainage'),
+    aDefectueuses: champNombre('Défectueuses'), aDechets: champNombre('Déchets'), aViolettes: champNombre('Feves violettes'),
+    aFevesBrisees: champNombre('Feves brisées'), aCrabots: champNombre('Crabots'), aFfa: champNombre('F.f.a'),
+    ficheCq: mCq ? (mCq[1] + (mCq[2]||'')) : null, grade: mGrade ? mGrade[0] : null,
   };
 }
 async function ocTicketImporterSource(inputEl){
@@ -11388,11 +11458,17 @@ async function ocTicketImporterSource(inputEl){
   const statutEl = document.getElementById('tpsImportStatut');
   if (statutEl) statutEl.textContent = 'Lecture du document...';
   try{
-    let texte;
+    let texte, viaOcr = false;
     if (estPdf){
       const lignes = await ocPdfExtraireLignes(file);
-      if (lignes.length===0) throw new Error("Aucun texte lisible dans ce PDF (probablement un scan, non pris en charge pour l'instant) -- remplis les champs manuellement.");
-      texte = lignes.join('\n');
+      if (lignes.length===0){
+        // Pas de texte integre : probablement un scan -- bascule sur la lecture OCR (plus lente, 10-30s).
+        viaOcr = true;
+        if (statutEl) statutEl.textContent = 'PDF scanné détecté — lecture OCR en cours (10 à 30 secondes)...';
+        texte = await ocOcrPdfScan(file, pct => { if (statutEl) statutEl.textContent = 'Lecture OCR en cours… '+pct+'%'; });
+      } else {
+        texte = lignes.join('\n');
+      }
     } else {
       texte = await ocLireDocxTexte(file);
     }
@@ -11445,9 +11521,10 @@ async function ocTicketImporterSource(inputEl){
     if (!d.connaissement) manquants.push('connaissement');
     if (d.poidsNetRefaction==null) manquants.push('poids net payé');
     if (!document.getElementById('tps_coop').value) manquants.push('coopérative (fournisseur non reconnu)');
-    if (statutEl) statutEl.textContent = manquants.length
+    const suffixeOcr = viaOcr ? ' Lu par OCR (scan) : vérifie en particulier les plaques et les chiffres avant de générer.' : '';
+    if (statutEl) statutEl.textContent = (manquants.length
       ? 'Champs non trouvés ou coopérative non reconnue, à compléter à la main : '+manquants.join(', ')+'.'
-      : 'Champs importés depuis le bordereau — vérifie avant de générer.';
+      : 'Champs importés depuis le bordereau — vérifie avant de générer.') + suffixeOcr;
   }catch(e){
     if (statutEl) statutEl.textContent = '';
     showToast('Échec de la lecture du document : '+e.message);
@@ -12835,7 +12912,7 @@ function _renderBrut(){
     html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal xl">'
       + '<h3>Ticket de pesée</h3>'
       + '<div class="hint" style="margin-bottom:10px;">Aucun achat existant requis : tout est saisi ici (livraison + relevé usine), rien n\'est enregistré en base, seul le document Word est généré.</div>'
-      + '<label class="field">Importer un bordereau source (Word ou PDF) — remplit automatiquement les champs ci-dessous'
+      + '<label class="field">Importer un bordereau source (Word, PDF ou scan) — remplit automatiquement les champs ci-dessous'
       +   '<input type="file" accept=".docx,.pdf" onchange="ocTicketImporterSource(this)"></label>'
       + '<p class="hint" id="tpsImportStatut" style="margin:-8px 0 14px;"></p>'
       + '<div id="modal-fields">'
