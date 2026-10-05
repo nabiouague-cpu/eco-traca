@@ -1491,7 +1491,7 @@ async function enregistrerDemandeAvecFichier(coop, o, fichier, nomFichier){
   let erreurEmail = null;
   try{
     const { error: errEmail } = await supabaseClient.functions.invoke('email-nouvelle-demande', { body:{ demande_id:newId } });
-    if (errEmail) erreurEmail = errEmail.message;
+    if (errEmail) erreurEmail = await detailErreurEmail(errEmail);
   }catch(e){ erreurEmail = e.message; }
   return { ok:true, demandeObj, erreurEmail };
 }
@@ -1500,6 +1500,18 @@ function telechargerBlob(blob, nom){
   const a = document.createElement('a'); a.href = url; a.download = nom;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   setTimeout(()=>URL.revokeObjectURL(url), 2000);
+}
+
+// ====================== ECHEC D'ENVOI D'UN E-MAIL : MESSAGE CLAIR ======================
+// supabase-js renvoie « Edge Function returned a non-2xx status code » : le vrai motif (renvoye par la fonction) se lit dans error.context.
+// Quand la LIMITE D'ENVOI DE RESEND est atteinte (quota journalier ou mensuel), l'e-mail n'est PAS envoye et n'est pas mis en attente : la demande, elle, est bien creee.
+async function detailErreurEmail(error){
+  let texte = String((error && error.message) || error || '');
+  try{ if (error && error.context && typeof error.context.text === 'function'){ const brut = await error.context.text(); try{ texte = String(JSON.parse(brut).error || brut); }catch(_e){ texte = brut || texte; } } }catch(_e){ /* on garde le message de base */ }
+  if (/monthly_quota_exceeded/.test(texte)) return 'limite MENSUELLE d\'envoi Resend atteinte : aucun e-mail ne part avant le mois prochain ou le passage à une offre supérieure';
+  if (/daily_quota_exceeded/.test(texte)) return 'limite JOURNALIÈRE d\'envoi Resend atteinte (100 e-mails par jour sur l\'offre gratuite) : réessaie dans 24 h avec « ✉ Relancer », ou passe à une offre supérieure';
+  if (/quota/i.test(texte)) return 'limite d\'envoi Resend atteinte : réessaie plus tard avec « ✉ Relancer »';
+  return texte;
 }
 
 // Fenetre « Generer le contrat » : 3 actions.
@@ -1996,7 +2008,7 @@ async function genererContratsGroupe(){
 
       try{
         const { error: errEmail } = await supabaseClient.functions.invoke('email-nouvelle-demande', { body: { demande_id: newId } });
-        if (errEmail) echecsEmail.push(coop.nom+' ('+errEmail.message+')');
+        if (errEmail) echecsEmail.push(coop.nom+' ('+await detailErreurEmail(errEmail)+')');
       }catch(eEmail){ echecsEmail.push(coop.nom+' ('+eEmail.message+')'); }
       if (![coop.email1, coop.email2, coop.email3].some(e=>String(e||'').trim())) sansEmail.push(coop.nom);
       ok++;
@@ -2231,7 +2243,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-121';
+const APP_VERSION = '2026-10-02-122';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -2818,7 +2830,7 @@ async function creerDemandeBaseDonnees(coopId, fichiers){
     if (error){ showToast("Fichiers déposés, mais la création de la demande a échoué : "+error.message); return; }
     try{
       const { error: errEmail } = await supabaseClient.functions.invoke('email-nouvelle-demande', { body: { demande_id: newId } });
-      if (errEmail) showToast("Fichiers déposés, mais l'envoi de l'email a échoué : "+errEmail.message+". Utilisez « ✉ Relancer » pour réessayer.", 'error');
+      if (errEmail) showToast("Fichiers déposés, mais l'envoi de l'email a échoué : "+(await detailErreurEmail(errEmail))+". Utilisez « ✉ Relancer » pour réessayer.", 'error');
       else showToast('Fichiers déposés et coopérative notifiée par email.', 'success');
     }catch(eEmail){
       showToast("Fichiers déposés, mais l'envoi de l'email a échoué : "+eEmail.message+". Utilisez « ✉ Relancer » pour réessayer.", 'error');
@@ -3735,7 +3747,7 @@ async function creerDemande(){
     // probleme du 19/09 : 9 cooperatives non notifiees, sans que rien ne le signale).
     try{
       const { error: errEmail } = await supabaseClient.functions.invoke('email-nouvelle-demande', { body: { demande_id: newId } });
-      if (errEmail) echecsEmail.push(coop.nom+' ('+errEmail.message+')');
+      if (errEmail) echecsEmail.push(coop.nom+' ('+await detailErreurEmail(errEmail)+')');
     }catch(eEmail){ echecsEmail.push(coop.nom+' ('+eEmail.message+')'); }
     if (![coop.email1, coop.email2, coop.email3].some(e=>String(e||'').trim())) sansEmail.push(coop.nom);
     if (btn && targetCoops.length>1) btn.textContent = 'Création en cours… ('+created+'/'+targetCoops.length+')';
@@ -4070,7 +4082,7 @@ async function renvoyerEmailDemande(demandeId, btn){
   if (btn){ btn.disabled = true; btn.textContent = 'Envoi…'; }
   try{
     const { error } = await supabaseClient.functions.invoke('email-nouvelle-demande', { body: { demande_id: demandeId } });
-    if (error){ showToast("Échec de l'envoi : "+error.message); }
+    if (error){ showToast("Échec de l'envoi : "+(await detailErreurEmail(error))); }
     else { showToast('Email renvoyé.', 'success'); }
   }catch(e){ showToast("Échec de l'envoi : "+e.message); }
   if (btn){ btn.disabled = false; btn.textContent = "✉ Renvoyer l'email"; }
