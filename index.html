@@ -1107,6 +1107,7 @@ const ICON_SAUVEGARDES = '<svg viewBox="0 0 24 24" fill="none" stroke="currentCo
 const ICON_BASEDONNEES = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg>';
 const ICON_STOCKAGE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>';
 const ICON_DEMANDES = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7"/><path d="M8 7h9v9"/></svg>';
+const ICON_TRACAGE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>';
 
 function openContratRAModal(coopId){
   const coop = coopById(coopId);
@@ -2257,7 +2258,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-130';
+const APP_VERSION = '2026-10-02-131';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3134,6 +3135,108 @@ function chargerPdfLib(){
   _pdfLib = (async()=>{ if (typeof PDFLib==='undefined') await chargerScriptExterne(PDFLIB_CDN); if (typeof PDFLib==='undefined') throw new Error('pdf-lib indisponible'); return PDFLib; })().catch(e=>{ _pdfLib = null; throw e; });
   return _pdfLib;
 }
+// ---- pdf.js : lecture du texte d'un connaissement source (PDF) pour pre-remplir le formulaire ----
+const PDFJS_CDN = ['https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.5.141/pdf.min.js', 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.5.141/build/pdf.min.js'];
+const PDFJS_WORKER_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.5.141/pdf.worker.min.js';
+let _pdfJs = null;
+function chargerPdfJs(){
+  if (_pdfJs) return _pdfJs;
+  _pdfJs = (async()=>{
+    if (typeof pdfjsLib==='undefined') await chargerScriptExterne(PDFJS_CDN);
+    if (typeof pdfjsLib==='undefined') throw new Error('pdf.js indisponible');
+    pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_CDN;
+    return pdfjsLib;
+  })().catch(e=>{ _pdfJs = null; throw e; });
+  return _pdfJs;
+}
+// Reconstruit le texte du PDF ligne par ligne (items regroupes par y a 2pt pres, tries par x) --
+// pdf.js ne propose pas d'equivalent a "pdftotext -layout", on le refait nous-memes.
+async function ocPdfExtraireLignes(file){
+  const lib = await chargerPdfJs();
+  const data = new Uint8Array(await file.arrayBuffer());
+  const doc = await lib.getDocument({ data: data }).promise;
+  const page = await doc.getPage(1);
+  const contenu = await page.getTextContent();
+  const items = contenu.items.map(it=>({ str: it.str, x: it.transform[4], y: Math.round(it.transform[5]) }));
+  const parLigne = new Map();
+  items.forEach(it=>{
+    let cle = null;
+    for (const k of parLigne.keys()){ if (Math.abs(k-it.y)<=2){ cle = k; break; } }
+    if (cle===null) cle = it.y;
+    if (!parLigne.has(cle)) parLigne.set(cle, []);
+    parLigne.get(cle).push(it);
+  });
+  return Array.from(parLigne.entries())
+    .sort((a,b)=>b[0]-a[0])
+    .map(([y, its])=>its.sort((a,b)=>a.x-b.x).map(i=>i.str).join(' ').replace(/\s+/g,' ').trim())
+    .filter(l=>l.length>0);
+}
+function ocNombreFrVersFloat(s){
+  return s ? parseFloat(String(s).replace(/\s/g,'').replace(',', '.')) : null;
+}
+function ocDateFrVersIso(s){
+  const p = String(s||'').split('/');
+  return p.length===3 ? p[2]+'-'+p[1]+'-'+p[0] : '';
+}
+// Extrait du connaissement d'origine (PDF genere par le logiciel des cooperatives, meme
+// gabarit a chaque fois) les informations propres a CETTE livraison -- tout ce qui n'est pas
+// propre a la cooperative finale choisie (son identite, son trajet, son TKM restent les siens,
+// deja geres par ocConnRappelerMemoireFinale/le choix de la cooperative).
+function ocConnExtraireDuTexte(lignes){
+  const texte = lignes.join('\n');
+  const m1 = re => { const r = texte.match(re); return r ? r[1].trim() : ''; };
+  const poidsBrutStr = m1(/Poids brut \(Kg\)\s+([\d\s]+,\d+)/);
+  const poidsNetStr = m1(/Poids net \(Kg\)\s+([\d\s]+,\d+)/);
+  const dateStr = m1(/Date Edition\s*:\s*(\d{2}\/\d{2}\/\d{4})/);
+  return {
+    coopANom: m1(/EXPEDITEUR\s*:\s*\S+\s+(.+)/),
+    traite: m1(/Traite\s*:\s*(\S+)/),
+    nomTransporteur: m1(/Nom Transporteur\s*:\s*(.+)/),
+    immatVehicule: m1(/Immat\.?\s*Véhicule\s*:\s*(.+)/),
+    immatRemorque: m1(/Immat\.?\s*Remorque\s*:\s*(.+)/),
+    nomChauffeur: m1(/Nom Chauffeur\s*:\s*(.+)/),
+    nombreSacs: m1(/Nombre de sacs\s+(\d+)/),
+    poidsBrut: poidsBrutStr ? ocNombreFrVersFloat(poidsBrutStr) : null,
+    poidsNet: poidsNetStr ? ocNombreFrVersFloat(poidsNetStr) : null,
+    dateSaisie: dateStr ? ocDateFrVersIso(dateStr) : '',
+  };
+}
+// Declenchee par l'input file de la modale "Generer un connaissement" : lit le PDF, extrait les
+// champs, pre-remplit le formulaire (la cooperative finale et son trajet/TKM restent inchanges --
+// ils viennent du choix de la cooperative, pas du document importe).
+async function ocImporterConnaissementSource(inputEl){
+  const file = inputEl.files && inputEl.files[0];
+  if (!file) return;
+  const statutEl = document.getElementById('connImportStatut');
+  if (statutEl) statutEl.textContent = 'Lecture du PDF...';
+  try{
+    const lignes = await ocPdfExtraireLignes(file);
+    if (lignes.length===0) throw new Error("Aucun texte lisible dans ce PDF (probablement un scan) -- remplis les champs manuellement.");
+    const d = ocConnExtraireDuTexte(lignes);
+    const set = (id, val) => { const el = document.getElementById(id); if (el && val) el.value = val; };
+    set('connCoopANom', d.coopANom);
+    set('connTraite', d.traite);
+    set('connTransporteur', d.nomTransporteur);
+    set('connImmatVehicule', d.immatVehicule);
+    set('connImmatRemorque', d.immatRemorque);
+    set('connChauffeur', d.nomChauffeur);
+    set('connSacs', d.nombreSacs);
+    if (d.poidsBrut!=null) set('connPoidsBrut', String(d.poidsBrut));
+    if (d.poidsNet!=null) set('connPoidsNet', String(d.poidsNet));
+    set('connDateSaisie', d.dateSaisie);
+    const manquants = [];
+    if (!d.coopANom) manquants.push("coopérative d'origine");
+    if (!d.nombreSacs) manquants.push('sacs');
+    if (d.poidsNet==null) manquants.push('poids net');
+    if (!d.dateSaisie) manquants.push('date');
+    if (statutEl) statutEl.textContent = manquants.length
+      ? 'Champs non trouvés dans le PDF, à compléter à la main : '+manquants.join(', ')+'.'
+      : 'Champs importés depuis le PDF — vérifie avant de générer.';
+  }catch(e){
+    if (statutEl) statutEl.textContent = '';
+    showToast('Échec de la lecture du PDF : '+e.message);
+  }
+}
 function optionsCompressionZip(nom){
   if (/\.(jpe?g|png|gif|webp|zip|7z|rar|gz|mp4|mov)$/i.test(nom)) return { compression:'STORE' };                       // deja compresses : inutile de les recompresser
   if (/\.(geojson|json|csv|tsv|txt|xml|kml|svg|html?|md)$/i.test(nom)) return { compression:'DEFLATE', compressionOptions:{ level:9 } };   // texte : jusqu'a 80 % de gain
@@ -3388,6 +3491,32 @@ function renderStockageTab(){
     + '</div>'
     + '</div>'
     + '</div>';
+  return html;
+}
+
+// Onglet « Traçage de volume » : rassemble les trois étapes développées séparément (tracer un volume
+// chez une coopérative en gestion directe, générer le connaissement d'une coopérative finale certifiée
+// à partir d'un connaissement source, générer son ticket de pesée) sans les enchaîner automatiquement --
+// chaque étape reste indépendante et peut être utilisée seule.
+function renderTracageTab(){
+  let html = '<div class="panel-head"><h2>Traçage de volume</h2>'
+    + '<p>Trois outils indépendants, à utiliser dans l\'ordre pour documenter un volume de bout en bout : répartition chez les producteurs réels, puis connaissement et ticket de pesée au nom de la coopérative finale certifiée.</p></div>';
+
+  html += '<div class="panel" style="margin-bottom:16px;">'
+    + '<div class="panel-head"><h2>1. Tracer un volume</h2><p>Répartit un volume acheté entre les producteurs réels d\'une coopérative en gestion directe (sans compte portail) : enregistre un achat par producteur (plafond 70% suivi) et télécharge la fiche de traçabilité Excel remplie.</p></div>'
+    + '<div style="padding:0 18px 18px;">' + ocBoutonTracerVolume('') + '</div>'
+    + '</div>';
+
+  html += '<div class="panel" style="margin-bottom:16px;">'
+    + '<div class="panel-head"><h2>2. Générer le connaissement</h2><p>Documente le trajet d\'une coopérative d\'origine (pas besoin d\'être dans la base) vers une coopérative finale certifiée. Permet d\'importer un connaissement source (PDF) pour pré-remplir automatiquement le poids, la date, le transporteur, etc.</p></div>'
+    + '<div style="padding:0 18px 18px;">' + ocBoutonGenererConnaissement() + '</div>'
+    + '</div>';
+
+  html += '<div class="panel" style="margin-bottom:16px;">'
+    + '<div class="panel-head"><h2>3. Générer le ticket de pesée</h2><p>Toutes les informations (livraison + relevé usine) sont saisies directement dans la fenêtre : aucun achat existant n\'est requis, rien n\'est enregistré en base, seul le document Word est généré.</p></div>'
+    + '<div style="padding:0 18px 18px;"><button class="btn btn-primary" onclick="ocOuvrirTicketPeseeStandalone()">Générer un ticket de pesée</button></div>'
+    + '</div>';
+
   return html;
 }
 
@@ -5639,6 +5768,24 @@ function ouvrirGenerationConnaissement(){
   state.modal = { type:'genererConnaissement', payload:{} };
   render();
 }
+// Genere le QR (image + matrice de secours pour l'impression) pour un contenu donne --
+// partage entre le flux de connaissement autonome et celui integre a "Tracer un volume".
+async function ocConnGenererQr(contenuQr){
+  const conteneurQr = document.createElement('div');
+  conteneurQr.style.cssText = 'position:fixed;left:-9999px;top:-9999px;';
+  document.body.appendChild(conteneurQr);
+  const qrObj = new QRCode(conteneurQr, { text: contenuQr, width: 240, height: 240, correctLevel: QRCode.CorrectLevel.M });
+  await new Promise(r=>setTimeout(r, 60));
+  let qrMatrice = null;
+  try{ const oq = qrObj._oQRCode; const nq = oq.getModuleCount(); qrMatrice = []; for (let r=0; r<nq; r++){ const lg = []; for (let k=0; k<nq; k++) lg.push(!!oq.isDark(r,k)); qrMatrice.push(lg); } }catch(e){ qrMatrice = null; }
+  let qrDataUrl = '';
+  const canvas = conteneurQr.querySelector('canvas');
+  const img = conteneurQr.querySelector('img');
+  if (canvas) qrDataUrl = canvas.toDataURL('image/png');
+  else if (img) qrDataUrl = img.src;
+  document.body.removeChild(conteneurQr);
+  return { qrDataUrl: qrDataUrl, qrMatrice: qrMatrice };
+}
 function fermerGenerationConnaissement(){
   state.modal = null;
   render();
@@ -5647,11 +5794,17 @@ function connFmtKg(n){
   const v = Number(n)||0;
   return v.toLocaleString('fr-FR', {minimumFractionDigits:2, maximumFractionDigits:2});
 }
-async function genererConnaissement(){
+// coopBIdOverride/poidsNetOverride/nombreSacsOverride : utilises quand la generation est
+// declenchee depuis "Tracer un volume" (coop B = la cooperative choisie la-bas, poids net/sacs
+// = le volume/nombre de sacs deja reparti entre ses producteurs -- pas ressaisis ici).
+// silencieux : n'affiche pas son propre toast et ne ferme pas la modale (l'appelant s'en charge).
+// Retourne { numeroConnaissement, coopB } en cas de succes, null si la generation a echoue
+// (deja signale a l'utilisateur via showToast).
+async function genererConnaissement(coopBIdOverride, poidsNetOverride, nombreSacsOverride, silencieux){
   const v = id => (document.getElementById(id)||{}).value || '';
   const coopAId = v('connCoopA'); // peut etre vide (cooperative initiale hors base)
   const coopANom = v('connCoopANom').trim();
-  const coopBId = v('connCoopB');
+  const coopBId = coopBIdOverride || v('connCoopB');
   const coopB = state.cooperatives.find(c=>c.id===coopBId);
   // Numero complet = prefixe verrouille (code CCC de B-annee campagne-2-) + le
   // seul numero final saisi par l'utilisateur, comme pour les fiches de tracabilite.
@@ -5680,9 +5833,9 @@ async function genererConnaissement(){
   const immatVehicule = v('connImmatVehicule').trim();
   const immatRemorque = v('connImmatRemorque').trim();
   const nomChauffeur = v('connChauffeur').trim();
-  const nombreSacs = v('connSacs');
+  const nombreSacs = nombreSacsOverride!=null ? String(nombreSacsOverride) : v('connSacs');
   const poidsBrut = v('connPoidsBrut');
-  const poidsNet = v('connPoidsNet');
+  const poidsNet = poidsNetOverride!=null ? String(poidsNetOverride) : v('connPoidsNet');
   const departement = v('connDepartement').trim();
   const sousPrefecture = v('connSousPrefecture').trim();
   const adresseExpediteur = v('connAdresseExpediteur').trim();
@@ -5697,7 +5850,7 @@ async function genererConnaissement(){
   if (!numeroConnaissement) manquants.push('N° de connaissement');
   if (!dateSaisie) manquants.push('Date du connaissement');
   if (!poidsNet) manquants.push('Poids net');
-  if (manquants.length){ showToast('Champs obligatoires manquants : '+manquants.join(', ')); return; }
+  if (manquants.length){ showToast('Champs obligatoires manquants : '+manquants.join(', ')); return null; }
 
   // La date affichee sur le document (haut de page + Date Edition) est celle
   // saisie dans la case unique jour/mois/annee -- seule l'heure reste aleatoire.
@@ -5708,19 +5861,7 @@ async function genererConnaissement(){
   const contenuQr = connContenuQr({ numeroConnaissement: numeroConnaissement, dateObj: dateObj, traite: traite, codeCcc: codeCcc, lieuDepart: lieuDepart,
     nomTransporteur: nomTransporteur, immatVehicule: immatVehicule, immatRemorque: immatRemorque, nomChauffeur: nomChauffeur, poidsNet: poidsNet });
 
-  const conteneurQr = document.createElement('div');
-  conteneurQr.style.cssText = 'position:fixed;left:-9999px;top:-9999px;';
-  document.body.appendChild(conteneurQr);
-  const qrObj = new QRCode(conteneurQr, { text: contenuQr, width: 240, height: 240, correctLevel: QRCode.CorrectLevel.M });
-  await new Promise(r=>setTimeout(r, 60));
-  let qrMatrice = null;
-  try{ const oq = qrObj._oQRCode; const nq = oq.getModuleCount(); qrMatrice = []; for (let r=0; r<nq; r++){ const lg = []; for (let k=0; k<nq; k++) lg.push(!!oq.isDark(r,k)); qrMatrice.push(lg); } }catch(e){ qrMatrice = null; }
-  let qrDataUrl = '';
-  const canvas = conteneurQr.querySelector('canvas');
-  const img = conteneurQr.querySelector('img');
-  if (canvas) qrDataUrl = canvas.toDataURL('image/png');
-  else if (img) qrDataUrl = img.src;
-  document.body.removeChild(conteneurQr);
+  const { qrDataUrl, qrMatrice } = await ocConnGenererQr(contenuQr);
 
   const donnees = {
     id: 'conn_'+Date.now(),
@@ -5736,7 +5877,7 @@ async function genererConnaissement(){
   };
   try{
     const { error } = await supabaseClient.from('connaissements').insert(donnees);
-    if (error){ showToast("Échec de l'enregistrement : "+error.message); return; }
+    if (error){ showToast("Échec de l'enregistrement : "+error.message); return null; }
     // Memorise le transporteur pour cette cooperative initiale (nom libre).
     await supabaseClient.from('connaissement_memoire_initiale').upsert({
       cle_nom: ocConnCleInitiale(coopANom), nom_transporteur: nomTransporteur,
@@ -5750,7 +5891,7 @@ async function genererConnaissement(){
       lieu_depart: lieuDepart, distance: distance?Number(distance):null, cout_tkm: coutTkm?Number(coutTkm):null,
       updated_at: new Date().toISOString(),
     });
-  }catch(e){ showToast('Erreur : '+e.message); return; }
+  }catch(e){ showToast('Erreur : '+e.message); return null; }
 
   // Cout de transport theorique = (poids net receptionne x cout TKM), comme
   // indique sur le document -- varie forcement avec le poids net saisi.
@@ -5764,13 +5905,16 @@ async function genererConnaissement(){
   // Ecrit le document tout de suite apres l'ouverture, sans rien entre les deux --
   // evite que l'onglet affiche "about:blank" le temps que le contenu arrive.
   const f = window.open('', '_blank');
-  if (!f){ showToast("Le navigateur a bloqué l'ouverture — autorise les fenêtres pop-up pour imprimer le connaissement."); return; }
+  if (!f){ showToast("Le navigateur a bloqué l'ouverture — autorise les fenêtres pop-up pour imprimer le connaissement."); return null; }
   f.document.open();
   f.document.write(html);
   f.document.close();
-  state.modal = null;
-  showToast('Connaissement généré — utilise « Imprimer » puis « Enregistrer en PDF ».', 'success');
-  render();
+  if (!silencieux){
+    state.modal = null;
+    showToast('Connaissement généré — utilise « Imprimer » puis « Enregistrer en PDF ».', 'success');
+    render();
+  }
+  return { numeroConnaissement: numeroConnaissement, coopB: coopB };
 }
 // ---------------------------------------------------------------------------------
 // Connaissement : page SVG de 210 x 297 mm (1 unite = 1 mm).
@@ -11094,13 +11238,18 @@ function ticketRecapHtml(a){
     ['Reçu à l\'usine', [a.nombre_sacs_accepte ? fmtNum(a.nombre_sacs_accepte)+' sacs acceptés' : '', a.poids_brut_accepte ? fmtNum(a.poids_brut_accepte)+' kg accepté' : '', a.poids_net_produit ? fmtNum(a.poids_net_produit)+' kg net payé' : ''].filter(Boolean).join(' · ')]];
   return '<div class="ticket-recap"><b>Déjà repris d\'ORIGEN</b> (rien à saisir) : '+lignes.filter(l=>l[1]).map(l=>'<span>'+esc(l[0])+' : <b>'+esc(l[1])+'</b></span>').join('')+'</div>';
 }
-function ticketFormulaireHtml(a, d){
+// Partie commune du formulaire (31 champs de la pesee usine + nature du produit), independante de
+// toute livraison reelle -- reutilisee telle quelle par le formulaire lie a un achat et par le
+// formulaire autonome (Tracage de volume).
+function ticketSectionsHtml(a, d){
   d = d || {};
   const nat = ticketNature(a, d);
-  return ticketRecapHtml(a)
-    + TICKET_SECTIONS.map(sec=>'<div class="ticket-section">'+esc(sec.titre)+'</div><div class="ticket-grille">'+sec.champs.map(c=>ticketChampHtml(c, d)).join('')+'</div>').join('')
+  return TICKET_SECTIONS.map(sec=>'<div class="ticket-section">'+esc(sec.titre)+'</div><div class="ticket-grille">'+sec.champs.map(c=>ticketChampHtml(c, d)).join('')+'</div>').join('')
     + '<div class="ticket-section">Nature du produit</div><div class="ticket-cases">'
     + TICKET_NATURES.map(([cle,lib])=>'<label><input type="checkbox" name="'+cle+'" '+(nat[cle.replace('nat_','')]?'checked':'')+'> '+esc(lib)+'</label>').join('')+'</div>';
+}
+function ticketFormulaireHtml(a, d){
+  return ticketRecapHtml(a) + ticketSectionsHtml(a, d || {});
 }
 async function ouvrirTicketPesee(achatId){
   const a = (state.achats||[]).find(x=>x.id===achatId);
@@ -11127,38 +11276,90 @@ async function enregistrerTicketPesee(generer){
     if (generer) await genererTicketPesee(achatId, d); else showToast('Informations du ticket enregistrées.', 'success');
   }finally{ state.ticketEnCours = false; }
 }
+// ---- Ticket de pesee autonome (onglet Tracage de volume) : aucun achat reel requis, tout est saisi
+// dans la modale (livraison + pesee usine). Rien n'est enregistre en base -- document genere a la volee,
+// a l'image de la generation autonome du connaissement. prefill : valeurs de depart (ex. depuis l'etape
+// connaissement du meme tracage), toutes modifiables.
+function ocOuvrirTicketPeseeStandalone(prefill){
+  openModal('ticketPeseeStandalone', { prefill: prefill || {}, donnees: {} });
+}
+async function genererTicketPeseeStandalone(){
+  if (state.ticketEnCours) return; state.ticketEnCours = true;
+  try{
+    const g = id => (document.getElementById(id)||{}).value || '';
+    const coopId = g('tps_coop');
+    const poidsNetProduit = g('tps_poids_net_produit');
+    const manquants = [];
+    if (!coopId) manquants.push('Coopérative');
+    if (!(Number(poidsNetProduit)>0)) manquants.push('Poids net produit (payé)');
+    if (manquants.length){ showToast('Champs obligatoires manquants : '+manquants.join(', ')); return; }
+
+    const a = {
+      id: genId('tps'),
+      cooperative_id: coopId,
+      connaissement: g('tps_connaissement').trim(),
+      campagne_id: g('tps_campagne') || null,
+      lieu_origine: g('tps_lieu_origine').trim(),
+      date: g('tps_date'),
+      nombre_sacs: g('tps_sacs_declares') ? Number(g('tps_sacs_declares')) : null,
+      poids_brut: g('tps_poids_brut') ? Number(g('tps_poids_brut')) : null,
+      quantite_kg: g('tps_poids_net') ? Number(g('tps_poids_net')) : null,
+      immat_vehicule: g('tps_immat_vehicule').trim(),
+      immat_remorque: g('tps_immat_remorque').trim(),
+      nom_transporteur: g('tps_transporteur').trim(),
+      nom_chauffeur: g('tps_chauffeur').trim(),
+      nombre_sacs_accepte: g('tps_sacs_acceptes') ? Number(g('tps_sacs_acceptes')) : null,
+      poids_brut_accepte: g('tps_poids_brut_accepte') ? Number(g('tps_poids_brut_accepte')) : null,
+      poids_net_produit: Number(poidsNetProduit),
+    };
+    const d = lireFormulaireTicket();
+    const { blob, nomFichier } = await ocConstruireTicketPeseeDocx(a, d);
+    telechargerBlob(blob, nomFichier);
+    closeModal();
+    showToast('Ticket de pesée généré.', 'success');
+  }catch(e){ showToast('Échec de la génération du ticket de pesée : '+e.message); }
+  finally{ state.ticketEnCours = false; }
+}
+// Construit le .docx du ticket de pesee a partir d'un couple (a, d) -- a = livraison (achat reel ou
+// objet autonome reconstitue), d = donnees de la fiche de pesee usine. Partagee entre le flux lie a un
+// achat reel (genererTicketPesee) et le flux autonome (genererTicketPeseeStandalone, "Tracage de volume").
+async function ocConstruireTicketPeseeDocx(a, d){
+  if (typeof JSZip==='undefined') throw new Error("La bibliothèque de compression n'a pas pu se charger (connexion internet requise).");
+  const rep = await fetch('modeles/ticket_de_pesee.docx?v='+encodeURIComponent(APP_VERSION), { cache:'no-cache' });
+  if (!rep.ok) throw new Error('modèle introuvable (HTTP '+rep.status+')');
+  const zip = await JSZip.loadAsync(await rep.arrayBuffer());
+  let xml = await zip.file('word/document.xml').async('string');
+  const v = ticketValeurs(a, d), esc = (t)=>String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  // « Nature du produit » : marques (petite image dans la case) — presentes dans le modele pour « Tout venant » et « Certifie », ajoutees ou retirees selon la saisie
+  const rxMarque = (id)=>new RegExp('<w:r [^>]*><w:rPr><w:noProof/></w:rPr><w:drawing><wp:inline(?:(?!</w:drawing>).)*?id="'+id+'"(?:(?!</w:drawing>).)*?</w:drawing></w:r>','g');
+  const nature = ticketNature(a, d), marque = (xml.match(rxMarque('303715626'))||[])[0] || '';
+  let compteur = 0; const marqueUnique = ()=> marque.replace(/(<wp:docPr id=")\d+(")/, '$1'+(900000+(++compteur))+'$2');
+  if (!nature.tout_venant) xml = xml.replace(rxMarque('449898731'), '');
+  if (!nature.certifie) xml = xml.replace(rxMarque('303715626'), '');
+  [['MARQUE_ORDINAIRE','ordinaire'],['MARQUE_PROJET','projet'],['MARQUE_USINE','usine']].forEach(([champ,cle])=>{
+    xml = xml.replace(new RegExp('<w:r><w:t xml:space="preserve">\\{\\{'+champ+'\\}\\}</w:t></w:r>','g'), ()=> nature[cle] ? marqueUnique() : '');
+  });
+  Object.keys(v).forEach(nom=>{
+    let val = String(v[nom]||'').trim(), lim = TICKET_LIMITES[nom], petit = false;
+    if (lim && val.length>lim){ petit = true; const max = Math.floor(lim*1.25); if (val.length>max) val = val.slice(0,max-1).trimEnd()+'…'; }
+    if (petit){   // police reduite (6,5 pt) pour la seule valeur
+      xml = xml.replace(new RegExp('<w:r><w:rPr>((?:(?!</w:rPr>).)*)</w:rPr><w:tab/><w:t xml:space="preserve">\\{\\{'+nom+'\\}\\}</w:t></w:r>','g'),
+        (m, rpr)=>'<w:r><w:rPr>'+rpr.replace(/(<w:sz w:val=")\d+(")/,'$113$2').replace(/(<w:szCs w:val=")\d+(")/,'$113$2')+'</w:rPr><w:tab/><w:t xml:space="preserve">'+esc(val)+'</w:t></w:r>');
+    } else xml = xml.split('{{'+nom+'}}').join(esc(val));
+  });
+  xml = xml.replace(/\{\{[A-Z_]+\}\}/g, '');   // champs sans donnee : laisses vides
+  zip.file('word/document.xml', xml);
+  const blob = await zip.generateAsync({ type:'blob', mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document', compression:'DEFLATE' });
+  const nomFichier = 'Ticket_de_pesee_'+String(a.connaissement||a.id||'sans_numero').replace(/[^A-Za-z0-9_-]+/g,'_')+'.docx';
+  return { blob, nomFichier };
+}
 async function genererTicketPesee(achatId, donnees){
   const a = (state.achats||[]).find(x=>x.id===achatId);
   if (!a){ showToast('Livraison introuvable.'); return; }
   if (!(Number(a.poids_net_produit)>0)){ showToast("Enregistre d'abord la réception à l'usine (poids net payé) : le ticket de pesée en reprend les poids."); return; }
-  if (typeof JSZip==='undefined'){ showToast("La bibliothèque de compression n'a pas pu se charger (connexion internet requise). Réessaie dans un instant."); return; }
   try{
-    const rep = await fetch('modeles/ticket_de_pesee.docx?v='+encodeURIComponent(APP_VERSION), { cache:'no-cache' });
-    if (!rep.ok) throw new Error('modèle introuvable (HTTP '+rep.status+')');
-    const zip = await JSZip.loadAsync(await rep.arrayBuffer());
-    let xml = await zip.file('word/document.xml').async('string');
-    const d = donnees || {}, v = ticketValeurs(a, d), esc = (t)=>String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    // « Nature du produit » : marques (petite image dans la case) — presentes dans le modele pour « Tout venant » et « Certifie », ajoutees ou retirees selon la saisie
-    const rxMarque = (id)=>new RegExp('<w:r [^>]*><w:rPr><w:noProof/></w:rPr><w:drawing><wp:inline(?:(?!</w:drawing>).)*?id="'+id+'"(?:(?!</w:drawing>).)*?</w:drawing></w:r>','g');
-    const nature = ticketNature(a, d), marque = (xml.match(rxMarque('303715626'))||[])[0] || '';
-    let compteur = 0; const marqueUnique = ()=> marque.replace(/(<wp:docPr id=")\d+(")/, '$1'+(900000+(++compteur))+'$2');
-    if (!nature.tout_venant) xml = xml.replace(rxMarque('449898731'), '');
-    if (!nature.certifie) xml = xml.replace(rxMarque('303715626'), '');
-    [['MARQUE_ORDINAIRE','ordinaire'],['MARQUE_PROJET','projet'],['MARQUE_USINE','usine']].forEach(([champ,cle])=>{
-      xml = xml.replace(new RegExp('<w:r><w:t xml:space="preserve">\\{\\{'+champ+'\\}\\}</w:t></w:r>','g'), ()=> nature[cle] ? marqueUnique() : '');
-    });
-    Object.keys(v).forEach(nom=>{
-      let val = String(v[nom]||'').trim(), lim = TICKET_LIMITES[nom], petit = false;
-      if (lim && val.length>lim){ petit = true; const max = Math.floor(lim*1.25); if (val.length>max) val = val.slice(0,max-1).trimEnd()+'…'; }
-      if (petit){   // police reduite (6,5 pt) pour la seule valeur
-        xml = xml.replace(new RegExp('<w:r><w:rPr>((?:(?!</w:rPr>).)*)</w:rPr><w:tab/><w:t xml:space="preserve">\\{\\{'+nom+'\\}\\}</w:t></w:r>','g'),
-          (m, rpr)=>'<w:r><w:rPr>'+rpr.replace(/(<w:sz w:val=")\d+(")/,'$113$2').replace(/(<w:szCs w:val=")\d+(")/,'$113$2')+'</w:rPr><w:tab/><w:t xml:space="preserve">'+esc(val)+'</w:t></w:r>');
-      } else xml = xml.split('{{'+nom+'}}').join(esc(val));
-    });
-    xml = xml.replace(/\{\{[A-Z_]+\}\}/g, '');   // champs sans donnee : laisses vides
-    zip.file('word/document.xml', xml);
-    const blob = await zip.generateAsync({ type:'blob', mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document', compression:'DEFLATE' });
-    telechargerBlob(blob, 'Ticket_de_pesee_'+String(a.connaissement||a.id).replace(/[^A-Za-z0-9_-]+/g,'_')+'.docx');
+    const { blob, nomFichier } = await ocConstruireTicketPeseeDocx(a, donnees || {});
+    telechargerBlob(blob, nomFichier);
     showToast('Ticket de pesée généré.', 'success');
   }catch(e){ showToast('Échec de la génération du ticket de pesée : '+e.message); }
 }
@@ -11823,6 +12024,7 @@ function _renderBrut(){
     + '<button class="sidebar-nav-item '+(!dashActive&&state.tab==='sauvegardes'?'active':'')+'" onclick="setTab(\'sauvegardes\')">'+ICON_SAUVEGARDES+'<span>Sauvegardes</span></button>'
     + '<button class="sidebar-nav-item '+(!dashActive&&state.tab==='basedonnees'?'active':'')+'" onclick="setTab(\'basedonnees\')">'+ICON_BASEDONNEES+'<span>Base de<br>données coop.</span></button>'
     + '<button class="sidebar-nav-item '+(!dashActive&&state.tab==='stockage'?'active':'')+'" onclick="setTab(\'stockage\')">'+ICON_STOCKAGE+'<span>Stockage</span></button>'
+    + '<button class="sidebar-nav-item '+(!dashActive&&state.tab==='tracage'?'active':'')+'" onclick="setTab(\'tracage\')">'+ICON_TRACAGE+'<span>Traçage de<br>volume</span></button>'
     + '</div></nav>'
     + '<div class="main-area">';
 
@@ -11878,6 +12080,7 @@ function _renderBrut(){
     else if (state.tab==='sauvegardes') html += renderSauvegardesTab();
     else if (state.tab==='basedonnees') html += renderBaseDonneesTab();
     else if (state.tab==='stockage') html += renderStockageTab();
+    else if (state.tab==='tracage') html += renderTracageTab();
     else if (state.tab==='demandes') html += renderDemandesTab();
     else html += renderDashboardTab();
   }
@@ -12350,8 +12553,10 @@ function _renderBrut(){
   if (state.modal && state.modal.type==='genererConnaissement'){
     const coopsTriees = state.cooperatives.slice().sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'}));
     html += '<div class="modal-overlay" onclick="if(event.target===this)fermerGenerationConnaissement()"><div class="modal wide">'
-      + '<h2>Tracer un volume</h2>'
+      + '<h2>Générer un connaissement</h2>'
       + '<p class="hint" style="margin:0 0 14px;">Génère le connaissement d\'un volume acheté auprès d\'une coopérative initiale, affiché sous le nom d\'une coopérative finale certifiée.</p>'
+      + '<label class="field" style="margin-bottom:14px;">Importer un connaissement d\'origine (PDF) — remplit automatiquement les champs ci-dessous<input type="file" accept="application/pdf" onchange="ocImporterConnaissementSource(this)"></label>'
+      + '<p class="hint" id="connImportStatut" style="margin:-8px 0 14px;"></p>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 16px;">'
       + '<label class="field">Coopérative initiale *<input type="text" id="connCoopANom" list="connCoopAListe" placeholder="Nom — pas besoin d\'être dans notre base" onblur="ocConnRappelerMemoireInitiale(this.value)"></label>'
       + '<datalist id="connCoopAListe">'
@@ -12449,6 +12654,43 @@ function _renderBrut(){
       + '<div class="hint" style="margin-bottom:10px;">Renseigne ce que l\'usine a relevé : ces informations s\'écrivent sur le ticket, alignées dans les cases du modèle. Tout champ laissé vide reste vide sur le ticket.</div>'
       + '<div id="modal-fields">'+ticketFormulaireHtml(a, pl.donnees)+'</div>'
       + '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Annuler</button><button type="button" class="btn" onclick="enregistrerTicketPesee(false)">Enregistrer</button><button type="button" class="btn btn-primary" onclick="enregistrerTicketPesee(true)">Enregistrer et générer le ticket (Word)</button></div>'
+      + '</div></div>';
+  }
+
+  if (state.modal && state.modal.type==='ticketPeseeStandalone'){
+    const pl = state.modal.payload, pf = pl.prefill || {};
+    const coopsTps = state.cooperatives.slice().sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'}));
+    html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal xl">'
+      + '<h3>Ticket de pesée</h3>'
+      + '<div class="hint" style="margin-bottom:10px;">Aucun achat existant requis : tout est saisi ici (livraison + relevé usine), rien n\'est enregistré en base, seul le document Word est généré.</div>'
+      + '<div id="modal-fields">'
+      +   '<div class="ticket-section">Livraison</div><div class="ticket-grille">'
+      +     '<label class="field">Coopérative *<select id="tps_coop"><option value="">Sélectionner…</option>'
+      +       coopsTps.map(c=>'<option value="'+esc(c.id)+'"'+(pf.coopId===c.id?' selected':'')+'>'+esc(c.nom)+'</option>').join('')
+      +     '</select></label>'
+      +     '<label class="field">Campagne<select id="tps_campagne"><option value="">—</option>'
+      +       state.campagnes.map(c=>'<option value="'+esc(c.id)+'"'+(pf.campagneId===c.id?' selected':'')+'>'+esc(c.nom)+'</option>').join('')
+      +     '</select></label>'
+      +     '<label class="field">N° de connaissement<input type="text" id="tps_connaissement" value="'+esc(pf.connaissement||'')+'"></label>'
+      +     '<label class="field">Lieu de départ<input type="text" id="tps_lieu_origine" value="'+esc(pf.lieuOrigine||'')+'"></label>'
+      +     '<label class="field">Date de la livraison<input type="date" id="tps_date" value="'+esc(pf.date||'')+'"></label>'
+      +     '<div></div>'
+      +     '<label class="field">Nombre de sacs déclarés<input type="number" min="0" step="1" id="tps_sacs_declares" value="'+esc(pf.sacsDeclares||'')+'"></label>'
+      +     '<label class="field">Poids brut déclaré (kg)<input type="number" min="0" step="0.01" id="tps_poids_brut" value="'+esc(pf.poidsBrut||'')+'"></label>'
+      +     '<label class="field">Poids net déclaré (kg)<input type="number" min="0" step="0.01" id="tps_poids_net" value="'+esc(pf.poidsNet||'')+'"></label>'
+      +     '<label class="field">Nom transporteur<input type="text" id="tps_transporteur" value="'+esc(pf.transporteur||'')+'"></label>'
+      +     '<label class="field">Immat. véhicule<input type="text" id="tps_immat_vehicule" value="'+esc(pf.immatVehicule||'')+'"></label>'
+      +     '<label class="field">Immat. remorque<input type="text" id="tps_immat_remorque" value="'+esc(pf.immatRemorque||'')+'"></label>'
+      +     '<label class="field">Nom chauffeur<input type="text" id="tps_chauffeur" value="'+esc(pf.chauffeur||'')+'"></label>'
+      +   '</div>'
+      +   '<div class="ticket-section">Réception à l\'usine</div><div class="ticket-grille">'
+      +     '<label class="field">Nombre de sacs acceptés<input type="number" min="0" step="1" id="tps_sacs_acceptes"></label>'
+      +     '<label class="field">Poids brut accepté (kg)<input type="number" min="0" step="0.01" id="tps_poids_brut_accepte"></label>'
+      +     '<label class="field">Poids net produit (payé, kg) *<input type="number" min="0" step="0.01" id="tps_poids_net_produit"></label>'
+      +   '</div>'
+      +   ticketSectionsHtml({}, pl.donnees)
+      + '</div>'
+      + '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Annuler</button><button type="button" class="btn btn-primary" onclick="genererTicketPeseeStandalone()">Générer le ticket (Word)</button></div>'
       + '</div></div>';
   }
 
