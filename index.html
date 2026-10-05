@@ -2252,7 +2252,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-127';
+const APP_VERSION = '2026-10-02-128';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -10993,6 +10993,7 @@ function detailAchatHtml(a, etat){
     + (function(){ const sd = soldeAchat(a);
         return (Number(a.poids_net_produit)>0 && (!sd || !sd.complet) ? '<button type="button" class="btn-ghost btn-compact" onclick="ouvrirPaiement(\''+a.id+'\')">'+(sd ? 'Ajouter un paiement' : 'Enregistrer le paiement')+'</button>' : '')
           + (sd ? '<button type="button" class="btn-ghost btn-compact" onclick="genererAttestation(\''+a.id+'\')">Attestation de paiement (Word)</button>' : ''); })()
+    + (Number(a.poids_net_produit)>0 ? '<button type="button" class="btn-ghost btn-compact" onclick="genererTicketPesee(\''+a.id+'\')" title="Bordereau de réception de cacao (modèle Word) avec les données de cette livraison">Ticket de pesée (Word)</button>' : '')
     + '<button type="button" class="btn-ghost btn-compact" onclick="openModal(\'achat\','+esc(JSON.stringify(a)).replace(/&#39;/g,"&apos;")+')">Modifier le connaissement</button>'
     + '<button type="button" class="btn-danger-text btn-compact" onclick="'+(a.connaissement?'annulerConnaissementRefoule':'deleteAchat')+'(\''+a.id+'\')">'+(a.connaissement?'Camion refoulé / annuler':'Supprimer')+'</button></div>';
   return '<tr class="detail-achat" data-for="'+esc(a.id)+'"><td colspan="10">'
@@ -11010,6 +11011,57 @@ function detailAchatHtml(a, etat){
     + '</div>'
     + '</div>'+actionsDetail+'</td></tr>';
 }
+// ====================== TICKET DE PESEE (bordereau de réception de cacao) ======================
+// Modèle Word fourni (modeles/ticket_de_pesee.docx). Chaque intitulé reste EXACTEMENT à sa place ; seules les valeurs sont écrites, alignées les unes
+// sous les autres (valeurs textuelles à gauche, chiffres alignés à droite). Les mesures propres à l'usine que ORIGEN ne possède pas (poids d'entrée et de
+// sortie, heures, analyse qualité, n° de bordereau...) restent vides, prêtes à être complétées à la main dans Word.
+const TICKET_LIMITES = { FOURNISSEUR:34, LOCALISATION:26, TELEPHONE:24, N_AGREMENT:24, LIEU_DEPART:16, TRACTEUR:17, VEHICULE:17, TRANSPORTEUR:17, CONDUCTEUR:17, CONNAISSEMENT:20 };
+function ticketNombre(n){ n = Number(n); return n>0 ? Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g,'\u00a0') : ''; }
+function ticketTelephone(t){ const c = String(t||'').replace(/\D/g,''); return c.length===10 ? c.replace(/(\d{2})(?=\d)/g,'$1 ') : String(t||'').trim(); }
+function ticketEstCertifie(a){ return /(^|\b)(RA|FT|CH)\b|rainforest|fairtrade|horizon/i.test(String(a.type_cacao||'')); }
+function ticketValeurs(a){
+  const coop = coopById(a.cooperative_id) || {}, camp = (state.campagnes||[]).find(c=>c.id===a.campagne_id);
+  const aujourdhui = new Date(), dd = aujourdhui.toLocaleDateString('fr-FR');
+  const moyen = Number(a.nombre_sacs)>0 && Number(a.quantite_kg)>0 ? (Number(a.quantite_kg)/Number(a.nombre_sacs)).toFixed(2).replace('.',',') : '';
+  return {
+    CAMPAGNE: camp ? camp.nom : '', DATE_EMISSION: dd, DATE_LONGUE: aujourdhui.toLocaleDateString('fr-FR',{day:'numeric',month:'long',year:'numeric'}),
+    CONNAISSEMENT: a.connaissement||'',
+    FOURNISSEUR: coop.nom||'', N_AGREMENT: coop.ccc_num||'', LOCALISATION: coop.ville||coop.siege_social||'', TELEPHONE: ticketTelephone(coop.contact_contact||coop.representant_legal_contact),
+    LIEU_DEPART: a.lieu_origine||'', DATE_DEPART: dateFr(a.date)||'',
+    SACS_DECLARES: ticketNombre(a.nombre_sacs), BRUT_DECLARE: ticketNombre(a.poids_brut), NET_DECLARE: ticketNombre(a.quantite_kg), POIDS_MOYEN: moyen,
+    TRACTEUR: a.immat_vehicule||'', VEHICULE: a.immat_remorque||'', TRANSPORTEUR: a.nom_transporteur||'', CONDUCTEUR: a.nom_chauffeur||'',
+    SACS_ACCEPTES: ticketNombre(a.nombre_sacs_accepte), POIDS_ACCEPTE: ticketNombre(a.poids_brut_accepte), POIDS_NET_REFACTION: ticketNombre(a.poids_net_produit),
+  };
+}
+async function genererTicketPesee(achatId){
+  const a = (state.achats||[]).find(x=>x.id===achatId);
+  if (!a){ showToast('Livraison introuvable.'); return; }
+  if (!(Number(a.poids_net_produit)>0)){ showToast("Enregistre d'abord la réception à l'usine (poids net payé) : le ticket de pesée en reprend les poids."); return; }
+  if (typeof JSZip==='undefined'){ showToast("La bibliothèque de compression n'a pas pu se charger (connexion internet requise). Réessaie dans un instant."); return; }
+  try{
+    const rep = await fetch('modeles/ticket_de_pesee.docx?v='+encodeURIComponent(APP_VERSION), { cache:'no-cache' });
+    if (!rep.ok) throw new Error('modèle introuvable (HTTP '+rep.status+')');
+    const zip = await JSZip.loadAsync(await rep.arrayBuffer());
+    let xml = await zip.file('word/document.xml').async('string');
+    const v = ticketValeurs(a), esc = (t)=>String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    Object.keys(v).forEach(nom=>{
+      let val = String(v[nom]||'').trim(), lim = TICKET_LIMITES[nom], petit = false;
+      if (lim && val.length>lim){ petit = true; const max = Math.floor(lim*1.25); if (val.length>max) val = val.slice(0,max-1).trimEnd()+'…'; }
+      if (petit){   // police reduite (6,5 pt) pour la seule valeur
+        xml = xml.replace(new RegExp('<w:r><w:rPr>((?:(?!</w:rPr>).)*)</w:rPr><w:tab/><w:t xml:space="preserve">\\{\\{'+nom+'\\}\\}</w:t></w:r>','g'),
+          (m, rpr)=>'<w:r><w:rPr>'+rpr.replace(/(<w:sz w:val=")\d+(")/,'$113$2').replace(/(<w:szCs w:val=")\d+(")/,'$113$2')+'</w:rPr><w:tab/><w:t xml:space="preserve">'+esc(val)+'</w:t></w:r>');
+      } else xml = xml.split('{{'+nom+'}}').join(esc(val));
+    });
+    xml = xml.replace(/\{\{[A-Z_]+\}\}/g, '');   // champs que ORIGEN ne possede pas : laisses vides
+    // « Certifié » : la marque (petite image dans la case) n'est conservée que pour un cacao certifié
+    if (!ticketEstCertifie(a)) xml = xml.replace(/<w:r [^>]*><w:rPr><w:noProof\/><\/w:rPr><w:drawing><wp:inline(?:(?!<\/w:drawing>).)*?id="303715626"(?:(?!<\/w:drawing>).)*?<\/w:drawing><\/w:r>/g, '');
+    zip.file('word/document.xml', xml);
+    const blob = await zip.generateAsync({ type:'blob', mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document', compression:'DEFLATE' });
+    telechargerBlob(blob, 'Ticket_de_pesee_'+String(a.connaissement||a.id).replace(/[^A-Za-z0-9_-]+/g,'_')+'.docx');
+    showToast('Ticket de pesée généré.', 'success');
+  }catch(e){ showToast('Échec de la génération du ticket de pesée : '+e.message); }
+}
+
 function ligneAchatHtml(a, montrerCoop, ouvert, avecNomPlateforme){
   const coop = coopById(a.cooperative_id);
   const etat = etatAchat(a);
