@@ -2229,7 +2229,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-119';
+const APP_VERSION = '2026-10-02-120';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -2840,17 +2840,21 @@ function nomRetourCanonique(nomSource, nomRetour, rang){
   const ex = (String(nomRetour||'').match(/\.[A-Za-z0-9]+$/)||[''])[0];
   return base+(rang>0 ? '_'+(rang+1) : '')+ex;
 }
-function demandeAvecDocumentDeBase(d){ const t = (d && d.types) || []; return !!(d && d.fichier_source_nom && !t.includes('masterdata') && !t.includes('product_movements')); }
+// Documents ajoutes DIRECTEMENT par ECORIGINE pour une cooperative, sans requete de retour (« Documents envoyes », registre / geolocalisation, documents purement
+// informatifs : document_a_signer = false) ne sont JAMAIS renommes ni supprimes : seul un document joint a une requete A RETOUR peut l'etre.
+function demandeAvecDocumentDeBase(d){ const t = (d && d.types) || []; return !!(d && d.fichier_source_nom && d.document_a_signer!==false && !t.includes('masterdata') && !t.includes('product_movements')); }
+function documentDeBaseSupprimable(d){ return !!(d && d.document_a_signer===true && demandeAvecDocumentDeBase(d) && d.fichier_source_path && String(d.fichier_source_path).indexOf('/demandes/'+d.id+'/source/')>0); }
 async function supprimerDocumentDeBaseApresValidation(demande){
-  if (!demande || !demande.fichier_source_path || !demandeAvecDocumentDeBase(demande)) return null;
+  if (!documentDeBaseSupprimable(demande)) return null;      // pas une requete a retour, ou fichier hors du dossier « source » de CETTE demande : conserve
   const retours = (state.demandeFichiers||[]).filter(f=>f.demande_id===demande.id && f.type!=='connaissement');
   if (retours.length===0) return null;                       // rien n'a ete renvoye : le document de base est conserve
   const chemin = demande.fichier_source_path;
-  const partage = (state.demandesCoop||[]).some(d=>d.id!==demande.id && d.fichier_source_path===chemin);   // jamais un fichier utilise par une autre demande
-  if (!partage){
-    const rm = await supabaseClient.storage.from('documents-coop').remove([chemin]);
-    if (rm.error) return { erreur: rm.error.message, nom: demande.fichier_source_nom };
-  }
+  const partage = (state.demandesCoop||[]).some(d=>d.id!==demande.id && d.fichier_source_path===chemin)   // jamais un fichier utilise par une autre demande
+    || (state.envoisCoop||[]).some(e=>(e.fichiers||[]).some(f=>f && f.path===chemin))                      // ni un document envoye directement par ECORIGINE
+    || (state.coopDatabaseFiles||[]).some(f=>f.path===chemin);                                              // ni un registre / une geolocalisation
+  if (partage) return { conserve:true, nom: demande.fichier_source_nom };   // fichier utilise ailleurs : RIEN n'est modifie (ni le fichier, ni la demande)
+  const rm = await supabaseClient.storage.from('documents-coop').remove([chemin]);
+  if (rm.error) return { erreur: rm.error.message, nom: demande.fichier_source_nom };
   const quand = new Date().toISOString();
   const up = await supabaseClient.from('demandes').update({ fichier_source_path:null, fichier_source_supprime_le:quand }).eq('id', demande.id);
   if (up.error) return { erreur: up.error.message, nom: demande.fichier_source_nom };
@@ -2899,7 +2903,7 @@ function fichiersParTypePourCoop(coopId){
   // "Base de donnees coop.") -- table separee de demande_fichiers.
   if (!dossiers['masterdata']) dossiers['masterdata'] = { label: DEMANDE_TYPE_LABELS['masterdata']||'Masterdata', fichiers: [] };
   (state.coopDatabaseFiles||[]).filter(f=>f.cooperative_id===coopId).forEach(f=>{
-    dossiers['masterdata'].fichiers.push({ path:f.path, nom:f.nom||f.path.split('/').pop(), date:f.uploaded_at, titre:f.type==='registre'?'Registre des membres':f.type==='geolocalisation'?'Géolocalisation':f.type, source:'coop_database_files', sourceId:f.id, origine:'ecorigine' });
+    dossiers['masterdata'].fichiers.push({ path:f.path, nom:f.nom||f.path.split('/').pop(), date:f.uploaded_at, titre:f.type==='registre'?'Registre des membres':f.type==='geolocalisation'?'Géolocalisation':f.type, source:'coop_database_files', sourceId:f.id, origine:'ecorigine', direct:true });
   });
   // Document source joint par ECORIGINE a la creation d'une demande (contrat a
   // signer, document "autres" avec fichier initial) -- stocke directement sur
@@ -2907,7 +2911,7 @@ function fichiersParTypePourCoop(coopId){
   (state.demandesCoop||[]).filter(d=>d.cooperative_id===coopId && d.fichier_source_path).forEach(d=>{
     const t = (d.types && d.types[0]) || 'autres';
     if (!dossiers[t]) dossiers[t] = { label: DEMANDE_TYPE_LABELS[t]||t, fichiers: [] };
-    dossiers[t].fichiers.push({ path:d.fichier_source_path, nom:d.fichier_source_nom||d.fichier_source_path.split('/').pop(), date:d.requested_at, titre:d.name+' (envoyé par ECORIGINE)', source:'demande_source', sourceId:d.id, origine:'ecorigine', modele:demandeAvecDocumentDeBase(d), statutDemande:d.statut });
+    dossiers[t].fichiers.push({ path:d.fichier_source_path, nom:d.fichier_source_nom||d.fichier_source_path.split('/').pop(), date:d.requested_at, titre:d.name+' (envoyé par ECORIGINE)', source:'demande_source', sourceId:d.id, origine:'ecorigine', modele:demandeAvecDocumentDeBase(d), direct:!demandeAvecDocumentDeBase(d), statutDemande:d.statut });
   });
   // Documents de base supprimés automatiquement après validation du retour de la coopérative : on garde la trace
   (state.demandesCoop||[]).filter(d=>d.cooperative_id===coopId && !d.fichier_source_path && d.fichier_source_supprime_le && d.fichier_source_nom).forEach(d=>{
@@ -2917,7 +2921,7 @@ function fichiersParTypePourCoop(coopId){
   dossiers['envois'] = { label: 'Documents envoyés par ECORIGINE', fichiers: [] };
   (state.envoisCoop||[]).filter(e=>e.cooperative_id===coopId).forEach(e=>{
     (e.fichiers||[]).forEach((f,idx)=>{
-      dossiers['envois'].fichiers.push({ path:f.path, nom:f.nom, date:e.created_at, titre:e.titre, source:'envois_coop', sourceId:e.id, sourceIndex:idx, origine:'ecorigine' });
+      dossiers['envois'].fichiers.push({ path:f.path, nom:f.nom, date:e.created_at, titre:e.titre, source:'envois_coop', sourceId:e.id, sourceIndex:idx, origine:'ecorigine', direct:true });
     });
   });
   return dossiers;
@@ -3345,7 +3349,7 @@ function renderStockageTab(){
     + '</div>'
     + (fichiersAffiches.length===0
         ? '<div class="stock-empty">'+(autresFichiers.length===0?'Aucun fichier dans ce dossier.':'Aucun fichier ne correspond à la recherche.')+'</div>'
-        : [['ecorigine','Documents de base envoyés par ECORIGINE','Modèles et documents transmis à la coopérative','ec'],['coop','Documents soumis par la coopérative','Renvoyés par la coopérative — renommés comme le document de base','co']].map(([cleO,titreO,sousO,cl])=>{
+        : [['ecorigine','Documents de base envoyés par ECORIGINE','Modèles à retourner et documents ajoutés directement par ECORIGINE','ec'],['coop','Documents soumis par la coopérative','Renvoyés par la coopérative — renommés comme le document de base','co']].map(([cleO,titreO,sousO,cl])=>{
             const lignes = fichiersAffiches.filter(f=>f.origine===cleO), histo = (cleO==='ecorigine' && filtreOrigine!=='coop') ? (dossierActif.historique||[]) : [];
             if (lignes.length===0 && histo.length===0) return '';
             return '<div class="stock-section-head '+cl+'"><b>'+titreO+'</b><span>'+sousO+'</span><em>'+lignes.length+'</em></div>'
@@ -3354,7 +3358,7 @@ function renderStockageTab(){
                 const dateAjout = dateAjoutStockage(f), dateFichier = dateAjout ? new Date(dateAjout).toLocaleDateString('fr-FR') : '';
                 const infoSurvol = f.nom+(f.titre?' — '+f.titre:'')+(dateFichier?' · '+dateFichier:'');
                 const st = f.statutDemande;
-                const chip = f.modele ? (st==='acceptee' ? '<span class="badge ok">Retour validé</span>' : (st==='soumise'||st==='en_validation') ? '<span class="badge warn">Retour reçu · à valider</span>' : '<span class="badge neutral">En attente du retour</span>')
+                const chip = f.direct ? '<span class="badge neutral" title="Document ajouté directement par ECORIGINE, sans requête de retour : il n\'est jamais supprimé automatiquement.">Ajouté directement · conservé</span>' : f.modele ? (st==='acceptee' ? '<span class="badge ok">Retour validé</span>' : (st==='soumise'||st==='en_validation') ? '<span class="badge warn">Retour reçu · à valider</span>' : '<span class="badge neutral">En attente du retour</span>')
                   : (f.source==='demande_fichiers' && st) ? (st==='acceptee' ? '<span class="badge ok">Validé</span>' : (st==='soumise'||st==='en_validation') ? '<span class="badge warn">À valider</span>' : st==='rejetee' ? '<span class="badge danger">Refusé</span>' : '') : '';
                 return '<div class="stock-file-row '+cl+'">'
                 + '<span class="stock-check"><input type="checkbox" '+(cocheFichier?'checked':'')+' onclick="toggleSelectionFichierStockage(\''+coopId+'\',\''+escJs(cleFichier)+'\')"><span class="box"><svg viewBox="0 0 24 24"><polyline points="4 12 10 18 20 6"/></svg></span></span>'
@@ -3366,7 +3370,7 @@ function renderStockageTab(){
               }).join('')
               + histo.map(h=>'<div class="stock-histo">🗑 <b>'+esc(h.nom)+'</b> — supprimé du stockage le '+esc(new Date(h.supprimeLe).toLocaleDateString('fr-FR'))+' après validation du retour de la coopérative <span>('+esc(h.demande||'')+')</span></div>').join('');
           }).join('')
-        + '<div class="stock-regle">Quand ECORIGINE valide le retour de la coopérative, le document de base correspondant est supprimé du stockage. La version soumise, renommée comme l\'original, est conservée.</div>'
+        + '<div class="stock-regle">Quand ECORIGINE valide le retour de la coopérative, le document de base de cette <b>requête</b> (contrat, code de conduite…) est supprimé du stockage ; la version soumise, renommée comme l\'original, est conservée. Les documents <b>ajoutés directement par ECORIGINE, sans requête</b>, ne sont jamais supprimés automatiquement.</div>'
       ) : '')
     + '</div>'
     + '</div>'
@@ -3763,7 +3767,8 @@ async function validerDemande(id){
     if (error){ showToast('Échec : '+error.message); return; }
     if (demande) demande.statut = 'acceptee';
     const del = await supprimerDocumentDeBaseApresValidation(demande);
-    if (del && del.erreur) showToast('Demande validée, mais le document de base « '+del.nom+' » n\'a pas pu être supprimé du stockage : '+del.erreur);
+    if (del && del.conserve) showToast('Demande validée. Le document de base « '+del.nom+' » est conservé : il est aussi utilisé par un autre élément (envoi ou autre demande).');
+    else if (del && del.erreur) showToast('Demande validée, mais le document de base « '+del.nom+' » n\'a pas pu être supprimé du stockage : '+del.erreur);
     else if (del) showToast('Demande validée. Le document de base « '+del.nom+' » a été supprimé du stockage (la version renvoyée par la coopérative est conservée).', 'success');
     else showToast('Demande validée.', 'success');
     if (demande && (demande.types||[]).includes('masterdata')){
