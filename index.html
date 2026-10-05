@@ -2258,7 +2258,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-140';
+const APP_VERSION = '2026-10-02-141';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3533,28 +3533,130 @@ function renderStockageTab(){
   return html;
 }
 
-// Onglet « Traçage de volume » : rassemble les trois étapes développées séparément (tracer un volume
-// chez une coopérative en gestion directe, générer le connaissement d'une coopérative finale certifiée
-// à partir d'un connaissement source, générer son ticket de pesée) sans les enchaîner automatiquement --
-// chaque étape reste indépendante et peut être utilisée seule.
+// ---- Traçage de volume : chaîne liée (1) tracer le volume sur la coopérative B -> (2) importer le
+// connaissement de la coopérative d'origine A et le transposer vers B -> (3) ticket de pesée à partir de
+// ce connaissement. Une seule chaîne « en cours » à la fois, mémorisée dans le navigateur pour survivre à
+// un rechargement ; chaque étape pré-remplit la suivante, et les données sont liées en base : les achats
+// producteurs du traçage reçoivent le n° du connaissement généré, et le ticket de pesée renseigne la
+// réception à l'usine de l'achat du connaissement (poids net payé -> montant à payer calculable).
+const TRACAGE_CLE = 'origen_tracage_en_cours';
+function ocTracageCourant(){ try{ return JSON.parse(localStorage.getItem(TRACAGE_CLE)||'null'); }catch(e){ return null; } }
+function ocTracageSauver(t){ try{ if (t) localStorage.setItem(TRACAGE_CLE, JSON.stringify(t)); else localStorage.removeItem(TRACAGE_CLE); }catch(e){} }
+function ocTracageNouveau(){ ocTracageSauver(null); render(); }
+// Achats producteurs d'un traçage (par identifiant de génération de fiche), tels qu'en mémoire.
+function ocTracageAchatsProducteurs(tr){
+  if (!tr) return [];
+  const ids = new Set(tr.achatIds||[]);
+  return state.achats.filter(a=>a.producteur_id && (a.fiche_generation_id===tr.ficheGenerationId || ids.has(a.id)));
+}
+// Supprime un connaissement généré (table connaissements + achat de niveau connaissement) sans les effets
+// lourds du refoulement (fiche, demande, cumuls) : pour pouvoir le reproduire ensuite. Les achats
+// producteurs qui lui étaient liés reprennent un connaissement vide (le traçage reste utilisable).
+async function supprimerConnaissement(achatId){
+  const a = state.achats.find(x=>x.id===achatId);
+  if (!a || !a.connaissement) return;
+  const numero = a.connaissement, coopId = a.cooperative_id;
+  askConfirm(
+    'Supprimer le connaissement '+numero+' ?\n\n'
+    + 'Cette action retire le connaissement généré et son achat ('+fmtKg(a.quantite_kg)+'), pour pouvoir le reproduire. '
+    + 'Les producteurs du traçage de volume ne sont pas touchés : ils restent enregistrés, simplement sans connaissement.\n\n'
+    + 'Pour un camion réellement refoulé, utilise plutôt « Camion refoulé / annuler ».',
+    async () => {
+      try{
+        await ocSupprimerConnaissementInterne(coopId, numero, achatId);
+        showToast('Connaissement '+numero+' supprimé — il peut être reproduit.', 'success');
+        render();
+      }catch(e){ showToast('Échec de la suppression : '+e.message); }
+    }
+  );
+}
+async function ocSupprimerConnaissementInterne(coopId, numero, achatId){
+  const { error: e1 } = await supabaseClient.from('achats').delete().eq('id', achatId);
+  if (e1) throw e1;
+  state.achats = state.achats.filter(x=>x.id!==achatId);
+  await supabaseClient.from('connaissements').delete().eq('cooperative_b_id', coopId).eq('numero_connaissement', numero);
+  const lies = state.achats.filter(x=>x.cooperative_id===coopId && x.producteur_id && x.connaissement===numero);
+  if (lies.length){
+    await supabaseClient.from('achats').update({ connaissement: '' }).in('id', lies.map(x=>x.id));
+    lies.forEach(x=>{ x.connaissement = ''; });
+  }
+  const tr = ocTracageCourant();
+  if (tr && tr.connaissement && tr.connaissement.numero===numero){ tr.connaissement = null; tr.ticketFait = false; ocTracageSauver(tr); }
+}
+// Supprime le traçage de volume en cours (ses achats producteurs) et, s'il y en a un, le connaissement
+// qui lui est lié -- pour tout reproduire proprement.
+async function supprimerTracage(){
+  const tr = ocTracageCourant();
+  if (!tr) return;
+  const producteurs = ocTracageAchatsProducteurs(tr);
+  const conn = tr.connaissement;
+  askConfirm(
+    'Supprimer ce traçage de volume ?\n\n'
+    + 'Cette action retire les '+producteurs.length+' achat(s) producteur(s) enregistrés ('+fmtKg(tr.volumeKg)+')'
+    + (conn ? ' et le connaissement '+conn.numero+' qui lui est lié' : '')+', pour pouvoir tout reproduire.\n\n'
+    + 'La fiche Excel déjà téléchargée n\'est pas concernée.',
+    async () => {
+      try{
+        if (conn){
+          const ac = state.achats.find(x=>x.cooperative_id===tr.coopId && x.connaissement===conn.numero && !x.producteur_id);
+          if (ac) await ocSupprimerConnaissementInterne(tr.coopId, conn.numero, ac.id);
+        }
+        const ids = producteurs.map(x=>x.id);
+        if (ids.length){
+          const { error } = await supabaseClient.from('achats').delete().in('id', ids);
+          if (error) throw error;
+          state.achats = state.achats.filter(x=>!ids.includes(x.id));
+        }
+        ocTracageSauver(null);
+        showToast('Traçage de volume supprimé — il peut être reproduit.', 'success');
+        render();
+      }catch(e){ showToast('Échec de la suppression : '+e.message); }
+    }
+  );
+}
+
+// Onglet « Traçage de volume » : les trois étapes liées, avec l'état de la chaîne en cours.
 function renderTracageTab(){
+  const tr = ocTracageCourant();
+  const coop = tr ? coopById(tr.coopId) : null;
+  const camp = tr ? (state.campagnes||[]).find(c=>c.id===tr.campagneId) : null;
+  const conn = tr ? tr.connaissement : null;
+  const etape = !tr ? 1 : (!conn ? 2 : (tr.ticketFait ? 4 : 3));
+  const badge = (n)=> n<etape ? '<span class="badge ok" style="margin-left:8px;">Fait</span>' : (n===etape ? '<span class="badge" style="margin-left:8px;">Étape en cours</span>' : '<span class="badge" style="margin-left:8px;opacity:.55;">En attente</span>');
+  const libDate = (iso)=> iso ? (dateFr(iso)||iso) : '';
+
   let html = '<div class="panel-head"><h2>Traçage de volume</h2>'
-    + '<p>Trois outils indépendants, à utiliser dans l\'ordre pour documenter un volume de bout en bout : répartition chez les producteurs réels, puis connaissement et ticket de pesée au nom de la coopérative finale certifiée.</p></div>';
-
-  html += '<div class="panel" style="margin-bottom:16px;">'
-    + '<div class="panel-head"><h2>1. Tracer un volume</h2><p>Répartit un volume acheté entre les producteurs réels d\'une coopérative en gestion directe (sans compte portail) : enregistre un achat par producteur (plafond 70% suivi) et télécharge la fiche de traçabilité Excel remplie.</p></div>'
-    + '<div style="padding:0 18px 18px;">' + ocBoutonTracerVolume('') + '</div>'
+    + '<p>Trois étapes liées, dans l\'ordre : le volume est tracé sur la coopérative finale certifiée (B), puis le connaissement de la coopérative d\'origine (A) est importé et transposé vers B, puis le ticket de pesée est établi à partir de ce connaissement. Chaque étape pré-remplit la suivante.</p>'
+    + (tr ? '<p class="hint">Traçage en cours : <b>'+esc(coop?coop.nom:tr.coopId)+'</b> · '+esc(camp?camp.nom:'')+' · '+fmtKg(tr.volumeKg)+' · '+esc(String(tr.nbSacs))+' sacs · du '+esc(libDate(tr.dateDebut))+' au '+esc(libDate(tr.dateFin))
+        + ' <button type="button" class="lien-param" onclick="ocTracageNouveau()" title="Oublie la chaîne en cours (rien n\'est supprimé en base) pour en commencer une nouvelle">Nouveau traçage</button>'
+        + ' <button type="button" class="btn-danger-text btn-compact" onclick="supprimerTracage()">Supprimer ce traçage</button></p>' : '')
     + '</div>';
 
+  // 1. Tracer le volume sur B
   html += '<div class="panel" style="margin-bottom:16px;">'
-    + '<div class="panel-head"><h2>2. Générer le connaissement</h2><p>Documente le trajet d\'une coopérative d\'origine (pas besoin d\'être dans la base) vers une coopérative finale certifiée. Permet d\'importer un connaissement source (PDF) pour pré-remplir automatiquement le poids, la date, le transporteur, etc.</p></div>'
-    + '<div style="padding:0 18px 18px;">' + ocBoutonGenererConnaissement() + '</div>'
-    + '</div>';
+    + '<div class="panel-head"><h2>1. Tracer le volume sur la coopérative B'+badge(1)+'</h2><p>Répartit le volume entre les producteurs réels de la coopérative finale certifiée (gestion directe) : un achat par producteur (plafond 70 % suivi) et la fiche de traçabilité Excel remplie.</p></div>'
+    + '<div style="padding:0 18px 18px;">'
+    + (tr ? '<p class="hint" style="margin:0 0 10px;">'+ocTracageAchatsProducteurs(tr).length+' producteur(s) enregistré(s). Pour tracer un autre volume, commence un nouveau traçage.</p>' : ocBoutonTracerVolume(''))
+    + '</div></div>';
 
+  // 2. Connaissement de A transpose vers B
   html += '<div class="panel" style="margin-bottom:16px;">'
-    + '<div class="panel-head"><h2>3. Générer le ticket de pesée</h2><p>Toutes les informations (livraison + relevé usine) sont saisies directement dans la fenêtre : aucun achat existant n\'est requis, rien n\'est enregistré en base, seul le document Word est généré.</p></div>'
-    + '<div style="padding:0 18px 18px;"><button class="btn btn-primary" onclick="ocOuvrirTicketPeseeStandalone()">Générer un ticket de pesée</button></div>'
-    + '</div>';
+    + '<div class="panel-head"><h2>2. Importer le connaissement de A et le transposer vers B'+badge(2)+'</h2><p>Importe le connaissement de la coopérative d\'origine (PDF) : ses quantités, sa date et son transporteur sont repris tels quels sous le nom de la coopérative finale B, avec son trajet et son TKM. Les producteurs du traçage sont alors liés à ce n° de connaissement.</p></div>'
+    + '<div style="padding:0 18px 18px;">'
+    + (!tr ? '<p class="hint" style="margin:0;">Disponible après l\'étape 1.</p>'
+      : conn ? '<p class="hint" style="margin:0 0 10px;">Connaissement <b>'+esc(conn.numero)+'</b> · '+fmtKg(conn.poidsNet)+' net · '+esc(String(conn.nombreSacs||''))+' sacs · '+esc(conn.transporteur||'')+' · '+esc(libDate(conn.date))+'</p>'
+          + '<button type="button" class="btn-danger-text btn-compact" onclick="(function(){ const a = state.achats.find(x=>x.cooperative_id===\''+esc(tr.coopId)+'\' && x.connaissement===\''+esc(conn.numero)+'\' && !x.producteur_id); if (a) supprimerConnaissement(a.id); else showToast(\'Achat du connaissement introuvable.\'); })()">Supprimer le connaissement</button>'
+      : '<button class="btn btn-primary" onclick="ouvrirGenerationConnaissement({ coopBId:\''+esc(tr.coopId)+'\', campagneId:\''+esc(tr.campagneId)+'\', poidsNet:'+Number(tr.volumeKg||0)+', nombreSacs:'+Number(tr.nbSacs||0)+' })">📄 Importer et générer le connaissement</button>')
+    + '</div></div>';
+
+  // 3. Ticket de pesee a partir du connaissement
+  html += '<div class="panel" style="margin-bottom:16px;">'
+    + '<div class="panel-head"><h2>3. Établir le ticket de pesée'+badge(3)+'</h2><p>Pré-rempli avec le connaissement de l\'étape 2 ; un bordereau source (Word, PDF ou scan) peut aussi être importé. Le poids net payé et les sacs/poids acceptés sont reportés sur l\'achat du connaissement (réception à l\'usine), ce qui rend le montant à payer calculable.</p></div>'
+    + '<div style="padding:0 18px 18px;">'
+    + (!conn ? '<p class="hint" style="margin:0;">Disponible après l\'étape 2.</p>'
+      : '<button class="btn btn-primary" onclick="ocOuvrirTicketPeseeStandalone('+esc(JSON.stringify({ coopId: tr.coopId, campagneId: tr.campagneId, connaissement: conn.numero, lieuOrigine: conn.lieuDepart||'', date: conn.date||'', sacsDeclares: conn.nombreSacs||'', poidsBrut: conn.poidsBrut||'', poidsNet: conn.poidsNet||'', transporteur: conn.transporteur||'', immatVehicule: conn.immatVehicule||'', immatRemorque: conn.immatRemorque||'', chauffeur: conn.chauffeur||'' })).replace(/&#39;/g,"&apos;")+')">'+(tr.ticketFait?'Regénérer le ticket de pesée':'Établir le ticket de pesée')+'</button>'
+        + (tr.ticketFait ? ' <span class="hint">Ticket généré, réception reportée sur l\'achat.</span>' : ''))
+    + '</div></div>';
 
   return html;
 }
@@ -4673,7 +4775,13 @@ async function submitTracerVolumeDirecte(){
     if (error){ showToast("Échec de l'enregistrement des achats : "+error.message); return; }
     lignes.forEach(l=>state.achats.push(l));
 
-    // 3) telechargement de la fiche
+    // 3) ce tracage devient la chaine en cours de l'onglet Tracage de volume : l'etape suivante
+    //    (connaissement de A transpose vers B) sera pre-remplie avec cette cooperative et ce volume.
+    ocTracageSauver({ coopId, campagneId, ficheGenerationId: genId_, volumeKg, nbSacs, dateDebut, dateFin,
+      achatIds: lignes.map(l=>l.id), creeLe: new Date().toISOString(), connaissement: null, ticketFait: false });
+    if (state.tab!=='tracage') state.tab = 'tracage';
+
+    // 4) telechargement de la fiche
     ocTelechargerBlob(fiche.blob, fiche.nomFichier);
     closeModal();
     showToast(resultat.nbUtilises+' producteur(s) · '+fmtKg(volumeKg)+' · '+nbSacs+' sacs : achats enregistrés et fiche téléchargée'
@@ -5803,9 +5911,18 @@ async function ocConnRappelerMemoireFinale(coopId){
     set('connCoutTkm', data.cout_tkm);
   }catch(e){ /* pas grave -- champs laisses vides */ }
 }
-function ouvrirGenerationConnaissement(){
-  state.modal = { type:'genererConnaissement', payload:{} };
+// prefill (optionnel, depuis l'etape 1 du Tracage de volume) : coopBId, campagneId, poidsNet, nombreSacs --
+// pre-remplit la cooperative finale (et rappelle son trajet/TKM), la campagne de l'achat et les quantites
+// de depart ; l'import du connaissement de A ecrase ensuite les quantites par les vraies valeurs.
+function ouvrirGenerationConnaissement(prefill){
+  const pf = prefill || {};
+  state.modal = { type:'genererConnaissement', payload:{ prefill: pf } };
   render();
+  const set = (id, val) => { const el = document.getElementById(id); if (el && val!=null && val!=='' && !(typeof val==='number' && !(val>0))) el.value = val; };
+  if (pf.coopBId){ set('connCoopB', pf.coopBId); ocConnRappelerMemoireFinale(pf.coopBId); }
+  set('connCampagneId', pf.campagneId);
+  set('connPoidsNet', pf.poidsNet);
+  set('connSacs', pf.nombreSacs);
 }
 // Genere le QR (image + matrice de secours pour l'impression) pour un contenu donne --
 // partage entre le flux de connaissement autonome et celui integre a "Tracer un volume".
@@ -5943,15 +6060,34 @@ async function genererConnaissement(coopBIdOverride, poidsNetOverride, nombreSac
       nombre_sacs: nombreSacs?Number(nombreSacs):0, lieu_origine: lieuDepart || null, tkm: coutTkm?Number(coutTkm):null,
     };
     const achatExistant = state.achats.find(a=>a.cooperative_id===coopBId && a.connaissement===numeroConnaissement && !a.producteur_id);
+    let achatConnId = null;
     if (achatExistant){
       Object.assign(achatExistant, donneesAchat);
       const { error: errAchat } = await supabaseClient.from('achats').update(donneesAchat).eq('id', achatExistant.id);
       if (errAchat) showToast("Connaissement enregistré, mais échec de la mise à jour de l'achat : "+errAchat.message);
+      achatConnId = achatExistant.id;
     } else {
       const nouvelAchat = Object.assign({ id: genId('a') }, donneesAchat);
       const { error: errAchat } = await supabaseClient.from('achats').insert(nouvelAchat);
       if (errAchat) showToast("Connaissement enregistré, mais échec de la création de l'achat : "+errAchat.message);
-      else state.achats.push(nouvelAchat);
+      else { state.achats.push(nouvelAchat); achatConnId = nouvelAchat.id; }
+    }
+    // Chaine du Tracage de volume : si ce connaissement est celui de la cooperative B du tracage en cours,
+    // les achats producteurs traces recoivent ce n° de connaissement (meme lien qu'une fiche de
+    // tracabilite recue du portail) et l'etape 3 (ticket de pesee) devient pre-remplie.
+    const tr = ocTracageCourant();
+    if (tr && tr.coopId===coopBId && (!tr.connaissement || tr.connaissement.numero===numeroConnaissement)){
+      const lies = ocTracageAchatsProducteurs(tr);
+      if (lies.length){
+        const { error: errLien } = await supabaseClient.from('achats').update({ connaissement: numeroConnaissement }).in('id', lies.map(a=>a.id));
+        if (errLien) showToast("Connaissement enregistré, mais échec du rattachement des producteurs : "+errLien.message);
+        else lies.forEach(a=>{ a.connaissement = numeroConnaissement; });
+      }
+      tr.connaissement = { numero: numeroConnaissement, achatId: achatConnId, poidsNet: poidsNet?Number(poidsNet):null, poidsBrut: poidsBrut?Number(poidsBrut):null,
+        nombreSacs: nombreSacs?Number(nombreSacs):null, transporteur: nomTransporteur, immatVehicule, immatRemorque, chauffeur: nomChauffeur,
+        date: dateEdition, lieuDepart, campagneId, coopANom };
+      tr.ticketFait = false;
+      ocTracageSauver(tr);
     }
   }catch(e){ showToast('Erreur : '+e.message); return null; }
 
@@ -11219,6 +11355,7 @@ function detailAchatHtml(a, etat){
           + (sd ? '<button type="button" class="btn-ghost btn-compact" onclick="genererAttestation(\''+a.id+'\')">Attestation de paiement (Word)</button>' : ''); })()
     + (Number(a.poids_net_produit)>0 ? '<button type="button" class="btn-ghost btn-compact" onclick="ouvrirTicketPesee(\''+a.id+'\')" title="Renseigner les informations de la fiche de pesée de l\'usine, puis générer le ticket (modèle Word)">Ticket de pesée (Word)</button>' : '')
     + '<button type="button" class="btn-ghost btn-compact" onclick="openModal(\'achat\','+esc(JSON.stringify(a)).replace(/&#39;/g,"&apos;")+')">Modifier le connaissement</button>'
+    + (a.connaissement && !a.producteur_id ? '<button type="button" class="btn-danger-text btn-compact" onclick="supprimerConnaissement(\''+a.id+'\')" title="Retire ce connaissement et son achat pour pouvoir le reproduire, sans toucher aux producteurs ni à la demande">Supprimer le connaissement</button>' : '')
     + '<button type="button" class="btn-danger-text btn-compact" onclick="'+(a.connaissement?'annulerConnaissementRefoule':'deleteAchat')+'(\''+a.id+'\')">'+(a.connaissement?'Camion refoulé / annuler':'Supprimer')+'</button></div>';
   return '<tr class="detail-achat" data-for="'+esc(a.id)+'"><td colspan="10">'
     + stepperAchatHtml(a, etat)
@@ -11560,8 +11697,25 @@ async function genererTicketPeseeStandalone(){
     const d = lireFormulaireTicket();
     const { blob, nomFichier } = await ocConstruireTicketPeseeDocx(a, d);
     telechargerBlob(blob, nomFichier);
+    // Lien avec l'achat du connaissement (meme cooperative, meme n°) : le ticket porte la reception a
+    // l'usine (poids net paye, sacs et poids acceptes) -- reportee sur l'achat, exactement comme
+    // « Reception a l'usine », pour que le montant a payer se calcule sans ressaisie.
+    let reportee = false;
+    if (a.connaissement){
+      const ac = state.achats.find(x=>x.cooperative_id===coopId && x.connaissement===a.connaissement && !x.producteur_id);
+      if (ac){
+        const maj = { poids_net_produit: a.poids_net_produit };
+        if (a.nombre_sacs_accepte>0) maj.nombre_sacs_accepte = a.nombre_sacs_accepte;
+        if (a.poids_brut_accepte>0) maj.poids_brut_accepte = a.poids_brut_accepte;
+        const { error: errMaj } = await supabaseClient.from('achats').update(maj).eq('id', ac.id);
+        if (errMaj) showToast("Ticket généré, mais échec du report de la réception sur l'achat : "+errMaj.message);
+        else { Object.assign(ac, maj); reportee = true; }
+      }
+      const tr = ocTracageCourant();
+      if (tr && tr.coopId===coopId && tr.connaissement && tr.connaissement.numero===a.connaissement){ tr.ticketFait = true; ocTracageSauver(tr); }
+    }
     closeModal();
-    showToast('Ticket de pesée généré.', 'success');
+    showToast('Ticket de pesée généré'+(reportee ? ' — réception à l\'usine reportée sur l\'achat du connaissement.' : '.'), 'success');
   }catch(e){ showToast('Échec de la génération du ticket de pesée : '+e.message); }
   finally{ state.ticketEnCours = false; }
 }
@@ -12800,7 +12954,8 @@ function _renderBrut(){
     const coopsTriees = state.cooperatives.slice().sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'}));
     html += '<div class="modal-overlay" onclick="if(event.target===this)fermerGenerationConnaissement()"><div class="modal wide">'
       + '<h2>Générer un connaissement</h2>'
-      + '<p class="hint" style="margin:0 0 14px;">Génère le connaissement d\'un volume acheté auprès d\'une coopérative initiale, affiché sous le nom d\'une coopérative finale certifiée.</p>'
+      + '<p class="hint" style="margin:0 0 14px;">Génère le connaissement d\'un volume acheté auprès d\'une coopérative initiale, affiché sous le nom d\'une coopérative finale certifiée.'
+      + ((state.modal.payload.prefill||{}).coopBId ? ' <b>Lié au traçage de volume en cours</b> : la coopérative finale et la campagne sont déjà choisies ; les producteurs tracés seront rattachés à ce n° de connaissement.' : '')+'</p>'
       + '<label class="field" style="margin-bottom:14px;">Importer un connaissement d\'origine (PDF) — remplit automatiquement les champs ci-dessous<input type="file" accept="application/pdf" onchange="ocImporterConnaissementSource(this)"></label>'
       + '<p class="hint" id="connImportStatut" style="margin:-8px 0 14px;"></p>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 16px;">'
