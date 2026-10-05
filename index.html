@@ -2258,7 +2258,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-134';
+const APP_VERSION = '2026-10-02-135';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -10488,6 +10488,14 @@ function parametresPaiementPour(a){
   const per = a.periode==='intermediaire' ? 'intermediaire' : 'principale';
   return (state.parametresPaiement||[]).find(p=>p.campagne_id===a.campagne_id && p.periode===per) || null;
 }
+// Cout de transport REEL d'un achat : toujours sur le poids net PAYE a l'usine (jamais le poids
+// declare du connaissement, qui n'est qu'une estimation avant pesee -- c'est d'ailleurs pour ca que
+// le document imprime l'appelle lui-meme "theorique") x le TKM de la cooperative concernee.
+function calcCoutTransport(a){
+  const poids = Number(a.poids_net_produit)||0, tkm = Number(a.tkm)||0;
+  if (!(poids>0) || !(tkm>0)) return null;
+  return Math.round(poids*tkm);
+}
 // Calcule le montant a payer a la cooperative pour un achat, selon la formule :
 // Montant = ((Prix entree usine + TKM + Commission) x Poids) - Retenue BIC
 // Le poids utilise est le poids net PAYE a l'usine, jamais le poids du connaissement (voir poidsBaseForPrime).
@@ -11124,7 +11132,7 @@ function detailAchatHtml(a, etat){
     + dl('Usine', a.usine_dechargement ? esc(a.usine_dechargement) : '')
     + dl('Distance', a.distance_km ? fmtNum(a.distance_km)+' km' : '')
     + dl('TKM', a.tkm ? fmtNum(a.tkm) : '')
-    + dl('Coût théorique', a.cout_transport_theorique ? fmtNum(a.cout_transport_theorique)+' FCFA' : '');
+    + (function(){ const ct = calcCoutTransport(a); return dl('Coût de transport', ct!=null ? fmtNum(ct)+' FCFA' : (a.tkm ? '<span class="vide">En attente du poids net payé</span>' : '')); })();
   const lignePesee = (lbl, decl, usine, unite, diff)=>{
     const f = v=> v>0 ? fmtNum(v) : '<span class="vide">—</span>';
     const d = (decl>0 && usine>0) ? '<span class="ecart '+(usine-decl<0?'neg':usine-decl>0?'pos':'')+'">'+fmtEcartAchat(usine-decl)+'</span>' : '<span class="vide">—</span>';
