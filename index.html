@@ -2252,7 +2252,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-124';
+const APP_VERSION = '2026-10-02-125';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -2865,6 +2865,12 @@ function nomRetourCanonique(nomSource, nomRetour, rang){
 }
 // Documents ajoutes DIRECTEMENT par ECORIGINE pour une cooperative, sans requete de retour (« Documents envoyes », registre / geolocalisation, documents purement
 // informatifs : document_a_signer = false) ne sont JAMAIS renommes ni supprimes : seul un document joint a une requete A RETOUR peut l'etre.
+// Nom d'une fiche de tracabilite = nom de sa demande + extension du fichier envoye (« _2 », « _3 » s'il y en a plusieurs pour la meme demande).
+function nomFicheDeDemande(nomDemande, nomFichier, rang){
+  const base = String(nomDemande||'').replace(/[\\/:*?"<>|]+/g,'-').trim() || 'fiche';
+  const ex = (String(nomFichier||'').match(/\.[A-Za-z0-9]+$/)||[''])[0];
+  return base+(rang>0 ? '_'+(rang+1) : '')+ex;
+}
 function demandeAvecDocumentDeBase(d){ const t = (d && d.types) || []; return !!(d && d.fichier_source_nom && d.document_a_signer!==false && !t.includes('masterdata') && !t.includes('product_movements')); }
 function documentDeBaseSupprimable(d){ return !!(d && d.document_a_signer===true && demandeAvecDocumentDeBase(d) && d.fichier_source_path && String(d.fichier_source_path).indexOf('/demandes/'+d.id+'/source/')>0); }
 async function supprimerDocumentDeBaseApresValidation(demande){
@@ -2948,6 +2954,11 @@ function fichiersParTypePourCoop(coopId){
       const retours = (state.demandeFichiers||[]).filter(x=>x.demande_id===dem.id && x.type===f.type).sort((a,b)=>String(a.uploaded_at||'').localeCompare(String(b.uploaded_at||''))||String(a.id).localeCompare(String(b.id)));
       const canonique = nomRetourCanonique(dem.fichier_source_nom, nomAffiche, retours.findIndex(x=>x.id===f.id));
       if (canonique!==nomAffiche){ nomDonne = nomAffiche; nomAffiche = canonique; }
+    }
+    if (f.type==='product_movements' && cleType==='product_movements' && dem && dem.name){
+      // La fiche de tracabilite porte le NOM DE LA DEMANDE, quel que soit le nom donne au fichier par la cooperative.
+      const fiches = (state.demandeFichiers||[]).filter(x=>x.demande_id===dem.id && x.type==='product_movements').sort((a,b)=>String(a.uploaded_at||'').localeCompare(String(b.uploaded_at||''))||String(a.id).localeCompare(String(b.id)));
+      nomAffiche = nomFicheDeDemande(dem.name, nomAffiche, fiches.findIndex(x=>x.id===f.id));
     }
     dossiers[cleType].fichiers.push({ path:f.path, nom:nomAffiche, nomDonne, date:f.uploaded_at, titre:titreType, source:'demande_fichiers', sourceId:f.id, origine:'coop', statutDemande:dem&&dem.statut,
       fiche: cleType==='product_movements' && f.type==='product_movements' && !!f.connaissement });   // fiche de tracabilite (Excel) envoyee par la cooperative : geree par le panneau archivage / vidage
@@ -3209,10 +3220,7 @@ async function exporterDossiersStockage(coopId, cles){
   if (btn){ btn.disabled=false; render(); }
 }
 
-// ====================== STOCKAGE : DOSSIER « FICHES DE TRACABILITE » (toutes les cooperatives) ======================
-// Les fiches de traçabilité envoyées par les coopératives (une par connaissement) sont regroupées dans un dossier unique. Une fiche dont les volumes sont
-// DEJA enregistres a deja servi : elle peut etre ARCHIVEE (ZIP telecharge sur l'ordinateur) puis VIDEE du stockage pour liberer de la place. Les fiches dont
-// les volumes ne sont pas encore enregistres sont PROTEGEES (elles servent encore au rattrapage et aux controles de plafond).
+// Taille lisible (octets -> Ko / Mo / Go).
 function fmtOctets(n){
   n = Number(n)||0;
   if (n>=1e9) return (n/1e9).toFixed(2).replace('.',',')+' Go';
@@ -3220,111 +3228,7 @@ function fmtOctets(n){
   if (n>=1e3) return Math.round(n/1e3)+' Ko';
   return n+' o';
 }
-async function chargerFichesTracabilite(forcer){
-  if (state.fichesChargement) return;
-  if (state.fichesTracabilite!==null && state.fichesTracabilite!==undefined && !forcer) return;
-  state.fichesChargement = true; state.fichesErreur = null; render();
-  try{
-    const [r1, r2] = await Promise.all([ supabaseClient.rpc('stockage_fiches_tracabilite'), supabaseClient.rpc('stockage_total_octets') ]);
-    if (r1.error) throw new Error(r1.error.message);
-    state.fichesTracabilite = r1.data || []; state.stockageTotalOctets = r2.error ? null : (Number(r2.data)||0);
-  }catch(e){ state.fichesErreur = e.message; state.fichesTracabilite = []; state.stockageTotalOctets = null; }
-  state.fichesChargement = false; render();
-}
-function fichesDeCoop(coopId){
-  return (state.fichesTracabilite||[]).filter(f=>f.cooperative_id===coopId)
-    .slice().sort((a,b)=>String(dateAjoutStockage(b)).localeCompare(String(dateAjoutStockage(a))));   // la plus recente d'abord (date d'ajout au stockage)
-}
-function toggleFicheSelection(id){ state.fichesSelection = state.fichesSelection || new Set(); if (state.fichesSelection.has(id)) state.fichesSelection.delete(id); else state.fichesSelection.add(id); render(); }
-function toggleToutesFiches(cocher, coopId){
-  state.fichesSelection = new Set(); if (cocher) fichesDeCoop(coopId).filter(f=>f.volumes_enregistres).forEach(f=>state.fichesSelection.add(f.id)); render();
-}
-// Archive (ZIP telecharge) les fiches choisies — ou toutes celles dont les volumes sont enregistres — SANS rien supprimer.
-async function archiverFichesTracabilite(coopId){
-  if (typeof JSZip==='undefined'){ showToast('La bibliothèque de compression n\'a pas pu se charger (connexion internet requise). Réessaie dans un instant.'); return; }
-  const sel = state.fichesSelection || new Set();
-  const lignes = fichesDeCoop(coopId).filter(f=>f.volumes_enregistres && (sel.size===0 || sel.has(f.id)));
-  if (lignes.length===0){ showToast('Aucune fiche à archiver : seules les fiches dont les volumes sont déjà enregistrés peuvent l\'être.'); return; }
-  state.fichesEnCours = true; render();
-  const zip = new JSZip(), dossier = 'Fiches_de_tracabilite', reussies = [], echecs = [], utilises = new Set();
-  const propre = (t)=>String(t||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Za-z0-9]+/g,'_').replace(/^_+|_+$/g,'') || 'coop';
-  try{
-    for (const f of lignes){
-      const { data, error } = await supabaseClient.storage.from('documents-coop').download(f.path);
-      if (error || !data){ echecs.push(f); continue; }
-      const sous = propre((coopById(f.cooperative_id)||{}).nom || f.cooperative_id);
-      let nom = f.nom || f.path.split('/').pop(); const cle = sous+'/'+nom;
-      if (utilises.has(cle)){ const p = nom.split('.'); const ext = p.length>1 ? '.'+p.pop() : ''; nom = p.join('.')+'_'+f.id.slice(0,6)+ext; }
-      utilises.add(sous+'/'+nom); zip.file(dossier+'/'+sous+'/'+nom, data, optionsCompressionZip(nom)); reussies.push(f);
-    }
-    if (reussies.length===0){ showToast('Aucune fiche n\'a pu être récupérée : rien n\'est archivé.'); return; }
-    zip.file(dossier+'/LISEZMOI.txt', ['Fiches de traçabilité archivées depuis ORIGEN le '+new Date().toLocaleDateString('fr-FR'), '',
-      ...reussies.map(f=>'- '+((coopById(f.cooperative_id)||{}).nom||f.cooperative_id)+' · connaissement '+(f.connaissement||'?')+' · ajoutée au stockage le '+(dateFr(String(dateAjoutStockage(f)).slice(0,10))||'?')+' · '+(f.nom||''))].join('\n'));
-    const blob = await zip.generateAsync({ type:'blob' });
-    telechargerBlob(blob, 'Fiches_de_tracabilite_'+propre((coopById(coopId)||{}).nom||coopId)+'_'+new Date().toISOString().slice(0,10)+'.zip');
-    state.fichesArchivees = new Set(reussies.map(f=>f.id)); state.fichesSelection = new Set();
-    showToast(reussies.length+' fiche(s) archivée(s) dans le ZIP'+(echecs.length ? ' — '+echecs.length+(echecs.length>1 ? ' n\'ont pas pu être récupérées (non archivées, donc non vidables)' : ' n\'a pas pu être récupérée (non archivée, donc non vidable)') : '')+'. Vérifie qu\'il s\'ouvre, puis clique « Vider les fiches archivées ».', echecs.length ? 'error' : 'success');
-  }catch(e){ showToast('Échec de l\'archivage : '+(e&&e.message?e.message:e)); }
-  finally{ state.fichesEnCours = false; render(); }
-}
-// Supprime du stockage (et de la base) UNIQUEMENT les fiches archivees dans cette session dont les volumes sont enregistres.
-function viderFichesArchivees(coopId){
-  const arch = state.fichesArchivees || new Set();
-  const lignes = fichesDeCoop(coopId).filter(f=>arch.has(f.id) && f.volumes_enregistres);
-  if (lignes.length===0){ showToast('Aucune fiche archivée à vider : commence par « Archiver ».'); return; }
-  const taille = lignes.reduce((t,f)=>t+(Number(f.taille)||0),0);
-  askConfirm('Supprimer définitivement '+lignes.length+' fiche(s) du stockage ('+fmtOctets(taille)+' libérés) ?\n\nElles ont été archivées dans le ZIP que tu viens de télécharger : vérifie qu\'il s\'ouvre bien.\nLes volumes déjà enregistrés ne sont pas modifiés.\n\nCette action est irréversible.', async ()=>{
-    const rm = await supabaseClient.storage.from('documents-coop').remove(lignes.map(f=>f.path));
-    if (rm.error){ showToast('Échec de la suppression des fichiers : '+rm.error.message+'. Rien n\'a été modifié.'); return; }
-    const ids = lignes.map(f=>f.id), del = await supabaseClient.from('demande_fichiers').delete().in('id', ids);
-    if (del.error) showToast('Fichiers supprimés du stockage, mais leurs enregistrements n\'ont pas pu être retirés : '+del.error.message);
-    else showToast(lignes.length+' fiche(s) vidée(s) · '+fmtOctets(taille)+' libérés.', 'success');
-    state.demandeFichiers = (state.demandeFichiers||[]).filter(x=>ids.indexOf(x.id)<0);
-    state.fichesTracabilite = (state.fichesTracabilite||[]).filter(f=>ids.indexOf(f.id)<0);
-    if (state.stockageTotalOctets!=null) state.stockageTotalOctets = Math.max(0, state.stockageTotalOctets-taille);
-    state.fichesArchivees = new Set(); state.fichesSelection = new Set(); render();
-  });
-}
-function renderFichesTracabilite(coopId){
-  if (state.fichesTracabilite===null || state.fichesTracabilite===undefined || state.fichesChargement){
-    if (!state.fichesChargement) chargerFichesTracabilite();
-    return '<div class="fiches-panneau"><div class="empty">Chargement des fiches de traçabilité…</div></div>';
-  }
-  const coop = coopById(coopId), fiches = fichesDeCoop(coopId), sel = state.fichesSelection || new Set(), arch = state.fichesArchivees || new Set();
-  const vidables = fiches.filter(f=>f.volumes_enregistres), nbVidables = vidables.length, tailleTotale = fiches.reduce((t,f)=>t+(Number(f.taille)||0),0), tailleVidable = vidables.reduce((t,f)=>t+(Number(f.taille)||0),0);
-  const nbArch = fiches.filter(f=>arch.has(f.id) && f.volumes_enregistres).length, nbSel = vidables.filter(f=>sel.has(f.id)).length, cid = escJs(coopId);
-  let html = '<div class="fiches-panneau"><div class="stock-files-head" style="justify-content:space-between;">'
-    + '<div><b>Fiches de traçabilité envoyées par '+esc(coop ? coop.nom : '')+'</b> <span class="hint">('+fmtNum(fiches.length)+' fiche'+(fiches.length>1?'s':'')+')</span></div>'
-    + '<div style="display:flex;gap:8px;flex-wrap:wrap;">'
-    + '<button class="btn" id="fiches-archiver-btn" '+(nbVidables>0 && !state.fichesEnCours ? 'onclick="archiverFichesTracabilite(\''+cid+'\')"' : 'disabled')+'>'+(state.fichesEnCours ? 'Préparation du ZIP…' : (nbSel>0 ? 'Archiver la sélection (ZIP) ('+nbSel+')' : 'Archiver tout ce qui est enregistré (ZIP)'))+'</button>'
-    + '<button class="btn btn-primary" id="fiches-vider-btn" '+(nbArch>0 ? 'onclick="viderFichesArchivees(\''+cid+'\')"' : 'disabled title="Archive d\'abord les fiches : seules les fiches archivées peuvent être vidées"')+'>Vider les fiches archivées'+(nbArch>0 ? ' ('+nbArch+')' : '')+'</button></div></div>'
-    + (state.fichesErreur ? '<div class="error-banner" style="margin:0 0 10px;"><span>Lecture impossible : '+esc(state.fichesErreur)+'</span></div>' : '');
-  if (fiches.length===0) return html + '<div class="stock-empty">Aucune fiche de traçabilité reçue de cette coopérative pour le moment : le dossier se remplit automatiquement dès qu\'elle en envoie une.</div></div>';
-  html += '<div class="hint" style="margin:6px 0 10px;">Une fiche dont les volumes sont <b>déjà enregistrés</b> a déjà servi : <b>archive-la</b> (ZIP sur ton ordinateur) puis <b>vide-la</b> pour libérer de la place. Les fiches dont les volumes ne sont pas encore enregistrés sont <b>protégées</b>. Conserve le ZIP : ce sont des justificatifs d\'origine (RDUE, audits).</div>'
-    + '<div class="stock-resume" style="margin:0 0 12px;">'
-    + '<div><div class="k">Fiches reçues</div><div class="v">'+fmtNum(fiches.length)+'</div><div class="s">'+fmtNum(nbVidables)+' vidable'+(nbVidables>1?'s':'')+' · '+fmtNum(fiches.length-nbVidables)+' protégée'+(fiches.length-nbVidables>1?'s':'')+'</div></div>'
-    + '<div><div class="k">Espace de ce dossier</div><div class="v">'+fmtOctets(tailleTotale)+'</div><div class="s">'+fmtOctets(tailleVidable)+' libérables</div></div>'
-    + '<div><div class="k">Stockage total utilisé</div><div class="v">'+(state.stockageTotalOctets!=null ? fmtOctets(state.stockageTotalOctets) : '—')+'</div><div class="s">toutes coopératives, tous dossiers</div></div>'
-    + '<div><div class="k">Archivées cette session</div><div class="v">'+fmtNum(nbArch)+'</div><div class="s">'+(nbArch>0 ? 'prêtes à être vidées' : 'aucune')+'</div></div></div>';
-  const toutCoche = nbVidables>0 && vidables.every(f=>sel.has(f.id));
-  html += '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th style="width:36px;"><input type="checkbox" '+(toutCoche?'checked':'')+(nbVidables===0?' disabled':'')+' onclick="toggleToutesFiches(this.checked,\''+cid+'\')" title="Sélectionner les fiches vidables"></th>'
-    + '<th>Connaissement</th><th>Fichier</th><th>Ajoutée le</th><th>Taille</th><th>État</th><th></th></tr></thead><tbody>'
-    + fiches.map(f=>{
-        const archivee = arch.has(f.id);
-        const etat = !f.volumes_enregistres ? '<span class="badge warn" title="Les volumes de cette fiche ne sont pas encore enregistrés : elle est protégée">Protégée · volumes à enregistrer</span>'
-          : archivee ? '<span class="badge ok">Archivée · prête à vider</span>' : '<span class="badge neutral">Volumes enregistrés</span>';
-        return '<tr data-id="'+esc(f.id)+'"><td>'+(f.volumes_enregistres ? '<input type="checkbox" '+(sel.has(f.id)?'checked':'')+' onclick="toggleFicheSelection(\''+esc(f.id)+'\')">' : '')+'</td>'
-          + '<td><b>'+esc(f.connaissement||'—')+'</b></td><td class="nom-fichier" title="'+esc(f.nom||'')+'">'+esc(f.nom||'')+'</td>'
-          + '<td>'+esc(dateFr(String(dateAjoutStockage(f)).slice(0,10))||'—')+'</td><td>'+fmtOctets(f.taille)+'</td><td>'+etat+'</td>'
-          + '<td><button class="doc-btn" onclick="telechargerFichierDemande(\''+escJs(f.path)+'\',\''+escJs(f.nom||'fiche')+'\')">Télécharger</button></td></tr>';
-      }).join('')
-    + '</tbody></table></div></div>';
-  return html;
-}
 
-// ====================== DATE D'AJOUT AU STOCKAGE ======================
-// La date affichee pour un fichier du Stockage est la date REELLE a laquelle il a ete AJOUTE au stockage (storage.objects.created_at), et non la date de
-// soumission d'une reponse a une demande ni la date de la demande. Tant que la vraie date n'est pas chargee (ou si elle est introuvable), on garde l'ancienne.
 function dateAjoutStockage(f){ const d = (state.stockageDates||{})[f && f.path]; return d || (f && (f.date || f.uploaded_at)) || ''; }
 async function chargerDatesStockage(chemins){
   state.stockageDates = state.stockageDates || {}; state.stockageDatesTentes = state.stockageDatesTentes || new Set();
@@ -3361,8 +3265,17 @@ function renderStockageTab(){
   const recherche = (state.stockageRecherche||'').toLowerCase();
   const tri = state.stockageTri || 'date';
   const autresFichiers = dossierActif.fichiers.filter(f=>!f.fiche);
-  const panneauFiches = cleActive==='product_movements' ? renderFichesTracabilite(coopId) : '';
-  const afficherListe = !panneauFiches || autresFichiers.length>0;   // dossier des fiches : la liste generique ne sert que s'il contient aussi d'autres fichiers (connaissements PDF, documents d'ECORIGINE)
+  // Dossier « Fiches de traçabilité » : UNIQUEMENT les fiches, chacune nommée comme sa demande — rien d'autre (ni tuiles, ni colonnes, ni boutons d'archivage).
+  const modeFiches = cleActive==='product_movements';
+  const afficherListe = !modeFiches;
+  const htmlFiches = !modeFiches ? '' : (dossierActif.fichiers.length===0
+    ? '<div class="stock-empty">Aucune fiche de traçabilité pour le moment.</div>'
+    : dossierActif.fichiers.slice().sort((a,b)=>String(dateAjoutStockage(b)).localeCompare(String(dateAjoutStockage(a)))).map(f=>{
+        const d = dateAjoutStockage(f), dt = d ? new Date(d).toLocaleDateString('fr-FR') : '';
+        return '<div class="stock-file-row"><div class="stock-file-name" title="'+esc(f.nom)+'">'+esc(f.nom)+'</div>'
+          + (dt ? '<div class="stock-file-date">Ajoutée le '+esc(dt)+'</div>' : '')
+          + '<div class="stock-file-actions"><button class="doc-btn" onclick="telechargerFichierDemande(\''+escJs(f.path)+'\',\''+escJs(f.nom)+'\')">Télécharger</button></div></div>';
+      }).join(''));
   const filtreOrigine = state.stockageOrigine || 'tous';
   const nbEc = autresFichiers.filter(f=>f.origine==='ecorigine').length, nbCo = autresFichiers.filter(f=>f.origine==='coop').length;
   let fichiersAffiches = autresFichiers.filter(f=>(filtreOrigine==='tous' || f.origine===filtreOrigine) && (!recherche || f.nom.toLowerCase().includes(recherche) || String(f.nomDonne||'').toLowerCase().includes(recherche)));
@@ -3398,7 +3311,7 @@ function renderStockageTab(){
     + '<div>'
     + '<div class="stock-dossier-bar"><div><b>'+esc(dossierActif.label)+'</b> <span class="hint">'+fmtNum(dossierActif.fichiers.length)+' fichier'+(dossierActif.fichiers.length>1?'s':'')+'</span></div>'
     + '<button type="button" class="btn" id="stock-export-dossier-btn" '+(dossierActif.fichiers.length>0 ? 'onclick="exporterDossiersStockage(\''+coopId+'\', [\''+cleActive+'\'])"' : 'disabled')+' title="Télécharge uniquement le contenu de ce sous-dossier, pas tout le stockage de la coopérative">⬇ Exporter ce dossier (ZIP)</button></div>'
-    + panneauFiches
+    + htmlFiches
     + (afficherListe ? '<div class="stock-origine-chips"><button type="button" class="'+(filtreOrigine==='tous'?'actif':'')+'" onclick="state.stockageOrigine=\'tous\';render();">Tous <small>('+(nbEc+nbCo)+')</small></button>'
       + '<button type="button" class="ec '+(filtreOrigine==='ecorigine'?'actif':'')+'" onclick="state.stockageOrigine=\'ecorigine\';render();">Envoyés par ECORIGINE <small>('+nbEc+')</small></button>'
       + '<button type="button" class="co '+(filtreOrigine==='coop'?'actif':'')+'" onclick="state.stockageOrigine=\'coop\';render();">Soumis par la coopérative <small>('+nbCo+')</small></button></div>'
