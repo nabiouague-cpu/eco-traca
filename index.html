@@ -2258,7 +2258,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-137';
+const APP_VERSION = '2026-10-02-138';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -11384,10 +11384,18 @@ function ocTicketExtraireDuTexte(texte){
 async function ocTicketImporterSource(inputEl){
   const file = inputEl.files && inputEl.files[0];
   if (!file) return;
+  const estPdf = /\.pdf$/i.test(file.name);
   const statutEl = document.getElementById('tpsImportStatut');
   if (statutEl) statutEl.textContent = 'Lecture du document...';
   try{
-    const texte = await ocLireDocxTexte(file);
+    let texte;
+    if (estPdf){
+      const lignes = await ocPdfExtraireLignes(file);
+      if (lignes.length===0) throw new Error("Aucun texte lisible dans ce PDF (probablement un scan, non pris en charge pour l'instant) -- remplis les champs manuellement.");
+      texte = lignes.join('\n');
+    } else {
+      texte = await ocLireDocxTexte(file);
+    }
     const d = ocTicketExtraireDuTexte(texte);
     const setId = (id, val) => { const el = document.getElementById(id); if (el && val!=null && val!=='') el.value = val; };
     const setName = (nom, val) => { const el = document.querySelector('#modal-fields [name="'+nom+'"]'); if (el && val!=null && val!=='') el.value = val; };
@@ -12827,8 +12835,8 @@ function _renderBrut(){
     html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal xl">'
       + '<h3>Ticket de pesée</h3>'
       + '<div class="hint" style="margin-bottom:10px;">Aucun achat existant requis : tout est saisi ici (livraison + relevé usine), rien n\'est enregistré en base, seul le document Word est généré.</div>'
-      + '<label class="field">Importer un bordereau source (Word) — remplit automatiquement les champs ci-dessous'
-      +   '<input type="file" accept=".docx" onchange="ocTicketImporterSource(this)"></label>'
+      + '<label class="field">Importer un bordereau source (Word ou PDF) — remplit automatiquement les champs ci-dessous'
+      +   '<input type="file" accept=".docx,.pdf" onchange="ocTicketImporterSource(this)"></label>'
       + '<p class="hint" id="tpsImportStatut" style="margin:-8px 0 14px;"></p>'
       + '<div id="modal-fields">'
       +   '<div class="ticket-section">Livraison</div><div class="ticket-grille">'
