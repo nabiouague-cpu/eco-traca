@@ -2220,7 +2220,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-116';
+const APP_VERSION = '2026-10-02-117';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3066,7 +3066,7 @@ async function chargerFichesTracabilite(forcer){
 }
 function fichesDeCoop(coopId){
   return (state.fichesTracabilite||[]).filter(f=>f.cooperative_id===coopId)
-    .slice().sort((a,b)=>String(b.uploaded_at||'').localeCompare(String(a.uploaded_at||'')));   // la plus recente d'abord
+    .slice().sort((a,b)=>String(dateAjoutStockage(b)).localeCompare(String(dateAjoutStockage(a))));   // la plus recente d'abord (date d'ajout au stockage)
 }
 function toggleFicheSelection(id){ state.fichesSelection = state.fichesSelection || new Set(); if (state.fichesSelection.has(id)) state.fichesSelection.delete(id); else state.fichesSelection.add(id); render(); }
 function toggleToutesFiches(cocher, coopId){
@@ -3092,7 +3092,7 @@ async function archiverFichesTracabilite(coopId){
     }
     if (reussies.length===0){ showToast('Aucune fiche n\'a pu être récupérée : rien n\'est archivé.'); return; }
     zip.file(dossier+'/LISEZMOI.txt', ['Fiches de traçabilité archivées depuis ORIGEN le '+new Date().toLocaleDateString('fr-FR'), '',
-      ...reussies.map(f=>'- '+((coopById(f.cooperative_id)||{}).nom||f.cooperative_id)+' · connaissement '+(f.connaissement||'?')+' · reçue le '+(dateFr(String(f.uploaded_at||'').slice(0,10))||'?')+' · '+(f.nom||''))].join('\n'));
+      ...reussies.map(f=>'- '+((coopById(f.cooperative_id)||{}).nom||f.cooperative_id)+' · connaissement '+(f.connaissement||'?')+' · ajoutée au stockage le '+(dateFr(String(dateAjoutStockage(f)).slice(0,10))||'?')+' · '+(f.nom||''))].join('\n'));
     const blob = await zip.generateAsync({ type:'blob' });
     telechargerBlob(blob, 'Fiches_de_tracabilite_'+propre((coopById(coopId)||{}).nom||coopId)+'_'+new Date().toISOString().slice(0,10)+'.zip');
     state.fichesArchivees = new Set(reussies.map(f=>f.id)); state.fichesSelection = new Set();
@@ -3141,18 +3141,37 @@ function renderFichesTracabilite(coopId){
     + '<div><div class="k">Archivées cette session</div><div class="v">'+fmtNum(nbArch)+'</div><div class="s">'+(nbArch>0 ? 'prêtes à être vidées' : 'aucune')+'</div></div></div>';
   const toutCoche = nbVidables>0 && vidables.every(f=>sel.has(f.id));
   html += '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th style="width:36px;"><input type="checkbox" '+(toutCoche?'checked':'')+(nbVidables===0?' disabled':'')+' onclick="toggleToutesFiches(this.checked,\''+cid+'\')" title="Sélectionner les fiches vidables"></th>'
-    + '<th>Connaissement</th><th>Fichier</th><th>Reçue le</th><th>Taille</th><th>État</th><th></th></tr></thead><tbody>'
+    + '<th>Connaissement</th><th>Fichier</th><th>Ajoutée le</th><th>Taille</th><th>État</th><th></th></tr></thead><tbody>'
     + fiches.map(f=>{
         const archivee = arch.has(f.id);
         const etat = !f.volumes_enregistres ? '<span class="badge warn" title="Les volumes de cette fiche ne sont pas encore enregistrés : elle est protégée">Protégée · volumes à enregistrer</span>'
           : archivee ? '<span class="badge ok">Archivée · prête à vider</span>' : '<span class="badge neutral">Volumes enregistrés</span>';
         return '<tr data-id="'+esc(f.id)+'"><td>'+(f.volumes_enregistres ? '<input type="checkbox" '+(sel.has(f.id)?'checked':'')+' onclick="toggleFicheSelection(\''+esc(f.id)+'\')">' : '')+'</td>'
           + '<td><b>'+esc(f.connaissement||'—')+'</b></td><td class="nom-fichier" title="'+esc(f.nom||'')+'">'+esc(f.nom||'')+'</td>'
-          + '<td>'+esc(dateFr(String(f.uploaded_at||'').slice(0,10))||'—')+'</td><td>'+fmtOctets(f.taille)+'</td><td>'+etat+'</td>'
+          + '<td>'+esc(dateFr(String(dateAjoutStockage(f)).slice(0,10))||'—')+'</td><td>'+fmtOctets(f.taille)+'</td><td>'+etat+'</td>'
           + '<td><button class="doc-btn" onclick="telechargerFichierDemande(\''+escJs(f.path)+'\',\''+escJs(f.nom||'fiche')+'\')">Télécharger</button></td></tr>';
       }).join('')
     + '</tbody></table></div></div>';
   return html;
+}
+
+// ====================== DATE D'AJOUT AU STOCKAGE ======================
+// La date affichee pour un fichier du Stockage est la date REELLE a laquelle il a ete AJOUTE au stockage (storage.objects.created_at), et non la date de
+// soumission d'une reponse a une demande ni la date de la demande. Tant que la vraie date n'est pas chargee (ou si elle est introuvable), on garde l'ancienne.
+function dateAjoutStockage(f){ const d = (state.stockageDates||{})[f && f.path]; return d || (f && (f.date || f.uploaded_at)) || ''; }
+async function chargerDatesStockage(chemins){
+  state.stockageDates = state.stockageDates || {}; state.stockageDatesTentes = state.stockageDatesTentes || new Set();
+  const a = [...new Set((chemins||[]).filter(Boolean))].filter(p=>!state.stockageDatesTentes.has(p)); if (a.length===0) return;
+  a.forEach(p=>state.stockageDatesTentes.add(p));   // un chemin n'est demande qu'une fois par session (pas de boucle si le serveur ne repond pas)
+  let nouveaux = 0;
+  try{
+    for (let i=0; i<a.length; i+=150){
+      const { data, error } = await supabaseClient.rpc('stockage_dates_fichiers', { p_paths:a.slice(i,i+150) });
+      if (error) throw error;
+      (data||[]).forEach(x=>{ if (x.ajoute_le){ state.stockageDates[x.path] = x.ajoute_le; nouveaux++; } });
+    }
+  }catch(_e){ /* on garde les anciennes dates */ }
+  if (nouveaux>0) render();
 }
 
 function renderStockageTab(){
@@ -3162,6 +3181,7 @@ function renderStockageTab(){
   const coopId = state.stockageCoopFilter || state.cooperatives[0].id;
   const coop = coopById(coopId);
   const dossiers = fichiersParTypePourCoop(coopId);
+  chargerDatesStockage(Object.values(dossiers).flatMap(d=>d.fichiers.map(f=>f.path)));   // dates reelles d'ajout au stockage
   const clesDossiers = Object.keys(dossiers);
   const totalFichiers = Object.values(dossiers).reduce((s,d)=>s+d.fichiers.length,0);
 
@@ -3179,7 +3199,7 @@ function renderStockageTab(){
   let fichiersAffiches = autresFichiers.filter(f=>!recherche || f.nom.toLowerCase().includes(recherche));
   fichiersAffiches = fichiersAffiches.slice().sort((a,b)=>{
     if (tri==='nom') return a.nom.localeCompare(b.nom,'fr',{sensitivity:'base'});
-    return String(b.date||'').localeCompare(String(a.date||'')); // date desc par defaut
+    return String(dateAjoutStockage(b)).localeCompare(String(dateAjoutStockage(a))); // date d'ajout au stockage, la plus recente d'abord
   });
 
   let html = ocRechercheCoopHtml('stockage') + '<div class="controls">'
@@ -3221,7 +3241,7 @@ function renderStockageTab(){
             const cocheFichier = selectionFichiers.includes(cleFichier);
             // Une ligne = case, nom du fichier, date d'ajout, puis « Télécharger » et « Supprimer » en face. Le titre du
             // document reste disponible au survol du nom.
-            const dateFichier = f.date ? new Date(f.date).toLocaleDateString('fr-FR') : '';
+            const dateAjout = dateAjoutStockage(f), dateFichier = dateAjout ? new Date(dateAjout).toLocaleDateString('fr-FR') : '';
             const infoSurvol = f.nom+(f.titre?' — '+f.titre:'')+(dateFichier?' · '+dateFichier:'');
             return '<div class="stock-file-row">'
             + '<span class="stock-check"><input type="checkbox" '+(cocheFichier?'checked':'')+' onclick="toggleSelectionFichierStockage(\''+coopId+'\',\''+escJs(cleFichier)+'\')"><span class="box"><svg viewBox="0 0 24 24"><polyline points="4 12 10 18 20 6"/></svg></span></span>'
