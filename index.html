@@ -2258,7 +2258,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-135';
+const APP_VERSION = '2026-10-02-136';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -10478,7 +10478,9 @@ async function savePrimes(){
   closeModal();
 }
 
-// Coop a-t-elle fourni son document BIC ? Si oui, la retenue ne s'applique pas.
+// Coop a-t-elle fourni son document BIC ? N'exempte PAS de la retenue a la source (elle s'applique
+// systematiquement sur chaque paiement) -- sert seulement a signaler les coops a qui la totalite retenue
+// sur la campagne doit etre reversee une fois celle-ci terminee (etape separee, geree ailleurs).
 function coopABic(coopId){
   return (state.docCheck||[]).some(d=>d.cooperative_id===coopId && d.doc==='BIC (si disponible)' && d.disponible);
 }
@@ -10509,8 +10511,8 @@ function calcMontantPaiement(a){
   const tkm = Number(a.tkm)||0;
   const commission = Number(a.commission)||0;
   const tauxBic = Number(par && par.taux_bic)||0;
-  const aBic = coopABic(a.cooperative_id);
-  const retenueBic = aBic ? 0 : Math.round(tauxBic*poids);
+  const aBic = coopABic(a.cooperative_id);   // informatif seulement (reversement fin de campagne) -- ne change pas le calcul
+  const retenueBic = Math.round(tauxBic*poids);
   const base = { poids, prixEntreeUsine, tkm, commission, tauxBic, retenueBic, aBic, campagneId:a.campagne_id, periode: a.periode==='intermediaire' ? 'intermediaire' : 'principale' };
   if (!(prixEntreeUsine>0)) return Object.assign(base, { manque:'prix', montant:null });
   if (!(tkm>0)) return Object.assign(base, { manque:'tkm', montant:null });
@@ -11163,7 +11165,7 @@ function detailAchatHtml(a, etat){
         return dl('Prix d\'entrée usine', m.prixEntreeUsine>0 ? fmtNum(m.prixEntreeUsine)+' FCFA/kg' : '<span class="vide">Non renseigné</span>')
           + dl('TKM', m.tkm>0 ? fmtNum(m.tkm)+' FCFA/kg' : '<span class="vide">Non renseigné</span>')
           + (m.commission>0 ? dl('Commission', fmtNum(m.commission)+' FCFA/kg') : '')
-          + dl('Retenue BIC', m.aBic ? '<span class="vide">Aucune (BIC fourni)</span>' : (m.tauxBic>0 ? fmtNum(m.retenueBic)+' FCFA' : '<span class="vide">Aucune</span>'))
+          + dl('Retenue BIC', m.tauxBic>0 ? fmtNum(m.retenueBic)+' FCFA'+(m.aBic ? ' <span class="vide">(BIC fourni — à reverser en fin de campagne)</span>' : '') : '<span class="vide">Aucune</span>')
           + dl('Montant à payer', m.montant!==null ? '<b>'+fmtNum(m.montant)+' FCFA</b>' : '<span class="vide">'+(m.manque==='prix' ? 'Prix d\'entrée usine à renseigner' : 'TKM à compléter')+'</span>'); })()
     + (function(){ const ps = paiementsDeAchat(a.id), sd = soldeAchat(a);
         if (!ps.length && !String(a.numero_cheque||'').trim()) return dl('Paiement', '<span class="vide">Non enregistré</span>');
@@ -12328,7 +12330,7 @@ function _renderBrut(){
       + '<p class="hint" style="margin-bottom:10px;">Montant à payer à la coopérative = ((prix entrée usine + TKM + commission) × poids net payé) − retenue BIC. Le prix entrée usine est celui fixé par le Conseil Café-Cacao ; il change à chaque campagne et à chaque période : il est donc mémorisé séparément, sans modifier les paiements des autres campagnes.</p>'
       + '<label class="field">Campagne<select id="pp-campagne" onchange="ouvrirParametresPaiement(this.value)">'+(camps.length ? '' : '<option value="">Aucune campagne</option>')+camps.map(c=>'<option value="'+c.id+'"'+(c.id===campId?' selected':'')+'>'+esc(c.nom)+'</option>').join('')+'</select></label>'
       + bloc('principale','Période principale') + bloc('intermediaire','Période intermédiaire')
-      + '<p class="hint" style="margin-top:8px;">La retenue BIC ne s\'applique que si la coopérative n\'a pas fourni son document BIC dans sa checklist de conformité. Laisse 0 si elle ne s\'applique pas.</p>'
+      + '<p class="hint" style="margin-top:8px;">La retenue BIC s\'applique systématiquement sur chaque paiement, même si la coopérative a fourni son document BIC — dans ce cas, le total retenu sur la campagne lui est reversé une fois celle-ci terminée. Laisse 0 si la retenue ne s\'applique pas du tout.</p>'
       + '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Annuler</button><button type="button" class="btn btn-primary" onclick="enregistrerParametresPaiement()">Enregistrer</button></div>'
       + '</div></div>';
   }
