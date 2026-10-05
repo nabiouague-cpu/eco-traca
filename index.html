@@ -2258,7 +2258,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-136';
+const APP_VERSION = '2026-10-02-137';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -11319,6 +11319,132 @@ async function enregistrerTicketPesee(generer){
 function ocOuvrirTicketPeseeStandalone(prefill){
   openModal('ticketPeseeStandalone', { prefill: prefill || {}, donnees: {} });
 }
+// Lit un fichier .docx (JSZip deja charge pour la generation du ticket) et renvoie son texte, un
+// paragraphe par ligne, les doublons consecutifs retires -- le bordereau source (AGROMEX/DirectSoft)
+// duplique systematiquement chaque champ dans le XML (artefact du logiciel, sans rapport avec la mise en page).
+async function ocLireDocxTexte(file){
+  if (typeof JSZip==='undefined') throw new Error("La bibliothèque de compression n'a pas pu se charger (connexion internet requise).");
+  const zip = await JSZip.loadAsync(await file.arrayBuffer());
+  const f = zip.file('word/document.xml');
+  if (!f) throw new Error('Document Word invalide (word/document.xml introuvable).');
+  const xml = await f.async('string');
+  const paras = xml.match(/<w:p[ >][\s\S]*?<\/w:p>/g) || [];
+  const lignes = [];
+  paras.forEach(p=>{
+    const morceaux = (p.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) || []).map(m=>m.replace(/<[^>]+>/g,''));
+    const texte = morceaux.join('').trim().replace(/\u00a0/g,' ');
+    if (texte) lignes.push(texte);
+  });
+  const u = [];
+  for (let i=0; i<lignes.length; i++){
+    if (i+1<lignes.length && lignes[i]===lignes[i+1]){ u.push(lignes[i]); i++; } else u.push(lignes[i]);
+  }
+  return u.join('\n');
+}
+// Extrait les champs d'un bordereau de reception de cacao (ticket de pesee source, modele AGROMEX/
+// DirectSoft) a partir de son texte brut (ocLireDocxTexte). Teste et valide sur un bordereau reel
+// (STE COOP UNITE DE MAHAPLEU, SC101416-2024-2-57) avant integration -- meme methode que pour le connaissement.
+function ocTicketExtraireDuTexte(texte){
+  // Pour chaque libelle, prend la PREMIERE occurrence non vide (un meme libelle peut apparaitre deux fois,
+  // dont une fois sans valeur -- ex. "Dont : Humidité" en tete, vide, avant la vraie ligne "Humidité  7,60").
+  const champ = (label, colonRequis) => {
+    const sep = colonRequis ? '[ \\t]*:[ \\t]*' : '[ \\t]*:?[ \\t]*';
+    const re = new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + sep + '([^\\n]*)', 'g');
+    let m, premier = null;
+    while ((m = re.exec(texte))){ const v = m[1].trim(); if (v) return v; if (premier===null) premier = v; }
+    return premier;
+  };
+  const nombreFr = s => { if (!s) return null; const n = Number(String(s).replace(/\s/g,'').replace(',','.')); return isNaN(n) ? null : n; };
+  const dateIso = s => { const m = /^(\d{2})\/(\d{2})\/(\d{4})/.exec(s||''); return m ? m[3]+'-'+m[2]+'-'+m[1] : null; };
+  const mCq = /\b(CQ\d\S*(?:\s\S+)?)/.exec(texte);
+  const mGrade = /\bGRADE\s*\d+\b/.exec(texte);
+  return {
+    nBordereau: champ('N° Bordereau'), connaissement: champ('N° Connaissement'),
+    dateEmission: dateIso(champ('Date D\u2019\u00e9mission')), dateArrivee: dateIso(champ('Date d\u2019arriv\u00e9e')),
+    fournisseur: champ('Fournisseur', true), lieuOrigine: champ('Lieu de départ'),
+    tareCamion: nombreFr(champ('Tare camion')), poidsBrutDecl: nombreFr(champ('poids produit déclaré Brut')),
+    dateDepart: dateIso(champ('Date de départ')), poidsNetDecl: nombreFr(champ('poids produit déclaré Net')),
+    tracteur: champ('N° Tracteur'), vehicule: champ('N° Véhicule'), transporteur: champ('Transporteur'),
+    conducteur: champ('Noms et prénoms Conducteur'),
+    poidsEntre: nombreFr(champ('Poids entré (Brut)')), poidsSortie: nombreFr(champ('Poids sortie (Tare)')),
+    poidsDecharge: nombreFr(champ('poids produit déchargé')), sacsDeclares: nombreFr(champ('Nombre de sacs déclarés')),
+    sacsRefoules: nombreFr(champ('Nombre de sacs refoulés')), sacsAcceptes: nombreFr(champ('Nombre de sacs acceptés')),
+    sacsDecharges: nombreFr(champ('Nombre de sacs déchargés')), sacsManquants: nombreFr(champ('Nombre de sacs manquants')),
+    tauxRefaction: nombreFr(champ('Taux de Réfaction')), poidsRefoule: nombreFr(champ('poids produit refoulé')),
+    poidsAccepte: nombreFr(champ('poids produit Accepté')), poidsNetRefaction: nombreFr(champ('poids net après réfaction')),
+    heureEntree: champ('Heure (Entrée)'), heureSortie: champ('Heure (Sortie)'),
+    aPlates: nombreFr(champ('Feves plates')), aMitees: nombreFr(champ('Feves mitées')), aGermees: nombreFr(champ('Feves germées')),
+    aArdoisees: nombreFr(champ('Feves ardoisées')), aBrisures: nombreFr(champ('Brisures')), aMatEtr: nombreFr(champ('Matières étrangères')),
+    aHumidite: nombreFr(champ('Humidité')), aMoisies: nombreFr(champ('Feves moisies')), aGrainage: nombreFr(champ('Grainage')),
+    aDefectueuses: nombreFr(champ('Défectueuses')), aDechets: nombreFr(champ('Déchets')), aViolettes: nombreFr(champ('Feves violettes')),
+    aFevesBrisees: nombreFr(champ('Feves brisées')), aCrabots: nombreFr(champ('Crabots')), aFfa: champ('F.f.a'),
+    ficheCq: mCq ? mCq[1] : null, grade: mGrade ? mGrade[0] : null,
+  };
+}
+async function ocTicketImporterSource(inputEl){
+  const file = inputEl.files && inputEl.files[0];
+  if (!file) return;
+  const statutEl = document.getElementById('tpsImportStatut');
+  if (statutEl) statutEl.textContent = 'Lecture du document...';
+  try{
+    const texte = await ocLireDocxTexte(file);
+    const d = ocTicketExtraireDuTexte(texte);
+    const setId = (id, val) => { const el = document.getElementById(id); if (el && val!=null && val!=='') el.value = val; };
+    const setName = (nom, val) => { const el = document.querySelector('#modal-fields [name="'+nom+'"]'); if (el && val!=null && val!=='') el.value = val; };
+    // Livraison
+    setId('tps_connaissement', d.connaissement);
+    setId('tps_lieu_origine', d.lieuOrigine);
+    setId('tps_date', d.dateDepart);
+    setId('tps_sacs_declares', d.sacsDeclares);
+    setId('tps_poids_brut', d.poidsBrutDecl);
+    setId('tps_poids_net', d.poidsNetDecl);
+    setId('tps_transporteur', d.transporteur);
+    setId('tps_immat_vehicule', d.tracteur);
+    setId('tps_immat_remorque', d.vehicule);
+    setId('tps_chauffeur', d.conducteur);
+    setId('tps_sacs_acceptes', d.sacsAcceptes);
+    setId('tps_poids_brut_accepte', d.poidsAccepte);
+    setId('tps_poids_net_produit', d.poidsNetRefaction);
+    // Pesee usine (31 champs, par name)
+    setName('n_bordereau', d.nBordereau);
+    setName('date_emission', d.dateEmission);
+    setName('date_arrivee', d.dateArrivee);
+    setName('tare_camion', d.tareCamion);
+    setName('sacs_decharges', d.sacsDecharges);
+    setName('poids_entre', d.poidsEntre);
+    setName('heure_entree', d.heureEntree);
+    setName('sacs_manquants', d.sacsManquants);
+    setName('poids_sortie', d.poidsSortie);
+    setName('heure_sortie', d.heureSortie);
+    setName('sacs_refoules', d.sacsRefoules);
+    setName('poids_decharge', d.poidsDecharge);
+    setName('poids_refoule', d.poidsRefoule);
+    setName('taux_refaction', d.tauxRefaction);
+    setName('a_plates', d.aPlates); setName('a_mitees', d.aMitees); setName('a_germees', d.aGermees);
+    setName('a_ardoisees', d.aArdoisees); setName('a_brisures', d.aBrisures); setName('a_mat_etr', d.aMatEtr);
+    setName('a_humidite', d.aHumidite); setName('a_moisies', d.aMoisies); setName('a_grainage', d.aGrainage);
+    setName('a_defectueuses', d.aDefectueuses); setName('a_dechets', d.aDechets); setName('a_violettes', d.aViolettes);
+    setName('a_feves_brisees', d.aFevesBrisees); setName('a_crabots', d.aCrabots); setName('a_ffa', d.aFfa);
+    setName('fiche_cq', d.ficheCq); setName('grade', d.grade);
+    // Cooperative (fournisseur) : correspondance approchee par nom, sinon laissee a choisir a la main
+    if (d.fournisseur){
+      const nrm = s => String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
+      const cible = nrm(d.fournisseur);
+      const coop = state.cooperatives.find(c=>{ const n = nrm(c.nom); return n && (n===cible || cible.includes(n) || n.includes(cible)); });
+      if (coop){ const sel = document.getElementById('tps_coop'); if (sel) sel.value = coop.id; }
+    }
+    const manquants = [];
+    if (!d.connaissement) manquants.push('connaissement');
+    if (d.poidsNetRefaction==null) manquants.push('poids net payé');
+    if (!document.getElementById('tps_coop').value) manquants.push('coopérative (fournisseur non reconnu)');
+    if (statutEl) statutEl.textContent = manquants.length
+      ? 'Champs non trouvés ou coopérative non reconnue, à compléter à la main : '+manquants.join(', ')+'.'
+      : 'Champs importés depuis le bordereau — vérifie avant de générer.';
+  }catch(e){
+    if (statutEl) statutEl.textContent = '';
+    showToast('Échec de la lecture du document : '+e.message);
+  }
+}
 async function genererTicketPeseeStandalone(){
   if (state.ticketEnCours) return; state.ticketEnCours = true;
   try{
@@ -12701,6 +12827,9 @@ function _renderBrut(){
     html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal xl">'
       + '<h3>Ticket de pesée</h3>'
       + '<div class="hint" style="margin-bottom:10px;">Aucun achat existant requis : tout est saisi ici (livraison + relevé usine), rien n\'est enregistré en base, seul le document Word est généré.</div>'
+      + '<label class="field">Importer un bordereau source (Word) — remplit automatiquement les champs ci-dessous'
+      +   '<input type="file" accept=".docx" onchange="ocTicketImporterSource(this)"></label>'
+      + '<p class="hint" id="tpsImportStatut" style="margin:-8px 0 14px;"></p>'
       + '<div id="modal-fields">'
       +   '<div class="ticket-section">Livraison</div><div class="ticket-grille">'
       +     '<label class="field">Coopérative *<select id="tps_coop"><option value="">Sélectionner…</option>'
