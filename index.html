@@ -2258,7 +2258,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-133';
+const APP_VERSION = '2026-10-02-134';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5828,6 +5828,7 @@ async function genererConnaissement(coopBIdOverride, poidsNetOverride, nombreSac
     return debut+'-'+(debut+1);
   })() : '';
   const numeroCampagne = v('connNumeroCampagne').trim();
+  const campagneId = v('connCampagneId');
   const traite = v('connTraite').trim() || 'Principale';
   const nomTransporteur = v('connTransporteur').trim();
   const immatVehicule = v('connImmatVehicule').trim();
@@ -5850,6 +5851,7 @@ async function genererConnaissement(coopBIdOverride, poidsNetOverride, nombreSac
   if (!numeroConnaissement) manquants.push('N° de connaissement');
   if (!dateSaisie) manquants.push('Date du connaissement');
   if (!poidsNet) manquants.push('Poids net');
+  if (!campagneId) manquants.push('Campagne (achat)');
   if (manquants.length){ showToast('Champs obligatoires manquants : '+manquants.join(', ')); return null; }
 
   // La date affichee sur le document (haut de page + Date Edition) est celle
@@ -5891,6 +5893,27 @@ async function genererConnaissement(coopBIdOverride, poidsNetOverride, nombreSac
       lieu_depart: lieuDepart, distance: distance?Number(distance):null, cout_tkm: coutTkm?Number(coutTkm):null,
       updated_at: new Date().toISOString(),
     });
+    // Cree ou met a jour l'achat reel correspondant (niveau connaissement, pas producteur) avec le TKM
+    // deja connu : des que le poids net paye sera saisi (Reception a l'usine), calcMontantPaiement peut
+    // calculer le montant a payer sans qu'aucune information ne soit ressaisie.
+    const periodeAchat = /^interm/i.test(traite.normalize('NFD').replace(/[\u0300-\u036f]/g,'')) ? 'intermediaire' : 'principale';
+    const donneesAchat = {
+      cooperative_id: coopBId, producteur_id: null, connaissement: numeroConnaissement,
+      date: dateEdition, campagne_id: campagneId, periode: periodeAchat,
+      quantite_kg: poidsNet?Number(poidsNet):0, poids_brut: poidsBrut?Number(poidsBrut):0,
+      nombre_sacs: nombreSacs?Number(nombreSacs):0, lieu_origine: lieuDepart || null, tkm: coutTkm?Number(coutTkm):null,
+    };
+    const achatExistant = state.achats.find(a=>a.cooperative_id===coopBId && a.connaissement===numeroConnaissement && !a.producteur_id);
+    if (achatExistant){
+      Object.assign(achatExistant, donneesAchat);
+      const { error: errAchat } = await supabaseClient.from('achats').update(donneesAchat).eq('id', achatExistant.id);
+      if (errAchat) showToast("Connaissement enregistré, mais échec de la mise à jour de l'achat : "+errAchat.message);
+    } else {
+      const nouvelAchat = Object.assign({ id: genId('a') }, donneesAchat);
+      const { error: errAchat } = await supabaseClient.from('achats').insert(nouvelAchat);
+      if (errAchat) showToast("Connaissement enregistré, mais échec de la création de l'achat : "+errAchat.message);
+      else state.achats.push(nouvelAchat);
+    }
   }catch(e){ showToast('Erreur : '+e.message); return null; }
 
   // Cout de transport theorique = (poids net receptionne x cout TKM), comme
@@ -12575,7 +12598,9 @@ function _renderBrut(){
       + '<label class="field">Date du connaissement *<input type="date" id="connDateSaisie" value="'+new Date().toISOString().slice(0,10)+'"></label>'
       + '<label class="field">N° de campagne<input type="text" id="connNumeroCampagne" placeholder="Ex : 2"></label>'
       + '<label class="field">Traite<select id="connTraite"><option value="Principale">Principale</option><option value="Intermédiaire">Intermédiaire</option></select></label>'
-      + '<div></div>'
+      + '<label class="field">Campagne (achat) *<select id="connCampagneId"><option value="">Sélectionner…</option>'
+      +   state.campagnes.map(c=>'<option value="'+esc(c.id)+'"'+(state.campagneFilter===c.id?' selected':'')+'>'+esc(c.nom)+'</option>').join('')
+      + '</select></label>'
       + '<label class="field" style="grid-column:1/-1;font-weight:700;margin-top:6px;">Transporteur (mémorisé pour cette coopérative initiale)</label>'
       + '<label class="field">Nom transporteur<input type="text" id="connTransporteur"></label>'
       + '<label class="field">Nom chauffeur<input type="text" id="connChauffeur"></label>'
