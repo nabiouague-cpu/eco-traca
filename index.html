@@ -2252,7 +2252,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-123';
+const APP_VERSION = '2026-10-02-124';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -2924,7 +2924,9 @@ function fichiersParTypePourCoop(coopId){
   const demandeIdsCoop = new Set((state.demandesCoop||[]).filter(d=>d.cooperative_id===coopId).map(d=>d.id));
   const dossiers = {};
   // « Fiches de traçabilité » en premier : chaque coopérative a son propre dossier (vide tant qu'elle n'a rien envoyé)
-  ['product_movements'].concat(Object.keys(DEMANDE_TYPE_LABELS).filter(t=>t!=='product_movements')).forEach(t=>{ dossiers[t] = { label: DEMANDE_TYPE_LABELS[t], fichiers: [] }; });
+  // Le dossier « Fiches de traçabilité » ne contient QUE les fiches envoyées par les coopératives : les connaissements (PDF) ont leur propre dossier,
+  // et les documents envoyés par ECORIGINE (contrat, code de conduite...) n'y sont jamais rangés.
+  ['product_movements','connaissements'].concat(Object.keys(DEMANDE_TYPE_LABELS).filter(t=>t!=='product_movements')).forEach(t=>{ dossiers[t] = { label: t==='connaissements' ? 'Connaissements (PDF)' : DEMANDE_TYPE_LABELS[t], fichiers: [] }; });
   (state.demandeFichiers||[]).forEach(f=>{
     if (!demandeIdsCoop.has(f.demande_id)) return;
     // Les depots de la cooperative pour le registre / la geolocalisation sont enregistres
@@ -2937,7 +2939,7 @@ function fichiersParTypePourCoop(coopId){
       cleType = 'masterdata';
     } else if (cleType==='connaissement'){
       titreType = 'Connaissement (PDF)' + (f.connaissement ? ' — '+f.connaissement : '') + ' — renvoyé par la coopérative';
-      cleType = 'product_movements';
+      cleType = 'connaissements';
     }
     if (!dossiers[cleType]) dossiers[cleType] = { label: cleType, fichiers: [] };
     const dem = (state.demandesCoop||[]).find(d=>d.id===f.demande_id);
@@ -2967,13 +2969,13 @@ function fichiersParTypePourCoop(coopId){
   // signer, document "autres" avec fichier initial) -- stocke directement sur
   // la demande (fichier_source_path), distinct de ce que la cooperative renvoie.
   (state.demandesCoop||[]).filter(d=>d.cooperative_id===coopId && d.fichier_source_path).forEach(d=>{
-    const t = (d.types && d.types[0]) || 'autres';
+    const t = (d.types && d.types[0] && d.types[0]!=='product_movements') ? d.types[0] : 'autres';   // jamais dans le dossier des fiches de traçabilité
     if (!dossiers[t]) dossiers[t] = { label: DEMANDE_TYPE_LABELS[t]||t, fichiers: [] };
     dossiers[t].fichiers.push({ path:d.fichier_source_path, nom:d.fichier_source_nom||d.fichier_source_path.split('/').pop(), date:d.requested_at, titre:d.name+' (envoyé par ECORIGINE)', source:'demande_source', sourceId:d.id, origine:'ecorigine', modele:demandeAvecDocumentDeBase(d), direct:!demandeAvecDocumentDeBase(d), statutDemande:d.statut });
   });
   // Documents de base supprimés automatiquement après validation du retour de la coopérative : on garde la trace
   (state.demandesCoop||[]).filter(d=>d.cooperative_id===coopId && !d.fichier_source_path && d.fichier_source_supprime_le && d.fichier_source_nom).forEach(d=>{
-    const t = (d.types && d.types[0]) || 'autres'; if (!dossiers[t]) dossiers[t] = { label: DEMANDE_TYPE_LABELS[t]||t, fichiers: [] };
+    const t = (d.types && d.types[0] && d.types[0]!=='product_movements') ? d.types[0] : 'autres'; if (!dossiers[t]) dossiers[t] = { label: DEMANDE_TYPE_LABELS[t]||t, fichiers: [] };
     (dossiers[t].historique = dossiers[t].historique || []).push({ nom:d.fichier_source_nom, demande:d.name, supprimeLe:d.fichier_source_supprime_le });
   });
   dossiers['envois'] = { label: 'Documents envoyés par ECORIGINE', fichiers: [] };
