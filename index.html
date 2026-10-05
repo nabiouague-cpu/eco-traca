@@ -1483,6 +1483,7 @@ async function enregistrerDemandeAvecFichier(coop, o, fichier, nomFichier){
     message: o.message || null,
     document_a_signer: fichier ? (o.nature === 'signer') : null,
     fichier_source_path: path, fichier_source_nom: fichier ? nomFichier : null,
+    document_modele: o.document_modele || null, modele_params: o.modele_params || null,
     connaissement: null, masterdata_scope: null,
   };
   const { error } = await supabaseClient.from('demandes').insert(demandeObj);
@@ -1538,7 +1539,7 @@ async function genererContratRA(mode){
     const doc = documentDemandable('contrat_ra');
     etat('Création de la demande…');
     const nomDemande = nomDemandeDocument(doc, coop);
-    const r = await enregistrerDemandeAvecFichier(coop, { name:nomDemande, types:['autres'], deadline:echeance, message:messageDocumentPourCoop(doc, coop), nature:doc.nature }, g.fichier, g.nom);
+    const r = await enregistrerDemandeAvecFichier(coop, { name:nomDemande, types:['autres'], deadline:echeance, message:messageDocumentPourCoop(doc, coop), nature:doc.nature, document_modele:doc.id, modele_params:params }, g.fichier, g.nom);
     if (!r.ok){ etat(''); showToast('Échec : '+r.erreur); return; }
     closeModal();
     showToast(r.erreurEmail
@@ -1988,6 +1989,7 @@ async function genererContratsGroupe(){
         message: 'Merci de télécharger votre contrat, de le signer, puis de nous retourner la version signée.',
         document_a_signer: true,
         fichier_source_path: path, fichier_source_nom: fileName,
+        document_modele: 'contrat_ra', modele_params: { campagne_label, periode_label, date_debut: date_debut_raw },
       };
       const { error } = await supabaseClient.from('demandes').insert(demandeObj);
       if (error){ ignorees.push(coop.nom+' (échec création demande : '+error.message+')'); continue; }
@@ -2229,7 +2231,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-120';
+const APP_VERSION = '2026-10-02-121';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -2862,6 +2864,41 @@ async function supprimerDocumentDeBaseApresValidation(demande){
   return { nom: demande.fichier_source_nom };
 }
 
+// ====================== CYCLE D'UN DOCUMENT A SIGNER (contrat, code de conduite, procuration) ======================
+// 1. A la creation de la demande, le modele PROPRE a la cooperative est genere et joint (portail + e-mail).
+// 2. Des que la cooperative soumet son retour, le modele est supprime du stockage (portail ; en secours a la validation, voir plus haut).
+// 3. Si ECORIGINE REFUSE le retour, le meme modele est REGENERE automatiquement pour cette cooperative : le cycle peut se repeter autant de fois que necessaire.
+async function genererDocumentDeBasePourCoop(docReg, coop, params){
+  if (docReg.genere) return contratPdfPourCooperative(coop, params);
+  if (docReg.fichierModele){
+    const rep = await fetch(docReg.fichierModele.url+'?v='+encodeURIComponent(APP_VERSION), { cache:'no-cache' });
+    if (!rep.ok) throw new Error('HTTP '+rep.status);
+    const blob = await rep.blob(); if (!(blob.size>1000)) throw new Error('fichier vide');
+    return { fichier: blob, nom: docReg.fichierModele.nom };
+  }
+  throw new Error("ce document n'a pas de modèle automatique");
+}
+function documentRegistreDeDemande(d, coop){   // par le type memorise, sinon (anciennes demandes) par le nom de la demande
+  if (d && d.document_modele) return documentDemandable(d.document_modele);
+  return DOCUMENTS_DEMANDABLES.find(x=>nomDemandeDocument(x, coop)===(d && d.name)) || null;
+}
+async function regenererDocumentDeBase(demande){
+  if (!demande || demande.document_a_signer!==true || demande.fichier_source_path) return { ignore:true };   // pas un document a signer, ou un modele est deja en place
+  const coop = coopById(demande.cooperative_id), docReg = documentRegistreDeDemande(demande, coop);
+  if (!coop || !docReg) return { ignore:true };                                                          // document sans modele automatique : rien a regenerer
+  if (docReg.genere && !(demande.modele_params && demande.modele_params.campagne_label)) return { erreur:"les paramètres du contrat (campagne, période, date de début) n'ont pas été mémorisés pour cette ancienne demande : génère un nouveau contrat" };
+  try{
+    const g = await genererDocumentDeBasePourCoop(docReg, coop, demande.modele_params||{});
+    const nom = demande.fichier_source_nom ? nomRetourCanonique(demande.fichier_source_nom, g.nom, 0) : g.nom;   // meme nom que le modele d'origine
+    const path = coop.id+'/demandes/'+demande.id+'/source/'+assainirNomFichier(nom);
+    const up = await supabaseClient.storage.from('documents-coop').upload(path, g.fichier, { upsert:true }); if (up.error) throw new Error(up.error.message);
+    const maj = await supabaseClient.from('demandes').update({ fichier_source_path:path, fichier_source_nom:nom, fichier_source_supprime_le:null }).eq('id', demande.id);
+    if (maj.error){ await supabaseClient.storage.from('documents-coop').remove([path]); throw new Error(maj.error.message); }
+    demande.fichier_source_path = path; demande.fichier_source_nom = nom; demande.fichier_source_supprime_le = null;
+    return { nom };
+  }catch(e){ return { erreur:e && e.message ? e.message : String(e) }; }
+}
+
 function fichiersParTypePourCoop(coopId){
   const demandeIdsCoop = new Set((state.demandesCoop||[]).filter(d=>d.cooperative_id===coopId).map(d=>d.id));
   const dossiers = {};
@@ -3368,9 +3405,9 @@ function renderStockageTab(){
                 + '<div class="stock-file-actions"><button class="doc-btn" onclick="telechargerFichierDemande(\''+escJs(f.path)+'\',\''+escJs(f.nom)+'\')">Télécharger</button>'
                 + '<button class="doc-btn doc-btn-danger" onclick="supprimerUnFichierStockage(\''+coopId+'\',\''+escJs(cleFichier)+'\')">Supprimer</button></div></div>';
               }).join('')
-              + histo.map(h=>'<div class="stock-histo">🗑 <b>'+esc(h.nom)+'</b> — supprimé du stockage le '+esc(new Date(h.supprimeLe).toLocaleDateString('fr-FR'))+' après validation du retour de la coopérative <span>('+esc(h.demande||'')+')</span></div>').join('');
+              + histo.map(h=>'<div class="stock-histo">🗑 <b>'+esc(h.nom)+'</b> — supprimé du stockage le '+esc(new Date(h.supprimeLe).toLocaleDateString('fr-FR'))+' après l\'envoi du retour par la coopérative <span>('+esc(h.demande||'')+')</span></div>').join('');
           }).join('')
-        + '<div class="stock-regle">Quand ECORIGINE valide le retour de la coopérative, le document de base de cette <b>requête</b> (contrat, code de conduite…) est supprimé du stockage ; la version soumise, renommée comme l\'original, est conservée. Les documents <b>ajoutés directement par ECORIGINE, sans requête</b>, ne sont jamais supprimés automatiquement.</div>'
+        + '<div class="stock-regle">Dès que la coopérative a envoyé son retour, le document de base de cette <b>requête</b> (contrat, code de conduite, procuration…) est supprimé du stockage ; la version soumise, renommée comme l\'original, est conservée. Si ECORIGINE refuse le retour, un nouveau document est généré pour la coopérative. Les documents <b>ajoutés directement par ECORIGINE, sans requête</b>, ne sont jamais supprimés automatiquement.</div>'
       ) : '')
     + '</div>'
     + '</div>'
@@ -3615,7 +3652,7 @@ async function creerDemande(){
 
   // Document connu (liste deroulante « Autres documents ») : ORIGEN fournit lui-meme le fichier.
   const docReg = state.newDemandeTypes.has('autres') ? documentDemandable(fv('demande_doc_choix')) : null;
-  let genererPour = null, modeleAMemoriser = null;
+  let genererPour = null, modeleAMemoriser = null, paramsContratSaisis = null;
   if (docReg && docReg.genere){
     const paramsContrat = {
       campagne_label: fv('demande_contrat_campagne').trim(),
@@ -3623,6 +3660,7 @@ async function creerDemande(){
       date_debut: fv('demande_contrat_date'),
     };
     if (!paramsContrat.campagne_label || !paramsContrat.periode_label || !paramsContrat.date_debut){ showToast('Renseigne la campagne, la période et la date de début du contrat.'); return; }
+    paramsContratSaisis = paramsContrat;
     genererPour = (coop)=>contratPdfPourCooperative(coop, paramsContrat);
   } else if (docReg && docReg.fichierModele){
     // Modele integre au site (dossier « modeles ») : lu une seule fois, puis joint tel quel a la demande de chaque cooperative.
@@ -3684,6 +3722,7 @@ async function creerDemande(){
       message: message || (docReg ? messageDocumentPourCoop(docReg, coop) : '') || null,
       document_a_signer: fichierCoop ? (natureFinale==='signer') : null,
       fichier_source_path, fichier_source_nom,
+      document_modele: docReg ? docReg.id : null, modele_params: (docReg && docReg.genere) ? paramsContratSaisis : null,
       connaissement: connaissementComplet,
       masterdata_scope: masterdataScope,
     };
@@ -3816,7 +3855,12 @@ async function rejeterDemande(){
   if (!motif){ showToast('Indique un motif — la coopérative doit savoir quoi corriger.'); return; }
   const { error } = await supabaseClient.from('demandes').update({statut:'rejetee', commentaire_ecorigine: motif}).eq('id', id);
   if (error){ showToast('Échec : '+error.message); return; }
-  showToast('Demande rejetée, la coopérative verra le motif.', 'success');
+  const demandeRejetee = (state.demandesCoop||[]).find(d=>d.id===id);
+  if (demandeRejetee) demandeRejetee.statut = 'rejetee';
+  const regen = await regenererDocumentDeBase(demandeRejetee);   // le meme modele est regenere pour la cooperative (le cycle se repete)
+  if (regen.nom) showToast('Demande rejetée. Un nouveau document « '+regen.nom+' » a été généré pour la coopérative : elle verra le motif et pourra le télécharger puis le renvoyer.', 'success');
+  else if (regen.erreur) showToast('Demande rejetée, mais le nouveau document n\'a pas pu être généré : '+regen.erreur, 'error');
+  else showToast('Demande rejetée, la coopérative verra le motif.', 'success');
   closeModal();
   await refreshDemandesTab();
 }
