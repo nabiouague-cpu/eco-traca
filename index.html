@@ -2757,7 +2757,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-158';
+const APP_VERSION = '2026-10-02-159';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3709,6 +3709,35 @@ async function ocPdfExtraireLignes(file){
     .sort((a,b)=>b[0]-a[0])
     .map(([y, its])=>its.sort((a,b)=>a.x-b.x).map(i=>i.str).join(' ').replace(/\s+/g,' ').trim())
     .filter(l=>l.length>0);
+}
+// Comme ocPdfExtraireLignes, mais sur TOUTES les pages (jusqu'a une limite) -- utilise pour
+// chercher une mention (ex: modele de chaine de tracabilite) qui peut se trouver n'importe
+// ou dans un certificat de plusieurs pages, pas seulement sur la 1ere.
+async function ocPdfExtraireLignesToutesPages(blob, maxPages){
+  const lib = await chargerPdfJs();
+  const data = new Uint8Array(await blob.arrayBuffer());
+  const doc = await lib.getDocument({ data }).promise;
+  const nbPages = Math.min(doc.numPages, maxPages||10);
+  let lignes = [];
+  for (let n=1; n<=nbPages; n++){
+    const page = await doc.getPage(n);
+    const contenu = await page.getTextContent();
+    const items = contenu.items.map(it=>({ str: it.str, x: it.transform[4], y: Math.round(it.transform[5]) }));
+    const parLigne = new Map();
+    items.forEach(it=>{
+      let cle = null;
+      for (const k of parLigne.keys()){ if (Math.abs(k-it.y)<=2){ cle = k; break; } }
+      if (cle===null) cle = it.y;
+      if (!parLigne.has(cle)) parLigne.set(cle, []);
+      parLigne.get(cle).push(it);
+    });
+    const lignesPage = Array.from(parLigne.entries())
+      .sort((a,b)=>b[0]-a[0])
+      .map(([y, its])=>its.sort((a,b)=>a.x-b.x).map(i=>i.str).join(' ').replace(/\s+/g,' ').trim())
+      .filter(l=>l.length>0);
+    lignes = lignes.concat(lignesPage);
+  }
+  return lignes;
 }
 function ocNombreFrVersFloat(s){
   return s ? parseFloat(String(s).replace(/\s/g,'').replace(',', '.')) : null;
@@ -7631,7 +7660,7 @@ const OC_TABLES = {
   },
   partenaires: {
     table:'cert_partenaires', titre:'Coopératives',
-    intro:'Coopératives sous contrat pour la campagne. Une coopérative rejoint automatiquement cette liste dès sa première livraison enregistrée sur le portail — l\'ajout manuel reste possible en complément.',
+    intro:'Coopératives sous contrat pour la campagne. Nom, localisation, mail, contact et type de cacao sont repris automatiquement de la fiche de chaque coopérative dans ORIGEN ; le niveau de traçabilité est lu sur le certificat RA qu\'elle a déposé sur son portail. "Ajouter" sert pour une coopérative hors registre ORIGEN, ou pour corriger à la main le niveau de traçabilité d\'une coopérative (même nom).',
     cols:[
       ['Nom coopérative','cooperative_nom'],['Localisation','localisation'],['Mail coopérative','mails','multi'],
       ['Personne contact','contacts','multi'],['Type de cacao','type_cacao'],
@@ -7691,7 +7720,13 @@ function ocValeurExportTexte(c, valeur){
 async function ocExporterWord(tableId){
   const conf = OC_EXPORT_WORD_COLS[tableId];
   if (!conf) return;
-  const rows = ocTableRows(tableId);
+  let rows;
+  if (tableId==='partenaires'){
+    const f = ocPartenairesLignesFusionnees();
+    rows = f.lignes.concat(f.horsRegistre);
+  } else {
+    rows = ocTableRows(tableId);
+  }
   const entetes = conf.cols.map(c=>c[0]);
   const lignes = rows.map(row=>conf.cols.map(c=>ocValeurExportTexte(c, row[c[1]])));
   await genererWordTableau(conf.titre, entetes, lignes, conf.titre.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9]+/g,'_')+'_ECORIGINE.docx');
@@ -7764,7 +7799,138 @@ function renderOcPartenaires(){
   if (OC_EXPORT_WORD_COLS[actif]){
     html += '<div class="controls" style="margin-bottom:10px;"><button class="btn-ghost" onclick="ocExporterWord(\''+actif+'\')">📄 Imprimer (Word)</button></div>';
   }
-  html += renderOcTableSimple(actif);
+  html += actif==='partenaires' ? renderOcPartenairesCooperatives() : renderOcTableSimple(actif);
+  return html;
+}
+
+// ---- Auto-remplissage du sous-onglet "Coopératives" de Partenaires ----
+// Nom/localisation/mail/contact viennent de la vraie fiche ORIGEN (state.cooperatives, comme
+// le dossier Certificats -> Coopératives). Le type de cacao est fixe a "RA" : cette instance
+// d'ORICERT ne suit QUE le referentiel Rainforest Alliance. Le niveau de tracabilite est lu
+// directement dans le certificat deja depose par la cooperative sur son portail (cert_documents
+// / docCheck "Certificat"), via pdf.js -- en cache par cooperative+fichier pour ne relire le
+// PDF qu'une fois (et de nouveau si la coop redepose un autre certificat).
+const OC_NIVEAU_TRACA_MOTS_PLEINS = {
+  'Identité Préservée': [/identity\s*preserved/i, /identit[ée]s?\s*pr[ée]serv[ée]e/i],
+  'Ségrégation': [/\bsegregat(ed|ion)\b/i, /\bs[ée]gr[ée]gation\b/i],
+  'Mass Balance': [/mass\s*balance/i],
+};
+// Sigles usuels des modeles RA (IP/SG/MB) -- retenus seulement sur une ligne qui evoque
+// explicitement la chaine de tracabilite/custody, pour eviter de confondre avec un sigle
+// sans rapport ailleurs dans le document.
+const OC_NIVEAU_TRACA_SIGLES = { 'IP':'Identité Préservée', 'SG':'Ségrégation', 'MB':'Mass Balance' };
+function ocNiveauxTracaDepuisLignes(lignes){
+  const trouves = new Set();
+  (lignes||[]).forEach(ligne=>{
+    Object.entries(OC_NIVEAU_TRACA_MOTS_PLEINS).forEach(([niveau, regs])=>{
+      if (regs.some(re=>re.test(ligne))) trouves.add(niveau);
+    });
+    if (/chain\s*of\s*custody|coc\s*model|mod[eè]le.{0,20}(tra[cç]abilit|custody)/i.test(ligne)){
+      Object.keys(OC_NIVEAU_TRACA_SIGLES).forEach(sigle=>{
+        if (new RegExp('\\b'+sigle+'\\b').test(ligne)) trouves.add(OC_NIVEAU_TRACA_SIGLES[sigle]);
+      });
+    }
+  });
+  return OC_NIVEAUX_TRACABILITE.filter(n=>trouves.has(n));
+}
+// Garde-fou (hors state, ne declenche pas de rendu) contre les telechargements en double
+// pendant qu'une lecture est deja en cours pour une cooperative.
+const ocNiveauTracaEnCours = new Set();
+function ocDetecterNiveauTracabilite(coopId){
+  if (!state.ocNiveauTracaCache) state.ocNiveauTracaCache = {};
+  const cert = ocCertificatDeCooperative(coopId);
+  if (!cert){
+    if (!state.ocNiveauTracaCache[coopId] || state.ocNiveauTracaCache[coopId].statut!=='absent'){
+      state.ocNiveauTracaCache[coopId] = { statut:'absent' };
+    }
+    return;
+  }
+  const dejaFait = state.ocNiveauTracaCache[coopId];
+  if (dejaFait && dejaFait.path===cert.fichier_path) return; // deja lu pour ce meme fichier
+  if (ocNiveauTracaEnCours.has(coopId)) return; // lecture deja en cours
+  const ext = String(cert.fichier_nom||cert.fichier_path||'').split('.').pop().toLowerCase();
+  if (ext !== 'pdf'){ state.ocNiveauTracaCache[coopId] = { statut:'non_pdf', path:cert.fichier_path }; return; }
+  ocNiveauTracaEnCours.add(coopId);
+  (async()=>{
+    try{
+      const { data, error } = await supabaseClient.storage.from('documents-coop').download(cert.fichier_path);
+      if (error) throw new Error(error.message);
+      const lignes = await ocPdfExtraireLignesToutesPages(data, 10);
+      const niveaux = ocNiveauxTracaDepuisLignes(lignes);
+      state.ocNiveauTracaCache[coopId] = { statut: niveaux.length?'trouve':'non_trouve', path: cert.fichier_path, niveaux };
+    }catch(e){
+      state.ocNiveauTracaCache[coopId] = { statut:'erreur', path:cert.fichier_path, erreur:e.message };
+    }
+    ocNiveauTracaEnCours.delete(coopId);
+    render();
+  })();
+}
+// Fusionne la vraie liste de coopératives ORIGEN (auto) avec les éventuelles lignes
+// ajoutées à la main dans cert_partenaires : une ligne manuelle au MÊME nom qu'une
+// coopérative réelle sert de correction (ex: niveau de traçabilité mal détecté) ;
+// une ligne manuelle sans coopérative correspondante reste un partenaire "hors registre".
+function ocPartenairesLignesFusionnees(){
+  const norm = s => String(s||'').trim().toLowerCase();
+  const coops = (state.cooperatives||[]).slice().sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'}));
+  const manuels = state.oc_partenaires || [];
+  const lignes = coops.map(c=>{
+    const correction = manuels.find(r=>norm(r.cooperative_nom)===norm(c.nom));
+    const mails = [c.email1, c.email2, c.email3].filter(Boolean);
+    const contact = [c.contact_nom, c.contact_contact].filter(Boolean).join(' — ');
+    const cert = ocCertificatDeCooperative(c.id);
+    const cache = (state.ocNiveauTracaCache||{})[c.id];
+    const corrige = !!(correction && Array.isArray(correction.niveaux_tracabilite) && correction.niveaux_tracabilite.length);
+    const niveaux = corrige ? correction.niveaux_tracabilite : ((cache && cache.statut==='trouve') ? cache.niveaux : []);
+    return {
+      coopId: c.id, cert, cache, corrige,
+      cooperative_nom: c.nom, localisation: c.ville || c.siege_social || '',
+      mails, contacts: contact ? [contact] : [], type_cacao:'RA', niveaux_tracabilite: niveaux,
+    };
+  });
+  const horsRegistre = manuels.filter(r=>!coops.some(c=>norm(c.nom)===norm(r.cooperative_nom)));
+  return { lignes, horsRegistre };
+}
+function renderOcPartenairesCooperatives(){
+  const { lignes, horsRegistre } = ocPartenairesLignesFusionnees();
+  lignes.forEach(l=>ocDetecterNiveauTracabilite(l.coopId));
+  let html = '<p class="hint" style="margin:-4px 0 14px;">Coopératives ECORIGINE sous contrat pour la campagne — nom, localisation, mail et contact repris automatiquement de leur fiche ORIGEN. Type de cacao : <b>RA</b> (référentiel suivi par cette instance d\'ORICERT). Niveau de traçabilité lu directement sur le certificat déposé sur leur portail.</p>';
+  html += '<div class="panel oc-table-panel"><div class="oc-table-scroll"><table class="oc-table"><thead><tr>'
+    + '<th>Nom coopérative</th><th>Localisation</th><th>Mail</th><th>Contact</th><th>Type de cacao</th><th>Niveau de traçabilité</th><th></th>'
+    + '</tr></thead><tbody>';
+  if (!lignes.length){
+    html += '<tr><td colspan="7" class="oc-table-empty">Aucune coopérative enregistrée dans ORIGEN.</td></tr>';
+  } else {
+    lignes.forEach(l=>{
+      let celluleNiveau;
+      if (l.niveaux_tracabilite.length){
+        celluleNiveau = esc(l.niveaux_tracabilite.join(', ')) + '<div class="hint">'+(l.corrige?'corrigé manuellement':'lu automatiquement sur le certificat')+'</div>';
+      } else if (!l.cert){
+        celluleNiveau = '<span class="hint">Aucun certificat déposé</span>';
+      } else if (!l.cache){
+        celluleNiveau = '<span class="hint">Lecture du certificat…</span>';
+      } else if (l.cache.statut==='non_trouve'){
+        celluleNiveau = '<span class="hint">Non détecté automatiquement</span>';
+      } else if (l.cache.statut==='non_pdf'){
+        celluleNiveau = '<span class="hint">Certificat non lisible automatiquement (pas un PDF)</span>';
+      } else {
+        celluleNiveau = '<span class="hint">Échec de lecture du certificat</span>';
+      }
+      html += '<tr>'
+        + '<td>'+esc(l.cooperative_nom)+'</td>'
+        + '<td>'+(l.localisation?esc(l.localisation):'—')+'</td>'
+        + '<td>'+(l.mails.length?esc(l.mails.join(', ')):'—')+'</td>'
+        + '<td>'+(l.contacts.length?esc(l.contacts[0]):'—')+'</td>'
+        + '<td><span class="badge ok">RA</span></td>'
+        + '<td>'+celluleNiveau+'</td>'
+        + '<td style="white-space:nowrap;">'+(l.cert?('<button class="oc-icon-btn" title="Voir le certificat" onclick="apercuFichier(\''+l.cert.fichier_path+'\',\''+esc(l.cert.fichier_nom||'Certificat').replace(/'/g,"\\'")+'\')">👁</button>'):'')+'</td>'
+        + '</tr>';
+    });
+  }
+  html += '</tbody></table></div></div>';
+
+  html += '<div class="panel-head" style="margin-top:22px;"><h3 style="margin:0 0 4px;font-size:15px;">Partenaires hors registre ORIGEN</h3>'
+    + '<p class="hint" style="margin:0;">Pour une coopérative pas encore enregistrée dans ORIGEN, ou pour corriger à la main le niveau de traçabilité d\'une coopérative ci-dessus (ajoute une ligne avec exactement le même nom).</p></div>';
+  html += renderOcTableSimple('partenaires', { rows: horsRegistre, masquerEntete: true });
   return html;
 }
 
@@ -7888,11 +8054,11 @@ function ocValeurAffichee(c, valeur){
   }
   return esc(valeur || '—');
 }
-function renderOcTableSimple(tableId){
+function renderOcTableSimple(tableId, opts){
   const cfg = OC_TABLES[tableId];
-  const rows = ocTableRows(tableId);
+  const rows = (opts && opts.rows) || ocTableRows(tableId);
   const editId = state.ocTableEditId && state.ocTableEditTable===tableId ? state.ocTableEditId : null;
-  let html = '<div class="panel-head"><h2>'+esc(cfg.titre)+'</h2><p>'+esc(cfg.intro)+'</p></div>';
+  let html = (opts && opts.masquerEntete) ? '' : '<div class="panel-head"><h2>'+esc(cfg.titre)+'</h2><p>'+esc(cfg.intro)+'</p></div>';
   html += '<div class="panel oc-table-panel"><div class="oc-table-scroll"><table class="oc-table"><thead><tr>'
     + cfg.cols.map(c=>'<th>'+esc(c[0])+'</th>').join('')
     + '<th></th></tr></thead><tbody>';
