@@ -1563,6 +1563,9 @@
   .qc-tr-r.vide{color:var(--ink-faint,#7a8582);font-weight:400;}
   .qc-tr-a{text-align:right;min-width:70px;}
   .qc-tr-pied{display:flex;align-items:center;gap:10px;justify-content:flex-end;margin-top:16px;}
+  .qc-tr-automate{margin:0 0 12px;border:1px solid var(--border);border-radius:10px;padding:8px 12px;background:#FFF9E8;font-size:12.5px;}
+  .qc-tr-automate summary{cursor:pointer;font-weight:600;color:var(--ink);}
+  .qc-tr-automate ol{margin:8px 0 6px;padding-left:20px;} .qc-tr-automate li{margin:4px 0;}
 </style>
 </head>
 <body>
@@ -3053,7 +3056,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-171';
+const APP_VERSION = '2026-10-02-172';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -15594,6 +15597,7 @@ function qcTransfertModalHtml(){
   if (!lien){
     html += '<div class="qc-tr-lien"><label class="field">Lien du formulaire Microsoft Forms de CARGILL<input type="url" placeholder="https://forms.office.com/…" onchange="qcLienFormsMaj(this.value)"></label><div class="hint">Colle ici le lien reçu de CARGILL : il sera mémorisé sur ce navigateur et ouvert à côté de l\'assistant.</div></div>';
   }
+  html += '<div style="padding:10px 20px 0;">'+qcAutomateHtml(pl.demandeId, liste.filter(l=>!l.transmis).length)+'</div>';
   html += '<div class="qc-tr-corps">';
   // liste des producteurs
   html += '<div class="qc-tr-liste">'
@@ -15618,6 +15622,52 @@ function qcTransfertModalHtml(){
     + '</div>';
   html += '</div></div></div></div>';
   return html;
+}
+// ---- Automate (script Tampermonkey « ORIGEN → Forms CARGILL ») : le lot copie ici est colle dans le panneau
+// de l'automate sur la page Forms ; il saisit et envoie une reponse par producteur, puis renvoie la liste
+// des reponses envoyees, a coller ci-dessous pour les marquer « saisies ».
+const QC_AUTOMATE_URL = 'https://nabiouague-cpu.github.io/eco-traca/automate/origen-forms-automate.user.js';
+function qcAutomateLot(demandeId){
+  const d = qcDemandeParId(demandeId); const coop = d ? qcCoopDe(d) : null;
+  const restants = qcTransfertReponses(demandeId).filter(l=>!l.transmis);
+  return { origen_forms_lot: true, cooperative: coop ? coop.nom : '', demande_id: demandeId, lien: qcLienForms() || '',
+    questions: QC_QUESTIONS.map(q=>({ cle:q.cle, libelle:q.libelle, type:q.type })),
+    reponses: restants.map(l=>{ const valeurs = {}; qcTransfertLignes(l.x).forEach(li=>{ if (li.valeur) valeurs[li.q.cle] = li.valeur; }); return { id:l.x.id, nom:l.nom, valeurs }; }) };
+}
+async function qcAutomateCopierLot(demandeId){
+  const lot = qcAutomateLot(demandeId);
+  if (!lot.reponses.length){ showToast('Rien à saisir : tous les questionnaires terminés sont déjà saisis dans Forms.'); return; }
+  await qcCopierTexte(JSON.stringify(lot), 'Lot de '+lot.reponses.length+' questionnaire'+(lot.reponses.length>1?'s':''));
+}
+function qcAutomateCollerResultat(demandeId){
+  const txt = prompt('Colle ici le résultat copié depuis l\'automate (bouton « Copier le résultat » sur la page Forms) :');
+  if (!txt) return;
+  let res; try{ res = JSON.parse(txt); }catch(e){ showToast('Résultat illisible : recopie-le depuis l\'automate.'); return; }
+  if (!res || !res.origen_forms_resultat || !Array.isArray(res.faits)){ showToast('Ce texte n\'est pas un résultat de l\'automate.'); return; }
+  qcAutomateMarquer(demandeId, res);
+}
+async function qcAutomateMarquer(demandeId, res){
+  const ids = res.faits.filter(id=>(state.questionnaireReponses||[]).some(x=>x.id===id && x.demande_id===demandeId && !x.transmis_forms_le));
+  const quand = new Date().toISOString();
+  try{
+    if (ids.length){
+      const { error } = await supabaseClient.from('questionnaire_reponses').update({ transmis_forms_le: quand }).in('id', ids);
+      if (error){ showToast('Échec de l\'enregistrement : '+error.message); return; }
+      (state.questionnaireReponses||[]).forEach(x=>{ if (ids.indexOf(x.id)>=0) x.transmis_forms_le = quand; });
+    }
+    const nbErr = Array.isArray(res.erreurs) ? res.erreurs.length : 0;
+    showToast(ids.length+' questionnaire'+(ids.length>1?'s':'')+' marqué'+(ids.length>1?'s':'')+' saisi'+(ids.length>1?'s':'')+' dans Forms.'+(nbErr ? ' '+nbErr+' en erreur dans l\'automate : à reprendre à la main.' : ''), nbErr ? 'error' : 'success');
+    render();
+  }catch(e){ showToast('Erreur : '+e.message); }
+}
+function qcAutomateHtml(demandeId, nbRestants){
+  return '<details class="qc-tr-automate"><summary>Automate de saisie (Tampermonkey) — remplit Forms tout seul</summary>'
+    + '<ol>'
+    + '<li>Une seule fois : installe l\'extension <b>Tampermonkey</b> dans Chrome ou Edge, puis ouvre <a href="'+esc(QC_AUTOMATE_URL)+'" target="_blank" rel="noopener">ce lien</a> et clique « Installer ».</li>'
+    + '<li>Ici : <button type="button" class="btn btn-primary btn-compact" onclick="qcAutomateCopierLot(\''+qcJs(demandeId)+'\')">Copier le lot pour l\'automate ('+nbRestants+' restants)</button></li>'
+    + '<li>Sur la page du formulaire CARGILL : colle le lot dans le panneau « ORIGEN → Forms CARGILL » et clique <b>Démarrer</b>. L\'automate saisit et envoie une réponse par producteur (environ 15 secondes chacune), puis affiche « Terminé ».</li>'
+    + '<li>Clique « Copier le résultat » dans le panneau, puis ici : <button type="button" class="btn btn-compact" onclick="qcAutomateCollerResultat(\''+qcJs(demandeId)+'\')">Coller le résultat de l\'automate</button> — les questionnaires envoyés passent en « saisi ».</li>'
+    + '</ol><div class="hint">L\'automate s\'arrête et te le dit s\'il ne reconnaît pas une question ou une option : rien n\'est envoyé à moitié. Reste devant l\'écran pendant qu\'il tourne.</div></details>';
 }
 function qcEstQuestionnaire(d){ return !!(d && d.document_modele===QC_MODELE); }
 // ---- Echantillonnage CARGILL : seul un echantillon de producteurs est enquete, pas la totalite.
