@@ -2734,7 +2734,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-155';
+const APP_VERSION = '2026-10-02-156';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4966,6 +4966,12 @@ function renderDemandesTab(){
 
   const typeActif = state.demandesSousOnglet || DEMANDE_GROUPS[0][0];
   const forType = state.demandesCoop.filter(d=>(d.types||[]).includes(typeActif));
+  // Questionnaires CARGILL : rapport de legalite consolide sur toutes les cooperatives ayant repondu.
+  if (typeActif==='questionnaires'){
+    const qcDemandes = forType.filter(qcEstQuestionnaire).filter(d=>d.statut!=='annulee');
+    const nbRemplis = qcDemandes.reduce((n,d)=>n+qcResume(d, qcProducteursDe(d)).remplis, 0);
+    if (qcDemandes.length>0) html += '<div class="controls" style="margin-top:-4px;"><button class="btn" '+(nbRemplis>0?'':'disabled')+' onclick="qcRapportLegalite('+esc(JSON.stringify(qcDemandes.map(d=>d.id)))+', \'Toutes coopératives\')">📊 Rapport de légalité — toutes les coopératives ('+nbRemplis+' questionnaire'+(nbRemplis>1?'s':'')+' terminé'+(nbRemplis>1?'s':'')+')</button></div>';
+  }
 
   const pending = forType.filter(d=>d.statut==='demandee');
   const enValidation = forType.filter(d=>d.statut==='en_validation');
@@ -14476,7 +14482,6 @@ function qcPanneauHtml(demande, producteurs, opts){
 // que le formulaire CARGILL et que l'export), pre-rempli avec le registre (cooperative, nom, n° CCC). La
 // premiere colonne porte l'identifiant ORIGEN du producteur, qui sert a rattacher chaque ligne au bon
 // producteur a l'import ; des lignes vides supplementaires accueillent les producteurs hors registre. ----
-const QC_COL_ID = 'ID ORIGEN (ne pas modifier)';
 function qcNormaliserTexte(s){ return String(s==null?'':s).normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(); }
 // Ramene une valeur saisie a l'option exacte du formulaire (tolere casse, accents, « O »/« N », « yes »/« no »).
 function qcNormaliserOption(q, v){
@@ -14514,7 +14519,9 @@ async function qcTelechargerClasseur(wb, nom){
   setTimeout(()=>URL.revokeObjectURL(url), 4000);
 }
 const QC_XL = {
-  brun: 'FF4A3528', brunClair: 'FFF3EDE8', or: 'FFF2B705', vert: 'FF1D6B4F', vertClair: 'FFE7F3EE', bleuClair: 'FFE8F0FA', gris: 'FFF4F4F2', grisTxt: 'FF6B6B6B', bordure: 'FFD6D3CE', blanc: 'FFFFFFFF', noir: 'FF1A1A1A',
+  // Charte ORIGEN / ECORIGINE : vert foret (barre laterale), vert accent, dore, fonds clairs.
+  teal:'FF0E3B36', tealMid:'FF12463F', accent:'FF1F6E5C', accentSoft:'FFE3F0EB', accentLine:'FFA9CFC1', or:'FFF2B705', orInk:'FF2A1E00', orSoft:'FFFBF0CC',
+  bg:'FFF5F6F5', gris:'FFF4F4F2', grisTxt:'FF5B6B68', bordure:'FFD6DAD8', blanc:'FFFFFFFF', noir:'FF1E2B29', zebre:'FFF7F8F6', danger:'FFB42318', dangerSoft:'FFFBE9E7',
 };
 function qcBordureFine(){ const b = { style:'thin', color:{ argb:QC_XL.bordure } }; return { top:b, left:b, bottom:b, right:b }; }
 function qcStyleCellule(c, o){
@@ -14523,11 +14530,20 @@ function qcStyleCellule(c, o){
   c.alignment = Object.assign({ vertical:'middle', wrapText:!!o.retour, horizontal:o.h||'left' }, o.alignment||{});
   if (o.bordure!==false) c.border = qcBordureFine();
 }
+// Bandeau de titre ORIGEN / ECORIGINE en tete d'une feuille (lignes 1 et 2).
+function qcBandeauTitre(ws, nbCol, titre, sousTitre){
+  ws.mergeCells(1, 1, 1, nbCol);
+  const t = ws.getCell(1, 1); t.value = titre; qcStyleCellule(t, { fill:QC_XL.teal, couleur:QC_XL.blanc, gras:true, taille:14, bordure:false });
+  ws.getRow(1).height = 30;
+  ws.mergeCells(2, 1, 2, nbCol);
+  const s = ws.getCell(2, 1); s.value = sousTitre; qcStyleCellule(s, { fill:QC_XL.bg, italique:true, taille:10, couleur:QC_XL.grisTxt, retour:true, bordure:false });
+  ws.getRow(2).height = 34;
+}
 // Sections du formulaire -> bandes de couleur au-dessus des en-tetes.
 const QC_SECTIONS_XL = [
-  { page:0, fill:QC_XL.brun, couleur:QC_XL.blanc },
-  { page:1, fill:QC_XL.vert, couleur:QC_XL.blanc },
-  { page:2, fill:'FF2E7D32', couleur:QC_XL.blanc },
+  { page:0, fill:QC_XL.accent, couleur:QC_XL.blanc },
+  { page:1, fill:QC_XL.or, couleur:QC_XL.orInk },
+  { page:2, fill:QC_XL.tealMid, couleur:QC_XL.blanc },
 ];
 async function qcTelechargerModele(demandeId){
   const d = qcDemandeParId(demandeId); if (!d) return;
@@ -14538,36 +14554,26 @@ async function qcTelechargerModele(demandeId){
   const reps = qcReponsesDeDemande(demandeId);
   const wb = new ExcelJS.Workbook();
   wb.creator = 'ORIGEN · ECORIGINE'; wb.created = new Date();
-  const ws = wb.addWorksheet('Questionnaire', { views:[{ state:'frozen', xSplit:2, ySplit:4 }], properties:{ defaultRowHeight:18 } });
-  const nbCol = 1 + QC_QUESTIONS.length;
+  const ws = wb.addWorksheet('Questionnaire', { views:[{ state:'frozen', xSplit:3, ySplit:4 }], properties:{ defaultRowHeight:18 } });
+  const nbCol = QC_QUESTIONS.length;
   const lettreCol = n=>ws.getColumn(n).letter;
   // Ligne 1 : titre ; ligne 2 : consigne ; ligne 3 : sections ; ligne 4 : en-tetes ; donnees a partir de la ligne 5.
-  ws.mergeCells(1, 1, 1, nbCol);
-  const t = ws.getCell(1, 1); t.value = QC_TITRE+'  —  '+(coop ? coop.nom : ''); qcStyleCellule(t, { fill:QC_XL.brun, couleur:QC_XL.blanc, gras:true, taille:14, bordure:false });
-  ws.getRow(1).height = 30;
-  ws.mergeCells(2, 1, 2, nbCol);
-  const c2 = ws.getCell(2, 1); c2.value = 'Une ligne par producteur. Les producteurs du registre sont déjà listés ; utilisez les lignes vides du bas pour un producteur hors registre (laissez la colonne A vide). Répondez de gauche à droite : les cases à choix proposent une liste déroulante, et les questions qui ne s\'appliquent pas (consentement « Non », travailleur, etc.) se grisent et se verrouillent automatiquement. Voir l\'onglet « Réponses acceptées ».';
-  qcStyleCellule(c2, { fill:QC_XL.brunClair, italique:true, taille:10, couleur:QC_XL.grisTxt, retour:true, bordure:false });
-  ws.getRow(2).height = 34;
-  // Bandes de sections (ligne 3)
-  const cA3 = ws.getCell(3, 1); cA3.value = 'Identifiant'; qcStyleCellule(cA3, { fill:QC_XL.gris, gras:true, taille:10, couleur:QC_XL.grisTxt, h:'center' });
+  qcBandeauTitre(ws, nbCol, QC_TITRE+'  —  '+(coop ? coop.nom : ''),
+    'ORIGEN · ECORIGINE — Une ligne par producteur. Les producteurs du registre sont déjà listés ; utilisez les lignes vides du bas pour un producteur hors registre. Répondez de gauche à droite : les cases à choix proposent une liste déroulante, et les questions qui ne s\'appliquent pas (consentement « Non », travailleur, etc.) se grisent et se verrouillent automatiquement. Voir l\'onglet « Réponses acceptées ».');
   QC_SECTIONS_XL.forEach(sec=>{
-    const idx = QC_QUESTIONS.map((q,i)=>q.page===sec.page ? i+2 : null).filter(i=>i!=null);
+    const idx = QC_QUESTIONS.map((q,i)=>q.page===sec.page ? i+1 : null).filter(i=>i!=null);
     ws.mergeCells(3, idx[0], 3, idx[idx.length-1]);
     const c = ws.getCell(3, idx[0]); c.value = QC_PAGES[sec.page]; qcStyleCellule(c, { fill:sec.fill, couleur:sec.couleur, gras:true, taille:11, h:'center' });
   });
   ws.getRow(3).height = 22;
-  // En-tetes (ligne 4)
-  const cA4 = ws.getCell(4, 1); cA4.value = QC_COL_ID; qcStyleCellule(cA4, { fill:QC_XL.gris, gras:true, taille:10, couleur:QC_XL.grisTxt, retour:true, h:'center' });
   QC_QUESTIONS.forEach((q,i)=>{
-    const c = ws.getCell(4, i+2); c.value = (i+1)+'. '+q.libelle+(q.requis ? ' *' : '');
-    qcStyleCellule(c, { fill:QC_XL.bleuClair, gras:true, taille:10, retour:true, h:'center' });
+    const c = ws.getCell(4, i+1); c.value = (i+1)+'. '+q.libelle+(q.requis ? ' *' : '');
+    qcStyleCellule(c, { fill:QC_XL.accentSoft, gras:true, taille:10, retour:true, h:'center', couleur:QC_XL.noir });
+    ws.getColumn(i+1).width = q.type==='long' ? 38 : (q.options ? Math.max(18, Math.min(30, Math.max.apply(null, q.options.map(o=>o.length))+4)) : 26);
   });
   ws.getRow(4).height = 96;
-  ws.getColumn(1).width = 24;
-  QC_QUESTIONS.forEach((q,i)=>{ ws.getColumn(i+2).width = q.type==='long' ? 38 : (q.options ? Math.max(18, Math.min(30, Math.max.apply(null, q.options.map(o=>o.length))+4)) : 26); });
   // Donnees
-  const ligneDe = (id, r)=>[id].concat(QC_QUESTIONS.map(q=>qcValeur(r, q.cle)));
+  const ligneDe = r=>QC_QUESTIONS.map(q=>qcValeur(r, q.cle));
   const lignes = [];
   producteurs.forEach(pr=>{
     const rep = reps.find(x=>x.producteur_id===pr.id);
@@ -14575,26 +14581,24 @@ async function qcTelechargerModele(demandeId){
     if (!qcValeur(r,'cooperative')) r.cooperative = coop ? (coop.nom||'') : '';
     if (!qcValeur(r,'nom')) r.nom = pr.nom || '';
     if (!qcValeur(r,'ccc')) r.ccc = String(pr.matricule_ccc||'').trim() || 'NEANT';
-    lignes.push(ligneDe(pr.id, r));
+    lignes.push(ligneDe(r));
   });
-  reps.filter(x=>!x.producteur_id).forEach(x=>lignes.push(ligneDe('', x.reponses||{})));
+  reps.filter(x=>!x.producteur_id).forEach(x=>lignes.push(ligneDe(x.reponses||{})));
   const nbVides = Math.max(10, Math.ceil(lignes.length*0.2));
-  for (let i=0; i<nbVides; i++) lignes.push(ligneDe('', { cooperative: coop ? (coop.nom||'') : '' }));
+  for (let i=0; i<nbVides; i++) lignes.push(ligneDe({ cooperative: coop ? (coop.nom||'') : '' }));
   const premiere = 5, derniere = premiere + lignes.length - 1;
   lignes.forEach((vals, k)=>{
     const row = ws.getRow(premiere+k); row.values = vals; row.height = 20;
-    const horsRegistre = !vals[0];
     for (let c=1; c<=nbCol; c++){
-      const cell = row.getCell(c); const q = c>1 ? QC_QUESTIONS[c-2] : null;
-      qcStyleCellule(cell, { fill: c===1 ? QC_XL.gris : (q && q.verrou ? QC_XL.gris : (k%2 ? 'FFFAFAF8' : QC_XL.blanc)), taille:10.5, couleur: c===1 ? QC_XL.grisTxt : QC_XL.noir, retour: !!(q && q.type==='long') });
-      if (c===1 && horsRegistre) cell.value = '';
+      const cell = row.getCell(c); const q = QC_QUESTIONS[c-1];
+      qcStyleCellule(cell, { fill: q.verrou ? QC_XL.gris : (k%2 ? QC_XL.zebre : QC_XL.blanc), taille:10.5, couleur: q.verrou ? QC_XL.grisTxt : QC_XL.noir, retour: q.type==='long' });
     }
   });
   // Branchements du formulaire reproduits dans Excel : chaque question ne s'ouvre que si les reponses
   // precedentes le permettent (consentement, proprietaire/travailleur, documents, litige, conservation,
   // intrants). Une case non applicable est grisee (mise en forme conditionnelle) et toute saisie y est
   // refusee (validation) ; une question a choix applicable propose sa liste, non applicable une liste vide.
-  const L = {}; QC_QUESTIONS.forEach((q,i)=>{ L[q.cle] = lettreCol(i+2); });
+  const L = {}; QC_QUESTIONS.forEach((q,i)=>{ L[q.cle] = lettreCol(i+1); });
   const cond = {};   // cle -> formule Excel (vraie si la question s'applique), pour la ligne r
   const consent = r=>'$'+L.consentement+r+'="Oui"';
   const proprio = r=>'AND('+consent(r)+',$'+L.statut_parcelle+r+'="Propriétaire")';
@@ -14640,7 +14644,7 @@ async function qcTelechargerModele(demandeId){
   // Onglet d'aide : reponses acceptees et quand repondre.
   const wa = wb.addWorksheet('Réponses acceptées', { views:[{ state:'frozen', ySplit:1 }] });
   wa.columns = [{ width:70 }, { width:62 }, { width:38 }];
-  ['Question','Réponses acceptées','Quand répondre'].forEach((h,i)=>{ const c = wa.getCell(1, i+1); c.value = h; qcStyleCellule(c, { fill:QC_XL.brun, couleur:QC_XL.blanc, gras:true }); });
+  ['Question','Réponses acceptées','Quand répondre'].forEach((h,i)=>{ const c = wa.getCell(1, i+1); c.value = h; qcStyleCellule(c, { fill:QC_XL.teal, couleur:QC_XL.blanc, gras:true }); });
   QC_QUESTIONS.forEach((q,i)=>{
     const quand = q.cle==='cooperative' || q.cle==='consentement' ? 'Toujours'
       : q.cle==='contrat_location' ? 'Si Travailleur'
@@ -14652,7 +14656,7 @@ async function qcTelechargerModele(demandeId){
       : (q.cle==='intrants_lesquels' || q.cle==='intrants_fournisseur') ? 'Si pesticides/engrais = Oui'
       : 'Si consentement = Oui';
     const vals = [(i+1)+'. '+q.libelle, q.options ? q.options.join('  /  ') : 'Texte libre', quand];
-    vals.forEach((v,j)=>{ const c = wa.getCell(i+2, j+1); c.value = v; qcStyleCellule(c, { fill: i%2 ? 'FFFAFAF8' : QC_XL.blanc, taille:10.5, retour:true }); });
+    vals.forEach((v,j)=>{ const c = wa.getCell(i+2, j+1); c.value = v; qcStyleCellule(c, { fill: i%2 ? QC_XL.zebre : QC_XL.blanc, taille:10.5, retour:true }); });
   });
   await qcTelechargerClasseur(wb, 'Modele_Enquete_EUDR_Cargill_2026_'+qcSlug(coop ? coop.nom : '')+'.xlsx');
 }
@@ -14670,17 +14674,141 @@ async function qcExporterExcel(demandeId){
   const wb = new ExcelJS.Workbook(); wb.creator = 'ORIGEN · ECORIGINE'; wb.created = new Date();
   const ws = wb.addWorksheet('Form1', { views:[{ state:'frozen', xSplit:1, ySplit:1 }] });
   const entetes = ['ID','Heure de début','Heure de fin','Adresse de messagerie','Nom'].concat(QC_QUESTIONS.map(q=>q.libelle));
-  entetes.forEach((h,i)=>{ const c = ws.getCell(1, i+1); c.value = h; qcStyleCellule(c, { fill:QC_XL.brun, couleur:QC_XL.blanc, gras:true, taille:10, retour:true, h:'center' }); });
+  entetes.forEach((h,i)=>{ const c = ws.getCell(1, i+1); c.value = h; qcStyleCellule(c, { fill:QC_XL.teal, couleur:QC_XL.blanc, gras:true, taille:10, retour:true, h:'center' }); });
   ws.getRow(1).height = 58;
   ws.columns.forEach((col,i)=>{ col.width = i===0 ? 6 : (i<3 ? 17 : (i<5 ? 20 : Math.min(55, Math.max(20, Math.round(entetes[i].length*0.8))))); });
   reps.forEach((x,k)=>{
     const r = x.reponses||{};
     const vals = [k+1, new Date(x.commence_le||x.created_at), new Date(x.termine_le||x.updated_at), 'anonymous', 'anonymous'].concat(QC_QUESTIONS.map(q=>qcVisible(q, r) ? qcValeur(r, q.cle) : ''));
     const row = ws.getRow(k+2); row.values = vals;
-    for (let c=1; c<=vals.length; c++){ const cell = row.getCell(c); qcStyleCellule(cell, { fill: k%2 ? 'FFFAFAF8' : QC_XL.blanc, taille:10.5 }); if (c===2 || c===3) cell.numFmt = 'm/d/yy h:mm:ss'; }
+    for (let c=1; c<=vals.length; c++){ const cell = row.getCell(c); qcStyleCellule(cell, { fill: k%2 ? QC_XL.zebre : QC_XL.blanc, taille:10.5 }); if (c===2 || c===3) cell.numFmt = 'm/d/yy h:mm:ss'; }
   });
   ws.autoFilter = { from:{ row:1, column:1 }, to:{ row:1, column:entetes.length } };
   await qcTelechargerClasseur(wb, 'Enquete_EUDR_Cargill_2026_PRODUCTEUR_'+qcSlug(coop ? coop.nom : '')+'.xlsx');
+}
+
+// ---- Rapport de legalite (admin) : synthese des reponses pour une ou plusieurs cooperatives, destine aux
+// clients d'ECORIGINE (etat d'avancement du principe de legalite : identite, droit d'utilisation des terres,
+// litiges, environnement). Donnees declaratives, telles que recueillies ; aucune donnee personnelle
+// (telephone, numero de piece) n'y figure. ----
+function qcRapportDonnees(demandes){
+  const coops = demandes.map(d=>({ d, coop: qcCoopDe(d), producteurs: qcProducteursDe(d), reps: qcReponsesDeDemande(d.id) }));
+  const toutes = [];
+  coops.forEach(c=>{ c.reps.forEach(x=>toutes.push({ c, x, r: x.reponses||{}, etat: qcEtatReponse(x) })); });
+  const finis = toutes.filter(t=>t.etat==='complet' || t.etat==='refus');
+  const consentants = toutes.filter(t=>t.etat==='complet');
+  return { coops, toutes, finis, consentants };
+}
+function qcPct(n, base){ return base>0 ? Math.round(n/base*1000)/10 : null; }
+async function qcRapportLegalite(demandeIds, titrePerimetre){
+  const demandes = demandeIds.map(qcDemandeParId).filter(Boolean);
+  if (demandes.length===0){ showToast('Aucune demande de questionnaire.'); return; }
+  const D = qcRapportDonnees(demandes);
+  if (D.finis.length===0){ showToast('Aucun questionnaire terminé : le rapport serait vide.'); return; }
+  let ExcelJS;
+  try{ ExcelJS = await qcChargerExcelJS(); }catch(e){ showToast('Impossible de préparer le rapport : '+e.message, 'error'); return; }
+  const wb = new ExcelJS.Workbook(); wb.creator = 'ORIGEN · ECORIGINE'; wb.created = new Date();
+  const nbProd = D.coops.reduce((s,c)=>s+c.producteurs.length, 0);
+  const nbHors = D.toutes.filter(t=>!t.x.producteur_id).length;
+  const base = D.consentants;   // base des indicateurs : producteurs ayant consenti et termine le questionnaire
+  const dateRapport = new Date().toLocaleDateString('fr-FR');
+  // ---- Feuille Synthese ----
+  const ws = wb.addWorksheet('Synthèse', { views:[{ showGridLines:false }] });
+  ws.columns = [{ width:4 }, { width:58 }, { width:12 }, { width:12 }, { width:44 }];
+  qcBandeauTitre(ws, 5, 'Rapport de légalité EUDR — questionnaire producteurs (enquête Cargill 2026)',
+    'ORIGEN · ECORIGINE SA — '+titrePerimetre+' — établi le '+dateRapport+'. Données déclaratives recueillies auprès des producteurs par les coopératives (consentement préalable). Les pourcentages sont calculés sur les producteurs ayant consenti et terminé le questionnaire, sauf mention contraire.');
+  let ligne = 4;
+  const section = (titre, fill, couleur)=>{ ws.mergeCells(ligne, 2, ligne, 5); const c = ws.getCell(ligne, 2); c.value = titre; qcStyleCellule(c, { fill:fill||QC_XL.accent, couleur:couleur||QC_XL.blanc, gras:true, taille:11.5 }); ws.getRow(ligne).height = 22; ligne++;
+    [['Indicateur','Nombre','%','Lecture']].forEach(h=>{ h.forEach((v,i)=>{ const cc = ws.getCell(ligne, i+2); cc.value = v; qcStyleCellule(cc, { fill:QC_XL.accentSoft, gras:true, taille:10, h: i===1||i===2 ? 'center' : 'left' }); }); ligne++; }); };
+  const indicateur = (libelle, n, baseN, lecture, alerte)=>{
+    const vals = [libelle, n, (baseN!=null && baseN>0) ? qcPct(n, baseN)/100 : null, lecture||''];
+    vals.forEach((v,i)=>{ const c = ws.getCell(ligne, i+2); c.value = v; qcStyleCellule(c, { fill: alerte && n>0 ? QC_XL.dangerSoft : (ligne%2 ? QC_XL.blanc : QC_XL.zebre), taille:10.5, h: i===1||i===2 ? 'center' : 'left', retour: i===3, couleur: alerte && n>0 ? QC_XL.danger : QC_XL.noir, gras: alerte && n>0 }); if (i===2 && v!=null) c.numFmt = '0.0%'; });
+    ligne++;
+  };
+  const compte = (liste, cle, val)=>liste.filter(t=>qcValeur(t.r, cle)===val).length;
+  const nonVide = (liste, cle, saufs)=>liste.filter(t=>{ const v = qcValeur(t.r, cle); return v && !(saufs||[]).includes(v.toUpperCase()); }).length;
+
+  section('1. Couverture de l\'enquête', QC_XL.teal);
+  indicateur('Coopératives concernées', D.coops.length, null, D.coops.map(c=>c.coop ? c.coop.nom : '—').join(', '));
+  indicateur('Producteurs au registre ORIGEN', nbProd, null, nbHors>0 ? '+ '+nbHors+' producteur(s) hors registre ayant répondu' : '');
+  indicateur('Questionnaires terminés', D.finis.length, nbProd+nbHors, 'Taux de couverture (base : producteurs au registre + hors registre)');
+  indicateur('Consentement donné', base.length, D.finis.length, 'Base des indicateurs ci-dessous');
+  indicateur('Consentement refusé', D.finis.filter(t=>t.etat==='refus').length, D.finis.length, 'Questionnaire clos, aucune donnée collectée', true);
+  indicateur('Brouillons en cours (non comptés)', D.toutes.filter(t=>t.etat==='en_cours').length, null, '');
+  ligne++;
+  section('2. Identité du producteur', QC_XL.accent);
+  QC_QUESTIONS.find(q=>q.cle==='piece_nature').options.forEach(o=>indicateur('Pièce d\'identité présentée : '+o, compte(base,'piece_nature',o), base.length, '', o==='Néant'));
+  indicateur('N° de carte CCC renseigné', nonVide(base,'ccc',['NEANT']), base.length, 'Producteurs identifiés dans le système du Conseil du Café-Cacao');
+  indicateur('Téléphone renseigné', nonVide(base,'telephone',['NEANT']), base.length, '');
+  ligne++;
+  section('3. Droit d\'utilisation des terres (CLIP)', QC_XL.or, QC_XL.orInk);
+  const proprios = base.filter(t=>qcValeur(t.r,'statut_parcelle')==='Propriétaire'), travailleurs = base.filter(t=>qcValeur(t.r,'statut_parcelle')==='Travailleur');
+  indicateur('Propriétaires de la parcelle', proprios.length, base.length, '');
+  indicateur('Travailleurs (non propriétaires)', travailleurs.length, base.length, '');
+  indicateur('   dont avec contrat de location signé', compte(travailleurs,'contrat_location','Oui'), travailleurs.length, 'Base : travailleurs');
+  indicateur('   dont sans contrat de location', compte(travailleurs,'contrat_location','Non'), travailleurs.length, 'Point d\'attention : sécurisation du droit d\'usage', true);
+  QC_QUESTIONS.find(q=>q.cle==='type_proprietaire').options.forEach(o=>indicateur('Type de propriétaire : '+o, compte(proprios,'type_proprietaire',o), proprios.length, 'Base : propriétaires'));
+  indicateur('Propriétaires disposant de documents attestant l\'acquisition', compte(proprios,'documents_acquisition','Oui'), proprios.length, 'Base : propriétaires');
+  indicateur('   dont prêts à les partager', compte(proprios,'documents_partage','Oui'), compte(proprios,'documents_acquisition','Oui'), 'Base : propriétaires avec documents');
+  indicateur('Propriétaires sans document (historique déclaré)', compte(proprios,'documents_acquisition','Non'), proprios.length, 'Point d\'attention : droit d\'usage coutumier non documenté', true);
+  indicateur('Litige foncier déclaré sur la parcelle', compte(proprios,'litige','Oui'), proprios.length, 'Voir l\'onglet « Points d\'attention »', true);
+  ligne++;
+  section('4. Protection de l\'environnement et biodiversité', QC_XL.tealMid);
+  indicateur('Actions de conservation des écosystèmes naturels', compte(base,'conservation','Oui'), base.length, '');
+  const intrants = base.filter(t=>qcValeur(t.r,'intrants')==='Oui');
+  indicateur('Utilisation de pesticides et/ou engrais', intrants.length, base.length, '');
+  QC_QUESTIONS.find(q=>q.cle==='intrants_fournisseur').options.forEach(o=>indicateur('   fournis par : '+o, compte(intrants,'intrants_fournisseur',o), intrants.length, 'Base : utilisateurs d\'intrants'));
+  ligne++;
+  ws.mergeCells(ligne, 2, ligne, 5); const note = ws.getCell(ligne, 2);
+  note.value = 'Méthode : réponses saisies dans ORIGEN par les coopératives (assistant en ligne ou modèle Excel importé), producteur par producteur, selon le questionnaire « '+QC_TITRE+' ». Les réponses sont déclaratives et n\'ont pas fait l\'objet d\'une vérification documentaire à ce stade. Rapport généré par ORIGEN le '+dateRapport+'.';
+  qcStyleCellule(note, { fill:QC_XL.bg, italique:true, taille:9.5, couleur:QC_XL.grisTxt, retour:true, bordure:false }); ws.getRow(ligne).height = 48;
+
+  // ---- Feuille Par cooperative ----
+  const wc = wb.addWorksheet('Par coopérative', { views:[{ state:'frozen', ySplit:3 }] });
+  const colsCoop = ['Coopérative','Producteurs au registre','Questionnaires terminés','Couverture','Consentement refusé','Propriétaires','Travailleurs sans contrat','Propriétaires sans document','Litiges fonciers','Actions de conservation','Utilisateurs d\'intrants'];
+  wc.columns = colsCoop.map((h,i)=>({ width: i===0 ? 34 : 16 }));
+  qcBandeauTitre(wc, colsCoop.length, 'Synthèse par coopérative', 'Nombres de producteurs ; la couverture rapporte les questionnaires terminés aux producteurs au registre.');
+  colsCoop.forEach((h,i)=>{ const c = wc.getCell(3, i+1); c.value = h; qcStyleCellule(c, { fill:QC_XL.accentSoft, gras:true, taille:10, retour:true, h:'center' }); }); wc.getRow(3).height = 44;
+  D.coops.forEach((c,k)=>{
+    const t = D.toutes.filter(x=>x.c===c), f = t.filter(x=>x.etat==='complet'||x.etat==='refus'), b = t.filter(x=>x.etat==='complet');
+    const pr = b.filter(x=>qcValeur(x.r,'statut_parcelle')==='Propriétaire'), tr = b.filter(x=>qcValeur(x.r,'statut_parcelle')==='Travailleur');
+    const baseCoop = c.producteurs.length + t.filter(x=>!x.x.producteur_id).length;
+    const vals = [c.coop ? c.coop.nom : '—', c.producteurs.length, f.length, baseCoop>0 ? f.length/baseCoop : null, f.length-b.length, pr.length, compte(tr,'contrat_location','Non'), compte(pr,'documents_acquisition','Non'), compte(pr,'litige','Oui'), compte(b,'conservation','Oui'), compte(b,'intrants','Oui')];
+    vals.forEach((v,i)=>{ const cell = wc.getCell(k+4, i+1); cell.value = v; qcStyleCellule(cell, { fill: k%2 ? QC_XL.zebre : QC_XL.blanc, taille:10.5, h: i===0 ? 'left' : 'center' }); if (i===3 && v!=null) cell.numFmt = '0%'; });
+  });
+
+  // ---- Feuille Points d'attention ----
+  const wp = wb.addWorksheet('Points d\'attention', { views:[{ state:'frozen', ySplit:3 }] });
+  const colsP = ['Coopérative','Producteur','N° CCC','Point d\'attention','Détail déclaré'];
+  wp.columns = [{ width:30 }, { width:30 }, { width:16 }, { width:36 }, { width:70 }];
+  qcBandeauTitre(wp, colsP.length, 'Points d\'attention à suivre', 'Litiges fonciers déclarés, travailleurs sans contrat de location, propriétaires sans document d\'acquisition, consentements refusés.');
+  colsP.forEach((h,i)=>{ const c = wp.getCell(3, i+1); c.value = h; qcStyleCellule(c, { fill:QC_XL.accentSoft, gras:true, taille:10, h:'center' }); });
+  const points = [];
+  D.finis.forEach(t=>{
+    const prodReg = t.x.producteur_id ? t.c.producteurs.find(p=>p.id===t.x.producteur_id) : null;
+    const nomCoop = t.c.coop ? t.c.coop.nom : '—', nom = (prodReg && prodReg.nom) || qcValeur(t.r,'nom') || t.x.producteur_nom || '—', ccc = qcValeur(t.r,'ccc') || (prodReg && String(prodReg.matricule_ccc||'').trim()) || '—';
+    if (t.etat==='refus') points.push([nomCoop, nom, ccc, 'Consentement refusé', 'Aucune donnée collectée pour ce producteur.']);
+    if (qcValeur(t.r,'litige')==='Oui') points.push([nomCoop, nom, ccc, 'Litige foncier déclaré', qcValeur(t.r,'litige_explication')]);
+    if (qcValeur(t.r,'statut_parcelle')==='Travailleur' && qcValeur(t.r,'contrat_location')==='Non') points.push([nomCoop, nom, ccc, 'Travailleur sans contrat de location', '']);
+    if (qcValeur(t.r,'statut_parcelle')==='Propriétaire' && qcValeur(t.r,'documents_acquisition')==='Non') points.push([nomCoop, nom, ccc, 'Propriétaire sans document d\'acquisition', qcValeur(t.r,'historique_acquisition')]);
+  });
+  if (points.length===0) points.push(['—','—','—','Aucun point d\'attention','']);
+  points.forEach((vals,k)=>{ vals.forEach((v,i)=>{ const c = wp.getCell(k+4, i+1); c.value = v; qcStyleCellule(c, { fill: k%2 ? QC_XL.zebre : QC_XL.blanc, taille:10.5, retour: i===4 }); }); });
+  wp.autoFilter = { from:{ row:3, column:1 }, to:{ row:3, column:colsP.length } };
+
+  // ---- Feuille Detail (sans donnees personnelles : ni telephone ni numero de piece) ----
+  const wd = wb.addWorksheet('Détail', { views:[{ state:'frozen', xSplit:2, ySplit:3 }] });
+  const clesDetail = ['consentement','piece_nature','ccc','statut_parcelle','contrat_location','type_proprietaire','mode_acquisition','documents_acquisition','documents_partage','historique_acquisition','litige','litige_explication','conservation','conservation_actions','intrants','intrants_lesquels','intrants_fournisseur'];
+  const colsD = ['Coopérative','Producteur'].concat(clesDetail.map(k=>QC_QUESTIONS.find(q=>q.cle===k).libelle));
+  wd.columns = colsD.map((h,i)=>({ width: i<2 ? 30 : Math.min(42, Math.max(14, Math.round(h.length*0.6))) }));
+  qcBandeauTitre(wd, colsD.length, 'Détail des réponses par producteur', 'Une ligne par questionnaire terminé. Le numéro de téléphone et le numéro de pièce d\'identité ne figurent pas dans ce rapport.');
+  colsD.forEach((h,i)=>{ const c = wd.getCell(3, i+1); c.value = h; qcStyleCellule(c, { fill:QC_XL.accentSoft, gras:true, taille:9.5, retour:true, h:'center' }); }); wd.getRow(3).height = 70;
+  D.finis.forEach((t,k)=>{
+    const vals = [t.c.coop ? t.c.coop.nom : '—', qcValeur(t.r,'nom') || t.x.producteur_nom || '—'].concat(clesDetail.map(c=>qcValeur(t.r, c)));
+    vals.forEach((v,i)=>{ const c = wd.getCell(k+4, i+1); c.value = v; qcStyleCellule(c, { fill: k%2 ? QC_XL.zebre : QC_XL.blanc, taille:10 }); });
+  });
+  wd.autoFilter = { from:{ row:3, column:1 }, to:{ row:3, column:colsD.length } };
+  await qcTelechargerClasseur(wb, 'Rapport_legalite_EUDR_'+qcSlug(titrePerimetre)+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
 }
 
 function qcChoisirFichierImport(demandeId){
@@ -14701,13 +14829,10 @@ async function qcImporterFichier(input, demandeId){
   // ajoutes dans le modele), dans n'importe quel ordre ; la ligne d'en-tetes est celle qui porte la colonne
   // d'identifiant ORIGEN (titre, consigne et bandes de sections se trouvent au-dessus), cherchee sur les 10 premieres lignes.
   const normEntete = h=>qcNormaliserTexte(String(h==null?'':h).replace(/^\s*\d+\s*[.)-]\s*/, '').replace(/\s*\*\s*$/, ''));
-  const cibleId = qcNormaliserTexte(QC_COL_ID);
   let ligneEntetes = -1;
-  for (let i=0; i<Math.min(10, aoa.length); i++){ if ((aoa[i]||[]).some(h=>normEntete(h)===cibleId)){ ligneEntetes = i; break; } }
-  if (ligneEntetes<0){ for (let i=0; i<Math.min(10, aoa.length); i++){ const e=(aoa[i]||[]).map(normEntete); if (QC_QUESTIONS.filter(q=>e.includes(qcNormaliserTexte(q.libelle))).length>=10){ ligneEntetes = i; break; } } }
+  for (let i=0; i<Math.min(10, aoa.length); i++){ const e=(aoa[i]||[]).map(normEntete); if (QC_QUESTIONS.filter(q=>e.includes(qcNormaliserTexte(q.libelle))).length>=10){ ligneEntetes = i; break; } }
   if (ligneEntetes<0){ showToast('Ce fichier ne correspond pas au modèle du questionnaire (ligne d\'en-têtes introuvable). Téléchargez le modèle depuis ORIGEN.', 'error'); return; }
   const entetes = aoa[ligneEntetes].map(normEntete);
-  const colId = entetes.indexOf(cibleId);
   const colonnes = {};
   QC_QUESTIONS.forEach(q=>{ const i = entetes.indexOf(qcNormaliserTexte(q.libelle)); if (i>=0) colonnes[q.cle] = i; });
   const manquantes = QC_QUESTIONS.filter(q=>colonnes[q.cle]==null);
@@ -14716,15 +14841,16 @@ async function qcImporterFichier(input, demandeId){
   const lignes = [];
   for (let i=ligneEntetes+1; i<aoa.length; i++){
     const row = aoa[i]; if (!row || row.every(c=>String(c==null?'':c).trim()==='')) continue;
-    const idOrigen = colId>=0 ? String(row[colId]||'').trim() : '';
     const brut = {}; QC_QUESTIONS.forEach(q=>{ if (colonnes[q.cle]!=null) brut[q.cle] = String(row[colonnes[q.cle]]==null?'':row[colonnes[q.cle]]).trim(); });
-    const pr = idOrigen ? (producteurs.find(p=>p.id===idOrigen) || null) : null;
-    const nomLigne = brut.nom || (pr ? pr.nom : '');
+    // Rattachement au registre par le nom du producteur (tel que pre-rempli dans le modele), sinon par le n° CCC.
+    const nomNorm = qcNormaliserTexte(brut.nom), cccNorm = qcNormaliserTexte(brut.ccc);
+    const pr = (nomNorm ? producteurs.find(p=>qcNormaliserTexte(p.nom)===nomNorm) : null)
+      || ((cccNorm && cccNorm!=='neant') ? producteurs.find(p=>qcNormaliserTexte(p.matricule_ccc)===cccNorm) : null) || null;
+    const nomLigne = pr ? pr.nom : brut.nom;   // orthographe du registre si le producteur y est rattache
     // Ligne non touchee (que le pre-remplissage, sans consentement) : rien a importer.
     const saisie = Object.keys(brut).filter(k=>!['cooperative','nom','ccc'].includes(k) && brut[k]);
     if (saisie.length===0) continue;
     const erreurs = [];
-    if (idOrigen && !pr) erreurs.push('identifiant ORIGEN inconnu « '+idOrigen+' »');
     if (!pr && !nomLigne) erreurs.push('nom du producteur manquant');
     const r = {};
     QC_QUESTIONS.forEach(q=>{
@@ -14812,7 +14938,8 @@ function qcVueAdminHtml(){
     + '<div class="qc-intro">'
     + '<p><strong>'+esc(coop ? coop.nom : '—')+'</strong> · '+s.total+' producteur'+(s.total>1?'s':'')+' · '+s.remplis+' questionnaire'+(s.remplis>1?'s':'')+' terminé'+(s.remplis>1?'s':'')
     + (d.soumis_le ? ' · soumis par la coopérative le '+esc(qcFmtDateHeure(d.soumis_le)) : '')+(d.deadline ? ' · échéance '+esc(new Date(d.deadline+'T00:00:00').toLocaleDateString('fr-FR')) : '')+'</p>'
-    + '<p class="hint">Tu peux répondre ou corriger à la place de la coopérative. « Exporter Excel (format Forms) » produit le fichier à transmettre à CARGILL : une ligne par producteur ayant terminé (ou refusé le consentement), les colonnes du formulaire dans l\'ordre, comme un export de réponses Microsoft Forms.</p>'
+    + '<p class="hint">Tu peux répondre ou corriger à la place de la coopérative. « Exporter Excel (format Forms) » produit le fichier à transmettre à CARGILL : une ligne par producteur ayant terminé (ou refusé le consentement), les colonnes du formulaire dans l\'ordre, comme un export de réponses Microsoft Forms. « Rapport de légalité » produit la synthèse à partager avec les clients (couverture, identité, droit d\'utilisation des terres, litiges, environnement, points d\'attention), sans téléphone ni numéro de pièce.</p>'
+    + (s.remplis>0 ? '<div style="margin-top:8px;"><button class="btn btn-primary" onclick="qcRapportLegalite([\''+qcJs(d.id)+'\'], \''+qcJs(coop ? coop.nom : 'cooperative')+'\')">📊 Rapport de légalité (Excel)</button></div>' : '')
     + (d.statut==='en_validation' ? '<div class="valid-actions" style="margin-top:6px;"><button class="btn-valider" onclick="validerDemande(\''+qcJs(d.id)+'\')"><span class="ic">✓</span>Valider</button><button class="btn-rejeter" onclick="ouvrirRejetDemande(\''+qcJs(d.id)+'\')"><span class="ic">✕</span>Rejeter</button></div>' : '')
     + '</div></div>';
   html += qcPanneauHtml(d, qcProducteursDe(d), {});
