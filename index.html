@@ -88,6 +88,18 @@
   /* Choix en cartes : meme gabarit partout (cases pour plusieurs choix, ronds pour un seul), alignes en grille */
   .choix-grille{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:6px;}
   .choix-grille.une-colonne{grid-template-columns:1fr;}
+  /* Selecteur de cooperatives (nouvelle demande) : plusieurs coches, recherche, « Toutes / Aucune » */
+  .coop-pick{border:1.5px solid var(--border);border-radius:10px;background:var(--surface);overflow:hidden;margin-top:6px;}
+  .coop-pick-barre{display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border);background:var(--surface-2);}
+  .coop-pick-barre input[type=search]{flex:1;min-width:0;margin:0;padding:6px 10px;font-size:12.5px;}
+  .coop-pick-barre .hint{margin:0;white-space:nowrap;}
+  .coop-pick-liste{max-height:190px;overflow:auto;display:grid;grid-template-columns:repeat(2,1fr);gap:2px 10px;padding:8px 10px;}
+  .coop-pick-item{display:flex;align-items:center;gap:8px;margin:0;padding:5px 6px;border-radius:6px;font-weight:400;font-size:13px;cursor:pointer;line-height:1.3;}
+  .coop-pick-item:hover{background:var(--surface-2);}
+  .modal .field .coop-pick-item input[type=checkbox]{width:17px;height:17px;margin:0;flex:none;}
+  .modal .field .coop-pick-barre input[type=search]{width:auto;}
+  .coop-pick-item.masque{display:none;}
+  .coop-pick-item.coche{color:var(--teal);font-weight:600;}
   .choix-grille > .choix:last-child:nth-child(odd){grid-column:1 / -1;}
   .choix{display:block;position:relative;cursor:pointer;margin:0;font-weight:400;}
   .choix-input{position:absolute;opacity:0;pointer-events:none;width:1px;height:1px;margin:0;}
@@ -2357,6 +2369,7 @@ function capturerFormulaireDemande(){
   return {
     demande_name: fv('demande_name'),
     demande_cooperative_id: fv('demande_cooperative_id'),
+    demande_cooperative_ids: coopPickIds(ancien),
     demande_deadline: fv('demande_deadline'),
     demande_demandeur_nom: fv('demande_demandeur_nom'),
     demande_message: fv('demande_message'),
@@ -3056,7 +3069,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-173';
+const APP_VERSION = '2026-10-02-174';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4832,6 +4845,60 @@ function prefixeConnaissementPourCoop(coop){
 // ci-dessous) qui ne redessine jamais la modale -- un render() a chaque frappe
 // recreerait l'input et lui ferait perdre le focus, empechant de taper un
 // numero a plusieurs chiffres (ex: "10") sans recliquer entre chaque touche.
+// ---- Selecteur de cooperatives de la nouvelle demande : une, plusieurs ou toutes ----
+// Les identifiants coches sont la source ; le champ cache « demande_cooperative_id » en est derive
+// ('' = aucune, l'identifiant = une seule, '__all__' = toutes, '__multi__' = plusieurs) pour que le reste
+// du formulaire (nom de connaissement, apercu du message automatique) continue de fonctionner tel quel.
+function coopPickIds(ancien){
+  const cases = document.querySelectorAll('#modal-fields .coop-pick-item input[type=checkbox]');
+  if (cases.length) return Array.from(cases).filter(c=>c.checked).map(c=>c.value);
+  return Array.isArray(ancien && ancien.demande_cooperative_ids) ? ancien.demande_cooperative_ids.slice() : [];
+}
+function coopPickValeurDerivee(ids){
+  if (!ids.length) return '';
+  if (ids.length===1) return ids[0];
+  return ids.length>=state.cooperatives.length ? '__all__' : '__multi__';
+}
+function coopPickCoops(ids){ return (ids||[]).map(coopById).filter(Boolean); }
+function coopPickHtml(nd){
+  const ids = Array.isArray(nd.demande_cooperative_ids) ? nd.demande_cooperative_ids
+    : (nd.demande_cooperative_id==='__all__' ? state.cooperatives.map(c=>c.id) : (nd.demande_cooperative_id ? [nd.demande_cooperative_id] : []));
+  const coche = new Set(ids);
+  return '<div class="field"><label>Coopérative(s) destinataires</label>'
+    + '<input type="hidden" name="demande_cooperative_id" value="'+esc(coopPickValeurDerivee(ids))+'">'
+    + '<div class="coop-pick"><div class="coop-pick-barre">'
+    + '<input type="search" placeholder="Rechercher une coopérative…" oninput="coopPickFiltrer(this.value)">'
+    + '<button type="button" class="btn-ghost btn-compact" onclick="coopPickTout(true)">Toutes</button>'
+    + '<button type="button" class="btn-ghost btn-compact" onclick="coopPickTout(false)">Aucune</button>'
+    + '<span class="hint" id="coop-pick-compte">'+coopPickCompteTexte(ids.length)+'</span></div>'
+    + '<div class="coop-pick-liste">'
+    + state.cooperatives.slice().sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''), 'fr')).map(c=>'<label class="coop-pick-item'+(coche.has(c.id)?' coche':'')+'" data-nom="'+esc(String(c.nom||'').toLowerCase())+'"><input type="checkbox" value="'+esc(c.id)+'"'+(coche.has(c.id)?' checked':'')+' onchange="coopPickChange()"><span>'+esc(c.nom)+'</span></label>').join('')
+    + '</div></div></div>';
+}
+function coopPickCompteTexte(n){ return n===0 ? 'Aucune sélectionnée' : (n>=state.cooperatives.length ? 'Toutes ('+n+')' : n+' sélectionnée'+(n>1?'s':'')); }
+function coopPickSync(){
+  const ids = coopPickIds();
+  const cache = document.querySelector('#modal-fields [name="demande_cooperative_id"]');
+  if (cache) cache.value = coopPickValeurDerivee(ids);
+  document.querySelectorAll('#modal-fields .coop-pick-item').forEach(l=>{ const c=l.querySelector('input'); l.classList.toggle('coche', !!(c && c.checked)); });
+  const compte = document.getElementById('coop-pick-compte'); if (compte) compte.textContent = coopPickCompteTexte(ids.length);
+  if (state.modal && state.modal.type==='nouvelleDemande'){ state.modal.payload = state.modal.payload || {}; state.modal.payload.demande_cooperative_ids = ids; state.modal.payload.demande_cooperative_id = coopPickValeurDerivee(ids); }
+  return ids;
+}
+function coopPickChange(){
+  coopPickSync();
+  // Tracabilite seule (connaissement) ou document a message automatique : le reste du formulaire depend de la cooperative -> on redessine.
+  const dependDeLaCoop = (state.newDemandeTypes.size===1 && state.newDemandeTypes.has('product_movements')) || (state.newDemandeTypes.has('autres') && !!fv('demande_doc_choix'));
+  if (dependDeLaCoop) majNomDemandeTracabilite();
+}
+function coopPickTout(coche){
+  document.querySelectorAll('#modal-fields .coop-pick-item').forEach(l=>{ if (coche && l.classList.contains('masque')) return; const c=l.querySelector('input'); if (c) c.checked = coche; });
+  coopPickChange();
+}
+function coopPickFiltrer(v){
+  const f = String(v||'').trim().toLowerCase();
+  document.querySelectorAll('#modal-fields .coop-pick-item').forEach(l=>l.classList.toggle('masque', !!f && !(l.dataset.nom||'').includes(f)));
+}
 function majNomDemandeTracabilite(){
   if (!(state.modal && state.modal.type==='nouvelleDemande')) return;
   state.modal.payload = capturerFormulaireDemande();
@@ -4936,7 +5003,9 @@ async function creerDemande(){
   // echoue plus bas, showToast() va redessiner la modale, et c'est ce payload qui
   // repeuple les champs -- sans ca, tout ce qui a ete tape disparait au premier echec.
   if (state.modal && state.modal.type==='nouvelleDemande') state.modal.payload = capturerFormulaireDemande();
-  if (!name || !coopId){ showToast('Renseigne au moins un nom et une coopérative.'); restaurerFichierSourceInput(); return; }
+  const coopIdsChoisis = coopPickIds(state.modal && state.modal.payload);
+  if (!name || !coopIdsChoisis.length){ showToast('Renseigne au moins un nom et une coopérative.'); restaurerFichierSourceInput(); return; }
+  if (estTracabiliteSeuleCreation && coopIdsChoisis.length>1){ showToast('Une demande de traçabilité vise une seule coopérative (le numéro de connaissement lui est propre) : ne coche qu\'une coopérative.'); restaurerFichierSourceInput(); return; }
   if (state.newDemandeTypes.size===0){ showToast('Sélectionne au moins un type de données.'); restaurerFichierSourceInput(); return; }
 
   const fileInput = document.getElementById('demande_fichier_source_input');
@@ -4981,7 +5050,7 @@ async function creerDemande(){
   }
   const natureFinale = docReg ? docReg.nature : docNature;
 
-  const targetCoops = coopId==='__all__' ? state.cooperatives.slice() : [coopById(coopId)].filter(Boolean);
+  const targetCoops = coopPickCoops(coopIdsChoisis);
   if (targetCoops.length===0){ showToast('Aucune coopérative à cibler.'); return; }
 
   const btn = document.querySelector('.modal .actions .btn-primary');
@@ -15231,7 +15300,7 @@ function _renderBrut(){
   if (state.modal && state.modal.type==='nouvelleDemande'){
     const nd = state.modal.payload || {};
     const estTracabiliteSeule = state.newDemandeTypes.size===1 && state.newDemandeTypes.has('product_movements');
-    const coopChoisie = nd.demande_cooperative_id && nd.demande_cooperative_id!=='__all__' ? coopById(nd.demande_cooperative_id) : null;
+    const coopChoisie = nd.demande_cooperative_id && nd.demande_cooperative_id!=='__all__' && nd.demande_cooperative_id!=='__multi__' ? coopById(nd.demande_cooperative_id) : null;
     // Prefixe verrouille (code court + n CCC + campagne + code periode), deduit
     // de la date du jour comme partout ailleurs sur la plateforme -- seul le
     // numero de livraison (1, 2, 3...) reste a saisir par l'utilisateur.
@@ -15253,10 +15322,7 @@ function _renderBrut(){
             + '<label class="field">Nom de la demande (généré automatiquement)<input type="text" name="demande_name" value="'+esc(nomGenere||nd.demande_name||'')+'" readonly style="background:var(--surface-2);color:var(--ink-soft);"></label>'
             + (coopChoisie && !coopChoisie.code_court ? '<div class="hint" style="color:var(--danger);margin:-10px 0 10px;">Cette coopérative n\'a pas de code court renseigné sur sa fiche — impossible de générer le nom automatiquement.</div>' : '')
           : '<label class="field">Nom de la demande<input type="text" name="demande_name" value="'+esc(nd.demande_name||'')+'" placeholder="ex : Mise à jour des parcelles — campagne 2026-2027"></label>')
-      + '<label class="field">Coopérative<select name="demande_cooperative_id" onchange="majNomDemandeTracabilite()"><option value="">— Choisir —</option>'
-      + '<option value="__all__"'+(nd.demande_cooperative_id==='__all__'?' selected':'')+'>— Toutes les coopératives ('+state.cooperatives.length+') —</option>'
-      + state.cooperatives.map(c=>'<option value="'+esc(c.id)+'"'+(nd.demande_cooperative_id===c.id?' selected':'')+'>'+esc(c.nom)+'</option>').join('')
-      + '</select></label>'
+      + coopPickHtml(nd)
       + '<div class="field"><label>Type de donnée demandée</label>'
       + '<div class="choix-grille">'
       + Object.entries(DEMANDE_TYPE_LABELS).map(([k,label])=>{
