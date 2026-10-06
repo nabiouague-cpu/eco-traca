@@ -2993,7 +2993,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-164';
+const APP_VERSION = '2026-10-02-165';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -12519,23 +12519,19 @@ function nomFichierSur(t){ return String(t||'').normalize('NFD').replace(/[\u030
 async function genererAttestation(achatId){
   const a0 = state.achats.find(x=>x.id===achatId); if (!a0) return;
   const coop = coopById(a0.cooperative_id), camp = state.campagnes.find(c=>c.id===a0.campagne_id);
+  if (!coop || !camp){ showToast('Coopérative ou campagne introuvable pour ce connaissement.'); return; }
   if (!paiementsDeAchat(a0.id).length){ showToast('Aucun paiement enregistré pour ce connaissement : renseigne d\'abord le paiement.'); return; }
   const lignes = lignesAttestation(a0.cooperative_id, a0.campagne_id);
   let lib; try{ lib = await chargerBibliothequeDocx(); }catch(e){ showToast(e.message); return; }
+  // Pas de telechargement cote ECORIGINE : l'attestation n'a de valeur qu'une fois signee par la
+  // cooperative. Elle part donc directement en demande (document a signer), et revient signee
+  // par le portail -- c'est cette version signee que l'on conserve.
   try{
-    const doc = construireAttestationDocx(lib, { coop, campagne: libelleCampagneCourt(camp ? camp.nom : ''), lignes });
+    const doc = construireAttestationDocx(lib, { coop, campagne: libelleCampagneCourt(camp.nom), lignes });
     const blob = await lib.Packer.toBlob(doc);
-    telechargerBlob(blob, 'Attestation_paiement_'+nomFichierSur(coop ? coop.nom : '')+'_campagne_'+nomFichierSur(libelleCampagneCourt(camp ? camp.nom : ''))+'.docx');
     const paye = lignes.reduce((t,l)=>t+l.paye,0), nbLiv = lignes.filter(l=>l.poidsKg!==null).length;
-    showToast('Attestation générée : '+nbLiv+' livraison'+(nbLiv>1?'s':'')+' · '+montantAttestation(paye)+' FCFA payés.', 'success');
-    if (coop && camp){
-      const nomFichier = 'Attestation_paiement_'+nomFichierSur(coop.nom)+'_campagne_'+nomFichierSur(libelleCampagneCourt(camp.nom))+'.docx';
-      const existante = demandeAttestationOuverte(coop.id, camp.id);
-      askConfirm((existante
-          ? 'Mettre à jour l\'attestation déjà envoyée à '+coop.nom+' pour signature ?\n\nLa demande « '+existante.name+' » recevra cette nouvelle version (cumul des chèques à ce jour).'
-          : 'Envoyer cette attestation à '+coop.nom+' pour signature ?\n\nUne demande sera créée et un email envoyé : l\'attestation devra être signée par '+signatairesPourCoop(coop)+', cachetée, puis déposée sur le portail.'),
-        () => envoyerAttestationPourSignature(coop, camp, blob, nomFichier, { nbCheques: lignes.length, nbLivraisons: nbLiv, totalPaye: paye }));
-    }
+    const nomFichier = 'Attestation_paiement_'+nomFichierSur(coop.nom)+'_campagne_'+nomFichierSur(libelleCampagneCourt(camp.nom))+'.docx';
+    await envoyerAttestationPourSignature(coop, camp, blob, nomFichier, { nbCheques: lignes.length, nbLivraisons: nbLiv, totalPaye: paye });
   }catch(e){ showToast('Échec de la génération de l\'attestation : '+(e && e.message ? e.message : e)); }
 }
 // Demande « attestation de paiement » encore ouverte pour cette cooperative et cette campagne (l'attestation est
@@ -13010,7 +13006,7 @@ function detailAchatHtml(a, etat){
   const actionsDetail = '<div class="detail-actions">'
     + (function(){ const sd = soldeAchat(a);
         return (Number(a.poids_net_produit)>0 && (!sd || !sd.complet) ? '<button type="button" class="btn-ghost btn-compact" onclick="ouvrirPaiement(\''+a.id+'\')">'+(sd ? 'Ajouter un paiement' : 'Enregistrer le paiement')+'</button>' : '')
-          + (sd ? '<button type="button" class="btn-ghost btn-compact" onclick="genererAttestation(\''+a.id+'\')">Attestation de paiement (Word)</button>' : ''); })()
+          + (sd ? '<button type="button" class="btn-ghost btn-compact" onclick="genererAttestation(\''+a.id+'\')">Attestation de paiement → à signer</button>' : ''); })()
     + (Number(a.poids_net_produit)>0 ? '<button type="button" class="btn-ghost btn-compact" onclick="ouvrirTicketPesee(\''+a.id+'\')" title="Renseigner les informations de la fiche de pesée de l\'usine, puis générer le ticket (modèle Word)">Ticket de pesée (Word)</button>' : '')
     + '<button type="button" class="btn-ghost btn-compact" onclick="openModal(\'achat\','+esc(JSON.stringify(a)).replace(/&#39;/g,"&apos;")+')">Modifier le connaissement</button>'
     + (a.connaissement && !a.producteur_id ? '<button type="button" class="btn-danger-text btn-compact" onclick="supprimerConnaissement(\''+a.id+'\')" title="Retire ce connaissement et son achat pour pouvoir le reproduire, sans toucher aux producteurs ni à la demande">Supprimer le connaissement</button>' : '')
@@ -13448,7 +13444,7 @@ function ligneAchatHtml(a, montrerCoop, ouvert, avecNomPlateforme){
         const bt = [], sd = soldeAchat(a);
         if (!peseeVerrouillee(a)) bt.push(reception);
         if (Number(a.poids_net_produit)>0 && (!sd || !sd.complet)) bt.push('<button type="button" class="btn-ghost btn-compact" onclick="ouvrirPaiement(\''+a.id+'\')" title="'+(sd ? 'Ajouter un chèque : il reste '+fmtNum(sd.reste)+' FCFA à payer' : 'Enregistrer le chèque de paiement de cette livraison')+'">Paiement</button>');
-        if (sd) bt.push('<button type="button" class="btn-ghost btn-compact" onclick="genererAttestation(\''+a.id+'\')" title="Attestation de paiement de la coopérative pour cette campagne (tous ses chèques enregistrés)">Attestation</button>');
+        if (sd) bt.push('<button type="button" class="btn-ghost btn-compact" onclick="genererAttestation(\''+a.id+'\')" title="Envoie à la coopérative, en demande à signer, l\'attestation de paiement de la campagne (tous ses chèques enregistrés)">Attestation → à signer</button>');
         if (a.connaissement) bt.push('<button type="button" class="btn-danger-text btn-compact" onclick="supprimerConnaissement(\''+a.id+'\')" title="Retire ce connaissement et son achat pour pouvoir le reproduire — sans toucher aux producteurs ni à la demande (pour un camion refoulé, voir le détail)">Supprimer</button>');
         return '<div class="acts-ligne'+(bt.length>1 ? ' pile' : '')+'">'+(bt.length ? bt.join('') : reception)+'</div>';
       })()+'</td></tr>'
