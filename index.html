@@ -2734,7 +2734,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-154';
+const APP_VERSION = '2026-10-02-155';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -14546,7 +14546,7 @@ async function qcTelechargerModele(demandeId){
   const t = ws.getCell(1, 1); t.value = QC_TITRE+'  —  '+(coop ? coop.nom : ''); qcStyleCellule(t, { fill:QC_XL.brun, couleur:QC_XL.blanc, gras:true, taille:14, bordure:false });
   ws.getRow(1).height = 30;
   ws.mergeCells(2, 1, 2, nbCol);
-  const c2 = ws.getCell(2, 1); c2.value = 'Une ligne par producteur. Les producteurs du registre sont déjà listés ; utilisez les lignes vides du bas pour un producteur hors registre (laissez la colonne A vide). Les cases à choix proposent une liste déroulante. Si le consentement est « Non », laissez le reste vide. Voir l\'onglet « Réponses acceptées ».';
+  const c2 = ws.getCell(2, 1); c2.value = 'Une ligne par producteur. Les producteurs du registre sont déjà listés ; utilisez les lignes vides du bas pour un producteur hors registre (laissez la colonne A vide). Répondez de gauche à droite : les cases à choix proposent une liste déroulante, et les questions qui ne s\'appliquent pas (consentement « Non », travailleur, etc.) se grisent et se verrouillent automatiquement. Voir l\'onglet « Réponses acceptées ».';
   qcStyleCellule(c2, { fill:QC_XL.brunClair, italique:true, taille:10, couleur:QC_XL.grisTxt, retour:true, bordure:false });
   ws.getRow(2).height = 34;
   // Bandes de sections (ligne 3)
@@ -14590,12 +14590,50 @@ async function qcTelechargerModele(demandeId){
       if (c===1 && horsRegistre) cell.value = '';
     }
   });
-  // Listes deroulantes sur toute la plage de saisie, pour chaque question a choix.
-  QC_QUESTIONS.forEach((q,i)=>{
-    if (!q.options) return;
-    const col = lettreCol(i+2);
+  // Branchements du formulaire reproduits dans Excel : chaque question ne s'ouvre que si les reponses
+  // precedentes le permettent (consentement, proprietaire/travailleur, documents, litige, conservation,
+  // intrants). Une case non applicable est grisee (mise en forme conditionnelle) et toute saisie y est
+  // refusee (validation) ; une question a choix applicable propose sa liste, non applicable une liste vide.
+  const L = {}; QC_QUESTIONS.forEach((q,i)=>{ L[q.cle] = lettreCol(i+2); });
+  const cond = {};   // cle -> formule Excel (vraie si la question s'applique), pour la ligne r
+  const consent = r=>'$'+L.consentement+r+'="Oui"';
+  const proprio = r=>'AND('+consent(r)+',$'+L.statut_parcelle+r+'="Propriétaire")';
+  const travailleur = r=>'AND('+consent(r)+',$'+L.statut_parcelle+r+'="Travailleur")';
+  QC_QUESTIONS.forEach(q=>{
+    if (q.cle==='cooperative' || q.cle==='consentement') cond[q.cle] = null;
+    else if (q.cle==='contrat_location') cond[q.cle] = travailleur;
+    else if (['type_proprietaire','mode_acquisition','documents_acquisition','litige'].includes(q.cle)) cond[q.cle] = proprio;
+    else if (q.cle==='documents_partage') cond[q.cle] = r=>'AND('+proprio(r)+',$'+L.documents_acquisition+r+'="Oui")';
+    else if (q.cle==='historique_acquisition') cond[q.cle] = r=>'AND('+proprio(r)+',$'+L.documents_acquisition+r+'="Non")';
+    else if (q.cle==='litige_explication') cond[q.cle] = r=>'AND('+proprio(r)+',$'+L.litige+r+'="Oui")';
+    else if (q.cle==='conservation_actions') cond[q.cle] = r=>'AND('+consent(r)+',$'+L.conservation+r+'="Oui")';
+    else if (q.cle==='intrants_lesquels' || q.cle==='intrants_fournisseur') cond[q.cle] = r=>'AND('+consent(r)+',$'+L.intrants+r+'="Oui")';
+    else cond[q.cle] = consent;
+  });
+  // Feuille cachee des listes : une colonne par question a choix (A1 reste vide = « liste vide »).
+  const wl = wb.addWorksheet('Listes'); wl.state = 'veryHidden';
+  const plageListe = {};
+  QC_QUESTIONS.filter(q=>q.options).forEach((q,k)=>{
+    const col = wl.getColumn(k+2).letter;
+    q.options.forEach((o,j)=>{ wl.getCell(col+(j+1)).value = o; });
+    plageListe[q.cle] = 'Listes!$'+col+'$1:$'+col+'$'+q.options.length;
+  });
+  const msgListe = 'Choisissez une réponse dans la liste. Si la liste est vide, cette question ne s\'applique pas d\'après les réponses précédentes (consentement, propriétaire / travailleur, documents, litige, conservation, intrants).';
+  const msgTexte = 'Cette question ne s\'applique pas d\'après les réponses précédentes (consentement, propriétaire / travailleur, documents, litige, conservation, intrants) : laissez la case vide.';
+  QC_QUESTIONS.forEach(q=>{
+    if (q.verrou) return;
+    const col = L[q.cle], c = cond[q.cle];
     for (let r=premiere; r<=derniere; r++){
-      ws.getCell(col+r).dataValidation = { type:'list', allowBlank:true, showErrorMessage:true, errorStyle:'stop', errorTitle:'Réponse non acceptée', error:'Choisissez une réponse dans la liste : '+q.options.join(' / '), formulae:['"'+q.options.join(',')+'"'] };
+      if (q.options){
+        ws.getCell(col+r).dataValidation = { type:'list', allowBlank:true, showErrorMessage:true, errorStyle:'stop', errorTitle: c ? 'Réponse non acceptée ou question non applicable' : 'Réponse non acceptée', error: c ? msgListe : 'Choisissez une réponse dans la liste : '+q.options.join(' / '),
+          formulae:[ c ? 'IF('+c(r)+','+plageListe[q.cle]+',Listes!$A$1)' : plageListe[q.cle] ] };
+      } else if (c){
+        ws.getCell(col+r).dataValidation = { type:'custom', allowBlank:true, showErrorMessage:true, errorStyle:'stop', errorTitle:'Question non applicable', error: msgTexte, formulae:[ c(r) ] };
+      }
+    }
+    if (c){
+      ws.addConditionalFormatting({ ref: col+premiere+':'+col+derniere, rules:[{ type:'expression', priority:1, formulae:['NOT('+c(premiere)+')'],
+        style:{ fill:{ type:'pattern', pattern:'lightUp', fgColor:{ argb:'FFD9D9D9' }, bgColor:{ argb:'FFEFEFEF' } }, font:{ color:{ argb:'FFB0B0B0' } } } }] });
     }
   });
   ws.autoFilter = { from:{ row:4, column:1 }, to:{ row:4, column:nbCol } };
