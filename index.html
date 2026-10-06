@@ -2993,7 +2993,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-166';
+const APP_VERSION = '2026-10-02-167';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -12655,6 +12655,21 @@ async function enregistrerReceptionUsine(){
   if (error){ Object.assign(a, avant); showToast('Échec de l\'enregistrement : '+error.message); return; }
   closeModal();
   showToast('Réception enregistrée : '+(a.connaissement||'connaissement')+' — poids net payé '+fmtNum(poidsNet)+' kg.', 'success');
+  signalerVolumeADeclarer(a);
+}
+// Des que le poids net paye est connu, la cooperative doit declarer ce volume sur Multitrace (cacao RA).
+// Le rappel quotidien (cron 06h30) s'en charge le lendemain ; ici on previent la cooperative TOUT DE SUITE,
+// par la meme fonction (meme email, meme suivi declaration_rappel), limitee a cette cooperative.
+async function signalerVolumeADeclarer(a){
+  if (!a || !a.cooperative_id || dateDeclaration(a,'ra') || plateformesDeclaration(a).indexOf('ra')<0) return;
+  const coop = coopById(a.cooperative_id);
+  try{
+    const { data, error } = await supabaseClient.functions.invoke('rappel-declaration-multitrace', { body:{ coop_id: a.cooperative_id } });
+    if (error) throw new Error(await detailErreurEmail(error));
+    if (data && data.error) throw new Error(data.error);
+    if (data && data.cooperatives_relancees>0) showToast((coop?coop.nom:'La coopérative')+' prévenue par email : '+(data.volumes_listes||1)+' volume'+(data.volumes_listes>1?'s':'')+' à déclarer sur Multitrace.', 'success');
+    else if (data && data.sans_adresse>0) showToast('Volume à déclarer, mais aucune adresse email enregistrée pour '+(coop?coop.nom:'cette coopérative')+'.');
+  }catch(e){ showToast('Réception enregistrée, mais l\'email « volume à déclarer » n\'a pas pu partir ('+e.message+') — le rappel quotidien prendra le relais.'); }
 }
 
 function ouvrirFinalisationPaiement(achatId){
@@ -13363,7 +13378,7 @@ async function genererTicketPeseeStandalone(){
         if (a.poids_brut_accepte>0) maj.poids_brut_accepte = a.poids_brut_accepte;
         const { error: errMaj } = await supabaseClient.from('achats').update(maj).eq('id', ac.id);
         if (errMaj) showToast("Ticket généré, mais échec du report de la réception sur l'achat : "+errMaj.message);
-        else { Object.assign(ac, maj); reportee = true; }
+        else { Object.assign(ac, maj); reportee = true; signalerVolumeADeclarer(ac); }
       }
       const tr = ocTracageCourant();
       if (tr && tr.coopId===coopId && tr.connaissement && tr.connaissement.numero===a.connaissement){ tr.ticketFait = true; ocTracageSauver(tr); }
