@@ -798,6 +798,7 @@
   .oc-ex-detail .oc-suggestion-conformite{margin-top:10px;padding:12px 14px;border-radius:10px;font-size:12.5px;}
   .oc-suggestion-titre{font-weight:600;color:var(--ink);margin-bottom:4px;} .oc-suggestion-titre small{font-weight:400;color:var(--ink-faint);}
   .oc-ex-detail .oc-suggestion-actions{margin-top:8px;display:flex;gap:6px;}
+  .qc-echantillon{margin:-4px 18px 12px;padding:8px 12px;background:var(--accent-soft);border-radius:8px;color:var(--ink);}
   /* ---- Programme mensuel (calendrier) ---- */
   .oc-cal2-copier.principal{background:var(--teal);border-color:var(--teal);color:#fff;}
   .oc-cal2-copier.principal:hover{background:var(--teal-mid);border-color:var(--teal-mid);color:#fff;}
@@ -3023,7 +3024,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-169';
+const APP_VERSION = '2026-10-02-170';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4982,7 +4983,8 @@ async function creerDemande(){
       message: message || (docReg ? messageDocumentPourCoop(docReg, coop) : '') || null,
       document_a_signer: fichierCoop ? (natureFinale==='signer') : null,
       fichier_source_path, fichier_source_nom,
-      document_modele: docReg ? docReg.id : modeleQuestionnaire, modele_params: (docReg && docReg.genere) ? paramsContratSaisis : null,
+      document_modele: docReg ? docReg.id : modeleQuestionnaire,
+      modele_params: (docReg && docReg.genere) ? paramsContratSaisis : (modeleQuestionnaire ? qcParamsEchantillon(coop) : null),
       connaissement: connaissementComplet,
       masterdata_scope: masterdataScope,
     };
@@ -15489,6 +15491,36 @@ const QC_QUESTIONS = [
 const QC_ETATS = { a_faire:['neutral','À faire'], en_cours:['warn','En cours'], complet:['ok','Répondu'], refus:['danger','Consentement refusé'] };
 
 function qcEstQuestionnaire(d){ return !!(d && d.document_modele===QC_MODELE); }
+// ---- Echantillonnage CARGILL : seul un echantillon de producteurs est enquete, pas la totalite.
+// 10 % des producteurs pour une cooperative de moins de 500 producteurs, 5 % au-dela (arrondi au
+// superieur, 1 minimum). Tirage au sort deterministe (graine = identifiant de la demande) : l'admin
+// et le portail voient exactement le meme echantillon sans rien stocker ; une demande creee depuis
+// l'admin memorise en plus sa liste dans modele_params.echantillon, qui prime si elle existe.
+function qcTauxEchantillon(n){ return n>=500 ? 0.05 : 0.10; }
+function qcGraine(s){ let h=2166136261; for (const c of String(s||'')){ h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); } return h>>>0; }
+function qcAleatoire(graine){ let a=graine|0; return function(){ a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
+function qcEchantillon(d, tous){
+  tous = tous || [];
+  if (!d || !qcEstQuestionnaire(d)) return tous;
+  const fixe = d.modele_params && Array.isArray(d.modele_params.echantillon) ? d.modele_params.echantillon : null;
+  if (fixe && fixe.length){ const ids = new Set(fixe.map(String)); const r = tous.filter(p=>ids.has(String(p.id))); if (r.length) return r; }
+  const n = tous.length; if (n===0) return [];
+  const taille = Math.max(1, Math.ceil(n * qcTauxEchantillon(n)));
+  if (taille>=n) return tous.slice();
+  const tri = tous.slice().sort((a,b)=>String(a.id).localeCompare(String(b.id)));
+  const rnd = qcAleatoire(qcGraine(d.id));
+  for (let i=tri.length-1;i>0;i--){ const j=Math.floor(rnd()*(i+1)); const t=tri[i]; tri[i]=tri[j]; tri[j]=t; }
+  return tri.slice(0, taille);
+}
+function qcEchantillonInfo(d){
+  const tous = qcTousProducteursDe(d), ech = qcProducteursDe(d);
+  return { total: tous.length, taille: ech.length, taux: Math.round(qcTauxEchantillon(tous.length)*100), fige: !!(d.modele_params && Array.isArray(d.modele_params.echantillon) && d.modele_params.echantillon.length) };
+}
+function qcEchantillonHtml(d){
+  const i = qcEchantillonInfo(d);
+  if (!i.total) return '';
+  return '<div class="hint qc-echantillon">Échantillon tiré au sort : <b>'+i.taille+' producteur'+(i.taille>1?'s':'')+'</b> sur '+i.total+' ('+i.taux+' %'+(i.fige?', figé à la création de la demande':'')+'). Seuls ces producteurs sont à enquêter ; la liste est la même sur le portail et dans ORIGEN.</div>';
+}
 function qcJs(s){ return String(s==null?'':s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
 function qcVisible(q, r){ return !q.si || !!q.si(r||{}); }
 function qcQuestionsVisibles(r){ return QC_QUESTIONS.filter(q=>qcVisible(q, r)); }
@@ -15680,6 +15712,7 @@ function qcPanneauHtml(demande, producteurs, opts){
     + '<span class="badge warn">'+s.en_cours+' en cours</span>'
     + '<span class="badge neutral">'+s.a_faire+' à faire</span>'
     + '</div></div>';
+  html += qcEchantillonHtml(demande);
   html += '<div class="qc-outils">'
     + '<input type="search" name="qc_filtre" placeholder="Rechercher un producteur (nom, n° CCC)…" value="'+esc(state.qcFiltre||'')+'" oninput="qcFiltrer(this.value)">'
     + (opts.lectureSeule ? '' : '<button class="btn" onclick="qcOuvrirHorsRegistre(\''+qcJs(demande.id)+'\')">+ Producteur hors registre</button>')
@@ -16159,7 +16192,16 @@ async function qcEnregistrerImport(){
 // ---- Adaptateurs du questionnaire CARGILL (admin ORIGEN) ----
 function qcDemandeParId(id){ return (state.demandesCoop||[]).find(d=>d.id===id) || null; }
 function qcCoopDe(d){ return coopById(d.cooperative_id); }
-function qcProducteursDe(d){ return (state.producteurs||[]).filter(p=>p.cooperative_id===d.cooperative_id); }
+function qcTousProducteursDe(d){ return (state.producteurs||[]).filter(p=>p.cooperative_id===d.cooperative_id); }
+// A la creation d'une demande questionnaire : tirage de l'echantillon memorise sur la demande (stable meme si
+// le registre de la cooperative evolue ensuite). Meme regle et meme tirage que qcEchantillon.
+function qcParamsEchantillon(coop){
+  const tous = (state.producteurs||[]).filter(p=>p.cooperative_id===coop.id);
+  const faux = { id: 'req_'+Date.now()+'_'+coop.id, document_modele: QC_MODELE };
+  const ech = qcEchantillon(faux, tous);
+  return { echantillon: ech.map(p=>p.id), echantillon_total: tous.length, echantillon_taux: Math.round(qcTauxEchantillon(tous.length)*100), tire_le: new Date().toISOString() };
+}
+function qcProducteursDe(d){ return qcEchantillon(d, qcTousProducteursDe(d)); }
 function qcOuvrirVueAdmin(id){ state.qcVueDemandeId = id; state.qcFiltre = ''; render(); }
 function qcFermerVueAdmin(){ state.qcVueDemandeId = null; render(); }
 // Reponses de tous les questionnaires CARGILL (chargees avec l'onglet Demandes).
