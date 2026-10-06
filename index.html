@@ -2757,7 +2757,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-157';
+const APP_VERSION = '2026-10-02-158';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4898,6 +4898,36 @@ async function apercuExcelHTML(blob){
 // images s'affichent directement ; les autres formats (Excel, Word...) n'ont
 // pas d'apercu fiable dans un navigateur, on propose alors le telechargement
 // direct plutot qu'un apercu casse ou trompeur.
+// Modale d'apercu d'un fichier (PDF, image, Excel) -- partagee par ORIGEN et ORICERT.
+function apercuFichierModalHtml(){
+  let html = '';
+  if (state.modal && state.modal.type==='apercuFichier'){
+    const pl = state.modal.payload;
+    let corps;
+    if (pl.chargement){
+      corps = '<div style="padding:60px 20px;text-align:center;color:var(--ink-faint);">Chargement de l\'aperçu…</div>';
+    } else if (pl.erreur){
+      corps = '<div style="padding:40px 20px;text-align:center;color:var(--danger);">Échec du chargement : '+esc(pl.erreur)+'</div>';
+    } else if (pl.mime==='application/pdf'){
+      corps = '<iframe src="'+pl.url+'" style="width:100%;height:72vh;border:1px solid var(--border);border-radius:8px;"></iframe>';
+    } else if (pl.mime && pl.mime.startsWith('image/')){
+      corps = '<div style="text-align:center;"><img src="'+pl.url+'" style="max-width:100%;max-height:72vh;border-radius:8px;"></div>';
+    } else if (pl.mime==='excel'){
+      corps = pl.excelHtml
+        ? '<div>'+pl.excelHtml+'</div>'
+        : '<div style="padding:50px 20px;text-align:center;color:var(--ink-soft);">Aperçu non disponible — télécharge-le pour le consulter.</div>';
+    } else {
+      corps = '<div style="padding:50px 20px;text-align:center;color:var(--ink-soft);">Aperçu non disponible pour ce type de fichier — télécharge-le pour le consulter.</div>';
+    }
+    html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal wide" style="max-width:'+(pl.mime==='excel'?'1100px':'800px')+';">'
+      + '<h3>👁 '+esc(pl.titre||pl.nom||'Aperçu')+'</h3>'
+      + (pl.titre && pl.nom ? '<div class="hint" style="margin:-6px 0 10px;">Fichier envoyé : '+esc(pl.nom)+'</div>' : '')
+      + corps
+      + '<div class="actions"><button class="btn" onclick="closeModal()">Fermer</button><button class="btn btn-primary" onclick="telechargerFichierDemande(\''+pl.path+'\',\''+escJs(pl.nom||'')+'\')">Télécharger</button></div>'
+      + '</div></div>';
+  }
+  return html;
+}
 async function apercuFichier(path, nom, titre){
   const ext = String(nom||path||'').split('.').pop().toLowerCase();
   state.modal = { type:'apercuFichier', payload:{ path, nom, titre: titre||'', chargement:true, url:null, mime:APERCU_MIME[ext]||null } };
@@ -5786,7 +5816,7 @@ function renderOricert(){
     + ocRechercheHtml();
   html += '<div class="wrap">';
   // Bandeau de marque (meme gabarit que ORIGEN)
-  const certValide = (state.oc_certificats||[]).filter(c=>c.dossier==='ecorigine' && c.date_fin && c.date_fin>=ocAujourdhuiIso()).sort((a,b)=>String(b.date_fin).localeCompare(String(a.date_fin)))[0];
+  const certValide = (state.oc_certificats||[]).filter(c=>c.dossier==='ecorigine' && c.date_expiration && c.date_expiration>=ocAujourdhuiIso()).sort((a,b)=>String(b.date_expiration).localeCompare(String(a.date_expiration)))[0];
   html += '<div class="top hero-origen hero-oricert'+(tab==='portail' ? '' : ' hero-compact')+'">'
     + '<div class="hero-marque"><div class="hero-logo">'+ORICERT_LOGO+'</div>'
     + '<div><h1 class="nom-origen hero-wm">'+ocWordmarkOricert('clair')+'</h1>'
@@ -5795,7 +5825,7 @@ function renderOricert(){
     + '<span class="hero-chip"><i class="pt ok"></i>Rainforest Alliance · SAS 2020 v1.5</span>'
     + '<span class="hero-chip">Campagne 2026 – 2027</span>'
     + '<span class="hero-chip or">'+I.fait+' / '+I.total+' exigences</span>'
-    + (certValide ? '<span class="hero-chip">Certificat valide jusqu\'au '+esc(new Date(certValide.date_fin+'T00:00:00').toLocaleDateString('fr-FR'))+'</span>' : '')
+    + (certValide ? '<span class="hero-chip">Certificat valide jusqu\'au '+esc(new Date(certValide.date_expiration+'T00:00:00').toLocaleDateString('fr-FR'))+'</span>' : '')
     + '</div></div>';
   html += '<div class="oc-wrap oc2-contenu">' + contenu + '</div>';
   html += '<footer class="pied-app"><span><b>ORICERT</b> · ECORIGINE SA</span><span><i class="pt ok"></i>Connecté · données synchronisées</span><span class="mono">v'+esc(APP_VERSION)+'</span></footer>';
@@ -5813,6 +5843,7 @@ function renderOricert(){
       + '<div class="actions"><button type="button" class="btn" onclick="confirmDialogNo()">Annuler</button><button type="button" class="btn btn-primary" onclick="confirmDialogYes()">Confirmer</button></div>'
       + '</div></div>';
   }
+  html += apercuFichierModalHtml();   // apercu des certificats, documents, PV...
   html += '</div>'; // fin .app-shell
   return html;
 }
@@ -8036,7 +8067,7 @@ function renderOcCertDossierDetail(cle){
     html += '<div class="oc-exigence-fichiers-liste" style="margin-top:14px;">'
       + certs.map(c=>{
           const expire = c.date_expiration ? (new Date(c.date_expiration) < new Date() ? ' <span style="color:var(--danger,#c0392b);">(expiré le '+esc(c.date_expiration)+')</span>' : ' <span class="hint">(expire le '+esc(c.date_expiration)+')</span>') : '';
-          return '<div class="oc-exigence-fichier-item">📄 <span style="flex:1;">'+esc(c.nom)+'</span><button class="btn-ghost" onclick="telechargerFichierDemande(\''+c.path+'\',\''+esc(c.nom).replace(/'/g,"\\'")+'\')">Télécharger</button>'+expire+'<button class="btn-danger-text" onclick="ocSupprimerCertificat('+c.id+',\''+c.path+'\')">Supprimer</button></div>';
+          return '<div class="oc-exigence-fichier-item">📄 <span style="flex:1;">'+esc(c.nom)+'</span><button class="btn-ghost" onclick="apercuFichier(\''+c.path+'\',\''+esc(c.nom).replace(/'/g,"\\'")+'\')">👁 Aperçu</button><button class="btn-ghost" onclick="telechargerFichierDemande(\''+c.path+'\',\''+esc(c.nom).replace(/'/g,"\\'")+'\')">Télécharger</button>'+expire+'<button class="btn-danger-text" onclick="ocSupprimerCertificat('+c.id+',\''+c.path+'\')">Supprimer</button></div>';
         }).join('')
       + '</div>';
   }
@@ -8076,7 +8107,7 @@ function renderOcCertCooperativeDetail(coopId){
   html += '<div class="hint" style="margin-bottom:8px;font-weight:600;">Déposé sur le portail de la coopérative</div>';
   if (cert){
     html += '<div class="oc-exigence-fichiers-liste" style="margin-bottom:16px;">'
-      + '<div class="oc-exigence-fichier-item">📄 <span style="flex:1;">'+esc(cert.fichier_nom||'Certificat')+'</span><button class="btn-ghost" onclick="telechargerFichierDemande(\''+cert.fichier_path+'\',\''+esc(cert.fichier_nom||'Certificat').replace(/'/g,"\\'")+'\')">Télécharger</button></div>'
+      + '<div class="oc-exigence-fichier-item">📄 <span style="flex:1;">'+esc(cert.fichier_nom||'Certificat')+'</span><button class="btn-ghost" onclick="apercuFichier(\''+cert.fichier_path+'\',\''+esc(cert.fichier_nom||'Certificat').replace(/'/g,"\\'")+'\')">👁 Aperçu</button><button class="btn-ghost" onclick="telechargerFichierDemande(\''+cert.fichier_path+'\',\''+esc(cert.fichier_nom||'Certificat').replace(/'/g,"\\'")+'\')">Télécharger</button></div>'
       + '</div>';
   } else {
     html += '<p class="oc-table-empty" style="margin-bottom:16px;">Cette coopérative n\'a pas encore déposé son certificat sur son portail.</p>';
@@ -8094,7 +8125,7 @@ function renderOcCertCooperativeDetail(coopId){
     html += '<div class="oc-exigence-fichiers-liste">'
       + certsManuels.map(x=>{
           const expire = x.date_expiration ? (new Date(x.date_expiration) < new Date() ? ' <span style="color:var(--danger,#c0392b);">(expiré le '+esc(x.date_expiration)+')</span>' : ' <span class="hint">(expire le '+esc(x.date_expiration)+')</span>') : '';
-          return '<div class="oc-exigence-fichier-item">📄 <span style="flex:1;">'+esc(x.nom)+'</span><button class="btn-ghost" onclick="telechargerFichierDemande(\''+x.path+'\',\''+esc(x.nom).replace(/'/g,"\\'")+'\')">Télécharger</button>'+expire+'<button class="btn-danger-text" onclick="ocSupprimerCertificat('+x.id+',\''+x.path+'\')">Supprimer</button></div>';
+          return '<div class="oc-exigence-fichier-item">📄 <span style="flex:1;">'+esc(x.nom)+'</span><button class="btn-ghost" onclick="apercuFichier(\''+x.path+'\',\''+esc(x.nom).replace(/'/g,"\\'")+'\')">👁 Aperçu</button><button class="btn-ghost" onclick="telechargerFichierDemande(\''+x.path+'\',\''+esc(x.nom).replace(/'/g,"\\'")+'\')">Télécharger</button>'+expire+'<button class="btn-danger-text" onclick="ocSupprimerCertificat('+x.id+',\''+x.path+'\')">Supprimer</button></div>';
         }).join('')
       + '</div>';
   }
@@ -8158,7 +8189,7 @@ function renderOcCertSiteDetail(siteId){
     html += '<div class="oc-exigence-fichiers-liste" style="margin-top:14px;">'
       + certs.map(c=>{
           const expire = c.date_expiration ? (new Date(c.date_expiration) < new Date() ? ' <span style="color:var(--danger,#c0392b);">(expiré le '+esc(c.date_expiration)+')</span>' : ' <span class="hint">(expire le '+esc(c.date_expiration)+')</span>') : '';
-          return '<div class="oc-exigence-fichier-item">📄 <span style="flex:1;">'+esc(c.nom)+'</span><button class="btn-ghost" onclick="telechargerFichierDemande(\''+c.path+'\',\''+esc(c.nom).replace(/'/g,"\\'")+'\')">Télécharger</button>'+expire+'<button class="btn-danger-text" onclick="ocSupprimerCertificat('+c.id+',\''+c.path+'\')">Supprimer</button></div>';
+          return '<div class="oc-exigence-fichier-item">📄 <span style="flex:1;">'+esc(c.nom)+'</span><button class="btn-ghost" onclick="apercuFichier(\''+c.path+'\',\''+esc(c.nom).replace(/'/g,"\\'")+'\')">👁 Aperçu</button><button class="btn-ghost" onclick="telechargerFichierDemande(\''+c.path+'\',\''+esc(c.nom).replace(/'/g,"\\'")+'\')">Télécharger</button>'+expire+'<button class="btn-danger-text" onclick="ocSupprimerCertificat('+c.id+',\''+c.path+'\')">Supprimer</button></div>';
         }).join('')
       + '</div>';
   }
@@ -14059,31 +14090,7 @@ function _renderBrut(){
       + '</div></div>';
   }
 
-  if (state.modal && state.modal.type==='apercuFichier'){
-    const pl = state.modal.payload;
-    let corps;
-    if (pl.chargement){
-      corps = '<div style="padding:60px 20px;text-align:center;color:var(--ink-faint);">Chargement de l\'aperçu…</div>';
-    } else if (pl.erreur){
-      corps = '<div style="padding:40px 20px;text-align:center;color:var(--danger);">Échec du chargement : '+esc(pl.erreur)+'</div>';
-    } else if (pl.mime==='application/pdf'){
-      corps = '<iframe src="'+pl.url+'" style="width:100%;height:72vh;border:1px solid var(--border);border-radius:8px;"></iframe>';
-    } else if (pl.mime && pl.mime.startsWith('image/')){
-      corps = '<div style="text-align:center;"><img src="'+pl.url+'" style="max-width:100%;max-height:72vh;border-radius:8px;"></div>';
-    } else if (pl.mime==='excel'){
-      corps = pl.excelHtml
-        ? '<div>'+pl.excelHtml+'</div>'
-        : '<div style="padding:50px 20px;text-align:center;color:var(--ink-soft);">Aperçu non disponible — télécharge-le pour le consulter.</div>';
-    } else {
-      corps = '<div style="padding:50px 20px;text-align:center;color:var(--ink-soft);">Aperçu non disponible pour ce type de fichier — télécharge-le pour le consulter.</div>';
-    }
-    html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal wide" style="max-width:'+(pl.mime==='excel'?'1100px':'800px')+';">'
-      + '<h3>👁 '+esc(pl.titre||pl.nom||'Aperçu')+'</h3>'
-      + (pl.titre && pl.nom ? '<div class="hint" style="margin:-6px 0 10px;">Fichier envoyé : '+esc(pl.nom)+'</div>' : '')
-      + corps
-      + '<div class="actions"><button class="btn" onclick="closeModal()">Fermer</button><button class="btn btn-primary" onclick="telechargerFichierDemande(\''+pl.path+'\',\''+escJs(pl.nom||'')+'\')">Télécharger</button></div>'
-      + '</div></div>';
-  }
+  html += apercuFichierModalHtml();
 
   if (state.modal && state.modal.type==='rejeterDemande'){
     const motifPrefill = (state.modal.payload && state.modal.payload.motifPrefill) || '';
