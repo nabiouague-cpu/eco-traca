@@ -1240,6 +1240,10 @@
   .qc-sup{color:var(--danger);}
   .qc-intro{padding:16px 18px;font-size:13px;line-height:1.55;}
   .qc-intro p{margin:0 0 10px;}
+  .modal.qc-import{max-width:640px;}
+  .qc-import-resume{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;}
+  .qc-import-erreurs{font-size:12.5px;background:var(--danger-bg);border:1px solid var(--danger-line);color:var(--danger);border-radius:8px;padding:10px 12px;margin-bottom:12px;line-height:1.5;} .qc-import-erreurs ul{margin:6px 0 0;padding-left:18px;}
+  .qc-import-liste{max-height:260px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:12.5px;} .qc-import-liste div{padding:4px 0;border-bottom:1px dashed var(--border);} .qc-import-liste div:last-child{border-bottom:none;}
 </style>
 </head>
 <body>
@@ -2728,7 +2732,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-150';
+const APP_VERSION = '2026-10-02-151';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -13935,6 +13939,7 @@ function _renderBrut(){
   }
 
   if (state.modal && state.modal.type==='questionnaireCargill') html += qcModalHtml();
+  if (state.modal && state.modal.type==='questionnaireImport') html += qcImportModalHtml();
 
   if (state.modal && state.modal.type==='nouvelleDemande'){
     const nd = state.modal.payload || {};
@@ -14426,6 +14431,9 @@ function qcPanneauHtml(demande, producteurs, opts){
   html += '<div class="qc-outils">'
     + '<input type="search" name="qc_filtre" placeholder="Rechercher un producteur (nom, n° CCC)…" value="'+esc(state.qcFiltre||'')+'" oninput="qcFiltrer(this.value)">'
     + (opts.lectureSeule ? '' : '<button class="btn" onclick="qcOuvrirHorsRegistre(\''+qcJs(demande.id)+'\')">+ Producteur hors registre</button>')
+    + (opts.lectureSeule ? '' : '<button class="btn" onclick="qcTelechargerModele(\''+qcJs(demande.id)+'\')" title="Fichier Excel pré-rempli avec les producteurs, à compléter hors ligne">⭳ Modèle Excel à remplir</button>'
+        + '<button class="btn" onclick="qcChoisirFichierImport(\''+qcJs(demande.id)+'\')">⭱ Importer le modèle rempli</button>'
+        + '<input type="file" accept=".xlsx,.xls,.csv" id="qc-import-'+esc(demande.id.replace(/[^A-Za-z0-9_-]/g,'_'))+'" style="display:none;" onchange="qcImporterFichier(this, \''+qcJs(demande.id)+'\')">')
     + (s.remplis>0 ? '<button class="btn" onclick="qcExporterExcel(\''+qcJs(demande.id)+'\')">⭳ Exporter Excel (format Forms)</button>' : '')
     + '</div>';
   if (filtrees.length===0){
@@ -14482,6 +14490,164 @@ function qcExporterExcel(demandeId){
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Form1');
   XLSX.writeFile(wb, 'Enquete_EUDR_Cargill_2026_PRODUCTEUR_'+qcSlug(coop ? coop.nom : '')+'.xlsx');
+}
+
+// ---- Modele Excel a remplir hors ligne : un producteur par ligne, une colonne par question (memes libelles
+// que le formulaire CARGILL et que l'export), pre-rempli avec le registre (cooperative, nom, n° CCC). La
+// premiere colonne porte l'identifiant ORIGEN du producteur, qui sert a rattacher chaque ligne au bon
+// producteur a l'import ; des lignes vides supplementaires accueillent les producteurs hors registre. ----
+const QC_COL_ID = 'ID ORIGEN (ne pas modifier)';
+function qcNormaliserTexte(s){ return String(s==null?'':s).normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(); }
+// Ramene une valeur saisie a l'option exacte du formulaire (tolere casse, accents, « O »/« N », « yes »/« no »).
+function qcNormaliserOption(q, v){
+  const t = qcNormaliserTexte(v); if (!t) return '';
+  const exact = q.options.find(o=>qcNormaliserTexte(o)===t); if (exact) return exact;
+  if (q.options===QC_OUI_NON){ if (['o','oui','yes','y','vrai','1','x'].includes(t)) return 'Oui'; if (['n','non','no','faux','0'].includes(t)) return 'Non'; }
+  const partiel = q.options.filter(o=>qcNormaliserTexte(o).indexOf(t)>=0 || t.indexOf(qcNormaliserTexte(o))>=0);
+  return partiel.length===1 ? partiel[0] : null;
+}
+function qcTelechargerModele(demandeId){
+  const d = qcDemandeParId(demandeId); if (!d) return;
+  if (typeof XLSX === 'undefined'){ showToast('La bibliothèque Excel ne s\'est pas chargée (connexion internet requise). Réessayez dans un instant.'); return; }
+  const coop = qcCoopDe(d);
+  const producteurs = qcProducteursDe(d).slice().sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''), 'fr'));
+  const reps = qcReponsesDeDemande(demandeId);
+  const entetes = [QC_COL_ID].concat(QC_QUESTIONS.map(q=>q.libelle));
+  const lignes = [entetes];
+  const ligneDe = (id, r)=>[id].concat(QC_QUESTIONS.map(q=>qcValeur(r, q.cle)));
+  producteurs.forEach(pr=>{
+    const rep = reps.find(x=>x.producteur_id===pr.id);
+    const r = rep ? Object.assign({}, rep.reponses||{}) : {};
+    if (!qcValeur(r,'cooperative')) r.cooperative = coop ? (coop.nom||'') : '';
+    if (!qcValeur(r,'nom')) r.nom = pr.nom || '';
+    if (!qcValeur(r,'ccc')) r.ccc = String(pr.matricule_ccc||'').trim() || 'NEANT';
+    lignes.push(ligneDe(pr.id, r));
+  });
+  reps.filter(x=>!x.producteur_id).forEach(x=>lignes.push(ligneDe('', x.reponses||{})));
+  for (let i=0; i<10; i++) lignes.push(ligneDe('', { cooperative: coop ? (coop.nom||'') : '' }));   // producteurs hors registre
+  const ws = XLSX.utils.aoa_to_sheet(lignes);
+  ws['!cols'] = entetes.map((h,i)=>({ wch: i===0 ? 26 : Math.min(55, Math.max(18, Math.round(h.length*0.8))) }));
+  ws['!freeze'] = { xSplit:1, ySplit:1 };
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Questionnaire');
+  // Feuille d'aide : valeurs attendues pour chaque question a choix, et consignes.
+  const aide = [['Question','Réponses acceptées','Quand répondre']];
+  QC_QUESTIONS.forEach(q=>{
+    const quand = q.cle==='cooperative' || q.cle==='consentement' ? 'Toujours'
+      : q.cle==='contrat_location' ? 'Si Travailleur'
+      : ['type_proprietaire','mode_acquisition','documents_acquisition','litige'].includes(q.cle) ? 'Si Propriétaire'
+      : q.cle==='documents_partage' ? 'Si Propriétaire et documents = Oui'
+      : q.cle==='historique_acquisition' ? 'Si Propriétaire et documents = Non'
+      : q.cle==='litige_explication' ? 'Si litige = Oui'
+      : q.cle==='conservation_actions' ? 'Si conservation = Oui'
+      : (q.cle==='intrants_lesquels' || q.cle==='intrants_fournisseur') ? 'Si pesticides/engrais = Oui'
+      : 'Si consentement = Oui';
+    aide.push([q.libelle, q.options ? q.options.join(' / ') : 'Texte libre', quand]);
+  });
+  aide.push([]); aide.push(['Consignes']);
+  aide.push(['1. Une ligne par producteur. Les producteurs du registre sont déjà listés (ne modifiez pas la colonne « '+QC_COL_ID+' »).']);
+  aide.push(['2. Pour un producteur absent du registre, utilisez une ligne vide en bas : laissez la première colonne vide et saisissez son nom.']);
+  aide.push(['3. Si le consentement est « Non », laissez les autres colonnes vides : le questionnaire est clos pour ce producteur.']);
+  aide.push(['4. Respectez les réponses acceptées ci-dessus (Oui / Non, etc.). Les lignes incomplètes sont importées comme brouillons, à terminer dans ORIGEN.']);
+  aide.push(['5. Enregistrez le fichier, puis « Importer le modèle rempli » dans ORIGEN.']);
+  const wsAide = XLSX.utils.aoa_to_sheet(aide);
+  wsAide['!cols'] = [{ wch:70 }, { wch:60 }, { wch:36 }];
+  XLSX.utils.book_append_sheet(wb, wsAide, 'Réponses acceptées');
+  XLSX.writeFile(wb, 'Modele_Enquete_EUDR_Cargill_2026_'+qcSlug(coop ? coop.nom : '')+'.xlsx');
+}
+function qcChoisirFichierImport(demandeId){
+  const input = document.getElementById('qc-import-'+demandeId.replace(/[^A-Za-z0-9_-]/g,'_'));
+  if (input){ input.value = ''; input.click(); }
+}
+async function qcImporterFichier(input, demandeId){
+  const fichier = input.files && input.files[0]; if (!fichier) return;
+  const d = qcDemandeParId(demandeId); if (!d) return;
+  if (typeof XLSX === 'undefined'){ showToast('La bibliothèque Excel ne s\'est pas chargée (connexion internet requise).'); return; }
+  let wb;
+  try{ wb = XLSX.read(await fichier.arrayBuffer(), { type:'array' }); }
+  catch(e){ showToast('Fichier illisible : '+e.message, 'error'); return; }
+  const ws = wb.Sheets['Questionnaire'] || wb.Sheets[wb.SheetNames[0]];
+  const aoa = XLSX.utils.sheet_to_json(ws, { header:1, raw:false, defval:'' });
+  if (!aoa.length){ showToast('Le fichier est vide.', 'error'); return; }
+  // Colonnes reconnues par leur libelle (tolerant aux accents / majuscules), dans n'importe quel ordre.
+  const entetes = aoa[0].map(qcNormaliserTexte);
+  const colId = entetes.indexOf(qcNormaliserTexte(QC_COL_ID));
+  const colonnes = {};
+  QC_QUESTIONS.forEach(q=>{ const i = entetes.indexOf(qcNormaliserTexte(q.libelle)); if (i>=0) colonnes[q.cle] = i; });
+  const manquantes = QC_QUESTIONS.filter(q=>colonnes[q.cle]==null);
+  if (manquantes.length>5){ showToast('Ce fichier ne correspond pas au modèle du questionnaire (colonnes introuvables : '+manquantes.slice(0,3).map(q=>q.libelle).join(' ; ')+'…). Téléchargez le modèle depuis ORIGEN.', 'error'); return; }
+  const coop = qcCoopDe(d), producteurs = qcProducteursDe(d), reps = qcReponsesDeDemande(demandeId);
+  const lignes = [];
+  for (let i=1; i<aoa.length; i++){
+    const row = aoa[i]; if (!row || row.every(c=>String(c==null?'':c).trim()==='')) continue;
+    const idOrigen = colId>=0 ? String(row[colId]||'').trim() : '';
+    const brut = {}; QC_QUESTIONS.forEach(q=>{ if (colonnes[q.cle]!=null) brut[q.cle] = String(row[colonnes[q.cle]]==null?'':row[colonnes[q.cle]]).trim(); });
+    const pr = idOrigen ? (producteurs.find(p=>p.id===idOrigen) || null) : null;
+    const nomLigne = brut.nom || (pr ? pr.nom : '');
+    // Ligne non touchee (que le pre-remplissage, sans consentement) : rien a importer.
+    const saisie = Object.keys(brut).filter(k=>!['cooperative','nom','ccc'].includes(k) && brut[k]);
+    if (saisie.length===0) continue;
+    const erreurs = [];
+    if (idOrigen && !pr) erreurs.push('identifiant ORIGEN inconnu « '+idOrigen+' »');
+    if (!pr && !nomLigne) erreurs.push('nom du producteur manquant');
+    const r = {};
+    QC_QUESTIONS.forEach(q=>{
+      const v = brut[q.cle]; if (!v) return;
+      if (q.options){ const o = qcNormaliserOption(q, v); if (o===null){ erreurs.push('« '+v+' » n\'est pas une réponse acceptée pour « '+q.libelle+' » (attendu : '+q.options.join(' / ')+')'); } else if (o) r[q.cle] = o; }
+      else r[q.cle] = v;
+    });
+    if (!qcValeur(r,'cooperative')) r.cooperative = coop ? (coop.nom||'') : '';
+    if (pr){ if (!qcValeur(r,'nom')) r.nom = pr.nom||''; if (!qcValeur(r,'ccc')) r.ccc = String(pr.matricule_ccc||'').trim() || 'NEANT'; }
+    const propre = qcNettoyer(r);
+    const existante = pr ? (reps.find(x=>x.producteur_id===pr.id) || null)
+      : (reps.find(x=>!x.producteur_id && qcNormaliserTexte(x.producteur_nom)===qcNormaliserTexte(nomLigne)) || null);
+    lignes.push({ ligne:i+1, producteurId: pr ? pr.id : null, nom: nomLigne, r: propre, complet: qcComplet(propre), erreurs, existante });
+  }
+  if (lignes.length===0){ showToast('Aucune ligne remplie trouvée dans le fichier (le consentement doit au moins être renseigné).', 'error'); return; }
+  openModal('questionnaireImport', { demandeId, cooperativeId: d.cooperative_id, lignes, nomFichier: fichier.name });
+}
+function qcImportModalHtml(){
+  const p = state.modal.payload; const ok = p.lignes.filter(l=>l.erreurs.length===0), ko = p.lignes.filter(l=>l.erreurs.length>0);
+  const complets = ok.filter(l=>l.complet).length, brouillons = ok.length-complets, maj = ok.filter(l=>l.existante).length;
+  let html = '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal qc-import">'
+    + '<h3>Importer le modèle rempli</h3>'
+    + '<div class="hint" style="margin-bottom:12px;">Fichier : <strong>'+esc(p.nomFichier)+'</strong></div>'
+    + '<div class="qc-import-resume">'
+    + '<span class="badge ok">'+complets+' questionnaire'+(complets>1?'s':'')+' complet'+(complets>1?'s':'')+'</span>'
+    + '<span class="badge warn">'+brouillons+' brouillon'+(brouillons>1?'s':'')+' (à terminer dans ORIGEN)</span>'
+    + (maj>0 ? '<span class="badge neutral">'+maj+' réponse'+(maj>1?'s':'')+' existante'+(maj>1?'s':'')+' remplacée'+(maj>1?'s':'')+'</span>' : '')
+    + (ko.length>0 ? '<span class="badge danger">'+ko.length+' ligne'+(ko.length>1?'s':'')+' ignorée'+(ko.length>1?'s':'')+'</span>' : '')
+    + '</div>';
+  if (ko.length>0){
+    html += '<div class="qc-import-erreurs"><strong>Lignes ignorées (à corriger dans le fichier, puis réimporter) :</strong><ul>'
+      + ko.map(l=>'<li>Ligne '+l.ligne+(l.nom?' — '+esc(l.nom):'')+' : '+esc(l.erreurs.join(' ; '))+'</li>').join('')+'</ul></div>';
+  }
+  if (ok.length>0){
+    html += '<div class="qc-import-liste">'+ok.map(l=>'<div><span class="badge '+(l.complet?'ok':'warn')+'">'+(l.complet?'complet':'brouillon')+'</span> '+esc(l.nom||'(sans nom)')+(l.producteurId?'':' <span class="badge neutral">hors registre</span>')+(l.existante?' · remplace la réponse existante':'')+'</div>').join('')+'</div>';
+  }
+  html += '<div class="actions"><button class="btn" onclick="closeModal()">Annuler</button>'
+    + (ok.length>0 ? '<button class="btn btn-primary" onclick="qcEnregistrerImport()">Enregistrer '+ok.length+' réponse'+(ok.length>1?'s':'')+'</button>' : '')
+    + '</div></div></div>';
+  return html;
+}
+async function qcEnregistrerImport(){
+  const p = state.modal && state.modal.type==='questionnaireImport' ? state.modal.payload : null; if (!p) return;
+  const ok = p.lignes.filter(l=>l.erreurs.length===0);
+  const boutons = document.querySelectorAll('.modal.qc-import .actions button'); boutons.forEach(b=>{ b.disabled = true; });
+  const maintenant = new Date().toISOString();
+  const userId = (state.session && state.session.user) ? state.session.user.id : null;
+  let faits = 0, echecs = [];
+  for (const l of ok){
+    const ligne = { demande_id:p.demandeId, cooperative_id:p.cooperativeId, producteur_id:l.producteurId, producteur_nom:l.nom||null, modele:QC_MODELE,
+      reponses:l.r, complet:l.complet, commence_le:(l.existante && l.existante.commence_le) || maintenant, termine_le:l.complet ? maintenant : null, saisi_par:userId, updated_at:maintenant };
+    let res;
+    if (l.existante) res = await supabaseClient.from('questionnaire_reponses').update(ligne).eq('id', l.existante.id).select().single();
+    else { ligne.id = 'qr_'+Date.now()+'_'+Math.random().toString(36).slice(2,8); res = await supabaseClient.from('questionnaire_reponses').insert(ligne).select().single(); }
+    if (res.error) echecs.push((l.nom||'ligne '+l.ligne)+' : '+res.error.message); else { qcIntegrerReponse(res.data); faits++; }
+  }
+  state.modal = null; render();
+  if (echecs.length) showToast(faits+' réponse(s) importée(s), '+echecs.length+' échec(s) : '+echecs.slice(0,2).join(' · '), 'error');
+  else showToast(faits+' réponse'+(faits>1?'s':'')+' importée'+(faits>1?'s':'')+' depuis le modèle.', 'success');
 }
 
 // ---- Adaptateurs du questionnaire CARGILL (admin ORIGEN) ----
