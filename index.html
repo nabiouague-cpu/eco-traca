@@ -1999,11 +1999,7 @@ async function genererContratDepuisModele(coop, campagne_label, periode_label, d
   doc = doc.split('2026-2027').join(escXmlContrat(campagne_label));
   // Espace fine insecable (U+202F), exactement celui utilise dans ce modele pour les nombres.
   doc = doc.split('713\u202f945 kg').join(escXmlContrat(volumeRDUE)+' kg');
-  doc = doc.split('766\u202f070 kg').join(escXmlContrat(capaciteTotale)+' kg'+(sousReserve ? escXmlContrat(" (estimation — sous réserve de l'obtention du certificat)") : ''));
-  if (sousReserve){
-    doc = doc.split('Nous ne pourrons acheter que dans la limite du volume conforme RDUE. . ').join('Nous ne pourrons acheter que dans la limite du volume conforme RDUE. '
-      + escXmlContrat("Certification en cours : le présent contrat est conclu sous réserve de l'obtention par le Fournisseur de son certificat Rainforest Alliance ; les livraisons effectuées avant cette obtention sont acceptées sous réserve."));
-  }
+  doc = doc.split('766\u202f070 kg').join(escXmlContrat(capaciteTotale)+' kg');
 
   header = header.split('ECORIGINE — SOCOPADOU COOP-CA - 2026-2027').join('ECORIGINE — '+escXmlContrat(nomAff)+' - '+escXmlContrat(campagne_label));
 
@@ -2131,6 +2127,7 @@ async function contratInsererSautsDePage(docxBlob){
   CONTRAT_RA_DEBUTS_PAGES.forEach(debut=>{
     const p = paragraphes.find(par=>norm(Array.from(par.getElementsByTagNameNS(W, 't')).map(t=>t.textContent).join('')).startsWith(debut));
     if (!p) return;
+    if (Array.from(p.getElementsByTagNameNS(W, 'br')).some(b=>b.getAttributeNS(W, 'type')==='page')) return;   // deja fait
     const r = dom.createElementNS(W, 'w:r'), br = dom.createElementNS(W, 'w:br');
     br.setAttributeNS(W, 'w:type', 'page'); r.appendChild(br);
     const ppr = Array.from(p.children).find(n=>n.localName === 'pPr');
@@ -2138,6 +2135,55 @@ async function contratInsererSautsDePage(docxBlob){
   });
   zip.file('word/document.xml', new XMLSerializer().serializeToString(dom));
   return await zip.generateAsync({ type:'blob' });
+}
+// Word livre : dans le modele, paraphes et cachet sont ancres a des paragraphes, donc ils glissent des que le texte
+// s'allonge (nom de la cooperative, representant...). Ici chaque image est figee a sa position mesuree sur la page
+// (ancrage relatif a la PAGE, plus au paragraphe) et accrochee au premier paragraphe de sa page, apres avoir impose
+// les memes sauts de page que pour le PDF : le rendu Word est identique quel que soit le texte, et identique au PDF.
+async function contratFigerImagesWord(docxBlob){
+  const zip = await JSZip.loadAsync(await docxBlob.arrayBuffer());
+  const xml = await zip.file('word/document.xml').async('string');
+  const dom = new DOMParser().parseFromString(xml, 'application/xml');
+  const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+  const WP = 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing';
+  const corps = dom.getElementsByTagNameNS(W, 'body')[0];
+  const norm = t => t.replace(/[\u202f\u00a0]/g, ' ').replace(/\s+/g, ' ').trim();
+  const texteDe = par => norm(Array.from(par.getElementsByTagNameNS(W, 't')).map(t=>t.textContent).join(''));
+  const paragraphes = Array.from(corps.children).filter(n=>n.localName === 'p');
+  // Premier paragraphe de chaque page : le tout premier, puis ceux qui ouvrent les pages 2 a 6 (saut de page impose).
+  const debuts = [paragraphes[0]];
+  CONTRAT_RA_DEBUTS_PAGES.forEach(debut=>{
+    const p = paragraphes.find(par=>texteDe(par).startsWith(debut));
+    if (!p) { debuts.push(null); return; }
+    if (!Array.from(p.getElementsByTagNameNS(W, 'br')).some(b=>b.getAttributeNS(W, 'type')==='page')){
+      const r = dom.createElementNS(W, 'w:r'), br = dom.createElementNS(W, 'w:br');
+      br.setAttributeNS(W, 'w:type', 'page'); r.appendChild(br);
+      const ppr = Array.from(p.children).find(n=>n.localName === 'pPr');
+      if (ppr && ppr.nextSibling) p.insertBefore(r, ppr.nextSibling); else if (ppr) p.appendChild(r); else p.insertBefore(r, p.firstChild);
+    }
+    debuts.push(p);
+  });
+  const EMU = mm => String(Math.round(mm*36000));
+  const nomDe = a => { const d = a.getElementsByTagNameNS(WP, 'docPr')[0]; return d ? d.getAttribute('name') : ''; };
+  const ancres = Array.from(dom.getElementsByTagNameNS(WP, 'anchor'));
+  const poser = (ancre, indexPage, posMm, encMm)=>{
+    const page = debuts[indexPage]; if (!page || !posMm) return;
+    [['positionH', posMm[0]-encMm[0]], ['positionV', posMm[1]-encMm[1]]].forEach(([nom, mm])=>{
+      const pos = ancre.getElementsByTagNameNS(WP, nom)[0]; if (!pos) return;
+      pos.setAttribute('relativeFrom', 'page');
+      while (pos.firstChild) pos.removeChild(pos.firstChild);
+      const off = dom.createElementNS(WP, 'wp:posOffset'); off.textContent = EMU(mm); pos.appendChild(off);
+    });
+    let run = ancre; while (run && run.localName !== 'r') run = run.parentNode;
+    if (!run || run.parentNode === page) return;
+    run.parentNode.removeChild(run);
+    const ppr = Array.from(page.children).find(n=>n.localName === 'pPr');
+    if (ppr && ppr.nextSibling) page.insertBefore(run, ppr.nextSibling); else if (ppr) page.appendChild(run); else page.insertBefore(run, page.firstChild);
+  };
+  ancres.filter(a=>nomDe(a)==='Image 2').forEach((a, i)=>poser(a, i, CONTRAT_RA_PARAPHES_MM[i+1], CONTRAT_DECALAGE_ENCRE_MM.paraphe));
+  ancres.filter(a=>nomDe(a)==='Image 3').forEach((a, i)=>poser(a, 4+i, CONTRAT_RA_CACHETS_MM[5+i], CONTRAT_DECALAGE_ENCRE_MM.cachet));
+  zip.file('word/document.xml', new XMLSerializer().serializeToString(dom));
+  return await zip.generateAsync({ type:'blob', mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
 }
 // Une page dont le contenu deborde de la feuille (le navigateur est un peu moins compact que Word) est resserree : on reduit
 // legerement les espaces entre paragraphes et l'interligne jusqu'a ce qu'elle tienne, sans toucher a la taille du texte.
@@ -2390,7 +2436,7 @@ async function genererContratRA(mode){
       const dateDebut = params.date_debut ? new Date(params.date_debut+'T00:00:00').toLocaleDateString('fr-FR') : '—';
       const blob = await genererContratDepuisModele(coop, params.campagne_label, params.periode_label, dateDebut,
         fmtNum(Math.round(coopStats(coop.id).potentiel)), fmtNum(Math.round(params.sous_reserve ? params.volume_certificat_estime : (coop.volume_certificat||0))), fonctionRepresentantFor(coop.nom), { sousReserve: !!params.sous_reserve });
-      telechargerBlob(blob, nomFichierContrat(coop, params.campagne_label)+'.docx');
+      telechargerBlob(await contratFigerImagesWord(blob), nomFichierContrat(coop, params.campagne_label)+'.docx');
       showToast('Contrat Word généré et téléchargé.', 'success');
       closeModal(); return;
     }
@@ -2844,12 +2890,11 @@ async function genererContratsGroupe(){
     try{
       // Volume conforme RDUE = potentiel cumule du registre ; Capacite totale
       // fournisseur = volume du certificat renseigne sur la fiche coop.
-      const volumeRDUE = fmtNum(Math.round(coopStats(coop.id).potentiel));
-      const capaciteTotale = fmtNum(Math.round(coop.volume_certificat||0));
-      const fonctionRepresentant = fonctionRepresentantFor(coop.nom);
-      const blob = await genererContratDepuisModele(coop, campagne_label, periode_label, dateDebut, volumeRDUE, capaciteTotale, fonctionRepresentant);
-      const fileName = 'Contrat_'+(coop.certifications==='Fairtrade'?'FT':coop.certifications==='Cocoa Horizon'?'CH':'RA')+'_'+coop.nom.replace(/[^a-z0-9]+/gi,'_')+'_'+campagne_label.replace(/[^a-z0-9]+/gi,'_')+'.docx';
-      const file = new File([blob], fileName, { type: blob.type });
+      // Meme PDF que la generation individuelle (paraphes et cachet figes a leur place, quel que soit le texte) :
+      // la cooperative recoit un document pret a imprimer et signer, identique d'une coop a l'autre.
+      const g = await contratPdfPourCooperative(coop, { campagne_label, periode_label, date_debut: date_debut_raw });
+      const fileName = g.nom;
+      const file = new File([g.fichier], fileName, { type: 'application/pdf' });
 
       const newId = 'req_'+Date.now()+'_'+coop.id;
       const path = coop.id + '/demandes/' + newId + '/source/' + fileName;
@@ -3127,7 +3172,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-178';
+const APP_VERSION = '2026-10-02-179';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
