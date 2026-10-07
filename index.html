@@ -1926,8 +1926,22 @@ function openContratRAModal(coopId){
           : 'Complète la fiche coopérative (Modifier) avant de continuer.'));
     return;
   }
-  state.modal = {type:'contratRA', payload:Object.assign({coopId}, contratParametresParDefaut())};
+  const sousReserve = contratSousReserve(coop);
+  state.modal = {type:'contratRA', payload:Object.assign({coopId, type_contrat:'certifie', sousReserve, volume_estime: sousReserve ? tirerVolumeCertificatEstime(coop).volume : null}, contratParametresParDefaut())};
   render();
+}
+function contratChoisirType(type){
+  if (!(state.modal && state.modal.type==='contratRA')) return;
+  const pl = state.modal.payload;
+  pl.type_contrat = type; pl.campagne_label = fv('campagne_label'); pl.periode_label = fv('periode_label'); pl.date_debut = fv('date_debut');
+  render();
+}
+function contratNouveauTirage(){
+  if (!(state.modal && state.modal.type==='contratRA')) return;
+  const pl = state.modal.payload; const coop = coopById(pl.coopId); if (!coop) return;
+  pl.volume_estime = tirerVolumeCertificatEstime(coop).volume;
+  const champ = document.querySelector('#modal-fields [name="volume_certificat_estime"]'); if (champ) champ.value = pl.volume_estime;
+  const ap = document.getElementById('contrat-estime-apercu'); if (ap) ap.textContent = fmtNum(pl.volume_estime)+' kg';
 }
 
 function fonctionRepresentantFor(nom){
@@ -1948,7 +1962,7 @@ function nomAfficheContrat(nom){ return String(nom||'').replace(/COOP\s+CA\b/gi,
 // une fidelite parfaite a la mise en forme d'origine (logo, encadre du titre, polices,
 // pagination...). Seuls les elements explicitement variables sont remplaces ; tout le
 // reste du fichier -- articles, styles, structure -- reste strictement inchange.
-async function genererContratDepuisModele(coop, campagne_label, periode_label, dateDebut, volumeRDUE, capaciteTotale, fonctionRepresentant){
+async function genererContratDepuisModele(coop, campagne_label, periode_label, dateDebut, volumeRDUE, capaciteTotale, fonctionRepresentant, opts){
   if (typeof JSZip === 'undefined') throw new Error("La bibliothèque de compression n'a pas pu se charger (connexion internet requise).");
 
   const bin = atob(TEMPLATE_CONTRAT_RA_B64);
@@ -1968,7 +1982,8 @@ async function genererContratDepuisModele(coop, campagne_label, periode_label, d
   doc = doc.split('SOCIÉTÉ COOPÉRATIVE DES PRODUCTEURS AGRICOLES DE DOUAVILLE (SOCOPADOU COOP-CA)').join(escXmlContrat(identComplete));
   doc = doc.split('SOCOPADOU COOP-CA').join(escXmlContrat(nomAff));
   doc = doc.split('SC070454').join(escXmlContrat(coop.ccc_num));
-  doc = doc.split('RA_00113602208').join(escXmlContrat(coop.identifiant_certification));
+  const sousReserve = !!(opts && opts.sousReserve);
+  doc = doc.split('RA_00113602208').join(escXmlContrat(coop.identifiant_certification || (sousReserve ? "en cours d'attribution" : '')));
   doc = doc.split('CI-2015-C-009').join(escXmlContrat(coop.rccm));
   doc = doc.split('Hiré-Douaville').join(escXmlContrat(coop.siege_social || coop.ville || ''));
   doc = doc.split('OUEDRAOGO ISSA').join(escXmlContrat(coop.representant_legal_nom));
@@ -1984,7 +1999,11 @@ async function genererContratDepuisModele(coop, campagne_label, periode_label, d
   doc = doc.split('2026-2027').join(escXmlContrat(campagne_label));
   // Espace fine insecable (U+202F), exactement celui utilise dans ce modele pour les nombres.
   doc = doc.split('713\u202f945 kg').join(escXmlContrat(volumeRDUE)+' kg');
-  doc = doc.split('766\u202f070 kg').join(escXmlContrat(capaciteTotale)+' kg');
+  doc = doc.split('766\u202f070 kg').join(escXmlContrat(capaciteTotale)+' kg'+(sousReserve ? escXmlContrat(" (estimation — sous réserve de l'obtention du certificat)") : ''));
+  if (sousReserve){
+    doc = doc.split('Nous ne pourrons acheter que dans la limite du volume conforme RDUE. . ').join('Nous ne pourrons acheter que dans la limite du volume conforme RDUE. '
+      + escXmlContrat("Certification en cours : le présent contrat est conclu sous réserve de l'obtention par le Fournisseur de son certificat Rainforest Alliance ; les livraisons effectuées avant cette obtention sont acceptées sous réserve."));
+  }
 
   header = header.split('ECORIGINE — SOCOPADOU COOP-CA - 2026-2027').join('ECORIGINE — '+escXmlContrat(nomAff)+' - '+escXmlContrat(campagne_label));
 
@@ -2008,6 +2027,7 @@ async function genererContratDepuisModele(coop, campagne_label, periode_label, d
 function certificationContrat(coop){
   if (!coop || coop.statut==='Non certifiée') return '';
   const c = String(coop.certifications||'').trim();
+  if (!c && coop.statut==='En cours de certification') return 'Rainforest Alliance';
   if (/rainforest/i.test(c)) return 'Rainforest Alliance';
   if (/fairtrade/i.test(c)) return 'Fairtrade';
   return c;
@@ -2205,12 +2225,22 @@ async function contratEnPdf(docxBlob){
     cadre.remove();
   }
 }
+// Contrat « sous réserve » : la cooperative est en cours de certification, son certificat (identifiant, volume)
+// arrive dans les jours qui viennent. On contracte quand meme en certifie : l'identifiant est « en cours
+// d'attribution » et le volume du certificat est estime = volume conforme RDUE + un ajout tire entre 150 et 200 t.
+function contratSousReserve(coop){ return !!coop && coop.statut==='En cours de certification'; }
+function tirerVolumeCertificatEstime(coop){
+  const rdue = Math.round(coopStats(coop.id).potentiel || 0);
+  const ajout = 150000 + Math.round(Math.random()*50000);
+  return { ajout, volume: rdue + ajout };
+}
 function champsManquantsContrat(coop){
   const m = [];
+  const sousReserve = contratSousReserve(coop);
   if (!coop.rccm) m.push('N° RCCM');
   if (!coop.ccc_num) m.push('N° agrément CCC');
-  if (!coop.identifiant_certification) m.push('Identifiant de certification');
-  if (!coop.volume_certificat) m.push('Volume certificat');
+  if (!coop.identifiant_certification && !sousReserve) m.push('Identifiant de certification');
+  if (!coop.volume_certificat && !sousReserve) m.push('Volume certificat');
   if (!coop.representant_legal_nom) m.push('Nom du représentant légal');
   if (!coop.siege_social && !coop.ville) m.push('Ville ou Siège social');
   return m;
@@ -2229,8 +2259,9 @@ async function contratPdfPourCooperative(coop, p){
   if (manquants.length) throw new Error('fiche incomplète ('+manquants.join(', ')+')');
   const dateDebut = p.date_debut ? new Date(p.date_debut+'T00:00:00').toLocaleDateString('fr-FR') : '—';
   const volumeRDUE = fmtNum(Math.round(coopStats(coop.id).potentiel));
-  const capaciteTotale = fmtNum(Math.round(coop.volume_certificat||0));
-  const docxBlob = await genererContratDepuisModele(coop, p.campagne_label, p.periode_label, dateDebut, volumeRDUE, capaciteTotale, fonctionRepresentantFor(coop.nom));
+  const sousReserve = contratSousReserve(coop);
+  const capaciteTotale = fmtNum(Math.round(sousReserve ? (Number(p.volume_certificat_estime) || tirerVolumeCertificatEstime(coop).volume) : (coop.volume_certificat||0)));
+  const docxBlob = await genererContratDepuisModele(coop, p.campagne_label, p.periode_label, dateDebut, volumeRDUE, capaciteTotale, fonctionRepresentantFor(coop.nom), { sousReserve });
   const pdf = await contratEnPdf(docxBlob);
   return { fichier: pdf, nom: nomFichierContrat(coop, p.campagne_label)+'.pdf', docxBlob };
 }
@@ -2334,11 +2365,22 @@ async function genererContratRA(mode){
   mode = mode || 'envoyer';
   const coop = coopById(m.payload.coopId);
   if (!coop) return;
+  if ((m.payload.type_contrat||'certifie')==='ordinaire'){
+    showToast("Le modèle de contrat ordinaire (cacao non certifié) n'est pas encore intégré à ORIGEN : transmets le modèle Word une fois, il sera rempli automatiquement comme le contrat certifié.");
+    return;
+  }
   const params = {
     campagne_label: fv('campagne_label').trim() || '—',
     periode_label: fv('periode_label').trim() || '—',
     date_debut: fv('date_debut'),
+    type_contrat: 'certifie',
   };
+  if (contratSousReserve(coop)){
+    const v = Number(fv('volume_certificat_estime'));
+    const rdue = Math.round(coopStats(coop.id).potentiel || 0);
+    if (!(v > rdue)){ showToast('Le volume estimé du certificat doit être supérieur au volume conforme RDUE ('+fmtNum(rdue)+' kg).'); return; }
+    params.sous_reserve = true; params.volume_certificat_estime = Math.round(v);
+  }
   const echeance = fv('date_echeance');
   const boutons = Array.from(document.querySelectorAll('.modal .actions button'));
   const etat = (texte)=>{ boutons.forEach(b=>{ b.disabled = !!texte; }); const t = document.getElementById('contrat-etat'); if (t) t.textContent = texte || ''; };
@@ -2347,7 +2389,7 @@ async function genererContratRA(mode){
     if (mode === 'word'){
       const dateDebut = params.date_debut ? new Date(params.date_debut+'T00:00:00').toLocaleDateString('fr-FR') : '—';
       const blob = await genererContratDepuisModele(coop, params.campagne_label, params.periode_label, dateDebut,
-        fmtNum(Math.round(coopStats(coop.id).potentiel)), fmtNum(Math.round(coop.volume_certificat||0)), fonctionRepresentantFor(coop.nom));
+        fmtNum(Math.round(coopStats(coop.id).potentiel)), fmtNum(Math.round(params.sous_reserve ? params.volume_certificat_estime : (coop.volume_certificat||0))), fonctionRepresentantFor(coop.nom), { sousReserve: !!params.sous_reserve });
       telechargerBlob(blob, nomFichierContrat(coop, params.campagne_label)+'.docx');
       showToast('Contrat Word généré et téléchargé.', 'success');
       closeModal(); return;
@@ -3085,7 +3127,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-177';
+const APP_VERSION = '2026-10-02-178';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -15439,13 +15481,33 @@ function _renderBrut(){
       + '<div class="info-grid" style="margin-bottom:14px;background:var(--surface-2);padding:10px;border-radius:8px;">'
       + '<div><span>N° RCCM :</span> '+esc(coop&&coop.rccm?coop.rccm:'⚠ VIDE')+'</div>'
       + '<div><span>N° agrément CCC :</span> '+esc(coop&&coop.ccc_num?coop.ccc_num:'⚠ VIDE')+'</div>'
-      + '<div><span>Identifiant de certification :</span> '+esc(coop&&coop.identifiant_certification?coop.identifiant_certification:'⚠ VIDE')+'</div>'
+      + '<div><span>Identifiant de certification :</span> '+esc(coop&&coop.identifiant_certification?coop.identifiant_certification:(pl.sousReserve ? 'en cours d\'attribution' : '⚠ VIDE'))+'</div>'
       + '<div><span>Représentant légal :</span> '+esc(coop&&coop.representant_legal_nom?coop.representant_legal_nom:'⚠ VIDE')+'</div>'
       + '<div><span>Ville / Siège social :</span> '+esc(coop?(coop.siege_social||coop.ville||'⚠ VIDE'):'⚠ VIDE')+'</div>'
       + '<div><span>Volume conforme RDUE (potentiel registre) :</span> '+volumeRDUEApercu+' kg</div>'
-      + '<div><span>Capacité totale fournisseur (certificat) :</span> '+esc(coop&&coop.volume_certificat?fmtNum(Math.round(coop.volume_certificat))+' kg':'⚠ VIDE')+'</div>'
+      + (pl.sousReserve
+          ? '<div><span>Capacité totale fournisseur (certificat) :</span> <span id="contrat-estime-apercu">'+fmtNum(pl.volume_estime||0)+' kg</span> <span class="badge warn">estimation · sous réserve</span></div>'
+          : '<div><span>Capacité totale fournisseur (certificat) :</span> '+esc(coop&&coop.volume_certificat?fmtNum(Math.round(coop.volume_certificat))+' kg':'⚠ VIDE')+'</div>')
       + '</div>'
+      + '<div class="field"><label>Type de contrat</label><div class="choix-grille">'
+      + [['certifie','Contrat certifié','Cacao certifié Rainforest Alliance — prime, différentiel et plan d\'approvisionnement.'],['ordinaire','Contrat ordinaire','Cacao non certifié — sans prime ni différentiel.']].map(([val,lbl,desc])=>{
+          const checked = (pl.type_contrat||'certifie')===val;
+          return '<label class="choix"><input type="radio" class="choix-input" name="type_contrat" value="'+val+'" '+(checked?'checked':'')+' onchange="contratChoisirType(\''+val+'\')">'
+            + '<span class="choix-carte"><span class="choix-puce ronde"></span><span class="choix-texte"><b>'+lbl+'</b><br><small class="hint" style="margin:0">'+desc+'</small></span></span></label>';
+        }).join('')
+      + '</div></div>'
+      + ((pl.type_contrat||'certifie')==='ordinaire'
+          ? '<div class="hint" style="margin:0 0 12px;color:var(--danger);">Le modèle de contrat ordinaire n\'est pas encore intégré : transmets le modèle Word une fois et il sera rempli automatiquement.</div>'
+          : '')
       + '<div id="modal-fields">'
+      + (pl.sousReserve && (pl.type_contrat||'certifie')==='certifie'
+          ? '<div style="margin:0 0 12px;padding:10px 12px;border-left:3px solid var(--gold);background:#FFF8E1;border-radius:8px;">'
+            + '<div style="font-weight:600;margin-bottom:4px;">Certification en cours — contrat conclu sous réserve</div>'
+            + '<div class="hint" style="margin:0 0 8px;">Le certificat n\'est pas encore disponible : l\'identifiant sera porté « en cours d\'attribution » et le volume du certificat est estimé = volume conforme RDUE ('+volumeRDUEApercu+' kg) + un ajout tiré entre 150 et 200 t. Tu peux le corriger ; il doit rester supérieur au volume conforme RDUE.</div>'
+            + '<div style="display:flex;gap:10px;align-items:end;"><label class="field" style="flex:1;margin:0">Volume du certificat (kg, estimation)<input type="number" name="volume_certificat_estime" value="'+esc(pl.volume_estime||'')+'" min="0" step="1" oninput="var a=document.getElementById(\'contrat-estime-apercu\'); if(a) a.textContent=fmtNum(Number(this.value)||0)+\' kg\';"></label>'
+            + '<button type="button" class="btn-ghost btn-compact" style="margin-bottom:6px" onclick="contratNouveauTirage()">Nouveau tirage</button></div>'
+            + '</div>'
+          : '')
       + '<label class="field">Campagne (libellé court)<input type="text" name="campagne_label" value="'+esc(pl.campagne_label)+'" placeholder="ex : 2026-2027"></label>'
       + '<label class="field">Période (texte affiché)<input type="text" name="periode_label" value="'+esc(pl.periode_label)+'" placeholder="ex : Septembre 2026 à août 2027"></label>'
       + '<label class="field">Date de début du contrat<input type="date" name="date_debut" value="'+esc(pl.date_debut)+'"></label>'
