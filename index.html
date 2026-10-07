@@ -2113,7 +2113,14 @@ const CONTRAT_RA_DEBUTS_PAGES = ['Article 2 — Obligations des parties', 'Artic
 // Position des paraphes (pages 1 a 4) et du cachet (pages 5 et 6), en mm depuis le coin haut-gauche de la page, releves sur le
 // modele d'origine ; ces images sont posees a ces endroits fixes, derriere le texte.
 const CONTRAT_RA_PARAPHES_MM = { 1:[182.4,260.6], 2:[183.6,258.3], 3:[178.6,256.5], 4:[177.3,260.1] };
-const CONTRAT_RA_CACHETS_MM  = { 5:[39.9,71.1], 6:[48.0,127.8] };
+const CONTRAT_RA_CACHETS_MM  = { 5:[39.9,71.1], 6:[48.0,127.8] };   // secours seulement (si la cellule de signature est introuvable)
+// Signature + cachet : dans le modele Word, l'image est ancree au paragraphe « Administrateur Général » de la cellule
+// « POUR ECORIGINE » (decalage horizontal depuis le bord du texte de la cellule, vertical depuis le haut de ce paragraphe).
+// C'est ainsi que Word la place : SOUS le nom et la fonction, dans l'espace libre de la case. On reproduit exactement
+// cet ancrage, pour que le cachet suive la case de signature ou qu'elle se trouve sur la page.
+const CONTRAT_RA_CACHET_ANCRE_MM = { 5:[7.9,7.2], 6:[15.9,8.0] };
+const CONTRAT_RA_CACHET_ANCRE_TEXTE = 'Administrateur Général';
+const CONTRAT_RA_SIGNATURE_LIGNE_MM = 68.4;   // hauteur minimale de la ligne de signature dans le modele (trHeight 3878 twips)
 const CONTRAT_DECALAGE_ENCRE_MM = { paraphe:[1.52,2.0], cachet:[2.03,1.65] };   // trace de l'image par rapport a sa boite
 
 async function contratInsererSautsDePage(docxBlob){
@@ -2181,7 +2188,7 @@ async function contratFigerImagesWord(docxBlob){
     if (ppr && ppr.nextSibling) page.insertBefore(run, ppr.nextSibling); else if (ppr) page.appendChild(run); else page.insertBefore(run, page.firstChild);
   };
   ancres.filter(a=>nomDe(a)==='Image 2').forEach((a, i)=>poser(a, i, CONTRAT_RA_PARAPHES_MM[i+1], CONTRAT_DECALAGE_ENCRE_MM.paraphe));
-  ancres.filter(a=>nomDe(a)==='Image 3').forEach((a, i)=>poser(a, 4+i, CONTRAT_RA_CACHETS_MM[5+i], CONTRAT_DECALAGE_ENCRE_MM.cachet));
+  // Le cachet (Image 3) garde son ancrage d'origine au paragraphe « Administrateur Général » : Word le place correctement, sous le nom.
   zip.file('word/document.xml', new XMLSerializer().serializeToString(dom));
   return await zip.generateAsync({ type:'blob', mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
 }
@@ -2239,7 +2246,30 @@ function contratRetoucherPages(pages){
       page.appendChild(im);
     };
     poser(paraphe, CONTRAT_RA_PARAPHES_MM[n], CONTRAT_DECALAGE_ENCRE_MM.paraphe);
-    poser(cachet, CONTRAT_RA_CACHETS_MM[n], CONTRAT_DECALAGE_ENCRE_MM.cachet);
+    // Cachet : pose par rapport au paragraphe d'ancrage de la case « POUR ECORIGINE », comme dans Word.
+    if (cachet && CONTRAT_RA_CACHET_ANCRE_MM[n]){
+      const paras = Array.from(page.querySelectorAll('td p, td div, td span')).filter(e=>String(e.textContent||'').replace(/\s+/g,' ').trim()===CONTRAT_RA_CACHET_ANCRE_TEXTE);
+      let ancre = paras.length ? paras[0] : null;
+      while (ancre && ancre.tagName!=='P' && ancre.parentElement && ancre.parentElement.tagName!=='TD') ancre = ancre.parentElement;
+      if (ancre){
+        // La ligne de signature fait au moins 68,4 mm dans le modele (le navigateur la rend parfois plus basse) :
+        // on lui redonne sa hauteur, puis on pose le cachet sous la fonction, en le gardant dans la case.
+        const td = ancre.closest('td'), tr = td ? td.closest('tr') : null;
+        if (tr && tr.getBoundingClientRect().height < CONTRAT_RA_SIGNATURE_LIGNE_MM*k) tr.style.height = (CONTRAT_RA_SIGNATURE_LIGNE_MM*k)+'px';
+        const ar = ancre.getBoundingClientRect(), cr = (td || ancre).getBoundingClientRect(), [dx, dy] = CONTRAT_RA_CACHET_ANCRE_MM[n];
+        let left = (ar.left-pr.left)+dx*k, top = (ar.top-pr.top)+dy*k;
+        const marge = 1.5*k;
+        if (top + cachet.h > (cr.bottom-pr.top) - marge) top = (cr.bottom-pr.top) - marge - cachet.h;
+        if (top < (ar.bottom-pr.top) - 2*k) top = (ar.bottom-pr.top) - 2*k;
+        if (left + cachet.w > (cr.right-pr.left) - marge) left = (cr.right-pr.left) - marge - cachet.w;
+        if (left < (cr.left-pr.left) + marge) left = (cr.left-pr.left) + marge;
+        const im = doc.createElement('img'); im.src = cachet.src;
+        im.style.cssText = 'position:absolute;z-index:-1;width:'+cachet.w+'px;height:'+cachet.h+'px;left:'+left+'px;top:'+top+'px;';
+        page.appendChild(im);
+      } else {
+        poser(cachet, CONTRAT_RA_CACHETS_MM[n], CONTRAT_DECALAGE_ENCRE_MM.cachet);
+      }
+    }
   });
 }
 // Convertit le contrat Word rempli en PDF (une image nette par page, format Lettre comme le modele). Le rendu se fait dans un
@@ -3172,7 +3202,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-179';
+const APP_VERSION = '2026-10-02-180';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
