@@ -511,11 +511,12 @@
   .oc-apercu .oc-apercu-sur{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);font-weight:600;margin-bottom:4px;}
   .oc-apercu-zone{background:#DDE3E0;padding:22px;border-radius:10px;max-height:62vh;overflow:auto;}
   .oc-papier{background:#fff;width:794px;max-width:100%;min-height:400px;margin:0 auto;padding:60px 60px 70px;box-sizing:border-box;box-shadow:0 6px 24px rgba(0,0,0,.18);font-family:'Calibri','Carlito','IBM Plex Sans',sans-serif;color:#000;}
-  .oc-papier-titre{font-size:16pt;font-weight:700;color:#1F6E5C;margin:0 0 4px;}
-  .oc-papier-sous{font-size:9pt;color:#666;margin:0 0 14px;}
+  .oc-papier-entete{display:flex;justify-content:space-between;gap:16px;font-size:8.5pt;color:#555;border-bottom:1px solid #1F6E5C;padding-bottom:4px;margin:-30px 0 26px;}
+  .oc-papier-titre{font-size:16pt;font-weight:700;color:#1F6E5C;margin:0 0 4px;text-align:center;}
+  .oc-papier-sous{font-size:9pt;color:#666;margin:0 0 14px;text-align:center;}
   .oc-papier-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:10pt;}
-  .oc-papier-table th{background:#1F6E5C;color:#fff;font-weight:700;text-align:left;padding:5px 7px;border:1px solid #1F6E5C;word-wrap:break-word;}
-  .oc-papier-table td{padding:5px 7px;border:1px solid #D0D5D2;vertical-align:top;word-wrap:break-word;}
+  .oc-papier-table th{background:#1F6E5C;color:#fff;font-weight:700;text-align:center;padding:5px 7px;border:1px solid #1F6E5C;word-wrap:break-word;}
+  .oc-papier-table td{padding:5px 7px;border:1px solid #D0D5D2;vertical-align:middle;text-align:center;word-wrap:break-word;}
   @media print{
     body.oc-impression *{visibility:hidden !important;}
     body.oc-impression .oc-papier, body.oc-impression .oc-papier *{visibility:visible !important;}
@@ -3221,7 +3222,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-181';
+const APP_VERSION = '2026-10-02-182';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8783,13 +8784,13 @@ const OC_TABLES = {
 // Colonnes precises a inclure dans l'export Word par sous-onglet -- volontairement
 // un sous-ensemble des colonnes de la table (jamais tout), comme demande.
 const OC_EXPORT_WORD_COLS = {
-  partenaires: { titre:'Coopératives partenaires', cols:[
+  partenaires: { titre:'Coopératives partenaires', exigence:'1.1.1', exigenceLibelle:'Plan de gestion de la chaîne d\'approvisionnement — fournisseurs certifiés', cols:[
     ['Nom coopérative','cooperative_nom'],['Mail','mails','multi'],['Type de cacao','type_cacao'],['Niveau de traçabilité','niveaux_tracabilite','checklist'],
   ]},
-  sites: { titre:'Sites', cols:[
+  sites: { titre:'Sites', exigence:'1.3.1 / 1.3.2', exigenceLibelle:'Inspection interne, approbation et sanction des sites', cols:[
     ['Nom du site','nom'],['Culture','culture'],['Activités','activites_multi','multi'],['Niveau de traçabilité','niveaux_tracabilite','checklist'],
   ]},
-  prestataires: { titre:'Prestataires', cols:[
+  prestataires: { titre:'Prestataires', exigence:'1.3.1', exigenceLibelle:'Périmètre d\'inspection interne — sous-traitants', cols:[
     ['Nom entreprise','nom'],['Nom prestataire','nom_prestataire'],['Type de prestation','prestation'],['Mail','mails','multi'],
   ]},
 };
@@ -8815,12 +8816,12 @@ function ocExporterWord(tableId){
   const entetes = conf.cols.map(c=>c[0]);
   const lignes = rows.map(row=>conf.cols.map(c=>ocValeurExportTexte(c, row[c[1]])));
   const nomFichier = conf.titre.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9]+/g,'_')+'_ECORIGINE.docx';
-  state.modal = { type:'ocApercuImpression', payload:{ tableId, titre: conf.titre, entetes, lignes, nomFichier } };
+  state.modal = { type:'ocApercuImpression', payload:{ tableId, titre: conf.titre, entetes, lignes, nomFichier, exigence: conf.exigence||'', exigenceLibelle: conf.exigenceLibelle||'' } };
   render();
 }
 async function ocApercuTelechargerWord(){
   const pl = state.modal && state.modal.type==='ocApercuImpression' ? state.modal.payload : null; if (!pl) return;
-  await genererWordTableau(pl.titre, pl.entetes, pl.lignes, pl.nomFichier);
+  await genererWordTableau(pl.titre, pl.entetes, pl.lignes, pl.nomFichier, { exigence: pl.exigence, exigenceLibelle: pl.exigenceLibelle });
 }
 function ocApercuImprimer(){
   document.body.classList.add('oc-impression');
@@ -8837,6 +8838,7 @@ function ocApercuImpressionHtml(){
     + '<div class="oc-apercu-tete"><div><div class="oc-apercu-sur">Aperçu avant impression</div><h3 style="margin:0">'+esc(pl.titre)+' — '+pl.lignes.length+' ligne'+(pl.lignes.length>1?'s':'')+'</h3></div>'
     + '<div class="hint" style="margin:0">Vérifie le contenu : c\'est exactement ce qui sera imprimé.</div></div>'
     + '<div class="oc-apercu-zone"><div class="oc-papier">'
+    + '<div class="oc-papier-entete"><span>'+(pl.exigence ? 'Exigence '+esc(pl.exigence)+' — '+esc(pl.exigenceLibelle) : '')+'</span><span>ECORIGINE</span></div>'
     + '<div class="oc-papier-titre">ECORIGINE — '+esc(pl.titre)+'</div>'
     + '<div class="oc-papier-sous">Export du '+esc(dateDuJour)+' — '+pl.lignes.length+' ligne(s)</div>'
     + '<table class="oc-papier-table"><thead><tr>'+pl.entetes.map(e=>'<th>'+esc(e)+'</th>').join('')+'</tr></thead><tbody>'
@@ -8852,36 +8854,50 @@ function ocApercuImpressionHtml(){
 // colonnes justifiees en largeur egale) -- construit "a la main" (un .docx est un
 // zip de XML), avec JSZip (deja charge sur cette page), pour eviter de charger une
 // librairie externe non presente dans la liste des domaines autorises.
-async function genererWordTableau(titre, entetes, lignes, nomFichier){
+async function genererWordTableau(titre, entetes, lignes, nomFichier, opts){
+  opts = opts || {};
   try{
     const zip = new JSZip();
     const largeurTotale = 9360; // ~6.5 pouces utiles, en twips (1440/pouce), page A4 avec marges
     const largeurCol = Math.floor(largeurTotale / entetes.length);
     const echapXml = s => String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    const celluleEntete = txt => '<w:tc><w:tcPr><w:tcW w:w="'+largeurCol+'" w:type="dxa"/><w:shd w:val="clear" w:color="auto" w:fill="1F6E5C"/><w:tcBorders><w:top w:val="single" w:sz="4" w:color="1F6E5C"/><w:left w:val="single" w:sz="4" w:color="1F6E5C"/><w:bottom w:val="single" w:sz="4" w:color="1F6E5C"/><w:right w:val="single" w:sz="4" w:color="1F6E5C"/></w:tcBorders></w:tcPr><w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="FFFFFF"/><w:sz w:val="20"/></w:rPr><w:t xml:space="preserve">'+echapXml(txt)+'</w:t></w:r></w:p></w:tc>';
-    const celluleDonnee = txt => '<w:tc><w:tcPr><w:tcW w:w="'+largeurCol+'" w:type="dxa"/><w:tcBorders><w:top w:val="single" w:sz="4" w:color="D0D5D2"/><w:left w:val="single" w:sz="4" w:color="D0D5D2"/><w:bottom w:val="single" w:sz="4" w:color="D0D5D2"/><w:right w:val="single" w:sz="4" w:color="D0D5D2"/></w:tcBorders></w:tcPr><w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:rPr><w:sz w:val="20"/></w:rPr><w:t xml:space="preserve">'+echapXml(txt||'—')+'</w:t></w:r></w:p></w:tc>';
+    const celluleEntete = txt => '<w:tc><w:tcPr><w:tcW w:w="'+largeurCol+'" w:type="dxa"/><w:shd w:val="clear" w:color="auto" w:fill="1F6E5C"/><w:tcBorders><w:top w:val="single" w:sz="4" w:color="1F6E5C"/><w:left w:val="single" w:sz="4" w:color="1F6E5C"/><w:bottom w:val="single" w:sz="4" w:color="1F6E5C"/><w:right w:val="single" w:sz="4" w:color="1F6E5C"/></w:tcBorders></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="FFFFFF"/><w:sz w:val="20"/></w:rPr><w:t xml:space="preserve">'+echapXml(txt)+'</w:t></w:r></w:p></w:tc>';
+    const celluleDonnee = txt => '<w:tc><w:tcPr><w:tcW w:w="'+largeurCol+'" w:type="dxa"/><w:tcBorders><w:top w:val="single" w:sz="4" w:color="D0D5D2"/><w:left w:val="single" w:sz="4" w:color="D0D5D2"/><w:bottom w:val="single" w:sz="4" w:color="D0D5D2"/><w:right w:val="single" w:sz="4" w:color="D0D5D2"/></w:tcBorders><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:sz w:val="20"/></w:rPr><w:t xml:space="preserve">'+echapXml(txt||'—')+'</w:t></w:r></w:p></w:tc>';
     const ligneEntete = '<w:tr>'+entetes.map(celluleEntete).join('')+'</w:tr>';
     const lignesDonnees = lignes.map(l=>'<w:tr>'+l.map(celluleDonnee).join('')+'</w:tr>').join('');
     const dateDuJour = new Date().toLocaleDateString('fr-FR');
     const documentXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-      + '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+      + '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
       + '<w:body>'
-      + '<w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="32"/><w:color w:val="1F6E5C"/></w:rPr><w:t xml:space="preserve">ECORIGINE — '+echapXml(titre)+'</w:t></w:r></w:p>'
-      + '<w:p><w:pPr><w:spacing w:after="240"/></w:pPr><w:r><w:rPr><w:sz w:val="18"/><w:color w:val="666666"/></w:rPr><w:t xml:space="preserve">Export du '+echapXml(dateDuJour)+' — '+lignes.length+' ligne(s)</w:t></w:r></w:p>'
+      + '<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="32"/><w:color w:val="1F6E5C"/></w:rPr><w:t xml:space="preserve">ECORIGINE — '+echapXml(titre)+'</w:t></w:r></w:p>'
+      + '<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:after="240"/></w:pPr><w:r><w:rPr><w:sz w:val="18"/><w:color w:val="666666"/></w:rPr><w:t xml:space="preserve">Export du '+echapXml(dateDuJour)+' — '+lignes.length+' ligne(s)</w:t></w:r></w:p>'
       + '<w:tbl><w:tblPr><w:tblW w:w="'+largeurTotale+'" w:type="dxa"/><w:tblBorders>'
       + '<w:top w:val="single" w:sz="4" w:color="D0D5D2"/><w:left w:val="single" w:sz="4" w:color="D0D5D2"/><w:bottom w:val="single" w:sz="4" w:color="D0D5D2"/><w:right w:val="single" w:sz="4" w:color="D0D5D2"/>'
       + '<w:insideH w:val="single" w:sz="4" w:color="D0D5D2"/><w:insideV w:val="single" w:sz="4" w:color="D0D5D2"/></w:tblBorders></w:tblPr>'
       + '<w:tblGrid>'+entetes.map(()=>'<w:gridCol w:w="'+largeurCol+'"/>').join('')+'</w:tblGrid>'
       + ligneEntete + lignesDonnees
       + '</w:tbl>'
-      + '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134"/></w:sectPr>'
+      + '<w:sectPr><w:headerReference w:type="default" r:id="rIdEntete"/><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="567"/></w:sectPr>'
       + '</w:body></w:document>';
+    // En-tete : a gauche l'exigence correspondante, a droite ECORIGINE (filet vert en dessous).
+    const texteExigence = opts.exigence ? 'Exigence '+opts.exigence+(opts.exigenceLibelle ? ' — '+opts.exigenceLibelle : '') : '';
+    const headerXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+      + '<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="1F6E5C"/></w:pBdr><w:tabs><w:tab w:val="right" w:pos="'+largeurTotale+'"/></w:tabs></w:pPr>'
+      + '<w:r><w:rPr><w:sz w:val="17"/><w:color w:val="555555"/></w:rPr><w:t xml:space="preserve">'+echapXml(texteExigence)+'</w:t></w:r>'
+      + '<w:r><w:tab/></w:r><w:r><w:rPr><w:b/><w:sz w:val="17"/><w:color w:val="1F6E5C"/></w:rPr><w:t>ECORIGINE</w:t></w:r></w:p>'
+      + '</w:hdr>';
+    const documentRelsXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+      + '<Relationship Id="rIdEntete" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>'
+      + '</Relationships>';
 
     const contentTypesXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
       + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
       + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
       + '<Default Extension="xml" ContentType="application/xml"/>'
       + '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+      + '<Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>'
       + '</Types>';
     const relsXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
       + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
@@ -8891,6 +8907,8 @@ async function genererWordTableau(titre, entetes, lignes, nomFichier){
     zip.file('[Content_Types].xml', contentTypesXml);
     zip.file('_rels/.rels', relsXml);
     zip.file('word/document.xml', documentXml);
+    zip.file('word/header1.xml', headerXml);
+    zip.file('word/_rels/document.xml.rels', documentRelsXml);
 
     const blob = await zip.generateAsync({ type:'blob', mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
     const url = URL.createObjectURL(blob);
