@@ -3238,7 +3238,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-08-195';
+const APP_VERSION = '2026-10-08-196';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4306,16 +4306,17 @@ function ccPeriodeEmbarquementVersCode(texte){
   return '';
 }
 // Ramene le texte libre de l'incoterm lu dans le PDF (ex : "FREE ON BOARD ABJ/S.PEDRO") vers le code
-// standard (FOB/CIF) et, quand un seul des deux ports est mentionne, le port correspondant.
+// standard (FOB/CIF) et les ports mentionnes (un seul, ou les deux a la fois -- frequent, le contrat
+// laissant alors le choix entre les deux a l'embarquement) ; port est une liste separee par des virgules.
 function ccIncotermVersCode(texte){
   const t = String(texte||'').toUpperCase();
   let code = '';
   if (/\bCIF\b|COST.{0,12}INSURANCE/.test(t)) code = 'CIF';
   else if (/\bFOB\b|FREE ON BOARD/.test(t)) code = 'FOB';
-  const abj = /\bABJ\b|ABIDJAN/.test(t);
-  const sp = /S\.?\s?PEDRO|SAN[\s-]?PEDRO/.test(t);
-  const port = (abj && !sp) ? 'Abidjan' : (sp && !abj) ? 'San-Pedro' : '';
-  return { code, port };
+  const ports = [];
+  if (/\bABJ\b|ABIDJAN/.test(t)) ports.push('Abidjan');
+  if (/S\.?\s?PEDRO|SAN[\s-]?PEDRO/.test(t)) ports.push('San-Pedro');
+  return { code, port: ports.join(',') };
 }
 function ccContratExtraireDuTexte(lignes){
   const texte = lignes.join('\n');
@@ -4370,7 +4371,7 @@ async function ccImporterContrat(inputEl){
     if (d.prixValeur) set('cc_prix_valeur', String(d.prixValeur));
     if (d.prixDevise) set('cc_prix_devise', d.prixDevise==='FCFA'||d.prixDevise==='XOF' ? 'FCFA/kg' : d.prixDevise+'/T');
     set('cc_incoterm', d.incoterm);
-    set('cc_port', d.port);
+    if (d.port) ccPortsCocher(d.port);
     set('cc_periode_embarquement', ccPeriodeEmbarquementVersCode(d.periodeEmbarquement));
     set('cc_conditions_paiement', d.conditionsPaiement);
     const manquants = [];
@@ -4901,6 +4902,17 @@ const LOTS_STATUTS_EXPORT = { preparation:['warn','En préparation'], embarque:[
 const CONTRATS_CLIENTS_STATUTS = { actif:['ok','Actif'], clos:['neutral','Clos'] };
 const CC_INCOTERMS = { FOB:'FOB (Free On Board)', CIF:'CIF (Cost, Insurance and Freight)' };
 const CC_PORTS = { Abidjan:'Abidjan', 'San-Pedro':'San-Pedro' };
+// Les cases a cocher "Port" (cc_port_*) utilisent chacune un name distinct (plutot qu'un name partage)
+// pour rester compatibles avec la protection anti-perte-de-saisie (capturerSaisies/restaurerSaisies, qui
+// retrouve un champ par son name et ne gererait pas correctement plusieurs cases partageant le meme).
+function ccPortNomChamp(port){ return 'cc_port_'+String(port).replace(/[^A-Za-z]/g,''); }
+function ccPortsCochees(){
+  return Array.from(document.querySelectorAll('#modal-fields .cc-port-check:checked')).map(el=>el.dataset.port);
+}
+function ccPortsCocher(portsStr){
+  const vals = String(portsStr||'').split(',').map(s=>s.trim()).filter(Boolean);
+  document.querySelectorAll('#modal-fields .cc-port-check').forEach(el=>{ el.checked = vals.includes(el.dataset.port); });
+}
 async function chargerLots(){
   if (!supabaseClient) return;
   const [u, ua, e, eu, se, cc] = await Promise.all([
@@ -5207,7 +5219,7 @@ async function contratClientEnregistrer(){
   const pl = state.modal && state.modal.type==='contratClient' ? state.modal.payload : null; if (!pl) return;
   const client = fv('cc_client').trim(); if (!client){ showToast('Indique le client.'); return; }
   const ligne = { client, reference: fv('cc_reference').trim()||null, campagne_id: fv('cc_campagne')||null, type_cacao: fv('cc_type')||null, niveau_tracabilite: fv('cc_niveau')||null, volume_contractuel_kg: Number(fv('cc_volume'))||null,
-    prix_valeur: Number(fv('cc_prix_valeur'))||null, prix_devise: fv('cc_prix_devise')||null, incoterm: fv('cc_incoterm')||null, port: fv('cc_port')||null, periode_embarquement: fv('cc_periode_embarquement').trim()||null, conditions_paiement: fv('cc_conditions_paiement').trim()||null,
+    prix_valeur: Number(fv('cc_prix_valeur'))||null, prix_devise: fv('cc_prix_devise')||null, incoterm: fv('cc_incoterm')||null, port: ccPortsCochees().join(',')||null, periode_embarquement: fv('cc_periode_embarquement').trim()||null, conditions_paiement: fv('cc_conditions_paiement').trim()||null,
     statut: fv('cc_statut')||'actif', notes: fv('cc_notes').trim()||null, updated_at: new Date().toISOString() };
   const id = pl.id || genId('cc');
   try{
@@ -5633,7 +5645,8 @@ function lotsModalsHtml(){
       + '<div style="display:grid;grid-template-columns:2fr 1fr;gap:0 12px"><label class="field">Prix<input type="number" step="0.01" name="cc_prix_valeur" value="'+esc(pl.prix_valeur||'')+'" placeholder="ex : 2782.84" oninput="state.modal.payload.prix_valeur=this.value"></label><label class="field">Devise / unité<select name="cc_prix_devise" onchange="ccPrixDeviseChange()"><option value="EUR/T"'+((pl.prix_devise||'EUR/T')==='EUR/T'?' selected':'')+'>EUR / tonne</option><option value="USD/T"'+(pl.prix_devise==='USD/T'?' selected':'')+'>USD / tonne</option><option value="FCFA/kg"'+(pl.prix_devise==='FCFA/kg'?' selected':'')+'>FCFA / kg</option></select></label></div>'
       + '<div class="hint" style="margin:-4px 0 10px">Conversion automatique en changeant de devise : parité fixe EUR ↔ FCFA (1 EUR = '+XOF_PAR_EUR+' FCFA) ; pour l\'USD, taux du jour du contrat recherché en ligne (pas de parité fixe).</div>'
       + '<div class="hint" id="ccTauxUsdStatut" style="margin:-4px 0 10px"></div>'
-      + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 12px"><label class="field">Incoterm<select name="cc_incoterm"><option value="">—</option>'+Object.entries(CC_INCOTERMS).map(([k,v])=>'<option value="'+k+'"'+(k===(pl.incoterm||'')?' selected':'')+'>'+v+'</option>').join('')+'</select></label><label class="field">Port<select name="cc_port"><option value="">—</option>'+Object.entries(CC_PORTS).map(([k,v])=>'<option value="'+esc(k)+'"'+(k===(pl.port||'')?' selected':'')+'>'+esc(v)+'</option>').join('')+'</select></label><label class="field">Conditions de paiement<input type="text" name="cc_conditions_paiement" value="'+esc(pl.conditions_paiement||'')+'" placeholder="ex : Comptant contre documents"></label></div>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Incoterm<select name="cc_incoterm"><option value="">—</option>'+Object.entries(CC_INCOTERMS).map(([k,v])=>'<option value="'+k+'"'+(k===(pl.incoterm||'')?' selected':'')+'>'+v+'</option>').join('')+'</select></label><div class="field">Port<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;min-height:38px">'+Object.entries(CC_PORTS).map(([k,v])=>'<label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer;white-space:nowrap"><input type="checkbox" class="cc-port-check" style="width:16px;height:16px;flex:none;margin:0" name="'+ccPortNomChamp(k)+'" data-port="'+esc(k)+'" '+(String(pl.port||'').split(',').map(s=>s.trim()).includes(k)?'checked':'')+'> '+esc(v)+'</label>').join('')+'</div></div></div>'
+      + '<label class="field">Conditions de paiement<input type="text" name="cc_conditions_paiement" value="'+esc(pl.conditions_paiement||'')+'" placeholder="ex : Comptant contre documents"></label>'
       + '<label class="field">Période d\'embarquement<select name="cc_periode_embarquement">'+lotsPeriodesEmbarquementOptions(pl.campagne_id, pl.periode_embarquement)+'</select></label>'
       + '<label class="field">Statut<select name="cc_statut">'+Object.entries(CONTRATS_CLIENTS_STATUTS).map(([k,v])=>'<option value="'+k+'"'+(k===(pl.statut||'actif')?' selected':'')+'>'+v[1]+'</option>').join('')+'</select></label>'
       + '<label class="field">Notes<textarea name="cc_notes" rows="2">'+esc(pl.notes||'')+'</textarea></label>'
