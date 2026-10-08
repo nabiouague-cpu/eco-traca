@@ -3238,7 +3238,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-187';
+const APP_VERSION = '2026-10-02-188';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4786,11 +4786,14 @@ async function supprimerTracage(){
 // Onglet « Traçage de volume » : les trois étapes liées, avec l'état de la chaîne en cours.
 // ============================================================================
 // LOTS & EXPORT — la tracabilite prolongee au-dela de l'usine :
-//   livraisons recues a l'usine (connaissements peses) -> lots d'usinage -> lots d'export (B/L + conteneurs)
+//   livraisons recues a l'usine (connaissements peses) -> lots d'usinage (25T, numerotes par serie) ->
+//   OT, ordre de transit (un ou plusieurs lots d'usinage regroupes pour un client, numero attribue par
+//   le service shipping -- port d'embarquement + leur propre code, ex. ABJ-0101 -- jamais genere par ORIGEN)
+//   -> connaissement maritime (B/L) + conteneurs, qui reprennent les infos de l'OT.
 // Chaque maillon garde le poids pris sur le precedent ; ORIGEN tient les soldes (une livraison ne peut pas
-// entrer deux fois dans un lot, un lot d'usinage ne peut pas etre exporte au-dela de son poids de sortie).
-// La chaine se lit dans les deux sens : d'un lot d'export, on remonte aux lots d'usinage, aux connaissements,
-// aux cooperatives et aux producteurs du tracage de volume.
+// entrer deux fois dans un lot, un lot d'usinage ne peut pas etre repris au-dela de son poids de sortie
+// dans un OT). La chaine se lit dans les deux sens : d'un OT, on remonte aux lots d'usinage, aux
+// connaissements, aux cooperatives et aux producteurs du tracage de volume. (lots_export = table des OT)
 // ============================================================================
 const LOTS_TYPES_CACAO = ['RA', 'Ordinaire', 'Fairtrade'];
 const LOTS_STATUTS_USINAGE = { ouvert:['info','Ouvert'], clos:['ok','Clos'] };
@@ -4882,10 +4885,10 @@ function lotsProducteursDeLivraison(a){
 function renderLotsTab(){
   if (!state.lotsCharges){ chargerLots().then(()=>render()); }
   const actif = lotsSousOnglet();
-  let html = '<div class="panel"><div class="panel-head"><div><h2>Lots & export</h2><p class="hint" style="margin:4px 0 0">Livraisons reçues à l\'usine → lots d\'usinage → lots d\'export (connaissement maritime, conteneurs). Chaque lot garde la trace exacte de ce qui le compose.</p></div></div>'
+  let html = '<div class="panel"><div class="panel-head"><div><h2>Lots & export</h2><p class="hint" style="margin:4px 0 0">Livraisons reçues à l\'usine → lots d\'usinage (numérotés par série) → OT · ordres de transit (un ou plusieurs lots regroupés pour un client, numéro attribué par le service shipping) → connaissement maritime (B/L). Chaque maillon garde la trace exacte de ce qui le compose.</p></div></div>'
     + '<div style="padding:0 18px 18px">'
     + '<div class="oc-subtabs">'
-    + [['usinage','Lots d\'usinage'],['export','Lots d\'export'],['series','Séries de numérotation'],['chaine','Chaîne de traçabilité']].map(([id,l])=>'<button class="'+(actif===id?'active':'')+'" onclick="lotsSetSousOnglet(\''+id+'\')">'+l+'</button>').join('')
+    + [['usinage','Lots d\'usinage'],['export','OT (ordres de transit)'],['series','Séries de numérotation'],['chaine','Chaîne de traçabilité']].map(([id,l])=>'<button class="'+(actif===id?'active':'')+'" onclick="lotsSetSousOnglet(\''+id+'\')">'+l+'</button>').join('')
     + '</div>';
   if (!state.lotsCharges) html += '<div class="hint">Chargement des lots…</div>';
   else if (actif==='usinage') html += renderLotsUsinage();
@@ -4969,9 +4972,10 @@ function renderLotsUsinage(){
 }
 function renderLotsExport(){
   const lots = (state.lotsExport||[]);
-  let html = '<div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px"><button class="btn btn-primary" onclick="lotExportOuvrir()">+ Nouveau lot d\'export</button></div>';
-  if (!lots.length) return html + '<div class="hint">Aucun lot d\'export. Crée-le, compose-le à partir des lots d\'usinage, puis renseigne le connaissement maritime et les conteneurs.</div>';
-  html += '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th>N° lot</th><th>Client</th><th>Navire</th><th>B/L</th><th>Réf. vendeur</th><th>Niveau</th><th>Embarquement</th><th>Conteneurs</th><th>Poids (lots)</th><th>Poids (conteneurs)</th><th>Statut</th><th></th></tr></thead><tbody>';
+  let html = '<div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px"><button class="btn btn-primary" onclick="lotExportOuvrir()">+ Nouvel OT (ordre de transit)</button>'
+    + '<span class="hint" style="margin:0">Un OT regroupe un ou plusieurs lots d\'usinage pour un client ; son numéro (ex. ABJ-0101) est attribué par le service shipping, pas par ORIGEN.</span></div>';
+  if (!lots.length) return html + '<div class="hint">Aucun OT. Crée-le avec son numéro (attribué par le service shipping), compose-le à partir des lots d\'usinage, puis renseigne le connaissement maritime et les conteneurs.</div>';
+  html += '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th>N° OT</th><th>Client</th><th>Navire</th><th>B/L</th><th>Réf. vendeur</th><th>Niveau</th><th>Embarquement</th><th>Conteneurs</th><th>Poids (lots)</th><th>Poids (conteneurs)</th><th>Statut</th><th></th></tr></thead><tbody>';
   lots.forEach(l=>{
     const compo = lotsExportCompo(l.id), poids = lotsExportPoids(l), pc = lotsConteneursPoids(l), nc = lotsConteneurs(l).length;
     const ecart = (poids>0 && pc>0 && Math.abs(poids-pc)>1) ? ' <span class="badge warn" title="Le poids des conteneurs diffère du poids des lots affectés">écart '+fmtKg(pc-poids)+'</span>' : '';
@@ -5004,18 +5008,18 @@ function lotsChaineDe(lot){
 }
 function renderLotsChaine(){
   const lots = (state.lotsExport||[]);
-  let html = '<div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px"><label class="field" style="margin:0;min-width:260px">Lot d\'export<select onchange="lotsVoirChaine(this.value)"><option value="">— Choisir —</option>'+lots.map(l=>'<option value="'+esc(l.id)+'"'+(l.id===state.lotChaineId?' selected':'')+'>'+esc(l.numero)+(l.client?' · '+esc(l.client):'')+(l.bl_numero?' · B/L '+esc(l.bl_numero):'')+'</option>').join('')+'</select></label>'
+  let html = '<div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px"><label class="field" style="margin:0;min-width:260px">OT (ordre de transit)<select onchange="lotsVoirChaine(this.value)"><option value="">— Choisir —</option>'+lots.map(l=>'<option value="'+esc(l.id)+'"'+(l.id===state.lotChaineId?' selected':'')+'>'+esc(l.numero)+(l.client?' · '+esc(l.client):'')+(l.bl_numero?' · B/L '+esc(l.bl_numero):'')+'</option>').join('')+'</select></label>'
     + (state.lotChaineId ? '<button class="btn" onclick="lotsExporterDossier(\''+esc(state.lotChaineId)+'\')">⭳ Dossier de traçabilité (Excel)</button>' : '')+'</div>';
-  const lot = lotExportParId(state.lotChaineId); if (!lot) return html + '<div class="hint">Choisis un lot d\'export pour remonter toute sa chaîne : conteneurs → lots d\'usinage → livraisons → coopératives → producteurs.</div>';
+  const lot = lotExportParId(state.lotChaineId); if (!lot) return html + '<div class="hint">Choisis un OT pour remonter toute sa chaîne : conteneurs → lots d\'usinage → livraisons → coopératives → producteurs.</div>';
   const ch = lotsChaineDe(lot);
   const maillon = (titre, sous, corps)=>'<div class="lots-maillon"><div class="lots-maillon-tete"><b>'+titre+'</b>'+(sous?'<span>'+sous+'</span>':'')+'</div>'+corps+'</div>';
   html += '<div class="lots-chaine">';
-  html += maillon('Lot d\'export '+esc(lot.numero), lotsBadge(LOTS_STATUTS_EXPORT, lot.statut),
+  html += maillon('OT '+esc(lot.numero), lotsBadge(LOTS_STATUTS_EXPORT, lot.statut),
     '<div class="info-grid"><div><span>Client :</span> '+esc(lot.client||'—')+'</div><div><span>Navire :</span> '+esc(lot.navire||'—')+'</div><div><span>B/L :</span> '+esc(lot.bl_numero||'—')+(lot.bl_date?' du '+esc(dateFr(lot.bl_date)):'')+'</div><div><span>Réf. vendeur :</span> '+esc(lot.ref_vendeur||'—')+'</div><div><span>Niveau de traçabilité :</span> '+esc(lot.niveau_tracabilite||'—')+'</div><div><span>Embarquement :</span> '+esc(dateFr(lot.date_embarquement)||'—')+(lot.port_embarquement?' · '+esc(lot.port_embarquement):'')+(lot.port_destination?' → '+esc(lot.port_destination):'')+'</div><div><span>Poids affecté :</span> '+fmtKg(lotsExportPoids(lot))+'</div><div><span>Conteneurs :</span> '+lotsConteneurs(lot).length+' · '+fmtKg(lotsConteneursPoids(lot))+'</div></div>'
     + (lotsConteneurs(lot).length ? '<div class="lots-compo">'+lotsConteneurs(lot).map(c=>'<span class="lots-puce">'+esc(c.numero||'(n°)')+(c.scelle?' · scellé '+esc(c.scelle):'')+(c.sacs?' · '+esc(c.sacs)+' sacs':'')+' — <b>'+fmtKg(c.poids_net_kg)+'</b></span>').join('')+'</div>' : ''));
   html += '<div class="lots-fleche">↓</div>';
   html += maillon(ch.usinages.length+' lot'+(ch.usinages.length>1?'s':'')+' d\'usinage', fmtKg(ch.usinages.reduce((s,u)=>s+u.kg,0)),
-    ch.usinages.length ? '<table class="tbl-fiches"><thead><tr><th>N° lot</th><th>Période</th><th>Site</th><th>Type</th><th>Niveau</th><th>Pris pour l\'export</th><th>Sortie du lot</th></tr></thead><tbody>'+ch.usinages.map(u=>'<tr><td><b>'+esc(u.lot.numero)+'</b></td><td>'+esc((dateFr(u.lot.date_debut)||'—')+(u.lot.date_fin?' → '+dateFr(u.lot.date_fin):''))+'</td><td>'+esc(u.lot.site||'—')+'</td><td>'+esc(u.lot.type_cacao||'—')+'</td><td>'+esc(u.lot.niveau_tracabilite||'—')+'</td><td>'+fmtKg(u.kg)+'</td><td>'+fmtKg(lotsUsinageSortie(u.lot))+'</td></tr>').join('')+'</tbody></table>' : '<div class="hint">Aucun lot d\'usinage affecté : clique « Composer » sur le lot d\'export.</div>');
+    ch.usinages.length ? '<table class="tbl-fiches"><thead><tr><th>N° lot</th><th>Période</th><th>Site</th><th>Type</th><th>Niveau</th><th>Pris pour cet OT</th><th>Sortie du lot</th></tr></thead><tbody>'+ch.usinages.map(u=>'<tr><td><b>'+esc(u.lot.numero)+'</b></td><td>'+esc((dateFr(u.lot.date_debut)||'—')+(u.lot.date_fin?' → '+dateFr(u.lot.date_fin):''))+'</td><td>'+esc(u.lot.site||'—')+'</td><td>'+esc(u.lot.type_cacao||'—')+'</td><td>'+esc(u.lot.niveau_tracabilite||'—')+'</td><td>'+fmtKg(u.kg)+'</td><td>'+fmtKg(lotsUsinageSortie(u.lot))+'</td></tr>').join('')+'</tbody></table>' : '<div class="hint">Aucun lot d\'usinage affecté : clique « Composer » sur l\'OT.</div>');
   html += '<div class="lots-fleche">↓</div>';
   html += maillon(ch.livraisons.length+' livraison'+(ch.livraisons.length>1?'s':'')+' reçue'+(ch.livraisons.length>1?'s':'')+' à l\'usine', fmtKg(ch.livraisons.reduce((s,l)=>s+l.kgExport,0))+' au prorata',
     ch.livraisons.length ? '<table class="tbl-fiches"><thead><tr><th>Connaissement</th><th>Coopérative</th><th>Date</th><th>Poids net usine</th><th>Dans le lot d\'usinage</th><th>Part exportée</th><th>Producteurs tracés</th></tr></thead><tbody>'+ch.livraisons.map(l=>{ const c = coopById(l.achat.cooperative_id); return '<tr><td><b>'+esc(l.achat.connaissement||'—')+'</b> <span class="hint" style="margin:0">'+esc(l.lotUsinage.numero)+'</span></td><td>'+esc(c?c.nom:'—')+'</td><td>'+esc(dateFr(l.achat.date)||'—')+'</td><td>'+fmtKg(l.achat.poids_net_produit)+'</td><td>'+fmtKg(l.kgUsinage)+'</td><td>'+fmtKg(l.kgExport)+'</td><td>'+(l.producteurs.length ? l.producteurs.length+' producteur'+(l.producteurs.length>1?'s':'') : '<span class="hint" style="margin:0">non tracé</span>')+'</td></tr>'; }).join('')+'</tbody></table>' : '<div class="hint">Aucune livraison : les lots d\'usinage ne sont pas encore composés.</div>');
@@ -5031,9 +5035,9 @@ async function lotsExporterDossier(id){
   const ch = lotsChaineDe(lot);
   const wb = new ExcelJS.Workbook(); wb.creator = 'ORIGEN · ECORIGINE'; wb.created = new Date();
   const entete = (ws)=>{ ws.getRow(1).eachCell(c=>{ c.font = { bold:true, color:{ argb:'FFFFFFFF' } }; c.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FF0E3B36' } }; }); };
-  const w1 = wb.addWorksheet('Lot export');
+  const w1 = wb.addWorksheet('OT');
   w1.columns = [{ width:28 }, { width:50 }];
-  [['N° lot', lot.numero], ['Client', lot.client||''], ['Navire', lot.navire||''], ['Connaissement maritime (B/L)', lot.bl_numero||''], ['Date B/L', lot.bl_date||''], ['Réf. vendeur', lot.ref_vendeur||''], ['Niveau de traçabilité', lot.niveau_tracabilite||''], ['Port d\'embarquement', lot.port_embarquement||''], ['Port de destination', lot.port_destination||''], ['Date d\'embarquement', lot.date_embarquement||''], ['Statut', (LOTS_STATUTS_EXPORT[lot.statut]||[])[1]||lot.statut], ['Poids affecté (lots d\'usinage)', lotsExportPoids(lot)], ['Poids des conteneurs', lotsConteneursPoids(lot)], ['Notes', lot.notes||''], ['Dossier généré le', new Date().toLocaleString('fr-FR')]].forEach(r=>{ const row = w1.addRow(r); row.getCell(1).font = { bold:true }; });
+  [['N° OT', lot.numero], ['Client', lot.client||''], ['Navire', lot.navire||''], ['Connaissement maritime (B/L)', lot.bl_numero||''], ['Date B/L', lot.bl_date||''], ['Réf. vendeur', lot.ref_vendeur||''], ['Niveau de traçabilité', lot.niveau_tracabilite||''], ['Port d\'embarquement', lot.port_embarquement||''], ['Port de destination', lot.port_destination||''], ['Date d\'embarquement', lot.date_embarquement||''], ['Statut', (LOTS_STATUTS_EXPORT[lot.statut]||[])[1]||lot.statut], ['Poids affecté (lots d\'usinage)', lotsExportPoids(lot)], ['Poids des conteneurs', lotsConteneursPoids(lot)], ['Notes', lot.notes||''], ['Dossier généré le', new Date().toLocaleString('fr-FR')]].forEach(r=>{ const row = w1.addRow(r); row.getCell(1).font = { bold:true }; });
   const w2 = wb.addWorksheet('Conteneurs'); w2.columns = [{ header:'N° conteneur', width:20 }, { header:'Scellé', width:18 }, { header:'Sacs', width:10 }, { header:'Poids net (kg)', width:16 }];
   lotsConteneurs(lot).forEach(c=>w2.addRow([c.numero||'', c.scelle||'', Number(c.sacs)||'', Number(c.poids_net_kg)||0])); entete(w2);
   const w3 = wb.addWorksheet('Lots usinage'); w3.columns = [{ header:'N° lot', width:16 }, { header:'Campagne', width:14 }, { header:'Début', width:12 }, { header:'Fin', width:12 }, { header:'Site', width:22 }, { header:'Type', width:10 }, { header:'Niveau de traçabilité', width:20 }, { header:'Date de production', width:16 }, { header:'Entrée (kg)', width:14 }, { header:'Sortie (kg)', width:14 }, { header:'Pris pour ce lot (kg)', width:20 }];
@@ -5137,26 +5141,28 @@ async function lotUsinageCompoEnregistrer(){
 // ---- Lots d'export : fiche, composition, conteneurs, suppression ----
 function lotExportOuvrir(id){
   const l = id ? lotExportParId(id) : null;
-  state.modal = { type:'lotExport', payload: l ? Object.assign({}, l) : { numero: lotsNumeroSuivant('LE', state.lotsExport), campagne_id: (state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : '', statut:'preparation', port_embarquement:'Abidjan' } };
+  // Le numero de l'OT (ordre de transit) vient du service shipping (code du port d'embarquement + leur propre
+  // sequence, ex. ABJ-0101) : ORIGEN ne le genere jamais, le champ reste donc vide par defaut a la creation.
+  state.modal = { type:'lotExport', payload: l ? Object.assign({}, l) : { campagne_id: (state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : '', statut:'preparation', port_embarquement:'Abidjan' } };
   render();
 }
 async function lotExportEnregistrer(){
   const pl = state.modal && state.modal.type==='lotExport' ? state.modal.payload : null; if (!pl) return;
-  const numero = fv('le_numero').trim(); if (!numero){ showToast('Indique le numéro du lot.'); return; }
+  const numero = fv('le_numero').trim(); if (!numero){ showToast('Indique le numéro de l\'OT (attribué par le service shipping).'); return; }
   const ligne = { numero, campagne_id: fv('le_campagne')||null, client: fv('le_client').trim()||null, navire: fv('le_navire').trim()||null, port_embarquement: fv('le_port_emb').trim()||null, port_destination: fv('le_port_dest').trim()||null, date_embarquement: fv('le_date_emb')||null, bl_numero: fv('le_bl').trim()||null, bl_date: fv('le_bl_date')||null, ref_vendeur: fv('le_ref_vendeur').trim()||null, niveau_tracabilite: fv('le_niveau')||null, statut: fv('le_statut')||'preparation', notes: fv('le_notes').trim()||null, updated_at: new Date().toISOString() };
   try{
     if (pl.id){ const { error } = await supabaseClient.from('lots_export').update(ligne).eq('id', pl.id); if (error) throw error; }
     else { ligne.id = genId('le'); ligne.conteneurs = []; const { error } = await supabaseClient.from('lots_export').insert(ligne); if (error) throw error; }
-    await chargerLots(); closeModal(); showToast('Lot d\'export enregistré.', 'success');
+    await chargerLots(); closeModal(); showToast('OT enregistré.', 'success');
   }catch(e){ showToast('Échec : '+e.message); }
 }
 function lotExportSupprimer(id){
   const l = lotExportParId(id); if (!l) return;
-  askConfirm('Supprimer le lot d\'export '+l.numero+' ? Les lots d\'usinage qu\'il contenait redeviennent disponibles.', async()=>{
+  askConfirm('Supprimer l\'OT '+l.numero+' ? Les lots d\'usinage qu\'il contenait redeviennent disponibles.', async()=>{
     const { error } = await supabaseClient.from('lots_export').delete().eq('id', id);
     if (error){ showToast('Échec : '+error.message); return; }
     if (state.lotChaineId===id) state.lotChaineId = null;
-    await chargerLots(); render(); showToast('Lot supprimé.', 'success');
+    await chargerLots(); render(); showToast('OT supprimé.', 'success');
   });
 }
 function lotExportComposer(id){
@@ -5252,8 +5258,9 @@ function lotsModalsHtml(){
   }
   if (m.type==='lotExport'){
     const pl = m.payload;
-    return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal wide"><h3>'+(pl.id?'Modifier le lot d\'export':'Nouveau lot d\'export')+'</h3><div id="modal-fields">'
-      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">N° de lot<input type="text" name="le_numero" value="'+esc(pl.numero||'')+'"></label><label class="field">Campagne<select name="le_campagne">'+lotsCampagneOptions(pl.campagne_id)+'</select></label></div>'
+    return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal wide"><h3>'+(pl.id?'Modifier l\'OT':'Nouvel OT (ordre de transit)')+'</h3><div id="modal-fields">'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">N° d\'OT<input type="text" name="le_numero" value="'+esc(pl.numero||'')+'" placeholder="ex : ABJ-0101"></label><label class="field">Campagne<select name="le_campagne">'+lotsCampagneOptions(pl.campagne_id)+'</select></label></div>'
+      + '<div class="hint" style="margin:-4px 0 10px">Le numéro d\'OT est attribué par le service shipping (port d\'embarquement + leur propre code) — ORIGEN ne le génère pas, saisis-le tel quel.</div>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Client / acheteur<input type="text" name="le_client" value="'+esc(pl.client||'')+'" placeholder="ex : CARGILL"></label><label class="field">Navire<input type="text" name="le_navire" value="'+esc(pl.navire||'')+'"></label></div>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Port d\'embarquement<input type="text" name="le_port_emb" value="'+esc(pl.port_embarquement||'')+'"></label><label class="field">Port de destination<input type="text" name="le_port_dest" value="'+esc(pl.port_destination||'')+'"></label></div>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 12px"><label class="field">N° connaissement maritime (B/L)<input type="text" name="le_bl" value="'+esc(pl.bl_numero||'')+'"></label><label class="field">Date du B/L<input type="date" name="le_bl_date" value="'+esc(pl.bl_date||'')+'"></label><label class="field">Date d\'embarquement<input type="date" name="le_date_emb" value="'+esc(pl.date_embarquement||'')+'"></label></div>'
@@ -5266,8 +5273,8 @@ function lotsModalsHtml(){
     const pl = m.payload, lot = lotExportParId(pl.lotId); if (!lot) return '';
     const dispo = (state.lotsUsinage||[]).filter(u=>(u.id in pl.choix) || lotsUsinageSoldeExport(u, pl.lotId)>0);
     const total = Object.values(pl.choix).reduce((s,v)=>s+(Number(v)||0), 0);
-    return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal xl"><h3>Composer le lot d\'export '+esc(lot.numero)+'</h3>'
-      + '<div class="hint" style="margin-bottom:10px">Coche les lots d\'usinage qui partent dans ce lot d\'export ; le poids proposé est le solde disponible de chaque lot (sortie d\'usinage moins ce qui est déjà exporté).</div>'
+    return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal xl"><h3>Composer l\'OT '+esc(lot.numero)+'</h3>'
+      + '<div class="hint" style="margin-bottom:10px">Coche les lots d\'usinage qui partent dans cet OT ; le poids proposé est le solde disponible de chaque lot (sortie d\'usinage moins ce qui est déjà affecté à un autre OT).</div>'
       + '<div id="modal-fields"><div class="achats-defile" style="max-height:52vh;overflow:auto"><table class="tbl-fiches"><thead><tr><th></th><th>N° lot</th><th>Période</th><th>Type</th><th>Livraisons</th><th>Sortie</th><th>Disponible</th><th>Dans ce lot (kg)</th></tr></thead><tbody>'
       + (dispo.length ? dispo.map(u=>{ const coche = u.id in pl.choix, solde = lotsUsinageSoldeExport(u, pl.lotId); return '<tr><td><input type="checkbox" '+(coche?'checked':'')+' onchange="lotExportCompoCocher(\''+esc(u.id)+'\', this.checked)"></td><td><b>'+esc(u.numero)+'</b> '+lotsBadge(LOTS_STATUTS_USINAGE, u.statut)+'</td><td>'+esc((dateFr(u.date_debut)||'—')+(u.date_fin?' → '+dateFr(u.date_fin):''))+'</td><td>'+esc(u.type_cacao||'—')+'</td><td>'+lotsUsinageCompo(u.id).length+'</td><td>'+fmtKg(lotsUsinageSortie(u))+'</td><td>'+fmtKg(solde)+'</td><td>'+(coche ? '<input type="number" value="'+esc(pl.choix[u.id])+'" min="0" max="'+solde+'" step="1" style="width:120px;margin:0" oninput="lotExportCompoPoids(\''+esc(u.id)+'\', this.value)">' : '—')+'</td></tr>'; }).join('') : '<tr><td colspan="8" class="hint">Aucun lot d\'usinage disponible : compose d\'abord des lots d\'usinage.</td></tr>')
       + '</tbody></table></div></div>'
@@ -5276,8 +5283,8 @@ function lotsModalsHtml(){
   if (m.type==='lotExportConteneurs'){
     const pl = m.payload, lot = lotExportParId(pl.lotId); if (!lot) return '';
     const total = pl.conteneurs.reduce((s,c)=>s+(Number(c.poids_net_kg)||0), 0);
-    return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal wide"><h3>Conteneurs du lot '+esc(lot.numero)+'</h3>'
-      + '<div class="hint" style="margin-bottom:10px">Un conteneur par ligne : numéro, scellé, nombre de sacs, poids net. Le total doit correspondre au poids affecté au lot ('+fmtKg(lotsExportPoids(lot))+').</div>'
+    return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal wide"><h3>Conteneurs de l\'OT '+esc(lot.numero)+'</h3>'
+      + '<div class="hint" style="margin-bottom:10px">Un conteneur par ligne : numéro, scellé, nombre de sacs, poids net. Le total doit correspondre au poids affecté à l\'OT ('+fmtKg(lotsExportPoids(lot))+').</div>'
       + '<div id="modal-fields">'
       + pl.conteneurs.map((c,i)=>'<div class="lots-conteneur"><input type="text" name="ct_numero" value="'+esc(c.numero||'')+'" placeholder="N° conteneur"><input type="text" name="ct_scelle" value="'+esc(c.scelle||'')+'" placeholder="Scellé"><input type="number" name="ct_sacs" value="'+esc(c.sacs||'')+'" placeholder="Sacs"><input type="number" name="ct_poids" value="'+esc(c.poids_net_kg||'')+'" placeholder="Poids net (kg)" oninput="lotExportConteneursTotal()"><button type="button" class="btn-ghost btn-compact" onclick="lotExportConteneurRetirer('+i+')">✕</button></div>').join('')
       + '<button type="button" class="btn-ghost btn-compact" onclick="lotExportConteneurAjouter()">+ Ajouter un conteneur</button>'
