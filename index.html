@@ -3238,7 +3238,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-08-193';
+const APP_VERSION = '2026-10-08-194';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4305,6 +4305,18 @@ function ccPeriodeEmbarquementVersCode(texte){
   if (/Janvier|F[ée]vrier|Mars/i.test(texte||'')) return 'JM'+(annee?' '+annee:'');
   return '';
 }
+// Ramene le texte libre de l'incoterm lu dans le PDF (ex : "FREE ON BOARD ABJ/S.PEDRO") vers le code
+// standard (FOB/CIF) et, quand un seul des deux ports est mentionne, le port correspondant.
+function ccIncotermVersCode(texte){
+  const t = String(texte||'').toUpperCase();
+  let code = '';
+  if (/\bCIF\b|COST.{0,12}INSURANCE/.test(t)) code = 'CIF';
+  else if (/\bFOB\b|FREE ON BOARD/.test(t)) code = 'FOB';
+  const abj = /\bABJ\b|ABIDJAN/.test(t);
+  const sp = /S\.?\s?PEDRO|SAN[\s-]?PEDRO/.test(t);
+  const port = (abj && !sp) ? 'Abidjan' : (sp && !abj) ? 'San-Pedro' : '';
+  return { code, port };
+}
 function ccContratExtraireDuTexte(lignes){
   const texte = lignes.join('\n');
   const out = {};
@@ -4321,7 +4333,8 @@ function ccContratExtraireDuTexte(lignes){
     out.prixDevise = ((fen.match(/EUR|USD|FCFA|XOF/i)||[])[0]||'').toUpperCase();
   } else { out.prixValeur = null; out.prixDevise = ''; }
   m = texte.match(/Embarquement\s+([^\n]+)/i); out.periodeEmbarquement = m ? m[1].trim() : '';
-  m = texte.match(/.ncoterm\s+([^\n]+)/i); out.incoterm = m ? m[1].trim() : '';
+  m = texte.match(/.ncoterm\s+([^\n]+)/i);
+  { const ic = ccIncotermVersCode(m ? m[1].trim() : ''); out.incoterm = ic.code; out.port = ic.port; }
   m = texte.match(/Paiement\s+([^\n]+)/i); out.conditionsPaiement = m ? m[1].trim() : '';
   const iAch = lignes.findIndex(l=>/Acheteur/i.test(l));
   out.client = '';
@@ -4357,6 +4370,7 @@ async function ccImporterContrat(inputEl){
     if (d.prixValeur) set('cc_prix_valeur', String(d.prixValeur));
     if (d.prixDevise) set('cc_prix_devise', d.prixDevise==='FCFA'||d.prixDevise==='XOF' ? 'FCFA/kg' : d.prixDevise+'/T');
     set('cc_incoterm', d.incoterm);
+    set('cc_port', d.port);
     set('cc_periode_embarquement', ccPeriodeEmbarquementVersCode(d.periodeEmbarquement));
     set('cc_conditions_paiement', d.conditionsPaiement);
     const manquants = [];
@@ -4885,6 +4899,8 @@ const LOTS_TYPES_CACAO = ['RA', 'Ordinaire', 'Fairtrade'];
 const LOTS_STATUTS_USINAGE = { ouvert:['info','Ouvert'], clos:['ok','Clos'] };
 const LOTS_STATUTS_EXPORT = { preparation:['warn','En préparation'], embarque:['ok','Embarqué'] };
 const CONTRATS_CLIENTS_STATUTS = { actif:['ok','Actif'], clos:['neutral','Clos'] };
+const CC_INCOTERMS = { FOB:'FOB (Free On Board)', CIF:'CIF (Cost, Insurance and Freight)' };
+const CC_PORTS = { Abidjan:'Abidjan', 'San-Pedro':'San-Pedro' };
 async function chargerLots(){
   if (!supabaseClient) return;
   const [u, ua, e, eu, se, cc] = await Promise.all([
@@ -5089,26 +5105,64 @@ function contratClientParId(id){ return (state.contratsClients||[]).find(c=>c.id
 // prix automatiquement quand on change de devise entre EUR et FCFA. Le USD n'a pas de parite fixe (taux
 // flottant) : un changement impliquant USD ne convertit pas le montant, a ajuster a la main.
 const XOF_PAR_EUR = 655.957;
-function ccPrixVersEurParKg(valeur, devise){
+function ccPrixVersEurParKg(valeur, devise, tauxUsdParEur){
   if (!(Number(valeur)>0)) return null;
   if (devise==='EUR/T') return valeur/1000;
   if (devise==='FCFA/kg') return valeur/XOF_PAR_EUR;
+  if (devise==='USD/T' && Number(tauxUsdParEur)>0) return (valeur/1000)/tauxUsdParEur;
   return null;
 }
-function ccPrixDepuisEurParKg(eurParKg, devise){
+function ccPrixDepuisEurParKg(eurParKg, devise, tauxUsdParEur){
   if (eurParKg==null) return null;
   if (devise==='EUR/T') return eurParKg*1000;
   if (devise==='FCFA/kg') return eurParKg*XOF_PAR_EUR;
+  if (devise==='USD/T' && Number(tauxUsdParEur)>0) return eurParKg*tauxUsdParEur*1000;
   return null;
 }
-function ccPrixDeviseChange(){
+// Date a utiliser comme "date du contrat" pour aller chercher le taux USD/EUR historique : la date
+// d'enregistrement initial du contrat dans ORIGEN si elle existe deja (contrat en cours de modification),
+// sinon la date du jour (nouveau contrat, pas encore enregistre).
+function ccDateContratPourTaux(pl){
+  const d = pl && pl.created_at ? String(pl.created_at).slice(0,10) : null;
+  return d || new Date().toISOString().slice(0,10);
+}
+const _ccTauxUsdCache = {};
+// Taux USD/EUR a une date donnee (reference BCE, via l'API publique Frankfurter). Pas de parite fixe
+// pour le dollar (change flottant), donc on prend le taux du jour le plus proche de la date du contrat.
+// Retourne null si l'appel echoue (pas de connexion, API indisponible...).
+async function ccTauxUsdParEur(date){
+  if (_ccTauxUsdCache[date]!=null) return _ccTauxUsdCache[date];
+  try{
+    const rep = await fetch('https://api.frankfurter.dev/v1/'+date+'?from=EUR&to=USD');
+    if (!rep.ok) throw new Error('reponse HTTP '+rep.status);
+    const d = await rep.json();
+    const taux = d && d.rates && Number(d.rates.USD);
+    if (!(taux>0)) throw new Error('taux introuvable');
+    _ccTauxUsdCache[date] = taux;
+    return taux;
+  }catch(e){ return null; }
+}
+async function ccPrixDeviseChange(){
   const pl = state.modal && state.modal.type==='contratClient' ? state.modal.payload : null; if (!pl) return;
   const ancienneDevise = pl.prix_devise || 'EUR/T';
   const nouvelleDevise = fv('cc_prix_devise');
   const valeurActuelle = Number(fv('cc_prix_valeur'))||null;
-  const eurParKg = ccPrixVersEurParKg(valeurActuelle, ancienneDevise);
-  const convertie = ccPrixDepuisEurParKg(eurParKg, nouvelleDevise);
   pl.prix_devise = nouvelleDevise;
+  const statutEl = document.getElementById('ccTauxUsdStatut');
+  let tauxUsd = null;
+  if (valeurActuelle!=null && (ancienneDevise==='USD/T' || nouvelleDevise==='USD/T')){
+    const date = ccDateContratPourTaux(pl);
+    if (statutEl) statutEl.textContent = 'Recherche du taux USD/EUR du '+dateFr(date)+'...';
+    tauxUsd = await ccTauxUsdParEur(date);
+    // la modale a pu changer pendant l'appel reseau (fermee, ou un autre champ modifie) : on revalide
+    if (!(state.modal && state.modal.type==='contratClient' && state.modal.payload===pl)) return;
+    if (tauxUsd==null){
+      if (statutEl) statutEl.textContent = 'Taux USD/EUR du '+dateFr(date)+' introuvable (pas de connexion ?) : ajuste le prix manuellement.';
+      return;
+    }
+  }
+  const eurParKg = ccPrixVersEurParKg(valeurActuelle, ancienneDevise, tauxUsd);
+  const convertie = ccPrixDepuisEurParKg(eurParKg, nouvelleDevise, tauxUsd);
   // Met a jour le champ directement (sans render()) : un render() complet redessinerait la modale et la
   // protection anti-perte-de-saisie (capturerSaisies/restaurerSaisies) remettrait l'ANCIENNE valeur tapee
   // par l'utilisateur par-dessus celle qu'on vient de calculer, puisque les deux different de la valeur
@@ -5117,8 +5171,7 @@ function ccPrixDeviseChange(){
     pl.prix_valeur = Math.round(convertie*100)/100;
     const champ = document.querySelector('#modal-fields [name="cc_prix_valeur"]');
     if (champ) champ.value = pl.prix_valeur;
-  } else if (valeurActuelle!=null && (ancienneDevise==='USD/T' || nouvelleDevise==='USD/T')){
-    showToast('Pas de parité fixe pour le USD : ajuste le prix manuellement.');
+    if (statutEl) statutEl.textContent = tauxUsd ? 'Converti au taux USD/EUR du '+dateFr(ccDateContratPourTaux(pl))+' ('+tauxUsd+').' : '';
   }
 }
 function contratClientPrixTexte(c){
@@ -5147,7 +5200,7 @@ async function contratClientEnregistrer(){
   const pl = state.modal && state.modal.type==='contratClient' ? state.modal.payload : null; if (!pl) return;
   const client = fv('cc_client').trim(); if (!client){ showToast('Indique le client.'); return; }
   const ligne = { client, reference: fv('cc_reference').trim()||null, campagne_id: fv('cc_campagne')||null, type_cacao: fv('cc_type')||null, niveau_tracabilite: fv('cc_niveau')||null, volume_contractuel_kg: Number(fv('cc_volume'))||null,
-    prix_valeur: Number(fv('cc_prix_valeur'))||null, prix_devise: fv('cc_prix_devise')||null, incoterm: fv('cc_incoterm').trim()||null, periode_embarquement: fv('cc_periode_embarquement').trim()||null, conditions_paiement: fv('cc_conditions_paiement').trim()||null,
+    prix_valeur: Number(fv('cc_prix_valeur'))||null, prix_devise: fv('cc_prix_devise')||null, incoterm: fv('cc_incoterm')||null, port: fv('cc_port')||null, periode_embarquement: fv('cc_periode_embarquement').trim()||null, conditions_paiement: fv('cc_conditions_paiement').trim()||null,
     statut: fv('cc_statut')||'actif', notes: fv('cc_notes').trim()||null, updated_at: new Date().toISOString() };
   const id = pl.id || genId('cc');
   try{
@@ -5572,8 +5625,9 @@ function lotsModalsHtml(){
       + '<label class="field">Niveau de traçabilité exigé<select name="cc_niveau"><option value="">—</option>'+OC_NIVEAUX_TRACABILITE.map(n=>'<option value="'+esc(n)+'"'+(n===(pl.niveau_tracabilite||'')?' selected':'')+'>'+esc(n)+'</option>').join('')+'</select></label>'
       + '<label class="field">Volume contractuel (kg)<input type="number" name="cc_volume" value="'+esc(pl.volume_contractuel_kg||'')+'"></label>'
       + '<div style="display:grid;grid-template-columns:2fr 1fr;gap:0 12px"><label class="field">Prix<input type="number" step="0.01" name="cc_prix_valeur" value="'+esc(pl.prix_valeur||'')+'" placeholder="ex : 2782.84" oninput="state.modal.payload.prix_valeur=this.value"></label><label class="field">Devise / unité<select name="cc_prix_devise" onchange="ccPrixDeviseChange()"><option value="EUR/T"'+((pl.prix_devise||'EUR/T')==='EUR/T'?' selected':'')+'>EUR / tonne</option><option value="USD/T"'+(pl.prix_devise==='USD/T'?' selected':'')+'>USD / tonne</option><option value="FCFA/kg"'+(pl.prix_devise==='FCFA/kg'?' selected':'')+'>FCFA / kg</option></select></label></div>'
-      + '<div class="hint" style="margin:-4px 0 10px">Conversion EUR ↔ FCFA automatique à la parité fixe (1 EUR = '+XOF_PAR_EUR+' FCFA) en changeant de devise ; pas de taux fixe pour le USD, à ajuster à la main.</div>'
-      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Incoterm<input type="text" name="cc_incoterm" value="'+esc(pl.incoterm||'')+'" placeholder="ex : FOB Abidjan/San Pedro"></label><label class="field">Conditions de paiement<input type="text" name="cc_conditions_paiement" value="'+esc(pl.conditions_paiement||'')+'" placeholder="ex : Comptant contre documents"></label></div>'
+      + '<div class="hint" style="margin:-4px 0 10px">Conversion automatique en changeant de devise : parité fixe EUR ↔ FCFA (1 EUR = '+XOF_PAR_EUR+' FCFA) ; pour l\'USD, taux du jour du contrat recherché en ligne (pas de parité fixe).</div>'
+      + '<div class="hint" id="ccTauxUsdStatut" style="margin:-4px 0 10px"></div>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 12px"><label class="field">Incoterm<select name="cc_incoterm"><option value="">—</option>'+Object.entries(CC_INCOTERMS).map(([k,v])=>'<option value="'+k+'"'+(k===(pl.incoterm||'')?' selected':'')+'>'+v+'</option>').join('')+'</select></label><label class="field">Port<select name="cc_port"><option value="">—</option>'+Object.entries(CC_PORTS).map(([k,v])=>'<option value="'+esc(k)+'"'+(k===(pl.port||'')?' selected':'')+'>'+esc(v)+'</option>').join('')+'</select></label><label class="field">Conditions de paiement<input type="text" name="cc_conditions_paiement" value="'+esc(pl.conditions_paiement||'')+'" placeholder="ex : Comptant contre documents"></label></div>'
       + '<label class="field">Période d\'embarquement<select name="cc_periode_embarquement">'+lotsPeriodesEmbarquementOptions(pl.campagne_id, pl.periode_embarquement)+'</select></label>'
       + '<label class="field">Statut<select name="cc_statut">'+Object.entries(CONTRATS_CLIENTS_STATUTS).map(([k,v])=>'<option value="'+k+'"'+(k===(pl.statut||'actif')?' selected':'')+'>'+v[1]+'</option>').join('')+'</select></label>'
       + '<label class="field">Notes<textarea name="cc_notes" rows="2">'+esc(pl.notes||'')+'</textarea></label>'
