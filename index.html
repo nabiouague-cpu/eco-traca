@@ -3238,7 +3238,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-186';
+const APP_VERSION = '2026-10-02-187';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4797,16 +4797,18 @@ const LOTS_STATUTS_USINAGE = { ouvert:['info','Ouvert'], clos:['ok','Clos'] };
 const LOTS_STATUTS_EXPORT = { preparation:['warn','En préparation'], embarque:['ok','Embarqué'] };
 async function chargerLots(){
   if (!supabaseClient) return;
-  const [u, ua, e, eu] = await Promise.all([
+  const [u, ua, e, eu, se] = await Promise.all([
     supabaseClient.from('lots_usinage').select('*').order('created_at', { ascending:false }),
     supabaseClient.from('lots_usinage_achats').select('*'),
     supabaseClient.from('lots_export').select('*').order('created_at', { ascending:false }),
     supabaseClient.from('lots_export_usinage').select('*'),
+    supabaseClient.from('lots_series').select('*').order('numero_debut', { ascending:true }),
   ]);
   state.lotsUsinage = (u && !u.error) ? (u.data||[]) : (state.lotsUsinage||[]);
   state.lotsUsinageAchats = (ua && !ua.error) ? (ua.data||[]) : (state.lotsUsinageAchats||[]);
   state.lotsExport = (e && !e.error) ? (e.data||[]) : (state.lotsExport||[]);
   state.lotsExportUsinage = (eu && !eu.error) ? (eu.data||[]) : (state.lotsExportUsinage||[]);
+  state.lotsSeries = (se && !se.error) ? (se.data||[]) : (state.lotsSeries||[]);
   state.lotsCharges = true;
 }
 function lotsSousOnglet(){ return state.lotsSousOnglet || 'usinage'; }
@@ -4817,6 +4819,35 @@ function lotsNumeroSuivant(prefixe, liste){
   let n = 1;
   (liste||[]).forEach(l=>{ const m = String(l.numero||'').match(new RegExp('^'+base+'(\\d+)$')); if (m) n = Math.max(n, Number(m[1])+1); });
   return base+String(n).padStart(3,'0');
+}
+// ---- Series de numerotation (definies en debut de campagne, par type de cacao / niveau de tracabilite) ----
+// Choisir le type de cacao (et au besoin le niveau de tracabilite) sur un lot d'usinage ramene automatiquement
+// dans la serie correspondante : le numero suivant de la plage est propose, sans jamais depasser le dernier
+// numero de la serie si elle en a un. Un type sans serie definie retombe sur la numerotation libre LU-annee-NNN.
+function lotsSerieParId(id){ return (state.lotsSeries||[]).find(s=>s.id===id) || null; }
+function lotsSeriesDe(campagneId, typeCacao){
+  return (state.lotsSeries||[]).filter(s=>s.campagne_id===campagneId && s.type_cacao===typeCacao);
+}
+function lotsSerieProchainNumero(serie, saufLotId){
+  let max = Number(serie.numero_debut)-1;
+  (state.lotsUsinage||[]).forEach(l=>{
+    if (l.serie_id===serie.id && l.id!==saufLotId){ const n = parseInt(String(l.numero).replace(/\D+/g,''), 10); if (!isNaN(n)) max = Math.max(max, n); }
+  });
+  return max+1;
+}
+function lotsSerieComplet(serie){ return Number(serie.numero_fin)>0 && lotsSerieProchainNumero(serie) > Number(serie.numero_fin); }
+// Choisit, parmi les series d'une campagne+type, celle qui correspond au niveau de tracabilite demande ;
+// a defaut (niveau pas encore choisi, ou series qui ne distinguent pas de niveau), prend la serie sans niveau
+// precis, sinon la premiere disponible — jamais plusieurs series incompatibles en meme temps.
+function lotsSerieChoisir(campagneId, typeCacao, niveau){
+  const options = lotsSeriesDe(campagneId, typeCacao);
+  if (!options.length) return null;
+  if (niveau){ const exact = options.find(s=>s.niveau_tracabilite===niveau); if (exact) return exact; }
+  return options.find(s=>!s.niveau_tracabilite) || options[0];
+}
+function lotsSerieEtiquette(serie){
+  return (serie.libelle || (serie.type_cacao+(serie.niveau_tracabilite?' · '+serie.niveau_tracabilite:'')))
+    + ' ('+serie.numero_debut+(serie.numero_fin?'–'+serie.numero_fin:' et suivants')+')';
 }
 function lotsCampagneNom(id){ const c = (state.campagnes||[]).find(x=>x.id===id); return c ? c.nom : ''; }
 function lotsCampagneOptions(valeur){
@@ -4854,13 +4885,67 @@ function renderLotsTab(){
   let html = '<div class="panel"><div class="panel-head"><div><h2>Lots & export</h2><p class="hint" style="margin:4px 0 0">Livraisons reçues à l\'usine → lots d\'usinage → lots d\'export (connaissement maritime, conteneurs). Chaque lot garde la trace exacte de ce qui le compose.</p></div></div>'
     + '<div style="padding:0 18px 18px">'
     + '<div class="oc-subtabs">'
-    + [['usinage','Lots d\'usinage'],['export','Lots d\'export'],['chaine','Chaîne de traçabilité']].map(([id,l])=>'<button class="'+(actif===id?'active':'')+'" onclick="lotsSetSousOnglet(\''+id+'\')">'+l+'</button>').join('')
+    + [['usinage','Lots d\'usinage'],['export','Lots d\'export'],['series','Séries de numérotation'],['chaine','Chaîne de traçabilité']].map(([id,l])=>'<button class="'+(actif===id?'active':'')+'" onclick="lotsSetSousOnglet(\''+id+'\')">'+l+'</button>').join('')
     + '</div>';
   if (!state.lotsCharges) html += '<div class="hint">Chargement des lots…</div>';
   else if (actif==='usinage') html += renderLotsUsinage();
   else if (actif==='export') html += renderLotsExport();
+  else if (actif==='series') html += renderLotsSeries();
   else html += renderLotsChaine();
   return html + '</div></div>';
+}
+// ---- Series de numerotation : vue de gestion ----
+function renderLotsSeries(){
+  const series = (state.lotsSeries||[]).slice().sort((a,b)=>
+    String(lotsCampagneNom(b.campagne_id)||'').localeCompare(String(lotsCampagneNom(a.campagne_id)||''))
+    || String(a.type_cacao||'').localeCompare(String(b.type_cacao||''))
+    || Number(a.numero_debut||0) - Number(b.numero_debut||0));
+  let html = '<div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">'
+    + '<button class="btn btn-primary" onclick="lotsSerieOuvrir()">+ Nouvelle série</button>'
+    + '<span class="hint" style="margin:0">Définis en début de campagne une plage de numéros par type de cacao (et, si besoin, par niveau de traçabilité) : la création d\'un lot d\'usinage choisit alors automatiquement le bon numéro suivant.</span></div>';
+  if (!series.length) return html + '<div class="hint">Aucune série définie pour l\'instant. Exemple : RA Ségrégation 5035–5074, RA Mass Balance 6001–6226.</div>';
+  html += '<table class="tbl-fiches"><thead><tr><th>Campagne</th><th>Type de cacao</th><th>Niveau de traçabilité</th><th>Libellé</th><th>Plage</th><th>Lots numérotés</th><th>Prochain n°</th><th></th></tr></thead><tbody>';
+  series.forEach(s=>{
+    const utilises = (state.lotsUsinage||[]).filter(l=>l.serie_id===s.id).length;
+    const complet = lotsSerieComplet(s);
+    html += '<tr><td>'+esc(lotsCampagneNom(s.campagne_id)||'—')+'</td><td>'+esc(s.type_cacao||'—')+'</td><td>'+esc(s.niveau_tracabilite||'—')+'</td><td>'+esc(s.libelle||'—')+'</td><td>'+esc(String(s.numero_debut))+(s.numero_fin?' – '+esc(String(s.numero_fin)):' et suivants')+'</td><td>'+utilises+'</td><td>'+(complet?'<span class="badge warn">Série épuisée</span>':('n° '+lotsSerieProchainNumero(s)))+'</td>'
+      + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="lotsSerieOuvrir(\''+esc(s.id)+'\')">Modifier</button> <button class="btn-danger-text btn-compact" onclick="lotsSerieSupprimer(\''+esc(s.id)+'\')">Supprimer</button></td></tr>';
+  });
+  return html + '</tbody></table>';
+}
+function lotsSerieOuvrir(id){
+  const s = id ? lotsSerieParId(id) : null;
+  state.modal = { type:'lotsSerie', payload: s ? Object.assign({}, s) : { campagne_id:(state.campagneFilter && state.campagneFilter!=='all')?state.campagneFilter:'', type_cacao:'RA', niveau_tracabilite:'', libelle:'', numero_debut:'', numero_fin:'' } };
+  render();
+}
+async function lotsSerieEnregistrer(){
+  const pl = state.modal && state.modal.type==='lotsSerie' ? state.modal.payload : null; if (!pl) return;
+  const campagne_id = fv('serie_campagne')||null;
+  const type_cacao = fv('serie_type')||null;
+  const niveau_tracabilite = fv('serie_niveau')||null;
+  const numero_debut = Number(fv('serie_debut'));
+  const numero_fin = fv('serie_fin').trim() ? Number(fv('serie_fin')) : null;
+  if (!campagne_id){ showToast('Choisis la campagne.'); return; }
+  if (!type_cacao){ showToast('Choisis le type de cacao.'); return; }
+  if (!numero_debut || numero_debut<1){ showToast('Indique le premier numéro de la série.'); return; }
+  if (numero_fin!=null && numero_fin < numero_debut){ showToast('Le dernier numéro doit être supérieur ou égal au premier.'); return; }
+  const doublon = (state.lotsSeries||[]).find(s=>s.id!==pl.id && s.campagne_id===campagne_id && s.type_cacao===type_cacao && (s.niveau_tracabilite||'')===(niveau_tracabilite||''));
+  if (doublon){ showToast('Une série existe déjà pour cette campagne, ce type et ce niveau : modifie-la plutôt que d\'en créer une autre.'); return; }
+  const ligne = { campagne_id, type_cacao, niveau_tracabilite, libelle: fv('serie_libelle').trim()||null, numero_debut, numero_fin };
+  try{
+    if (pl.id){ const { error } = await supabaseClient.from('lots_series').update(ligne).eq('id', pl.id); if (error) throw error; }
+    else { ligne.id = genId('ls'); const { error } = await supabaseClient.from('lots_series').insert(ligne); if (error) throw error; }
+    await chargerLots(); closeModal(); showToast('Série enregistrée.', 'success');
+  }catch(e){ showToast('Échec : '+e.message); }
+}
+function lotsSerieSupprimer(id){
+  const s = lotsSerieParId(id); if (!s) return;
+  const utilises = (state.lotsUsinage||[]).filter(l=>l.serie_id===id).length;
+  askConfirm('Supprimer cette série ?'+(utilises?(' '+utilises+' lot(s) déjà numérotés dans cette série gardent leur numéro, mais n\'y seront plus rattachés.'):''), async()=>{
+    const { error } = await supabaseClient.from('lots_series').delete().eq('id', id);
+    if (error){ showToast('Échec : '+error.message); return; }
+    await chargerLots(); render(); showToast('Série supprimée.', 'success');
+  });
 }
 function renderLotsUsinage(){
   const lots = (state.lotsUsinage||[]);
@@ -4870,14 +4955,14 @@ function renderLotsUsinage(){
     + '<button class="btn btn-primary" onclick="lotUsinageOuvrir()">+ Nouveau lot d\'usinage</button>'
     + '<span class="hint" style="margin:0">'+recus.length+' livraison'+(recus.length>1?'s':'')+' reçue'+(recus.length>1?'s':'')+' à l\'usine · <b>'+fmtKg(dispo)+'</b> pas encore affectés à un lot</span></div>';
   if (!lots.length) return html + '<div class="hint">Aucun lot d\'usinage. Crée le premier, puis compose-le à partir des livraisons reçues.</div>';
-  html += '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th>N° lot</th><th>Campagne</th><th>Période</th><th>Site</th><th>Type</th><th>Livraisons</th><th>Entrée</th><th>Sortie</th><th>Dispo. export</th><th>Statut</th><th></th></tr></thead><tbody>';
+  html += '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th>N° lot</th><th>Campagne</th><th>Période</th><th>Site</th><th>Type</th><th>Niveau</th><th>Livraisons</th><th>Entrée</th><th>Sortie</th><th>Dispo. export</th><th>Statut</th><th></th></tr></thead><tbody>';
   lots.forEach(l=>{
     const compo = lotsUsinageCompo(l.id), entree = lotsUsinageEntree(l), sortie = lotsUsinageSortie(l), solde = lotsUsinageSoldeExport(l);
-    html += '<tr><td><b>'+esc(l.numero)+'</b></td><td>'+esc(lotsCampagneNom(l.campagne_id)||'—')+'</td><td>'+esc((dateFr(l.date_debut)||'—')+(l.date_fin?' → '+dateFr(l.date_fin):''))+'</td><td>'+esc(l.site||'—')+'</td><td>'+esc(l.type_cacao||'—')+'</td>'
+    html += '<tr><td><b>'+esc(l.numero)+'</b></td><td>'+esc(lotsCampagneNom(l.campagne_id)||'—')+'</td><td>'+esc((dateFr(l.date_debut)||'—')+(l.date_fin?' → '+dateFr(l.date_fin):''))+'</td><td>'+esc(l.site||'—')+'</td><td>'+esc(l.type_cacao||'—')+'</td><td>'+esc(l.niveau_tracabilite||'—')+'</td>'
       + '<td>'+compo.length+'</td><td>'+fmtKg(entree)+'</td><td>'+fmtKg(sortie)+(Number(l.poids_sortie_kg)>0 && entree>0 ? ' <span class="hint" style="margin:0">('+Math.round((sortie/entree)*1000)/10+' %)</span>' : '')+'</td><td>'+fmtKg(solde)+'</td><td>'+lotsBadge(LOTS_STATUTS_USINAGE, l.statut)+'</td>'
       + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="lotUsinageComposer(\''+esc(l.id)+'\')">Composer</button> <button class="btn-ghost btn-compact" onclick="lotUsinageOuvrir(\''+esc(l.id)+'\')">Modifier</button> <button class="btn-ghost btn-compact" onclick="lotUsinageBasculer(\''+esc(l.id)+'\')">'+(l.statut==='clos'?'Rouvrir':'Clore')+'</button> <button class="btn-danger-text btn-compact" onclick="lotUsinageSupprimer(\''+esc(l.id)+'\')">Supprimer</button></td></tr>';
     if (compo.length){
-      html += '<tr class="lots-detail"><td colspan="11"><div class="lots-compo">'+compo.map(c=>{ const a = lotsAchatParId(c.achat_id); return '<span class="lots-puce">'+esc(a ? lotsTexteAchat(a) : c.achat_id)+' — <b>'+fmtKg(c.poids_kg)+'</b></span>'; }).join('')+'</div></td></tr>';
+      html += '<tr class="lots-detail"><td colspan="12"><div class="lots-compo">'+compo.map(c=>{ const a = lotsAchatParId(c.achat_id); return '<span class="lots-puce">'+esc(a ? lotsTexteAchat(a) : c.achat_id)+' — <b>'+fmtKg(c.poids_kg)+'</b></span>'; }).join('')+'</div></td></tr>';
     }
   });
   return html + '</tbody></table></div>';
@@ -4886,15 +4971,15 @@ function renderLotsExport(){
   const lots = (state.lotsExport||[]);
   let html = '<div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px"><button class="btn btn-primary" onclick="lotExportOuvrir()">+ Nouveau lot d\'export</button></div>';
   if (!lots.length) return html + '<div class="hint">Aucun lot d\'export. Crée-le, compose-le à partir des lots d\'usinage, puis renseigne le connaissement maritime et les conteneurs.</div>';
-  html += '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th>N° lot</th><th>Client</th><th>Navire</th><th>B/L</th><th>Embarquement</th><th>Conteneurs</th><th>Poids (lots)</th><th>Poids (conteneurs)</th><th>Statut</th><th></th></tr></thead><tbody>';
+  html += '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th>N° lot</th><th>Client</th><th>Navire</th><th>B/L</th><th>Réf. vendeur</th><th>Niveau</th><th>Embarquement</th><th>Conteneurs</th><th>Poids (lots)</th><th>Poids (conteneurs)</th><th>Statut</th><th></th></tr></thead><tbody>';
   lots.forEach(l=>{
     const compo = lotsExportCompo(l.id), poids = lotsExportPoids(l), pc = lotsConteneursPoids(l), nc = lotsConteneurs(l).length;
     const ecart = (poids>0 && pc>0 && Math.abs(poids-pc)>1) ? ' <span class="badge warn" title="Le poids des conteneurs diffère du poids des lots affectés">écart '+fmtKg(pc-poids)+'</span>' : '';
-    html += '<tr><td><b>'+esc(l.numero)+'</b></td><td>'+esc(l.client||'—')+'</td><td>'+esc(l.navire||'—')+'</td><td>'+esc(l.bl_numero||'—')+(l.bl_date?' <span class="hint" style="margin:0">'+esc(dateFr(l.bl_date))+'</span>':'')+'</td><td>'+esc(dateFr(l.date_embarquement)||'—')+(l.port_embarquement?' <span class="hint" style="margin:0">'+esc(l.port_embarquement)+(l.port_destination?' → '+esc(l.port_destination):'')+'</span>':'')+'</td>'
+    html += '<tr><td><b>'+esc(l.numero)+'</b></td><td>'+esc(l.client||'—')+'</td><td>'+esc(l.navire||'—')+'</td><td>'+esc(l.bl_numero||'—')+(l.bl_date?' <span class="hint" style="margin:0">'+esc(dateFr(l.bl_date))+'</span>':'')+'</td><td>'+esc(l.ref_vendeur||'—')+'</td><td>'+esc(l.niveau_tracabilite||'—')+'</td><td>'+esc(dateFr(l.date_embarquement)||'—')+(l.port_embarquement?' <span class="hint" style="margin:0">'+esc(l.port_embarquement)+(l.port_destination?' → '+esc(l.port_destination):'')+'</span>':'')+'</td>'
       + '<td>'+nc+'</td><td>'+fmtKg(poids)+'</td><td>'+(nc?fmtKg(pc):'—')+ecart+'</td><td>'+lotsBadge(LOTS_STATUTS_EXPORT, l.statut)+'</td>'
       + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="lotExportComposer(\''+esc(l.id)+'\')">Composer</button> <button class="btn-ghost btn-compact" onclick="lotExportConteneurs(\''+esc(l.id)+'\')">Conteneurs</button> <button class="btn-ghost btn-compact" onclick="lotExportOuvrir(\''+esc(l.id)+'\')">Modifier</button> <button class="btn-ghost btn-compact" onclick="lotsVoirChaine(\''+esc(l.id)+'\')">Chaîne</button> <button class="btn-danger-text btn-compact" onclick="lotExportSupprimer(\''+esc(l.id)+'\')">Supprimer</button></td></tr>';
     if (compo.length){
-      html += '<tr class="lots-detail"><td colspan="10"><div class="lots-compo">'+compo.map(c=>{ const u = lotUsinageParId(c.lot_usinage_id); return '<span class="lots-puce">'+esc(u ? u.numero : c.lot_usinage_id)+' — <b>'+fmtKg(c.poids_kg)+'</b></span>'; }).join('')+'</div></td></tr>';
+      html += '<tr class="lots-detail"><td colspan="12"><div class="lots-compo">'+compo.map(c=>{ const u = lotUsinageParId(c.lot_usinage_id); return '<span class="lots-puce">'+esc(u ? u.numero : c.lot_usinage_id)+' — <b>'+fmtKg(c.poids_kg)+'</b></span>'; }).join('')+'</div></td></tr>';
     }
   });
   return html + '</tbody></table></div>';
@@ -4926,11 +5011,11 @@ function renderLotsChaine(){
   const maillon = (titre, sous, corps)=>'<div class="lots-maillon"><div class="lots-maillon-tete"><b>'+titre+'</b>'+(sous?'<span>'+sous+'</span>':'')+'</div>'+corps+'</div>';
   html += '<div class="lots-chaine">';
   html += maillon('Lot d\'export '+esc(lot.numero), lotsBadge(LOTS_STATUTS_EXPORT, lot.statut),
-    '<div class="info-grid"><div><span>Client :</span> '+esc(lot.client||'—')+'</div><div><span>Navire :</span> '+esc(lot.navire||'—')+'</div><div><span>B/L :</span> '+esc(lot.bl_numero||'—')+(lot.bl_date?' du '+esc(dateFr(lot.bl_date)):'')+'</div><div><span>Embarquement :</span> '+esc(dateFr(lot.date_embarquement)||'—')+(lot.port_embarquement?' · '+esc(lot.port_embarquement):'')+(lot.port_destination?' → '+esc(lot.port_destination):'')+'</div><div><span>Poids affecté :</span> '+fmtKg(lotsExportPoids(lot))+'</div><div><span>Conteneurs :</span> '+lotsConteneurs(lot).length+' · '+fmtKg(lotsConteneursPoids(lot))+'</div></div>'
+    '<div class="info-grid"><div><span>Client :</span> '+esc(lot.client||'—')+'</div><div><span>Navire :</span> '+esc(lot.navire||'—')+'</div><div><span>B/L :</span> '+esc(lot.bl_numero||'—')+(lot.bl_date?' du '+esc(dateFr(lot.bl_date)):'')+'</div><div><span>Réf. vendeur :</span> '+esc(lot.ref_vendeur||'—')+'</div><div><span>Niveau de traçabilité :</span> '+esc(lot.niveau_tracabilite||'—')+'</div><div><span>Embarquement :</span> '+esc(dateFr(lot.date_embarquement)||'—')+(lot.port_embarquement?' · '+esc(lot.port_embarquement):'')+(lot.port_destination?' → '+esc(lot.port_destination):'')+'</div><div><span>Poids affecté :</span> '+fmtKg(lotsExportPoids(lot))+'</div><div><span>Conteneurs :</span> '+lotsConteneurs(lot).length+' · '+fmtKg(lotsConteneursPoids(lot))+'</div></div>'
     + (lotsConteneurs(lot).length ? '<div class="lots-compo">'+lotsConteneurs(lot).map(c=>'<span class="lots-puce">'+esc(c.numero||'(n°)')+(c.scelle?' · scellé '+esc(c.scelle):'')+(c.sacs?' · '+esc(c.sacs)+' sacs':'')+' — <b>'+fmtKg(c.poids_net_kg)+'</b></span>').join('')+'</div>' : ''));
   html += '<div class="lots-fleche">↓</div>';
   html += maillon(ch.usinages.length+' lot'+(ch.usinages.length>1?'s':'')+' d\'usinage', fmtKg(ch.usinages.reduce((s,u)=>s+u.kg,0)),
-    ch.usinages.length ? '<table class="tbl-fiches"><thead><tr><th>N° lot</th><th>Période</th><th>Site</th><th>Type</th><th>Pris pour l\'export</th><th>Sortie du lot</th></tr></thead><tbody>'+ch.usinages.map(u=>'<tr><td><b>'+esc(u.lot.numero)+'</b></td><td>'+esc((dateFr(u.lot.date_debut)||'—')+(u.lot.date_fin?' → '+dateFr(u.lot.date_fin):''))+'</td><td>'+esc(u.lot.site||'—')+'</td><td>'+esc(u.lot.type_cacao||'—')+'</td><td>'+fmtKg(u.kg)+'</td><td>'+fmtKg(lotsUsinageSortie(u.lot))+'</td></tr>').join('')+'</tbody></table>' : '<div class="hint">Aucun lot d\'usinage affecté : clique « Composer » sur le lot d\'export.</div>');
+    ch.usinages.length ? '<table class="tbl-fiches"><thead><tr><th>N° lot</th><th>Période</th><th>Site</th><th>Type</th><th>Niveau</th><th>Pris pour l\'export</th><th>Sortie du lot</th></tr></thead><tbody>'+ch.usinages.map(u=>'<tr><td><b>'+esc(u.lot.numero)+'</b></td><td>'+esc((dateFr(u.lot.date_debut)||'—')+(u.lot.date_fin?' → '+dateFr(u.lot.date_fin):''))+'</td><td>'+esc(u.lot.site||'—')+'</td><td>'+esc(u.lot.type_cacao||'—')+'</td><td>'+esc(u.lot.niveau_tracabilite||'—')+'</td><td>'+fmtKg(u.kg)+'</td><td>'+fmtKg(lotsUsinageSortie(u.lot))+'</td></tr>').join('')+'</tbody></table>' : '<div class="hint">Aucun lot d\'usinage affecté : clique « Composer » sur le lot d\'export.</div>');
   html += '<div class="lots-fleche">↓</div>';
   html += maillon(ch.livraisons.length+' livraison'+(ch.livraisons.length>1?'s':'')+' reçue'+(ch.livraisons.length>1?'s':'')+' à l\'usine', fmtKg(ch.livraisons.reduce((s,l)=>s+l.kgExport,0))+' au prorata',
     ch.livraisons.length ? '<table class="tbl-fiches"><thead><tr><th>Connaissement</th><th>Coopérative</th><th>Date</th><th>Poids net usine</th><th>Dans le lot d\'usinage</th><th>Part exportée</th><th>Producteurs tracés</th></tr></thead><tbody>'+ch.livraisons.map(l=>{ const c = coopById(l.achat.cooperative_id); return '<tr><td><b>'+esc(l.achat.connaissement||'—')+'</b> <span class="hint" style="margin:0">'+esc(l.lotUsinage.numero)+'</span></td><td>'+esc(c?c.nom:'—')+'</td><td>'+esc(dateFr(l.achat.date)||'—')+'</td><td>'+fmtKg(l.achat.poids_net_produit)+'</td><td>'+fmtKg(l.kgUsinage)+'</td><td>'+fmtKg(l.kgExport)+'</td><td>'+(l.producteurs.length ? l.producteurs.length+' producteur'+(l.producteurs.length>1?'s':'') : '<span class="hint" style="margin:0">non tracé</span>')+'</td></tr>'; }).join('')+'</tbody></table>' : '<div class="hint">Aucune livraison : les lots d\'usinage ne sont pas encore composés.</div>');
@@ -4948,11 +5033,11 @@ async function lotsExporterDossier(id){
   const entete = (ws)=>{ ws.getRow(1).eachCell(c=>{ c.font = { bold:true, color:{ argb:'FFFFFFFF' } }; c.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FF0E3B36' } }; }); };
   const w1 = wb.addWorksheet('Lot export');
   w1.columns = [{ width:28 }, { width:50 }];
-  [['N° lot', lot.numero], ['Client', lot.client||''], ['Navire', lot.navire||''], ['Connaissement maritime (B/L)', lot.bl_numero||''], ['Date B/L', lot.bl_date||''], ['Port d\'embarquement', lot.port_embarquement||''], ['Port de destination', lot.port_destination||''], ['Date d\'embarquement', lot.date_embarquement||''], ['Statut', (LOTS_STATUTS_EXPORT[lot.statut]||[])[1]||lot.statut], ['Poids affecté (lots d\'usinage)', lotsExportPoids(lot)], ['Poids des conteneurs', lotsConteneursPoids(lot)], ['Notes', lot.notes||''], ['Dossier généré le', new Date().toLocaleString('fr-FR')]].forEach(r=>{ const row = w1.addRow(r); row.getCell(1).font = { bold:true }; });
+  [['N° lot', lot.numero], ['Client', lot.client||''], ['Navire', lot.navire||''], ['Connaissement maritime (B/L)', lot.bl_numero||''], ['Date B/L', lot.bl_date||''], ['Réf. vendeur', lot.ref_vendeur||''], ['Niveau de traçabilité', lot.niveau_tracabilite||''], ['Port d\'embarquement', lot.port_embarquement||''], ['Port de destination', lot.port_destination||''], ['Date d\'embarquement', lot.date_embarquement||''], ['Statut', (LOTS_STATUTS_EXPORT[lot.statut]||[])[1]||lot.statut], ['Poids affecté (lots d\'usinage)', lotsExportPoids(lot)], ['Poids des conteneurs', lotsConteneursPoids(lot)], ['Notes', lot.notes||''], ['Dossier généré le', new Date().toLocaleString('fr-FR')]].forEach(r=>{ const row = w1.addRow(r); row.getCell(1).font = { bold:true }; });
   const w2 = wb.addWorksheet('Conteneurs'); w2.columns = [{ header:'N° conteneur', width:20 }, { header:'Scellé', width:18 }, { header:'Sacs', width:10 }, { header:'Poids net (kg)', width:16 }];
   lotsConteneurs(lot).forEach(c=>w2.addRow([c.numero||'', c.scelle||'', Number(c.sacs)||'', Number(c.poids_net_kg)||0])); entete(w2);
-  const w3 = wb.addWorksheet('Lots usinage'); w3.columns = [{ header:'N° lot', width:16 }, { header:'Campagne', width:14 }, { header:'Début', width:12 }, { header:'Fin', width:12 }, { header:'Site', width:22 }, { header:'Type', width:10 }, { header:'Entrée (kg)', width:14 }, { header:'Sortie (kg)', width:14 }, { header:'Pris pour ce lot (kg)', width:20 }];
-  ch.usinages.forEach(u=>w3.addRow([u.lot.numero, lotsCampagneNom(u.lot.campagne_id), u.lot.date_debut||'', u.lot.date_fin||'', u.lot.site||'', u.lot.type_cacao||'', lotsUsinageEntree(u.lot), lotsUsinageSortie(u.lot), u.kg])); entete(w3);
+  const w3 = wb.addWorksheet('Lots usinage'); w3.columns = [{ header:'N° lot', width:16 }, { header:'Campagne', width:14 }, { header:'Début', width:12 }, { header:'Fin', width:12 }, { header:'Site', width:22 }, { header:'Type', width:10 }, { header:'Niveau de traçabilité', width:20 }, { header:'Date de production', width:16 }, { header:'Entrée (kg)', width:14 }, { header:'Sortie (kg)', width:14 }, { header:'Pris pour ce lot (kg)', width:20 }];
+  ch.usinages.forEach(u=>w3.addRow([u.lot.numero, lotsCampagneNom(u.lot.campagne_id), u.lot.date_debut||'', u.lot.date_fin||'', u.lot.site||'', u.lot.type_cacao||'', u.lot.niveau_tracabilite||'', u.lot.date_production||'', lotsUsinageEntree(u.lot), lotsUsinageSortie(u.lot), u.kg])); entete(w3);
   const w4 = wb.addWorksheet('Livraisons'); w4.columns = [{ header:'Connaissement', width:22 }, { header:'Coopérative', width:28 }, { header:'N° CCC', width:14 }, { header:'Date', width:12 }, { header:'Lieu d\'origine', width:20 }, { header:'Poids net usine (kg)', width:18 }, { header:'Lot usinage', width:16 }, { header:'Dans le lot usinage (kg)', width:20 }, { header:'Part exportée (kg)', width:18 }, { header:'Transporteur', width:20 }, { header:'Immatriculation', width:16 }, { header:'Producteurs tracés', width:16 }];
   ch.livraisons.forEach(l=>{ const c = coopById(l.achat.cooperative_id)||{}; w4.addRow([l.achat.connaissement||'', c.nom||'', c.ccc_num||'', l.achat.date||'', l.achat.lieu_origine||'', lotsAchatPoidsRecu(l.achat), l.lotUsinage.numero, l.kgUsinage, l.kgExport, l.achat.nom_transporteur||'', l.achat.immat_vehicule||'', l.producteurs.length]); }); entete(w4);
   const w5 = wb.addWorksheet('Coopératives'); w5.columns = [{ header:'Coopérative', width:28 }, { header:'Nom complet', width:40 }, { header:'N° CCC', width:14 }, { header:'Statut', width:22 }, { header:'Certification', width:20 }, { header:'Identifiant', width:18 }, { header:'Ville', width:16 }, { header:'Livraisons', width:12 }, { header:'Part exportée (kg)', width:18 }, { header:'Producteurs au registre', width:20 }];
@@ -4964,13 +5049,33 @@ async function lotsExporterDossier(id){
 // ---- Lots d'usinage : fiche, composition, statut, suppression ----
 function lotUsinageOuvrir(id){
   const l = id ? lotUsinageParId(id) : null;
-  state.modal = { type:'lotUsinage', payload: l ? Object.assign({}, l) : { numero: lotsNumeroSuivant('LU', state.lotsUsinage), campagne_id: (state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : '', type_cacao:'RA', statut:'ouvert' } };
+  if (l){ state.modal = { type:'lotUsinage', payload: Object.assign({}, l) }; render(); return; }
+  const campagne_id = (state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : '';
+  const type_cacao = 'RA', niveau_tracabilite = '';
+  const serie = lotsSerieChoisir(campagne_id, type_cacao, niveau_tracabilite);
+  state.modal = { type:'lotUsinage', payload: { campagne_id, type_cacao, niveau_tracabilite, statut:'ouvert',
+    serie_id: serie ? serie.id : null, numero: serie ? String(lotsSerieProchainNumero(serie)) : lotsNumeroSuivant('LU', state.lotsUsinage) } };
+  render();
+}
+// Recalcule, a chaque changement de campagne/type/niveau sur un NOUVEAU lot, la serie correspondante et propose
+// son prochain numero (sauf si l'utilisateur a deja retouche le numero a la main). Un lot existant garde son
+// numero : on ne fait que mettre a jour les champs simples et l'indication de serie affichee.
+function lotUsinageRecalculerSerie(){
+  const pl = state.modal && state.modal.type==='lotUsinage' ? state.modal.payload : null; if (!pl) return;
+  pl.campagne_id = fv('lot_campagne')||'';
+  pl.type_cacao = fv('lot_type')||'';
+  pl.niveau_tracabilite = fv('lot_niveau')||'';
+  if (!pl.id){
+    const serie = lotsSerieChoisir(pl.campagne_id, pl.type_cacao, pl.niveau_tracabilite);
+    if (serie && !pl._numeroManuel){ pl.serie_id = serie.id; pl.numero = String(lotsSerieProchainNumero(serie)); }
+    else if (!serie){ pl.serie_id = null; }
+  }
   render();
 }
 async function lotUsinageEnregistrer(){
   const pl = state.modal && state.modal.type==='lotUsinage' ? state.modal.payload : null; if (!pl) return;
   const numero = fv('lot_numero').trim(); if (!numero){ showToast('Indique le numéro du lot.'); return; }
-  const ligne = { numero, campagne_id: fv('lot_campagne')||null, site: fv('lot_site').trim()||null, type_cacao: fv('lot_type')||null, date_debut: fv('lot_date_debut')||null, date_fin: fv('lot_date_fin')||null, poids_sortie_kg: Number(fv('lot_sortie'))||null, notes: fv('lot_notes').trim()||null, updated_at: new Date().toISOString() };
+  const ligne = { numero, campagne_id: fv('lot_campagne')||null, site: fv('lot_site').trim()||null, type_cacao: fv('lot_type')||null, niveau_tracabilite: fv('lot_niveau')||null, date_production: fv('lot_date_prod')||null, serie_id: pl.serie_id||null, date_debut: fv('lot_date_debut')||null, date_fin: fv('lot_date_fin')||null, poids_sortie_kg: Number(fv('lot_sortie'))||null, notes: fv('lot_notes').trim()||null, updated_at: new Date().toISOString() };
   try{
     if (pl.id){ const { error } = await supabaseClient.from('lots_usinage').update(ligne).eq('id', pl.id); if (error) throw error; }
     else { ligne.id = genId('lu'); ligne.statut = 'ouvert'; const { error } = await supabaseClient.from('lots_usinage').insert(ligne); if (error) throw error; }
@@ -5038,7 +5143,7 @@ function lotExportOuvrir(id){
 async function lotExportEnregistrer(){
   const pl = state.modal && state.modal.type==='lotExport' ? state.modal.payload : null; if (!pl) return;
   const numero = fv('le_numero').trim(); if (!numero){ showToast('Indique le numéro du lot.'); return; }
-  const ligne = { numero, campagne_id: fv('le_campagne')||null, client: fv('le_client').trim()||null, navire: fv('le_navire').trim()||null, port_embarquement: fv('le_port_emb').trim()||null, port_destination: fv('le_port_dest').trim()||null, date_embarquement: fv('le_date_emb')||null, bl_numero: fv('le_bl').trim()||null, bl_date: fv('le_bl_date')||null, statut: fv('le_statut')||'preparation', notes: fv('le_notes').trim()||null, updated_at: new Date().toISOString() };
+  const ligne = { numero, campagne_id: fv('le_campagne')||null, client: fv('le_client').trim()||null, navire: fv('le_navire').trim()||null, port_embarquement: fv('le_port_emb').trim()||null, port_destination: fv('le_port_dest').trim()||null, date_embarquement: fv('le_date_emb')||null, bl_numero: fv('le_bl').trim()||null, bl_date: fv('le_bl_date')||null, ref_vendeur: fv('le_ref_vendeur').trim()||null, niveau_tracabilite: fv('le_niveau')||null, statut: fv('le_statut')||'preparation', notes: fv('le_notes').trim()||null, updated_at: new Date().toISOString() };
   try{
     if (pl.id){ const { error } = await supabaseClient.from('lots_export').update(ligne).eq('id', pl.id); if (error) throw error; }
     else { ligne.id = genId('le'); ligne.conteneurs = []; const { error } = await supabaseClient.from('lots_export').insert(ligne); if (error) throw error; }
@@ -5079,6 +5184,13 @@ async function lotExportCompoEnregistrer(){
   try{
     const { error: e1 } = await supabaseClient.from('lots_export_usinage').delete().eq('lot_export_id', pl.lotId); if (e1) throw e1;
     if (lignes.length){ const { error: e2 } = await supabaseClient.from('lots_export_usinage').insert(lignes.map(x=>({ id: genId('leu'), lot_export_id: pl.lotId, lot_usinage_id: x.lot_usinage_id, poids_kg: x.poids_kg }))); if (e2) throw e2; }
+    // Le lot d'export herite du niveau de tracabilite de ses lots d'usinage quand ils sont tous au meme niveau
+    // et que le lot d'export n'en a pas deja un choisi a la main — evite d'avoir a le ressaisir a chaque composition.
+    const lotExp = lotExportParId(pl.lotId);
+    if (lotExp && !lotExp.niveau_tracabilite && lignes.length){
+      const niveaux = new Set(lignes.map(x=>{ const u = lotUsinageParId(x.lot_usinage_id); return u && u.niveau_tracabilite; }).filter(Boolean));
+      if (niveaux.size===1){ await supabaseClient.from('lots_export').update({ niveau_tracabilite: [...niveaux][0] }).eq('id', pl.lotId); }
+    }
     await chargerLots(); closeModal(); showToast('Composition enregistrée : '+fmtKg(lignes.reduce((s,x)=>s+x.poids_kg,0))+'.', 'success');
   }catch(e){ showToast('Échec : '+e.message); }
 }
@@ -5108,11 +5220,19 @@ function lotsModalsHtml(){
   const m = state.modal; if (!m) return '';
   if (m.type==='lotUsinage'){
     const pl = m.payload;
+    const serieActive = lotsSerieChoisir(pl.campagne_id, pl.type_cacao, pl.niveau_tracabilite);
+    const serieInfo = !pl.id
+      ? (serieActive
+          ? '<div class="hint" style="margin:-4px 0 10px">Série : <b>'+esc(lotsSerieEtiquette(serieActive))+'</b> — prochain n° libre : <b>'+lotsSerieProchainNumero(serieActive)+'</b></div>'
+          : '<div class="hint" style="margin:-4px 0 10px">Aucune série définie pour cette campagne/type/niveau — numérotation libre. <a href="javascript:void(0)" onclick="closeModal();lotsSetSousOnglet(\'series\')">Définir une série</a></div>')
+      : (serieActive ? '<div class="hint" style="margin:-4px 0 10px">Série : <b>'+esc(lotsSerieEtiquette(serieActive))+'</b></div>' : '');
     return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>'+(pl.id?'Modifier le lot d\'usinage':'Nouveau lot d\'usinage')+'</h3><div id="modal-fields">'
-      + '<label class="field">N° de lot<input type="text" name="lot_numero" value="'+esc(pl.numero||'')+'"></label>'
-      + '<label class="field">Campagne<select name="lot_campagne">'+lotsCampagneOptions(pl.campagne_id)+'</select></label>'
+      + '<label class="field">N° de lot<input type="text" name="lot_numero" value="'+esc(pl.numero||'')+'" oninput="state.modal.payload.numero=this.value;state.modal.payload._numeroManuel=true"></label>'
+      + '<label class="field">Campagne<select name="lot_campagne" onchange="lotUsinageRecalculerSerie()">'+lotsCampagneOptions(pl.campagne_id)+'</select></label>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Site / usine<input type="text" name="lot_site" value="'+esc(pl.site||'')+'" placeholder="ex : Usine d\'Abidjan"></label><label class="field">Type de cacao<select name="lot_type" onchange="lotUsinageRecalculerSerie()">'+LOTS_TYPES_CACAO.map(t=>'<option value="'+t+'"'+(t===(pl.type_cacao||'RA')?' selected':'')+'>'+t+'</option>').join('')+'</select></label></div>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Niveau de traçabilité<select name="lot_niveau" onchange="lotUsinageRecalculerSerie()"><option value="">—</option>'+OC_NIVEAUX_TRACABILITE.map(n=>'<option value="'+esc(n)+'"'+(n===(pl.niveau_tracabilite||'')?' selected':'')+'>'+esc(n)+'</option>').join('')+'</select></label><label class="field">Date de production<input type="date" name="lot_date_prod" value="'+esc(pl.date_production||'')+'"></label></div>'
+      + serieInfo
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Début d\'usinage<input type="date" name="lot_date_debut" value="'+esc(pl.date_debut||'')+'"></label><label class="field">Fin d\'usinage<input type="date" name="lot_date_fin" value="'+esc(pl.date_fin||'')+'"></label></div>'
-      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Site / usine<input type="text" name="lot_site" value="'+esc(pl.site||'')+'" placeholder="ex : Usine d\'Abidjan"></label><label class="field">Type de cacao<select name="lot_type">'+LOTS_TYPES_CACAO.map(t=>'<option value="'+t+'"'+(t===(pl.type_cacao||'RA')?' selected':'')+'>'+t+'</option>').join('')+'</select></label></div>'
       + '<label class="field">Poids de sortie après usinage (kg)<input type="number" name="lot_sortie" value="'+esc(pl.poids_sortie_kg||'')+'" placeholder="vide = poids d\'entrée"></label>'
       + '<label class="field">Notes<textarea name="lot_notes" rows="2">'+esc(pl.notes||'')+'</textarea></label>'
       + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="lotUsinageEnregistrer()">Enregistrer</button></div></div></div>';
@@ -5137,6 +5257,7 @@ function lotsModalsHtml(){
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Client / acheteur<input type="text" name="le_client" value="'+esc(pl.client||'')+'" placeholder="ex : CARGILL"></label><label class="field">Navire<input type="text" name="le_navire" value="'+esc(pl.navire||'')+'"></label></div>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Port d\'embarquement<input type="text" name="le_port_emb" value="'+esc(pl.port_embarquement||'')+'"></label><label class="field">Port de destination<input type="text" name="le_port_dest" value="'+esc(pl.port_destination||'')+'"></label></div>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 12px"><label class="field">N° connaissement maritime (B/L)<input type="text" name="le_bl" value="'+esc(pl.bl_numero||'')+'"></label><label class="field">Date du B/L<input type="date" name="le_bl_date" value="'+esc(pl.bl_date||'')+'"></label><label class="field">Date d\'embarquement<input type="date" name="le_date_emb" value="'+esc(pl.date_embarquement||'')+'"></label></div>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Réf. vendeur<input type="text" name="le_ref_vendeur" value="'+esc(pl.ref_vendeur||'')+'" placeholder="ex : SP-0015A/25-26/000648"></label><label class="field">Niveau de traçabilité<select name="le_niveau"><option value="">—</option>'+OC_NIVEAUX_TRACABILITE.map(n=>'<option value="'+esc(n)+'"'+(n===(pl.niveau_tracabilite||'')?' selected':'')+'>'+esc(n)+'</option>').join('')+'</select></label></div>'
       + '<label class="field">Statut<select name="le_statut">'+Object.entries(LOTS_STATUTS_EXPORT).map(([k,v])=>'<option value="'+k+'"'+(k===(pl.statut||'preparation')?' selected':'')+'>'+v[1]+'</option>').join('')+'</select></label>'
       + '<label class="field">Notes<textarea name="le_notes" rows="2">'+esc(pl.notes||'')+'</textarea></label>'
       + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="lotExportEnregistrer()">Enregistrer</button></div></div></div>';
@@ -5161,6 +5282,17 @@ function lotsModalsHtml(){
       + pl.conteneurs.map((c,i)=>'<div class="lots-conteneur"><input type="text" name="ct_numero" value="'+esc(c.numero||'')+'" placeholder="N° conteneur"><input type="text" name="ct_scelle" value="'+esc(c.scelle||'')+'" placeholder="Scellé"><input type="number" name="ct_sacs" value="'+esc(c.sacs||'')+'" placeholder="Sacs"><input type="number" name="ct_poids" value="'+esc(c.poids_net_kg||'')+'" placeholder="Poids net (kg)" oninput="lotExportConteneursTotal()"><button type="button" class="btn-ghost btn-compact" onclick="lotExportConteneurRetirer('+i+')">✕</button></div>').join('')
       + '<button type="button" class="btn-ghost btn-compact" onclick="lotExportConteneurAjouter()">+ Ajouter un conteneur</button>'
       + '</div><div class="actions"><span style="margin-right:auto;font-weight:600">Total : <span id="ct-total">'+fmtKg(total)+'</span></span><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="lotExportConteneursEnregistrer()">Enregistrer</button></div></div></div>';
+  }
+  if (m.type==='lotsSerie'){
+    const pl = m.payload;
+    return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>'+(pl.id?'Modifier la série':'Nouvelle série de numérotation')+'</h3>'
+      + '<div class="hint" style="margin-bottom:10px">Une série par type de cacao (et, si plusieurs niveaux de traçabilité coexistent pour ce type, une série par niveau) : exemple RA Ségrégation 5035–5074, RA Mass Balance 6001–6226.</div>'
+      + '<div id="modal-fields">'
+      + '<label class="field">Campagne<select name="serie_campagne">'+lotsCampagneOptions(pl.campagne_id)+'</select></label>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Type de cacao<select name="serie_type">'+LOTS_TYPES_CACAO.map(t=>'<option value="'+t+'"'+(t===(pl.type_cacao||'RA')?' selected':'')+'>'+t+'</option>').join('')+'</select></label><label class="field">Niveau de traçabilité (optionnel)<select name="serie_niveau"><option value="">—</option>'+OC_NIVEAUX_TRACABILITE.map(n=>'<option value="'+esc(n)+'"'+(n===(pl.niveau_tracabilite||'')?' selected':'')+'>'+esc(n)+'</option>').join('')+'</select></label></div>'
+      + '<label class="field">Libellé (affiché dans les listes)<input type="text" name="serie_libelle" value="'+esc(pl.libelle||'')+'" placeholder="ex : RA Ségrégation"></label>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Premier numéro<input type="number" name="serie_debut" value="'+esc(pl.numero_debut||'')+'" placeholder="ex : 5035"></label><label class="field">Dernier numéro (optionnel)<input type="number" name="serie_fin" value="'+esc(pl.numero_fin||'')+'" placeholder="laisser vide si illimité"></label></div>'
+      + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="lotsSerieEnregistrer()">Enregistrer</button></div></div></div>';
   }
   return '';
 }
