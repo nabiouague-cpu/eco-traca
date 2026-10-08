@@ -3238,7 +3238,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-08-192';
+const APP_VERSION = '2026-10-08-193';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5085,6 +5085,42 @@ function lotsSerieSupprimer(id){
 // numerotation ou un lot d'usinage peuvent etre rattaches a un contrat precis (contrat_client_id) pour
 // reprendre automatiquement son type de cacao et son niveau de tracabilite.
 function contratClientParId(id){ return (state.contratsClients||[]).find(c=>c.id===id) || null; }
+// Parite fixe EUR/FCFA (BCEAO) : 1 EUR = 655,957 XOF, inchangee depuis sa creation. Permet de convertir le
+// prix automatiquement quand on change de devise entre EUR et FCFA. Le USD n'a pas de parite fixe (taux
+// flottant) : un changement impliquant USD ne convertit pas le montant, a ajuster a la main.
+const XOF_PAR_EUR = 655.957;
+function ccPrixVersEurParKg(valeur, devise){
+  if (!(Number(valeur)>0)) return null;
+  if (devise==='EUR/T') return valeur/1000;
+  if (devise==='FCFA/kg') return valeur/XOF_PAR_EUR;
+  return null;
+}
+function ccPrixDepuisEurParKg(eurParKg, devise){
+  if (eurParKg==null) return null;
+  if (devise==='EUR/T') return eurParKg*1000;
+  if (devise==='FCFA/kg') return eurParKg*XOF_PAR_EUR;
+  return null;
+}
+function ccPrixDeviseChange(){
+  const pl = state.modal && state.modal.type==='contratClient' ? state.modal.payload : null; if (!pl) return;
+  const ancienneDevise = pl.prix_devise || 'EUR/T';
+  const nouvelleDevise = fv('cc_prix_devise');
+  const valeurActuelle = Number(fv('cc_prix_valeur'))||null;
+  const eurParKg = ccPrixVersEurParKg(valeurActuelle, ancienneDevise);
+  const convertie = ccPrixDepuisEurParKg(eurParKg, nouvelleDevise);
+  pl.prix_devise = nouvelleDevise;
+  // Met a jour le champ directement (sans render()) : un render() complet redessinerait la modale et la
+  // protection anti-perte-de-saisie (capturerSaisies/restaurerSaisies) remettrait l'ANCIENNE valeur tapee
+  // par l'utilisateur par-dessus celle qu'on vient de calculer, puisque les deux different de la valeur
+  // d'origine du champ.
+  if (convertie!=null){
+    pl.prix_valeur = Math.round(convertie*100)/100;
+    const champ = document.querySelector('#modal-fields [name="cc_prix_valeur"]');
+    if (champ) champ.value = pl.prix_valeur;
+  } else if (valeurActuelle!=null && (ancienneDevise==='USD/T' || nouvelleDevise==='USD/T')){
+    showToast('Pas de parité fixe pour le USD : ajuste le prix manuellement.');
+  }
+}
 function contratClientPrixTexte(c){
   if (!(Number(c.prix_valeur)>0)) return '';
   return fmtNum(c.prix_valeur)+' '+(c.prix_devise||'').replace('/', ' / ');
@@ -5535,7 +5571,8 @@ function lotsModalsHtml(){
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Campagne<select name="cc_campagne" onchange="contratClientCampagneChange()">'+lotsCampagneOptions(pl.campagne_id)+'</select></label><label class="field">Type de cacao<select name="cc_type">'+LOTS_TYPES_CACAO.map(t=>'<option value="'+t+'"'+(t===(pl.type_cacao||'RA')?' selected':'')+'>'+t+'</option>').join('')+'</select></label></div>'
       + '<label class="field">Niveau de traçabilité exigé<select name="cc_niveau"><option value="">—</option>'+OC_NIVEAUX_TRACABILITE.map(n=>'<option value="'+esc(n)+'"'+(n===(pl.niveau_tracabilite||'')?' selected':'')+'>'+esc(n)+'</option>').join('')+'</select></label>'
       + '<label class="field">Volume contractuel (kg)<input type="number" name="cc_volume" value="'+esc(pl.volume_contractuel_kg||'')+'"></label>'
-      + '<div style="display:grid;grid-template-columns:2fr 1fr;gap:0 12px"><label class="field">Prix<input type="number" step="0.01" name="cc_prix_valeur" value="'+esc(pl.prix_valeur||'')+'" placeholder="ex : 2782.84"></label><label class="field">Devise / unité<select name="cc_prix_devise"><option value="EUR/T"'+((pl.prix_devise||'EUR/T')==='EUR/T'?' selected':'')+'>EUR / tonne</option><option value="USD/T"'+(pl.prix_devise==='USD/T'?' selected':'')+'>USD / tonne</option><option value="FCFA/kg"'+(pl.prix_devise==='FCFA/kg'?' selected':'')+'>FCFA / kg</option></select></label></div>'
+      + '<div style="display:grid;grid-template-columns:2fr 1fr;gap:0 12px"><label class="field">Prix<input type="number" step="0.01" name="cc_prix_valeur" value="'+esc(pl.prix_valeur||'')+'" placeholder="ex : 2782.84" oninput="state.modal.payload.prix_valeur=this.value"></label><label class="field">Devise / unité<select name="cc_prix_devise" onchange="ccPrixDeviseChange()"><option value="EUR/T"'+((pl.prix_devise||'EUR/T')==='EUR/T'?' selected':'')+'>EUR / tonne</option><option value="USD/T"'+(pl.prix_devise==='USD/T'?' selected':'')+'>USD / tonne</option><option value="FCFA/kg"'+(pl.prix_devise==='FCFA/kg'?' selected':'')+'>FCFA / kg</option></select></label></div>'
+      + '<div class="hint" style="margin:-4px 0 10px">Conversion EUR ↔ FCFA automatique à la parité fixe (1 EUR = '+XOF_PAR_EUR+' FCFA) en changeant de devise ; pas de taux fixe pour le USD, à ajuster à la main.</div>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Incoterm<input type="text" name="cc_incoterm" value="'+esc(pl.incoterm||'')+'" placeholder="ex : FOB Abidjan/San Pedro"></label><label class="field">Conditions de paiement<input type="text" name="cc_conditions_paiement" value="'+esc(pl.conditions_paiement||'')+'" placeholder="ex : Comptant contre documents"></label></div>'
       + '<label class="field">Période d\'embarquement<select name="cc_periode_embarquement">'+lotsPeriodesEmbarquementOptions(pl.campagne_id, pl.periode_embarquement)+'</select></label>'
       + '<label class="field">Statut<select name="cc_statut">'+Object.entries(CONTRATS_CLIENTS_STATUTS).map(([k,v])=>'<option value="'+k+'"'+(k===(pl.statut||'actif')?' selected':'')+'>'+v[1]+'</option>').join('')+'</select></label>'
