@@ -3238,7 +3238,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-188';
+const APP_VERSION = '2026-10-02-189';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4798,20 +4798,23 @@ async function supprimerTracage(){
 const LOTS_TYPES_CACAO = ['RA', 'Ordinaire', 'Fairtrade'];
 const LOTS_STATUTS_USINAGE = { ouvert:['info','Ouvert'], clos:['ok','Clos'] };
 const LOTS_STATUTS_EXPORT = { preparation:['warn','En préparation'], embarque:['ok','Embarqué'] };
+const CONTRATS_CLIENTS_STATUTS = { actif:['ok','Actif'], clos:['neutral','Clos'] };
 async function chargerLots(){
   if (!supabaseClient) return;
-  const [u, ua, e, eu, se] = await Promise.all([
+  const [u, ua, e, eu, se, cc] = await Promise.all([
     supabaseClient.from('lots_usinage').select('*').order('created_at', { ascending:false }),
     supabaseClient.from('lots_usinage_achats').select('*'),
     supabaseClient.from('lots_export').select('*').order('created_at', { ascending:false }),
     supabaseClient.from('lots_export_usinage').select('*'),
     supabaseClient.from('lots_series').select('*').order('numero_debut', { ascending:true }),
+    supabaseClient.from('contrats_clients').select('*').order('created_at', { ascending:false }),
   ]);
   state.lotsUsinage = (u && !u.error) ? (u.data||[]) : (state.lotsUsinage||[]);
   state.lotsUsinageAchats = (ua && !ua.error) ? (ua.data||[]) : (state.lotsUsinageAchats||[]);
   state.lotsExport = (e && !e.error) ? (e.data||[]) : (state.lotsExport||[]);
   state.lotsExportUsinage = (eu && !eu.error) ? (eu.data||[]) : (state.lotsExportUsinage||[]);
   state.lotsSeries = (se && !se.error) ? (se.data||[]) : (state.lotsSeries||[]);
+  state.contratsClients = (cc && !cc.error) ? (cc.data||[]) : (state.contratsClients||[]);
   state.lotsCharges = true;
 }
 function lotsSousOnglet(){ return state.lotsSousOnglet || 'usinage'; }
@@ -4888,12 +4891,13 @@ function renderLotsTab(){
   let html = '<div class="panel"><div class="panel-head"><div><h2>Lots & export</h2><p class="hint" style="margin:4px 0 0">Livraisons reçues à l\'usine → lots d\'usinage (numérotés par série) → OT · ordres de transit (un ou plusieurs lots regroupés pour un client, numéro attribué par le service shipping) → connaissement maritime (B/L). Chaque maillon garde la trace exacte de ce qui le compose.</p></div></div>'
     + '<div style="padding:0 18px 18px">'
     + '<div class="oc-subtabs">'
-    + [['usinage','Lots d\'usinage'],['export','OT (ordres de transit)'],['series','Séries de numérotation'],['chaine','Chaîne de traçabilité']].map(([id,l])=>'<button class="'+(actif===id?'active':'')+'" onclick="lotsSetSousOnglet(\''+id+'\')">'+l+'</button>').join('')
+    + [['contrats','Contrats clients'],['series','Séries de numérotation'],['usinage','Lots d\'usinage'],['export','OT (ordres de transit)'],['chaine','Chaîne de traçabilité']].map(([id,l])=>'<button class="'+(actif===id?'active':'')+'" onclick="lotsSetSousOnglet(\''+id+'\')">'+l+'</button>').join('')
     + '</div>';
   if (!state.lotsCharges) html += '<div class="hint">Chargement des lots…</div>';
+  else if (actif==='contrats') html += renderContratsClients();
+  else if (actif==='series') html += renderLotsSeries();
   else if (actif==='usinage') html += renderLotsUsinage();
   else if (actif==='export') html += renderLotsExport();
-  else if (actif==='series') html += renderLotsSeries();
   else html += renderLotsChaine();
   return html + '</div></div>';
 }
@@ -4948,6 +4952,48 @@ function lotsSerieSupprimer(id){
     const { error } = await supabaseClient.from('lots_series').delete().eq('id', id);
     if (error){ showToast('Échec : '+error.message); return; }
     await chargerLots(); render(); showToast('Série supprimée.', 'success');
+  });
+}
+// ---- Contrats clients : registre des contrats de vente qui fixent le niveau de tracabilite exige ----
+// Le niveau de tracabilite (Segregation, Mass Balance, Identite Preservee...) vient du contrat passe avec
+// le client, et c'est lui qui determine en amont quels sites/cooperatives peuvent fournir la matiere.
+// Ce registre ne fait qu'enregistrer ces contrats pour s'y referer (client, niveau exige, volume, periode) ;
+// il n'est pas (encore) rattache aux lots ou aux OT.
+function contratClientParId(id){ return (state.contratsClients||[]).find(c=>c.id===id) || null; }
+function renderContratsClients(){
+  const contrats = (state.contratsClients||[]).slice().sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
+  let html = '<div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">'
+    + '<button class="btn btn-primary" onclick="contratClientOuvrir()">+ Nouveau contrat client</button>'
+    + '<span class="hint" style="margin:0">Le niveau de traçabilité exigé par le contrat dicte le choix des sites/coopératives (décidé hors ORIGEN) ; ce registre sert de référence.</span></div>';
+  if (!contrats.length) return html + '<div class="hint">Aucun contrat client enregistré pour l\'instant.</div>';
+  html += '<table class="tbl-fiches"><thead><tr><th>Client</th><th>Réf. contrat</th><th>Campagne</th><th>Type de cacao</th><th>Niveau de traçabilité</th><th>Volume contractuel</th><th>Période</th><th>Statut</th><th></th></tr></thead><tbody>';
+  contrats.forEach(c=>{
+    html += '<tr><td><b>'+esc(c.client)+'</b></td><td>'+esc(c.reference||'—')+'</td><td>'+esc(lotsCampagneNom(c.campagne_id)||'—')+'</td><td>'+esc(c.type_cacao||'—')+'</td><td>'+esc(c.niveau_tracabilite||'—')+'</td><td>'+(Number(c.volume_contractuel_kg)>0?fmtKg(c.volume_contractuel_kg):'—')+'</td><td>'+esc((dateFr(c.date_debut)||'—')+(c.date_fin?' → '+dateFr(c.date_fin):''))+'</td><td>'+lotsBadge(CONTRATS_CLIENTS_STATUTS, c.statut)+'</td>'
+      + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="contratClientOuvrir(\''+esc(c.id)+'\')">Modifier</button> <button class="btn-danger-text btn-compact" onclick="contratClientSupprimer(\''+esc(c.id)+'\')">Supprimer</button></td></tr>';
+  });
+  return html + '</tbody></table>';
+}
+function contratClientOuvrir(id){
+  const c = id ? contratClientParId(id) : null;
+  state.modal = { type:'contratClient', payload: c ? Object.assign({}, c) : { campagne_id:(state.campagneFilter && state.campagneFilter!=='all')?state.campagneFilter:'', type_cacao:'RA', statut:'actif' } };
+  render();
+}
+async function contratClientEnregistrer(){
+  const pl = state.modal && state.modal.type==='contratClient' ? state.modal.payload : null; if (!pl) return;
+  const client = fv('cc_client').trim(); if (!client){ showToast('Indique le client.'); return; }
+  const ligne = { client, reference: fv('cc_reference').trim()||null, campagne_id: fv('cc_campagne')||null, type_cacao: fv('cc_type')||null, niveau_tracabilite: fv('cc_niveau')||null, volume_contractuel_kg: Number(fv('cc_volume'))||null, date_debut: fv('cc_date_debut')||null, date_fin: fv('cc_date_fin')||null, statut: fv('cc_statut')||'actif', notes: fv('cc_notes').trim()||null, updated_at: new Date().toISOString() };
+  try{
+    if (pl.id){ const { error } = await supabaseClient.from('contrats_clients').update(ligne).eq('id', pl.id); if (error) throw error; }
+    else { ligne.id = genId('cc'); const { error } = await supabaseClient.from('contrats_clients').insert(ligne); if (error) throw error; }
+    await chargerLots(); closeModal(); showToast('Contrat client enregistré.', 'success');
+  }catch(e){ showToast('Échec : '+e.message); }
+}
+function contratClientSupprimer(id){
+  const c = contratClientParId(id); if (!c) return;
+  askConfirm('Supprimer le contrat avec '+c.client+' ?', async()=>{
+    const { error } = await supabaseClient.from('contrats_clients').delete().eq('id', id);
+    if (error){ showToast('Échec : '+error.message); return; }
+    await chargerLots(); render(); showToast('Contrat supprimé.', 'success');
   });
 }
 function renderLotsUsinage(){
@@ -5008,7 +5054,8 @@ function lotsChaineDe(lot){
 }
 function renderLotsChaine(){
   const lots = (state.lotsExport||[]);
-  let html = '<div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px"><label class="field" style="margin:0;min-width:260px">OT (ordre de transit)<select onchange="lotsVoirChaine(this.value)"><option value="">— Choisir —</option>'+lots.map(l=>'<option value="'+esc(l.id)+'"'+(l.id===state.lotChaineId?' selected':'')+'>'+esc(l.numero)+(l.client?' · '+esc(l.client):'')+(l.bl_numero?' · B/L '+esc(l.bl_numero):'')+'</option>').join('')+'</select></label>'
+  let html = '<p class="hint" style="margin:0 0 14px">Sert à prouver, pour un OT donné, que le volume exporté provient bien des livraisons et coopératives déclarées : en partant des conteneurs embarqués, on remonte aux lots d\'usinage qui les composent, puis aux livraisons reçues à l\'usine, jusqu\'aux coopératives et producteurs d\'origine — la preuve d\'audit (RDUE, certification) à fournir sur demande, et le dossier à télécharger avant l\'export.</p>'
+    + '<div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px"><label class="field" style="margin:0;min-width:260px">OT (ordre de transit)<select onchange="lotsVoirChaine(this.value)"><option value="">— Choisir —</option>'+lots.map(l=>'<option value="'+esc(l.id)+'"'+(l.id===state.lotChaineId?' selected':'')+'>'+esc(l.numero)+(l.client?' · '+esc(l.client):'')+(l.bl_numero?' · B/L '+esc(l.bl_numero):'')+'</option>').join('')+'</select></label>'
     + (state.lotChaineId ? '<button class="btn" onclick="lotsExporterDossier(\''+esc(state.lotChaineId)+'\')">⭳ Dossier de traçabilité (Excel)</button>' : '')+'</div>';
   const lot = lotExportParId(state.lotChaineId); if (!lot) return html + '<div class="hint">Choisis un OT pour remonter toute sa chaîne : conteneurs → lots d\'usinage → livraisons → coopératives → producteurs.</div>';
   const ch = lotsChaineDe(lot);
@@ -5300,6 +5347,18 @@ function lotsModalsHtml(){
       + '<label class="field">Libellé (affiché dans les listes)<input type="text" name="serie_libelle" value="'+esc(pl.libelle||'')+'" placeholder="ex : RA Ségrégation"></label>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Premier numéro<input type="number" name="serie_debut" value="'+esc(pl.numero_debut||'')+'" placeholder="ex : 5035"></label><label class="field">Dernier numéro (optionnel)<input type="number" name="serie_fin" value="'+esc(pl.numero_fin||'')+'" placeholder="laisser vide si illimité"></label></div>'
       + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="lotsSerieEnregistrer()">Enregistrer</button></div></div></div>';
+  }
+  if (m.type==='contratClient'){
+    const pl = m.payload;
+    return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>'+(pl.id?'Modifier le contrat client':'Nouveau contrat client')+'</h3><div id="modal-fields">'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Client<input type="text" name="cc_client" value="'+esc(pl.client||'')+'" placeholder="ex : CARGILL"></label><label class="field">Réf. contrat<input type="text" name="cc_reference" value="'+esc(pl.reference||'')+'"></label></div>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Campagne<select name="cc_campagne">'+lotsCampagneOptions(pl.campagne_id)+'</select></label><label class="field">Type de cacao<select name="cc_type">'+LOTS_TYPES_CACAO.map(t=>'<option value="'+t+'"'+(t===(pl.type_cacao||'RA')?' selected':'')+'>'+t+'</option>').join('')+'</select></label></div>'
+      + '<label class="field">Niveau de traçabilité exigé<select name="cc_niveau"><option value="">—</option>'+OC_NIVEAUX_TRACABILITE.map(n=>'<option value="'+esc(n)+'"'+(n===(pl.niveau_tracabilite||'')?' selected':'')+'>'+esc(n)+'</option>').join('')+'</select></label>'
+      + '<label class="field">Volume contractuel (kg)<input type="number" name="cc_volume" value="'+esc(pl.volume_contractuel_kg||'')+'"></label>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Début<input type="date" name="cc_date_debut" value="'+esc(pl.date_debut||'')+'"></label><label class="field">Fin<input type="date" name="cc_date_fin" value="'+esc(pl.date_fin||'')+'"></label></div>'
+      + '<label class="field">Statut<select name="cc_statut">'+Object.entries(CONTRATS_CLIENTS_STATUTS).map(([k,v])=>'<option value="'+k+'"'+(k===(pl.statut||'actif')?' selected':'')+'>'+v[1]+'</option>').join('')+'</select></label>'
+      + '<label class="field">Notes<textarea name="cc_notes" rows="2">'+esc(pl.notes||'')+'</textarea></label>'
+      + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="contratClientEnregistrer()">Enregistrer</button></div></div></div>';
   }
   return '';
 }
