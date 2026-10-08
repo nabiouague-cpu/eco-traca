@@ -509,6 +509,7 @@
   /* Apercu avant impression (ORICERT · partenaires) : la feuille telle qu'elle sortira */
   .oc-apercu .oc-apercu-tete{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-bottom:12px;flex-wrap:wrap;}
   .oc-apercu .oc-apercu-sur{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);font-weight:600;margin-bottom:4px;}
+  .oc-apercu-exclus{margin:0 0 12px;padding:10px 12px;border-left:3px solid var(--gold);background:#FFF8E1;border-radius:8px;font-size:12.5px;line-height:1.5;}
   .oc-apercu-zone{background:#DDE3E0;padding:22px;border-radius:10px;max-height:62vh;overflow:auto;}
   .oc-papier{background:#fff;width:794px;max-width:100%;min-height:400px;margin:0 auto;padding:60px 60px 70px;box-sizing:border-box;box-shadow:0 6px 24px rgba(0,0,0,.18);font-family:'Calibri','Carlito','IBM Plex Sans',sans-serif;color:#000;}
   .oc-papier-entete{display:flex;justify-content:space-between;gap:16px;font-size:8.5pt;color:#555;border-bottom:1px solid #1F6E5C;padding-bottom:4px;margin:-30px 0 26px;}
@@ -3222,7 +3223,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-02-182';
+const APP_VERSION = '2026-10-02-183';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8814,9 +8815,14 @@ function ocExporterWord(tableId){
     rows = ocTableRows(tableId);
   }
   const entetes = conf.cols.map(c=>c[0]);
-  const lignes = rows.map(row=>conf.cols.map(c=>ocValeurExportTexte(c, row[c[1]])));
+  // Ne figurent sur le document que les lignes dont TOUTES les informations retenues sont renseignees ;
+  // les autres sont listees dans l'apercu (hors feuille) pour qu'on sache quoi completer.
+  const toutes = rows.map(row=>({ nom: String(row[conf.cols[0][1]]||'—'), valeurs: conf.cols.map(c=>ocValeurExportTexte(c, row[c[1]])) }));
+  const completes = toutes.filter(l=>l.valeurs.every(v=>String(v||'').trim()!==''));
+  const incompletes = toutes.filter(l=>!l.valeurs.every(v=>String(v||'').trim()!=='')).map(l=>({ nom:l.nom, manque: conf.cols.filter((c,i)=>String(l.valeurs[i]||'').trim()==='').map(c=>c[0]) }));
+  const lignes = completes.map(l=>l.valeurs);
   const nomFichier = conf.titre.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9]+/g,'_')+'_ECORIGINE.docx';
-  state.modal = { type:'ocApercuImpression', payload:{ tableId, titre: conf.titre, entetes, lignes, nomFichier, exigence: conf.exigence||'', exigenceLibelle: conf.exigenceLibelle||'' } };
+  state.modal = { type:'ocApercuImpression', payload:{ tableId, titre: conf.titre, entetes, lignes, incompletes, nomFichier, exigence: conf.exigence||'', exigenceLibelle: conf.exigenceLibelle||'' } };
   render();
 }
 async function ocApercuTelechargerWord(){
@@ -8837,6 +8843,11 @@ function ocApercuImpressionHtml(){
   return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal xl oc-apercu">'
     + '<div class="oc-apercu-tete"><div><div class="oc-apercu-sur">Aperçu avant impression</div><h3 style="margin:0">'+esc(pl.titre)+' — '+pl.lignes.length+' ligne'+(pl.lignes.length>1?'s':'')+'</h3></div>'
     + '<div class="hint" style="margin:0">Vérifie le contenu : c\'est exactement ce qui sera imprimé.</div></div>'
+    + (pl.incompletes && pl.incompletes.length
+        ? '<div class="oc-apercu-exclus"><b>'+pl.incompletes.length+' non listée'+(pl.incompletes.length>1?'s':'')+' — informations incomplètes :</b> '
+          + pl.incompletes.map(x=>esc(x.nom)+' <span class="hint" style="margin:0">('+esc(x.manque.join(', '))+')</span>').join(' · ')
+          + '<div class="hint" style="margin:4px 0 0">Complète la fiche puis rouvre l\'aperçu pour les faire apparaître.</div></div>'
+        : '')
     + '<div class="oc-apercu-zone"><div class="oc-papier">'
     + '<div class="oc-papier-entete"><span>'+(pl.exigence ? 'Exigence '+esc(pl.exigence)+' — '+esc(pl.exigenceLibelle) : '')+'</span><span>ECORIGINE</span></div>'
     + '<div class="oc-papier-titre">ECORIGINE — '+esc(pl.titre)+'</div>'
