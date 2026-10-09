@@ -3238,7 +3238,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-09-001';
+const APP_VERSION = '2026-10-09-002';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4220,6 +4220,33 @@ async function ocPdfExtraireLignesToutesPages(blob, maxPages){
   }
   return lignes;
 }
+// Variante « page par page » (pas de fusion des lignes entre pages) : sert a reconnaitre plusieurs
+// contrats regroupes dans un meme PDF (un contrat par page), chacun extrait separement.
+async function ocPdfExtraireLignesParPage(blob, maxPages){
+  const lib = await chargerPdfJs();
+  const data = new Uint8Array(await blob.arrayBuffer());
+  const doc = await lib.getDocument({ data }).promise;
+  const nbPages = Math.min(doc.numPages, maxPages||20);
+  const pages = [];
+  for (let n=1; n<=nbPages; n++){
+    const page = await doc.getPage(n);
+    const contenu = await page.getTextContent();
+    const items = contenu.items.map(it=>({ str: it.str, x: it.transform[4], y: Math.round(it.transform[5]) }));
+    const parLigne = new Map();
+    items.forEach(it=>{
+      let cle = null;
+      for (const k of parLigne.keys()){ if (Math.abs(k-it.y)<=2){ cle = k; break; } }
+      if (cle===null) cle = it.y;
+      if (!parLigne.has(cle)) parLigne.set(cle, []);
+      parLigne.get(cle).push(it);
+    });
+    pages.push(Array.from(parLigne.entries())
+      .sort((a,b)=>b[0]-a[0])
+      .map(([y, its])=>its.sort((a,b)=>a.x-b.x).map(i=>i.str).join(' ').replace(/\s+/g,' ').trim())
+      .filter(l=>l.length>0));
+  }
+  return pages;
+}
 function ocNombreFrVersFloat(s){
   return s ? parseFloat(String(s).replace(/\s/g,'').replace(',', '.')) : null;
 }
@@ -4305,6 +4332,11 @@ function ccPeriodeEmbarquementVersCode(texte){
   if (/Janvier|F[ée]vrier|Mars/i.test(texte||'')) return 'JM'+(annee?' '+annee:'');
   return '';
 }
+// "EUR"/"USD"/"FCFA"/"XOF" (lu dans le PDF) -> code de devise du formulaire ("EUR/T", "FCFA/kg"...).
+function ccDeviseTexteVersCode(txt){
+  if (!txt) return null;
+  return (txt==='FCFA'||txt==='XOF') ? 'FCFA/kg' : txt+'/T';
+}
 // Ramene le texte libre de l'incoterm lu dans le PDF (ex : "FREE ON BOARD ABJ/S.PEDRO") vers le code
 // standard (FOB/CIF) et les ports mentionnes (un seul, ou les deux a la fois -- frequent, le contrat
 // laissant alors le choix entre les deux a l'embarquement) ; port est une liste separee par des virgules.
@@ -4317,6 +4349,19 @@ function ccIncotermVersCode(texte){
   if (/\bABJ\b|ABIDJAN/.test(t)) ports.push('Abidjan');
   if (/S\.?\s?PEDRO|SAN[\s-]?PEDRO/.test(t)) ports.push('San-Pedro');
   return { code, port: ports.join(',') };
+}
+// Liste des CV couverts par un contrat, telle que mentionnee dans ses "Conditions Speciales" (ex : "cv
+// 009-2129-2130." ou, avec le bruit frequent de l'OCR sur les contrats scannes, "cv 009-2 1 23 -21 24-21
+// 25-21 26.") -- on retire tous les espaces de la portion reconnue avant de la decouper par tiret : le
+// premier segment est le prefixe commun (ex "009"), chaque segment suivant un numero de CV a lui completer
+// avec ce prefixe. Permet de rattacher automatiquement chaque CV (import Excel) au bon contrat (import PDF).
+function ccContratsCvCouverts(texte){
+  const m = String(texte||'').match(/\bcv\s+([0-9][0-9\s-]*[0-9])/i);
+  if (!m) return [];
+  const segments = m[1].replace(/\s+/g,'').split('-').filter(Boolean);
+  if (segments.length<2) return [];
+  const prefixe = segments[0];
+  return segments.slice(1).map(s=>prefixe+'-'+s);
 }
 function ccContratExtraireDuTexte(lignes){
   const texte = lignes.join('\n');
@@ -4348,6 +4393,7 @@ function ccContratExtraireDuTexte(lignes){
   }
   m = texte.match(/\bDate\s*:\s*(\d{6,10})\b/);
   out.dateDebut = (m && m[1].length===8) ? m[1].slice(4,8)+'-'+m[1].slice(2,4)+'-'+m[1].slice(0,2) : '';
+  out.cvCouverts = ccContratsCvCouverts(texte);
   return out;
 }
 // Declenchee par l'input file de la modale "Contrat client" : lit le PDF, extrait les champs reconnus et
@@ -4369,11 +4415,12 @@ async function ccImporterContrat(inputEl){
     set('cc_client', d.client);
     if (d.volumeKg) set('cc_volume', String(d.volumeKg));
     if (d.prixValeur) set('cc_prix_valeur', String(d.prixValeur));
-    if (d.prixDevise) set('cc_prix_devise', d.prixDevise==='FCFA'||d.prixDevise==='XOF' ? 'FCFA/kg' : d.prixDevise+'/T');
+    if (d.prixDevise) set('cc_prix_devise', ccDeviseTexteVersCode(d.prixDevise));
     set('cc_incoterm', d.incoterm);
     if (d.port) ccPortsCocher(d.port);
     set('cc_periode_embarquement', ccPeriodeEmbarquementVersCode(d.periodeEmbarquement));
     set('cc_conditions_paiement', d.conditionsPaiement);
+    if (d.cvCouverts && d.cvCouverts.length) set('cc_cv_couverts', d.cvCouverts.join(', '));
     const manquants = [];
     if (!d.client) manquants.push('client');
     if (!d.reference) manquants.push('référence');
@@ -5223,6 +5270,7 @@ async function contratClientEnregistrer(){
   const client = fv('cc_client').trim(); if (!client){ showToast('Indique le client.'); return; }
   const ligne = { client, reference: fv('cc_reference').trim()||null, campagne_id: fv('cc_campagne')||null, type_cacao: fv('cc_type')||null, niveau_tracabilite: fv('cc_niveau')||null, volume_contractuel_kg: Number(fv('cc_volume'))||null,
     prix_valeur: Number(fv('cc_prix_valeur'))||null, prix_devise: fv('cc_prix_devise')||null, incoterm: fv('cc_incoterm')||null, port: ccPortsCochees().join(',')||null, periode_embarquement: fv('cc_periode_embarquement').trim()||null, conditions_paiement: fv('cc_conditions_paiement').trim()||null,
+    cv_couverts: fv('cc_cv_couverts').trim()||null,
     statut: fv('cc_statut')||'actif', notes: fv('cc_notes').trim()||null, updated_at: new Date().toISOString() };
   const id = pl.id || genId('cc');
   try{
@@ -5389,14 +5437,159 @@ function cvSupprimer(id){
     await chargerLots(); render(); showToast('CV supprimé.', 'success');
   });
 }
+// ---- Import en masse -------------------------------------------------------------------------------
+// Deux fichiers peuvent etre deposes directement dans cet onglet, pour eviter la ressaisie CV par CV /
+// contrat par contrat : le classeur Excel "Etat des CV" tenu par le service commercial (memes libelles de
+// colonnes que le modele fourni : NUMERO DE CV, Volume, Periode d'execution, Prix CAF CV, Reversement/
+// Soutien, Fret, Surveillance -- assurance et freinte maritimes, elles, restent calculees par ORIGEN) et un
+// PDF regroupant plusieurs contrats FOB (TOUTON en envoie un par page) : chaque contrat y mentionne, dans
+// ses "Conditions speciales", la liste des CV qu'il couvre ("cv 009-2129-2130") -- cette liste (cv_couverts)
+// sert ensuite a rattacher automatiquement les CV correspondants au bon contrat, sans intervention manuelle.
+function cvChoisirFichierExcel(){ const i = document.getElementById('cv-import-excel'); if (i){ i.value=''; i.click(); } }
+function cvChoisirFichierContratsPdf(){ const i = document.getElementById('cv-import-contrats-pdf'); if (i){ i.value=''; i.click(); } }
+function cvPeriodeExcelVersCode(txt){
+  const t = String(txt||'').trim();
+  const m = t.match(/^(OD|JM)\s*-?\s*(\d{2})$/i);
+  return m ? (m[1].toUpperCase()+' 20'+m[2]) : (t||null);
+}
+// Relie chaque CV sans contrat deja choisi (a la main ou par un import precedent) au contrat dont la liste
+// de CV couverts mentionne son numero. Jamais l'inverse : un rattachement deja fait n'est jamais ecrase.
+async function cvRelierAuxContrats(){
+  let nb = 0;
+  for (const cv of (state.cvVentes||[])){
+    if (cv.contrat_client_id) continue;
+    const contrat = (state.contratsClients||[]).find(c=>String(c.cv_couverts||'').split(',').map(s=>s.trim()).filter(Boolean).includes(cv.numero_cv));
+    if (!contrat) continue;
+    const { error } = await supabaseClient.from('cv_ventes').update({ contrat_client_id: contrat.id, client: contrat.client, updated_at: new Date().toISOString() }).eq('id', cv.id);
+    if (!error) nb++;
+  }
+  return nb;
+}
+async function cvImporterExcel(input){
+  const fichier = input.files && input.files[0]; if (!fichier) return;
+  if (typeof XLSX === 'undefined'){ showToast('La bibliothèque Excel ne s\'est pas chargée (connexion internet requise).'); return; }
+  let wb;
+  try{ wb = XLSX.read(await fichier.arrayBuffer(), { type:'array', cellDates:true }); }
+  catch(e){ showToast('Fichier illisible : '+e.message, 'error'); return; }
+  const nomFeuille = wb.SheetNames.find(n=>qcNormaliserTexte(n)==='recap') || wb.SheetNames[0];
+  const aoa = XLSX.utils.sheet_to_json(wb.Sheets[nomFeuille], { header:1, defval:'' });
+  if (!aoa.length){ showToast('Le fichier est vide.', 'error'); return; }
+  // Campagne deduite du titre ("... 2026-2027 ...") si une campagne de ce nom existe deja, sinon celle filtree a l'ecran.
+  let campagneId = (state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : null;
+  for (let i=0; i<Math.min(6, aoa.length) && !campagneId; i++){
+    (aoa[i]||[]).forEach(cell=>{ const m = String(cell||'').match(/(20\d{2}-20\d{2})/); if (m){ const c = (state.campagnes||[]).find(x=>x.nom===m[1]); if (c) campagneId = c.id; } });
+  }
+  // Ligne d'en-tetes : celle qui porte "NUMERO DE CV" (cherchee sur les 12 premieres lignes) ; la colonne
+  // "Client", elle, n'a pas de libelle propre dans le modele -- c'est celle juste avant "NUMERO DE CV".
+  let ligneEntetes = -1, colNumero = -1;
+  for (let i=0; i<Math.min(12, aoa.length); i++){
+    const idx = (aoa[i]||[]).findIndex(c=>qcNormaliserTexte(c)==='numero de cv');
+    if (idx>=0){ ligneEntetes = i; colNumero = idx; break; }
+  }
+  if (ligneEntetes<0){ showToast('Ce fichier ne correspond pas au modèle « État des CV » (colonne « NUMERO DE CV » introuvable).', 'error'); return; }
+  const entetes = (aoa[ligneEntetes]||[]).map(qcNormaliserTexte);
+  const col = pred => entetes.findIndex(pred);
+  const colClient = colNumero>0 ? colNumero-1 : -1;
+  const colVolume = col(e=>e==='volume');
+  const colPeriode = col(e=>e.includes('periode'));
+  const colPrixCaf = col(e=>e.includes('caf cv'));
+  const colReversement = col(e=>e.includes('reversement'));
+  const colFret = col(e=>e==='fret');
+  const colSurveillance = col(e=>e==='surveillance');
+  const val = (row, i) => i>=0 ? row[i] : '';
+  const lignes = [];
+  for (let i=ligneEntetes+1; i<aoa.length; i++){
+    const row = aoa[i]; if (!row) continue;
+    const numero = String(val(row, colNumero)||'').trim();
+    if (!numero || qcNormaliserTexte(numero)==='total') continue;
+    lignes.push({
+      numero_cv: numero, client: String(val(row, colClient)||'').trim()||null,
+      volume_kg: Number(val(row, colVolume))||null,
+      periode_embarquement: cvPeriodeExcelVersCode(val(row, colPeriode)),
+      prix_caf_fcfa_kg: Number(val(row, colPrixCaf))||null,
+      reversement_fcfa_kg: Number(val(row, colReversement))||null,
+      fret_fcfa_kg: Number(val(row, colFret))||40,
+      surveillance_fcfa_kg: Number(val(row, colSurveillance))||1,
+    });
+  }
+  if (!lignes.length){ showToast('Aucune ligne de CV reconnue dans ce fichier.', 'error'); return; }
+  let nbCrees = 0, nbMisAJour = 0;
+  for (const l of lignes){
+    const existant = (state.cvVentes||[]).find(c=>c.numero_cv===l.numero_cv);
+    const ligne = Object.assign({ campagne_id: campagneId }, l, { updated_at: new Date().toISOString() });
+    if (existant){ const { error } = await supabaseClient.from('cv_ventes').update(ligne).eq('id', existant.id); if (!error) nbMisAJour++; }
+    else { ligne.id = genId('cv'); const { error } = await supabaseClient.from('cv_ventes').insert(ligne); if (!error) nbCrees++; }
+  }
+  await chargerLots();
+  const nbRelies = await cvRelierAuxContrats();
+  await chargerLots(); render();
+  showToast(nbCrees+' CV créé(s), '+nbMisAJour+' mis à jour'+(nbRelies?', '+nbRelies+' rattaché(s) automatiquement à leur contrat':'')+'.', 'success');
+}
+async function cvImporterContratsPdf(input){
+  const fichier = input.files && input.files[0]; if (!fichier) return;
+  let pages;
+  try{ pages = await ocPdfExtraireLignesParPage(fichier, 20); }
+  catch(e){ showToast('Échec de la lecture du PDF : '+e.message); return; }
+  const campagneId = (state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : null;
+  // Chaque page est extraite separement (un contrat par page), mais un PDF regroupant plusieurs contrats
+  // dans ce contexte a toujours le meme acheteur -- le nom du client, parfois mal reconnu sur une page
+  // (scan/mise en page ou la ligne "Acheteur" fusionne avec une autre, ou reste introuvable), est donc
+  // uniformise sur tout le lot avec la plus courte extraction non vide trouvee (la plus propre : une
+  // fusion accidentelle produit un nom plus long, jamais plus court).
+  const extractions = pages.map(lignesPage=>{
+    const texte = lignesPage.join('\n');
+    if (!/CONTRAT\s+D['"’]ACHAT/i.test(texte)) return null;
+    return ccContratExtraireDuTexte(lignesPage);
+  }).filter(Boolean).filter(d=>d.reference);
+  const clientsTrouves = extractions.map(d=>d.client).filter(Boolean).sort((a,b)=>a.length-b.length);
+  const clientCanonique = clientsTrouves[0] || '';
+  let nbCrees = 0, nbMisAJour = 0; const refs = [];
+  for (const d of extractions){
+    const client = clientCanonique || d.client; if (!client) continue; // aucun contrat du lot n'a livre de nom de client lisible
+    const existant = (state.contratsClients||[]).find(c=>c.reference===d.reference);
+    const ligne = {
+      client, reference: d.reference,
+      campagne_id: existant ? existant.campagne_id : campagneId,
+      type_cacao: existant ? existant.type_cacao : 'RA',
+      niveau_tracabilite: existant ? existant.niveau_tracabilite : null,
+      volume_contractuel_kg: d.volumeKg || (existant ? existant.volume_contractuel_kg : null),
+      prix_valeur: d.prixValeur || (existant ? existant.prix_valeur : null),
+      prix_devise: d.prixDevise ? ccDeviseTexteVersCode(d.prixDevise) : (existant ? existant.prix_devise : null),
+      incoterm: d.incoterm || (existant ? existant.incoterm : null),
+      port: d.port || (existant ? existant.port : null),
+      periode_embarquement: ccPeriodeEmbarquementVersCode(d.periodeEmbarquement) || (existant ? existant.periode_embarquement : null),
+      conditions_paiement: d.conditionsPaiement || (existant ? existant.conditions_paiement : null),
+      cv_couverts: d.cvCouverts.length ? d.cvCouverts.join(', ') : (existant ? existant.cv_couverts : null),
+      statut: existant ? existant.statut : 'actif',
+      updated_at: new Date().toISOString(),
+    };
+    if (existant){ const { error } = await supabaseClient.from('contrats_clients').update(ligne).eq('id', existant.id); if (!error) nbMisAJour++; }
+    else { ligne.id = genId('cc'); const { error } = await supabaseClient.from('contrats_clients').insert(ligne); if (!error) nbCrees++; }
+    refs.push(d.reference);
+  }
+  if (!refs.length){ showToast('Aucun contrat reconnu dans ce PDF (texte illisible, probablement un scan sans couche texte).', 'error'); return; }
+  await chargerLots();
+  const nbRelies = await cvRelierAuxContrats();
+  await chargerLots(); render();
+  showToast(nbCrees+' contrat(s) créé(s), '+nbMisAJour+' mis à jour (réf. '+refs.join(', ')+')'+(nbRelies?' · '+nbRelies+' CV rattaché(s) automatiquement':'')+'.', 'success');
+}
+// Colonnes gardees dans le tableau recapitulatif : seulement celles utiles au calcul du cout reel et a la
+// facturation (le detail complet -- fret, surveillance, assurance, cout CAF->FOB, prix FOB seul -- reste
+// visible/modifiable via "Modifier"). La decote (reversement/soutien) et la freinte maritime sont gardees
+// en evidence : ce sont les deux ecarts que le suivi commercial doit surveiller en priorite.
 function renderCvVentes(){
   const campagneId = (state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : null;
   const cvs = (state.cvVentes||[]).filter(c=>!campagneId || c.campagne_id===campagneId).slice().sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
   let html = '<div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">'
     + '<button class="btn btn-primary" onclick="cvOuvrir()">+ Nouveau CV</button>'
-    + '<span class="hint" style="margin:0">Récapitulatif des CV de la campagne (numéro de vente/exécution) : à quel contrat client chacun est rattaché, et l\'écart entre le prix réellement supporté (coût CAF ramené au FOB) et le prix du contrat. Le niveau d\'apurement sera ajouté séparément.</span></div>';
+    + '<button class="btn" onclick="cvChoisirFichierExcel()">⭱ Importer l\'état des CV (Excel)</button>'
+    + '<input type="file" id="cv-import-excel" accept=".xlsx,.xls,.csv" style="display:none" onchange="cvImporterExcel(this)">'
+    + '<button class="btn" onclick="cvChoisirFichierContratsPdf()">⭱ Importer des contrats FOB (PDF)</button>'
+    + '<input type="file" id="cv-import-contrats-pdf" accept=".pdf" style="display:none" onchange="cvImporterContratsPdf(this)">'
+    + '</div>'
+    + '<p class="hint" style="margin:0 0 12px">Récapitulatif des CV de la campagne (numéro de vente/exécution), le contrat client auquel chacun est rattaché, et l\'écart entre le coût réellement supporté (CAF ramené au FOB) et le prix FOB du contrat. Les deux imports se recoupent automatiquement : un contrat PDF mentionne les CV qu\'il couvre, qui sont alors rattachés tout seuls. Le niveau d\'apurement sera ajouté séparément.</p>';
   if (!cvs.length) return html + '<div class="hint">Aucun CV enregistré pour cette campagne pour l\'instant.</div>';
-  html += '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th>N° CV</th><th>Client</th><th>Contrat</th><th>Période</th><th>Volume</th><th>Prix CAF</th><th>Reversement/Soutien</th><th>Fret</th><th>Surveillance</th><th>Assurance maritime</th><th>Freinte maritime</th><th>Prix FOB</th><th>Prix FOB+assurance</th><th>Prix FOB client (contrat)</th><th>Écart</th><th></th></tr></thead><tbody>';
+  html += '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th>N° CV</th><th>Client</th><th>Contrat</th><th>Période</th><th>Volume</th><th>Prix CAF</th><th>Reversement/Soutien</th><th>Freinte maritime</th><th>Coût réel (FOB+assur.)</th><th>Prix FOB client (contrat)</th><th>Écart</th><th></th></tr></thead><tbody>';
   cvs.forEach(cv=>{
     const contrat = cv.contrat_client_id ? contratClientParId(cv.contrat_client_id) : null;
     const calc = cvCalculs(cv);
@@ -5404,7 +5597,7 @@ function renderCvVentes(){
     const ecart = (prixContrat!=null) ? Math.round((prixContrat-calc.prixFobAssurance)*100)/100 : null;
     const couleurEcart = ecart==null ? '' : (ecart<0 ? 'color:var(--danger)' : (ecart>0 ? 'color:var(--ok)' : ''));
     html += '<tr><td><b>'+esc(cv.numero_cv||'—')+'</b></td><td>'+esc(cv.client||(contrat?contrat.client:'')||'—')+'</td><td>'+(contrat?esc(contrat.reference||contrat.client):'<span class="hint" style="margin:0">—</span>')+'</td><td>'+esc(cv.periode_embarquement||'—')+'</td><td>'+(Number(cv.volume_kg)>0?fmtKg(cv.volume_kg):'—')+'</td>'
-      + '<td>'+fmtNum(calc.prixCaf)+'</td><td>'+(Number(cv.reversement_fcfa_kg)?fmtNum(cv.reversement_fcfa_kg):'—')+'</td><td>'+fmtNum(calc.fret)+'</td><td>'+fmtNum(calc.surveillance)+'</td><td>'+fmtNum(calc.assurance)+'</td><td>'+fmtNum(calc.freinte)+'</td><td>'+fmtNum(calc.prixFob)+'</td><td>'+fmtNum(calc.prixFobAssurance)+'</td>'
+      + '<td>'+fmtNum(calc.prixCaf)+'</td><td>'+(cv.reversement_fcfa_kg!=null && cv.reversement_fcfa_kg!==''?fmtNum(cv.reversement_fcfa_kg):'—')+'</td><td>'+fmtNum(calc.freinte)+'</td><td>'+fmtNum(calc.prixFobAssurance)+'</td>'
       + '<td>'+(prixContrat!=null?fmtNum(prixContrat):(contrat&&contrat.prix_devise==='USD/T'?'<span class="hint" style="margin:0">recherche du taux…</span>':'<span class="hint" style="margin:0">—</span>'))+'</td>'
       + '<td style="'+couleurEcart+'"><b>'+(ecart!=null?fmtNum(ecart):'—')+'</b></td>'
       + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="cvOuvrir(\''+esc(cv.id)+'\')">Modifier</button> <button class="btn-danger-text btn-compact" onclick="cvSupprimer(\''+esc(cv.id)+'\')">Supprimer</button></td></tr>';
@@ -5788,6 +5981,8 @@ function lotsModalsHtml(){
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Incoterm<select name="cc_incoterm"><option value="">—</option>'+Object.entries(CC_INCOTERMS).map(([k,v])=>'<option value="'+k+'"'+(k===(pl.incoterm||'')?' selected':'')+'>'+v+'</option>').join('')+'</select></label><div class="field">Port<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;min-height:38px">'+Object.entries(CC_PORTS).map(([k,v])=>'<label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer;white-space:nowrap"><input type="checkbox" class="cc-port-check" style="width:16px;height:16px;flex:none;margin:0" name="'+ccPortNomChamp(k)+'" data-port="'+esc(k)+'" '+(String(pl.port||'').split(',').map(s=>s.trim()).includes(k)?'checked':'')+'> '+esc(v)+'</label>').join('')+'</div></div></div>'
       + '<label class="field">Conditions de paiement<input type="text" name="cc_conditions_paiement" value="'+esc(pl.conditions_paiement||'')+'" placeholder="ex : Comptant contre documents"></label>'
       + '<label class="field">Période d\'embarquement<select name="cc_periode_embarquement">'+lotsPeriodesEmbarquementOptions(pl.campagne_id, pl.periode_embarquement)+'</select></label>'
+      + '<label class="field">CV couverts par ce contrat<input type="text" name="cc_cv_couverts" value="'+esc(pl.cv_couverts||'')+'" placeholder="ex : 009-2129, 009-2130"></label>'
+      + '<div class="hint" style="margin:6px 0 10px">Reconnus automatiquement dans les « Conditions spéciales » du PDF (« cv 009-xxxx-yyyy ») — vérifie et complète à la main si besoin : sert à rattacher automatiquement les CV correspondants à ce contrat dans « État des CV ».</div>'
       + '<label class="field">Statut<select name="cc_statut">'+Object.entries(CONTRATS_CLIENTS_STATUTS).map(([k,v])=>'<option value="'+k+'"'+(k===(pl.statut||'actif')?' selected':'')+'>'+v[1]+'</option>').join('')+'</select></label>'
       + '<label class="field">Notes<textarea name="cc_notes" rows="2">'+esc(pl.notes||'')+'</textarea></label>'
       + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="contratClientEnregistrer()">Enregistrer</button></div></div></div>';
