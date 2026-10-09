@@ -3274,7 +3274,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-09-014';
+const APP_VERSION = '2026-10-09-015';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -6907,6 +6907,15 @@ async function voirResultatsWhisp(demandeId){
 
 async function validerDemande(id){
   const demande = (state.demandesCoop||[]).find(d=>d.id===id);
+  if (!demande){ showToast('Demande introuvable.'); return; }
+  if ((demande.types||[]).includes('product_movements')){
+    showToast('Vérification de la fiche avant validation…');
+    const verif = await verifierFicheTracabiliteAvantValidation(demande);
+    if (!verif.ok){
+      openModal('problemesFicheTracabilite', { demandeId:id, fichierNom: verif.fichierNom, problemes: verif.problemes });
+      return;
+    }
+  }
   askConfirm('Valider cette demande ? La coopérative verra le statut passer à "Accepté".', async ()=>{
     const { error } = await supabaseClient.from('demandes').update({statut:'acceptee', commentaire_ecorigine: null}).eq('id', id);
     if (error){ showToast('Échec : '+error.message); return; }
@@ -13776,6 +13785,58 @@ async function verifierLimitesFicheTracabilite(demandeId){
   }
 }
 
+// Controle de completude de la fiche de tracabilite (nom de la cooperative, localite, nombre de sacs,
+// poids), execute automatiquement a chaque tentative de validation d'une demande "product_movements" --
+// voir validerDemande. On relit les valeurs BRUTES des cellules plutot que de faire confiance aux totaux
+// ou formules du classeur (col. H12/I12, controle L) : ceux-ci peuvent avoir ete supprimes ou contournes
+// par la cooperative (cf. l'incident de la fiche d'accompagnement dont la formule buguait), auquel cas un
+// fichier incomplet pouvait jusqu'ici etre valide sans que personne ne s'en apercoive. Un nombre de sacs
+// non entier est egalement signale : un sac reel ne se compte jamais en dixiemes, donc une valeur
+// decimale trahit presque toujours un nombre recalcule (poids / poids moyen suppose) plutot que recopie
+// du bordereau papier.
+async function verifierFicheTracabiliteAvantValidation(demande){
+  const fichier = (state.demandeFichiers||[]).find(f=>f.demande_id===demande.id && f.type==='product_movements');
+  if (!fichier) return { ok:true };
+  const coop = coopById(demande.cooperative_id);
+  const { data: blob, error: dlErr } = await supabaseClient.storage.from('documents-coop').download(fichier.path);
+  if (dlErr) return { ok:false, fichierNom: fichier.nom, problemes:["Impossible de lire le fichier pour le vérifier avant validation : "+dlErr.message] };
+  let wb;
+  try{ wb = XLSX.read(await blob.arrayBuffer(), {type:'array', cellDates:true}); }
+  catch(e){ return { ok:false, fichierNom: fichier.nom, problemes:["Fichier illisible, impossible de le vérifier : "+e.message] }; }
+  const sheetName = wb.SheetNames.includes('Delivery Data') ? 'Delivery Data' : wb.SheetNames[0];
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], {header:1, defval:''});
+  const nomFournisseur = String((rows[4]||[])[8]||'').trim();
+  const villeOrigine = String((rows[5]||[])[8]||'').trim();
+  const problemes = [];
+  if (!nomFournisseur) problemes.push("Le nom de la coopérative (« NOM FOURNISSEUR ») n'est pas renseigné sur la fiche.");
+  else if (coop && coop.nom){
+    const a = qcNormaliserTexte(nomFournisseur), b = qcNormaliserTexte(coop.nom);
+    const motsB = b.split(' ').filter(m=>m.length>2);
+    const chevauche = a.includes(b) || b.includes(a) || motsB.some(m=>a.includes(m));
+    if (!chevauche) problemes.push("Le nom de la coopérative inscrit sur la fiche (« "+nomFournisseur+" ») ne correspond pas à « "+coop.nom+" », la coopérative de cette demande — vérifie qu'il ne s'agit pas de la fiche d'une autre coopérative.");
+  }
+  if (!villeOrigine) problemes.push("La localité (« VILLE D'ORIGINE ») n'est pas renseignée sur la fiche.");
+
+  let nbLignes = 0, sacsManquants = 0, poidsManquant = 0, sacsNonEntiers = 0;
+  const exSacs = [], exPoids = [], exEntiers = [];
+  for (let r=13; r<rows.length; r++){
+    const row = rows[r]||[];
+    const farmId = String(row[6]||'').trim();
+    if (!farmId) continue;
+    nbLignes++;
+    const bagsNum = Number(row[7]), qte = Number(row[8])||0;
+    if (!(bagsNum>0)){ sacsManquants++; if (exSacs.length<5) exSacs.push(farmId); }
+    else if (!Number.isInteger(bagsNum)){ sacsNonEntiers++; if (exEntiers.length<5) exEntiers.push(farmId+' ('+bagsNum+')'); }
+    if (!(qte>0)){ poidsManquant++; if (exPoids.length<5) exPoids.push(farmId); }
+  }
+  if (nbLignes===0) problemes.push("Aucune ligne de livraison exploitable (Farm ID) trouvée dans le fichier.");
+  if (sacsManquants>0) problemes.push(sacsManquants+' ligne'+(sacsManquants>1?'s':'')+' sans nombre de sacs renseigné (Farm ID '+exSacs.join(', ')+(sacsManquants>exSacs.length?'…':'')+').');
+  if (poidsManquant>0) problemes.push(poidsManquant+' ligne'+(poidsManquant>1?'s':'')+' sans poids renseigné (Farm ID '+exPoids.join(', ')+(poidsManquant>exPoids.length?'…':'')+').');
+  if (sacsNonEntiers>0) problemes.push(sacsNonEntiers+' ligne'+(sacsNonEntiers>1?'s':'')+' avec un nombre de sacs non entier, donc probablement recalculé plutôt que recopié du bordereau papier (ex. '+exEntiers.join(', ')+(sacsNonEntiers>exEntiers.length?'…':'')+').');
+
+  return { ok: problemes.length===0, fichierNom: fichier.nom, problemes };
+}
+
 async function telechargerDossierDemandesZip(coopId, typeKey){
   const coop = coopById(coopId);
   const demandeById = {};
@@ -17087,6 +17148,24 @@ function _renderBrut(){
             + '<div class="checklist-grid" style="margin-bottom:16px;">' + p.surveillances.map(it=>ligneItem(it,false)).join('') + '</div>'
             + '<p class="hint">Ces parcelles n\'empêchent pas la validation, mais pense à utiliser « Alerter la coopérative » (Tableau de bord) si ce n\'est pas déjà fait.</p>'
           : '')
+      + '<div class="actions"><button class="btn" onclick="closeModal()">Fermer</button></div>'
+      + '</div></div>';
+  }
+
+  // Bloque la validation tant que la fiche n'est pas complete (nom coop., localite, sacs, poids) --
+  // cf. verifierFicheTracabiliteAvantValidation. Volontairement pas de "Valider quand meme" : la seule
+  // issue est de corriger le fichier ou de le renvoyer a la cooperative via Rejeter (qui regenere
+  // automatiquement un modele propre pour elle).
+  if (state.modal && state.modal.type==='problemesFicheTracabilite'){
+    const p = state.modal.payload;
+    const motifAuto = 'Le fichier « '+p.fichierNom+' » doit être corrigé avant de pouvoir être validé :\n'
+      + p.problemes.map(m=>'- '+m).join('\n')
+      + '\n\nMerci de renvoyer une fiche complète (nom de la coopérative, localité, nombre de sacs et poids pour chaque ligne).';
+    html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal wide">'
+      + '<h3>Fiche incomplète — '+esc(p.fichierNom)+'</h3>'
+      + '<p class="hint" style="margin-bottom:14px;color:var(--danger);">Cette fiche ne peut pas être validée en l\'état : au moins un contrôle obligatoire (nom de la coopérative, localité, nombre de sacs, poids) n\'est pas satisfait.</p>'
+      + '<div class="checklist-grid" style="margin-bottom:16px;">' + p.problemes.map(m=>'<div class="achat-item"><span>⚠ '+esc(m)+'</span></div>').join('') + '</div>'
+      + '<button class="btn btn-primary" style="background:var(--danger);border-color:var(--danger);margin-bottom:12px;" onclick="closeModal();ouvrirRejetDemande(\''+p.demandeId+'\','+esc(JSON.stringify(motifAuto))+')">Rejeter la demande avec ce motif</button>'
       + '<div class="actions"><button class="btn" onclick="closeModal()">Fermer</button></div>'
       + '</div></div>';
   }
