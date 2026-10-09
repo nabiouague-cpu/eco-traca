@@ -299,6 +299,29 @@
   .achats-defile{overflow-x:auto;}
   /* Lots & export */
   .lots-detail td{background:var(--surface-2);padding:6px 12px 10px;}
+  /* Contrats clients : ligne depliable (chevron qui tourne, detail en grille cle/valeur) */
+  .cc-ligne{cursor:pointer;} .cc-ligne:hover td{background:var(--surface-2);}
+  .cc-chevron{display:inline-block;transition:transform .15s var(--ease);color:var(--ink-faint);}
+  .cc-chevron.ouvert{transform:rotate(90deg);color:var(--accent);}
+  .cc-detail td{background:var(--surface-2);padding:4px 12px 14px;}
+  .cc-detail-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px 18px;}
+  .cc-detail-grid span{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-faint);margin-bottom:2px;}
+  .cc-detail-grid b{font-weight:600;color:var(--ink);}
+  /* Suivi achats clients : cartes par client (volume contrat vs realise), sous les tuiles ckpt du total */
+  .ckpt-tuile.alerte{border-color:var(--warn-line);background:linear-gradient(180deg,#fff 0%,var(--warn-bg) 140%);}
+  .sa-ckpt{grid-template-columns:repeat(4,1fr);}
+  @media (max-width:1280px){ .sa-ckpt{grid-template-columns:repeat(2,1fr);} }
+  @media (max-width:640px){ .sa-ckpt{grid-template-columns:1fr;} }
+  .sa-grille{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px;margin-bottom:10px;}
+  .sa-carte{background:var(--surface);border:1px solid #E6EAE8;border-radius:14px;padding:14px 16px;box-shadow:var(--shadow-sm);transition:box-shadow .2s,transform .2s;}
+  .sa-carte:hover{box-shadow:var(--shadow-md);transform:translateY(-1px);}
+  .sa-carte-tete{display:flex;justify-content:space-between;align-items:baseline;gap:8px;}
+  .sa-carte-tete b{font-size:14px;}
+  .sa-pct{font-family:var(--mono);font-weight:700;font-size:15px;}
+  .sa-carte-chiffres{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-top:12px;}
+  .sa-carte-chiffres span{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.03em;color:var(--ink-faint);}
+  .sa-carte-chiffres b{font-family:var(--mono);font-size:12.5px;font-weight:600;}
+  @media (max-width:760px){ .sa-carte-chiffres{grid-template-columns:repeat(3,1fr);} }
   .lots-compo{display:flex;flex-wrap:wrap;gap:6px;}
   .lots-puce{display:inline-block;font-size:12px;padding:3px 9px;border-radius:14px;background:#fff;border:1px solid var(--border);color:var(--ink-soft);}
   .lots-chaine{display:flex;flex-direction:column;gap:4px;}
@@ -3238,7 +3261,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-09-006';
+const APP_VERSION = '2026-10-09-007';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4962,7 +4985,7 @@ function ccPortsCocher(portsStr){
 }
 async function chargerLots(){
   if (!supabaseClient) return;
-  const [u, ua, e, eu, se, cc, cv] = await Promise.all([
+  const [u, ua, e, eu, se, cc, cv, sa] = await Promise.all([
     supabaseClient.from('lots_usinage').select('*').order('created_at', { ascending:false }),
     supabaseClient.from('lots_usinage_achats').select('*'),
     supabaseClient.from('lots_export').select('*').order('created_at', { ascending:false }),
@@ -4970,6 +4993,7 @@ async function chargerLots(){
     supabaseClient.from('lots_series').select('*').order('numero_debut', { ascending:true }),
     supabaseClient.from('contrats_clients').select('*').order('created_at', { ascending:false }),
     supabaseClient.from('cv_ventes').select('*').order('created_at', { ascending:false }),
+    supabaseClient.from('suivi_achats_clients').select('*'),
   ]);
   state.lotsUsinage = (u && !u.error) ? (u.data||[]) : (state.lotsUsinage||[]);
   state.lotsUsinageAchats = (ua && !ua.error) ? (ua.data||[]) : (state.lotsUsinageAchats||[]);
@@ -4978,6 +5002,7 @@ async function chargerLots(){
   state.lotsSeries = (se && !se.error) ? (se.data||[]) : (state.lotsSeries||[]);
   state.contratsClients = (cc && !cc.error) ? (cc.data||[]) : (state.contratsClients||[]);
   state.cvVentes = (cv && !cv.error) ? (cv.data||[]) : (state.cvVentes||[]);
+  state.suiviAchatsClients = (sa && !sa.error) ? (sa.data||[]) : (state.suiviAchatsClients||[]);
   state.lotsCharges = true;
 }
 function lotsSousOnglet(){ return state.lotsSousOnglet || 'contrats'; }
@@ -5086,11 +5111,12 @@ function renderLotsTab(){
     // « État des CV » est retiré de la navigation pour le moment (temporaire, cf. renderCvVentes et la
     // table cv_ventes conservees intactes plus bas : rattacher le sous-onglet suffira a tout remettre en
     // place quand on reprendra ce chantier avec plus d'elements).
-    + [['contrats','Contrats clients'],['series','Séries de numérotation'],['usinage','Lots d\'usinage'],['export','OT (ordres de transit)'],['chaine','Chaîne de traçabilité']].map(([id,l])=>'<button class="'+(actif===id?'active':'')+'" onclick="lotsSetSousOnglet(\''+id+'\')">'+l+'</button>').join('')
+    + [['contrats','Contrats clients'],['achats_clients','Suivi achats clients'],['series','Séries de numérotation'],['usinage','Lots d\'usinage'],['export','OT (ordres de transit)'],['chaine','Chaîne de traçabilité']].map(([id,l])=>'<button class="'+(actif===id?'active':'')+'" onclick="lotsSetSousOnglet(\''+id+'\')">'+l+'</button>').join('')
     + '</div>';
   if (!state.lotsCharges) html += '<div class="hint">Chargement des lots…</div>';
   else if (actif==='cv') html += renderCvVentes();
   else if (actif==='contrats') html += renderContratsClients();
+  else if (actif==='achats_clients') html += renderAchatsClientsDashboard();
   else if (actif==='series') html += renderLotsSeries();
   else if (actif==='usinage') html += renderLotsUsinage();
   else if (actif==='export') html += renderLotsExport();
@@ -5250,18 +5276,164 @@ function contratClientPrixTexte(c){
   if (!(Number(c.prix_valeur)>0)) return '';
   return fmtNum(c.prix_valeur)+' '+(c.prix_devise||'').replace('/', ' / ');
 }
+// Ligne cliquable depliable : seules Client / Reference / Statut / actions restent visibles d'un coup
+// d'oeil ; le reste (campagne, type, niveau, volume, prix, embarquement, notes) n'apparait que si on
+// deplie la ligne. L'etat deplie/replie (state.ccOuverts) est un simple drapeau en memoire, perdu au
+// rechargement -- pas besoin de le persister.
+function ccBasculerLigne(id){ state.ccOuverts = state.ccOuverts||{}; state.ccOuverts[id] = !state.ccOuverts[id]; render(); }
 function renderContratsClients(){
   const contrats = (state.contratsClients||[]).slice().sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
   let html = '<div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">'
     + '<button class="btn btn-primary" onclick="contratClientOuvrir()">+ Nouveau contrat client</button>'
-    + '<span class="hint" style="margin:0">Le niveau de traçabilité exigé par le contrat dicte le choix des sites/coopératives (décidé hors ORIGEN) ; ce registre sert de référence.</span></div>';
+    + '<span class="hint" style="margin:0">Clique sur une ligne pour voir le détail du contrat (campagne, type, niveau, volume, prix, embarquement). Le niveau de traçabilité exigé par le contrat dicte le choix des sites/coopératives (décidé hors ORIGEN) ; ce registre sert de référence.</span></div>';
   if (!contrats.length) return html + '<div class="hint">Aucun contrat client enregistré pour l\'instant.</div>';
-  html += '<table class="tbl-fiches"><thead><tr><th>Client</th><th>Réf. contrat</th><th>Campagne</th><th>Type de cacao</th><th>Niveau de traçabilité</th><th>Volume contractuel</th><th>Prix</th><th>Embarquement</th><th>Statut</th><th></th></tr></thead><tbody>';
+  html += '<table class="tbl-fiches cc-tbl"><thead><tr><th></th><th>Client</th><th>Réf. contrat</th><th>Statut</th><th></th></tr></thead><tbody>';
   contrats.forEach(c=>{
-    html += '<tr><td><b>'+esc(c.client)+'</b></td><td>'+esc(c.reference||'—')+'</td><td>'+esc(lotsCampagneNom(c.campagne_id)||'—')+'</td><td>'+esc(c.type_cacao||'—')+'</td><td>'+esc(c.niveau_tracabilite||'—')+'</td><td>'+(Number(c.volume_contractuel_kg)>0?fmtKg(c.volume_contractuel_kg):'—')+'</td><td>'+esc(contratClientPrixTexte(c)||'—')+'</td><td>'+esc(c.periode_embarquement||'—')+'</td><td>'+lotsBadge(CONTRATS_CLIENTS_STATUTS, c.statut)+'</td>'
-      + '<td style="white-space:nowrap">'+(c.fichier_path?'<button class="btn-ghost btn-compact" onclick="ccContratTelechargerFichier(\''+esc(c.id)+'\')" title="'+esc(c.fichier_nom||'')+'">Contrat</button> ':'')+'<button class="btn-ghost btn-compact" onclick="contratClientOuvrir(\''+esc(c.id)+'\')">Modifier</button> <button class="btn-danger-text btn-compact" onclick="contratClientSupprimer(\''+esc(c.id)+'\')">Supprimer</button></td></tr>';
+    const ouvert = !!(state.ccOuverts && state.ccOuverts[c.id]);
+    html += '<tr class="cc-ligne" onclick="ccBasculerLigne(\''+esc(c.id)+'\')"><td><span class="cc-chevron'+(ouvert?' ouvert':'')+'">▸</span></td><td><b>'+esc(c.client)+'</b></td><td>'+esc(c.reference||'—')+'</td><td>'+lotsBadge(CONTRATS_CLIENTS_STATUTS, c.statut)+'</td>'
+      + '<td style="white-space:nowrap" onclick="event.stopPropagation()">'+(c.fichier_path?'<button class="btn-ghost btn-compact" onclick="ccContratTelechargerFichier(\''+esc(c.id)+'\')" title="'+esc(c.fichier_nom||'')+'">Contrat</button> ':'')+'<button class="btn-ghost btn-compact" onclick="contratClientOuvrir(\''+esc(c.id)+'\')">Modifier</button> <button class="btn-danger-text btn-compact" onclick="contratClientSupprimer(\''+esc(c.id)+'\')">Supprimer</button></td></tr>';
+    if (ouvert){
+      html += '<tr class="cc-detail"><td></td><td colspan="4"><div class="cc-detail-grid">'
+        + '<div><span>Campagne</span><b>'+esc(lotsCampagneNom(c.campagne_id)||'—')+'</b></div>'
+        + '<div><span>Type de cacao</span><b>'+esc(c.type_cacao||'—')+'</b></div>'
+        + '<div><span>Niveau de traçabilité</span><b>'+esc(c.niveau_tracabilite||'—')+'</b></div>'
+        + '<div><span>Volume contractuel</span><b>'+(Number(c.volume_contractuel_kg)>0?fmtKg(c.volume_contractuel_kg):'—')+'</b></div>'
+        + '<div><span>Prix</span><b>'+esc(contratClientPrixTexte(c)||'—')+'</b></div>'
+        + '<div><span>Embarquement</span><b>'+esc(c.periode_embarquement||'—')+'</b></div>'
+        + (c.conditions_paiement?'<div><span>Conditions de paiement</span><b>'+esc(c.conditions_paiement)+'</b></div>':'')
+        + (c.port?'<div><span>Port</span><b>'+esc(c.port)+'</b></div>':'')
+        + (c.notes?'<div style="grid-column:1/-1"><span>Notes</span><b>'+esc(c.notes)+'</b></div>':'')
+        + '</div></td></tr>';
+    }
   });
   return html + '</tbody></table>';
+}
+// ---- Suivi achats clients (tableau de bord) -------------------------------------------------------
+// Alimente a partir du classeur "Suivi achats" tenu par le service commercial (feuille "Suivi achats
+// 26-27" : par periode (OD/JM) puis par client, volume contrat (a) vs volume valide sur connaissement
+// (b) vs livraison brousse (c) vs production lots exports (d) vs presente en agreage (e) vs reste a
+// acheter (f=a-b). Le fichier est un instantane complet a chaque envoi : on remplace entierement les
+// lignes de la campagne affichee plutot que de tenter un rapprochement ligne a ligne.
+function suiviAchatsChoisirFichier(){ const i = document.getElementById('sa-import-excel'); if (i){ i.value=''; i.click(); } }
+function suiviAchatsPeriodeCode(brut, campagneId){
+  const code = String(brut||'').trim().toUpperCase();
+  if (code!=='OD' && code!=='JM') return String(brut||'').trim()||null;
+  const nom = lotsCampagneNom(campagneId) || '';
+  const m = nom.match(/(\d{4}).*?(\d{4})/);
+  if (!m) return code;
+  return code+' '+(code==='OD'?m[1]:m[2]);
+}
+async function suiviAchatsImporterExcel(input){
+  const fichier = input.files && input.files[0]; if (!fichier) return;
+  if (typeof XLSX === 'undefined'){ showToast('La bibliothèque Excel ne s\'est pas chargée (connexion internet requise).'); return; }
+  let wb;
+  try{ wb = XLSX.read(await fichier.arrayBuffer(), { type:'array', cellDates:true }); }
+  catch(e){ showToast('Fichier illisible : '+e.message, 'error'); return; }
+  const nomFeuille = wb.SheetNames.find(n=>qcNormaliserTexte(n).includes('suivi achats')) || wb.SheetNames[0];
+  const aoa = XLSX.utils.sheet_to_json(wb.Sheets[nomFeuille], { header:1, defval:'' });
+  if (!aoa.length){ showToast('Le fichier est vide.', 'error'); return; }
+  let ligneEntetes = -1;
+  for (let i=0; i<Math.min(10, aoa.length); i++){
+    if ((aoa[i]||[]).some(c=>qcNormaliserTexte(c).includes('volume contrat'))){ ligneEntetes = i; break; }
+  }
+  if (ligneEntetes<0){ showToast('Ce fichier ne correspond pas au modèle « Suivi achats » (colonne « Volume contrat » introuvable).', 'error'); return; }
+  const entetes = (aoa[ligneEntetes]||[]).map(qcNormaliserTexte);
+  const col = pred => entetes.findIndex(pred);
+  const colContrat = col(e=>e.includes('volume contrat'));
+  const colValide = col(e=>e.includes('valide') && e.includes('connaissement'));
+  const colBrousse = col(e=>e.includes('livraison') && e.includes('brousse'));
+  const colProduction = col(e=>e.includes('production') && e.includes('lots'));
+  const colAgreage = col(e=>e.includes('agreage'));
+  const colReste = col(e=>e.includes('reste'));
+  const colCamion = col(e=>e.includes('camion'));
+  const val = (row, i) => i>=0 ? row[i] : '';
+  const campagneId = (state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : null;
+  // Entre la ligne d'en-tetes et les donnees : une ligne de lettres (a, b, c, f=a-b...) puis parfois une
+  // ligne vide -- on saute les deux si presentes plutot que de compter un nombre fixe de lignes.
+  let debut = ligneEntetes+1;
+  if ((aoa[debut]||[]).some(c=>/^[a-z](=.*)?$/i.test(String(c||'').trim()))) debut++;
+  while (debut<aoa.length && !(aoa[debut]||[]).some(c=>String(c||'').trim())) debut++;
+  let periodeCourante = null;
+  const lignes = [];
+  for (let i=debut; i<aoa.length; i++){
+    const row = aoa[i]; if (!row) continue;
+    const periodeBrute = String(row[0]||'').trim();
+    if (periodeBrute) periodeCourante = suiviAchatsPeriodeCode(periodeBrute, campagneId);
+    const client = String(row[1]||'').trim();
+    if (!client) continue;
+    const normClient = qcNormaliserTexte(client);
+    if (normClient.startsWith('sous total') || normClient==='total') continue; // totaux recalcules nous-memes
+    lignes.push({
+      periode: periodeCourante, client,
+      volume_contrat_t: Number(val(row, colContrat))||null,
+      volume_valide_connaissement_t: Number(val(row, colValide))||null,
+      livraison_brousse_t: Number(val(row, colBrousse))||null,
+      production_lots_exports_t: Number(val(row, colProduction))||null,
+      presente_agreage_t: Number(val(row, colAgreage))||null,
+      reste_a_acheter_t: Number(val(row, colReste))||null,
+      camion_attente_t: Number(val(row, colCamion))||null,
+    });
+  }
+  if (!lignes.length){ showToast('Aucune ligne client reconnue dans ce fichier.', 'error'); return; }
+  let req = supabaseClient.from('suivi_achats_clients').delete();
+  req = campagneId ? req.eq('campagne_id', campagneId) : req.is('campagne_id', null);
+  const { error: errSupp } = await req;
+  if (errSupp){ showToast('Échec : '+errSupp.message); return; }
+  const maintenant = new Date().toISOString();
+  const lignesInsert = lignes.map(l=>Object.assign({ id: genId('sa'), campagne_id: campagneId, created_at: maintenant, updated_at: maintenant }, l));
+  const { error } = await supabaseClient.from('suivi_achats_clients').insert(lignesInsert);
+  if (error){ showToast('Échec : '+error.message); return; }
+  await chargerLots(); render();
+  showToast(lignes.length+' ligne(s) importée(s)'+(campagneId?'':' (aucune campagne sélectionnée — à réimporter après avoir choisi une campagne si besoin)')+'.', 'success');
+}
+function suiviAchatsCarteClient(l){
+  const contrat = Number(l.volume_contrat_t)||0;
+  const valide = Number(l.volume_valide_connaissement_t)||0;
+  const brousse = Number(l.livraison_brousse_t)||0;
+  const agreage = Number(l.presente_agreage_t)||0;
+  const reste = Number(l.reste_a_acheter_t)||0;
+  const pct = contrat>0 ? Math.min(100, Math.round(valide/contrat*100)) : 0;
+  const pctBrousse = contrat>0 ? Math.min(100, Math.round(brousse/contrat*100)) : 0;
+  const couleur = pct>=80 ? 'var(--ok)' : (pct>=40 ? 'var(--accent)' : 'var(--warn)');
+  return '<div class="sa-carte">'
+    + '<div class="sa-carte-tete"><b>'+esc(l.client)+'</b><span class="sa-pct" style="color:'+couleur+'">'+pct+' %</span></div>'
+    + '<div class="ckpt-seg" style="margin-top:8px"><i style="width:'+pct+'%;background:'+couleur+'"></i><i style="width:'+Math.max(0,pctBrousse-pct)+'%;background:var(--info)"></i></div>'
+    + '<div class="sa-carte-chiffres">'
+      + '<div><span>Contrat</span><b>'+fmtNum(contrat)+' T</b></div>'
+      + '<div><span>Validé</span><b>'+fmtNum(valide)+' T</b></div>'
+      + '<div><span>Brousse</span><b>'+fmtNum(brousse)+' T</b></div>'
+      + '<div><span>Agréage</span><b>'+fmtNum(agreage)+' T</b></div>'
+      + '<div><span>Reste</span><b style="'+(reste>0?'color:var(--warn)':'color:var(--ok)')+'">'+fmtNum(reste)+' T</b></div>'
+    + '</div></div>';
+}
+function renderAchatsClientsDashboard(){
+  const campagneId = (state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : null;
+  const lignes = (state.suiviAchatsClients||[]).filter(l=>!campagneId || l.campagne_id===campagneId);
+  let html = '<div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">'
+    + '<button class="btn" onclick="suiviAchatsChoisirFichier()">⭱ Importer le suivi achats (Excel)</button>'
+    + '<input type="file" id="sa-import-excel" accept=".xlsx,.xls,.csv" style="display:none" onchange="suiviAchatsImporterExcel(this)">'
+    + '<span class="hint" style="margin:0">Volumes par client : contrat vs validé sur connaissement, livraison brousse, agréage, reste à acheter. Réimporter le fichier remplace entièrement les données de la campagne affichée.</span></div>';
+  if (!lignes.length) return html + '<div class="hint">Aucune donnée importée pour l\'instant'+(campagneId?' pour cette campagne':'')+'.</div>';
+
+  const somme = champ => lignes.reduce((s,l)=>s+(Number(l[champ])||0), 0);
+  const totalContrat = somme('volume_contrat_t'), totalValide = somme('volume_valide_connaissement_t'),
+    totalAgreage = somme('presente_agreage_t'), totalReste = somme('reste_a_acheter_t');
+  const pctRealise = totalContrat>0 ? Math.round(totalValide/totalContrat*100) : 0;
+
+  html += '<div class="ckpt sa-ckpt">'
+    + '<div class="ckpt-tuile"><div class="k">Volume contracté</div><div class="v" data-n="'+Math.round(totalContrat)+'">'+fmtNum(totalContrat)+' <small>tonnes</small></div><div class="s">Tous clients confondus</div></div>'
+    + '<div class="ckpt-tuile"><div class="k">Validé sur connaissement</div><div class="v" data-n="'+Math.round(totalValide)+'">'+fmtNum(totalValide)+' <small>tonnes</small></div><div class="s">'+pctRealise+' % du volume contracté</div><div class="ckpt-barre"><i style="width:'+Math.min(100,pctRealise)+'%;background:var(--ok)"></i></div></div>'
+    + '<div class="ckpt-tuile"><div class="k">Présenté en agréage</div><div class="v" data-n="'+Math.round(totalAgreage)+'">'+fmtNum(totalAgreage)+' <small>tonnes</small></div><div class="s">En cours de validation</div></div>'
+    + '<div class="ckpt-tuile'+(totalReste>0?' alerte':'')+'"><div class="k">Reste à acheter</div><div class="v" data-n="'+Math.round(totalReste)+'">'+fmtNum(totalReste)+' <small>tonnes</small></div><div class="s">Pour honorer les contrats en cours</div></div>'
+    + '</div>';
+
+  const periodes = Array.from(new Set(lignes.map(l=>l.periode||'—'))).sort();
+  periodes.forEach(periode=>{
+    const lignesPeriode = lignes.filter(l=>(l.periode||'—')===periode).slice().sort((a,b)=>(Number(b.volume_contrat_t)||0)-(Number(a.volume_contrat_t)||0));
+    html += '<h3 style="margin:22px 0 10px;font-size:14px;color:var(--ink-soft)">'+esc(periode)+'</h3>'
+      + '<div class="sa-grille">'+lignesPeriode.map(suiviAchatsCarteClient).join('')+'</div>';
+  });
+  return html;
 }
 function contratClientOuvrir(id){
   const c = id ? contratClientParId(id) : null;
