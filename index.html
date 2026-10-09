@@ -3266,7 +3266,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-09-009';
+const APP_VERSION = '2026-10-09-010';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5337,10 +5337,17 @@ async function ccLogoDepose(input){
   if (error){ showToast('Échec : '+error.message); return; }
   await chargerLots(); render(); showToast('Logo mis à jour pour '+client+'.', 'success');
 }
-// Regroupe par client (recoupement exact sur le champ "client" tel qu'enregistre sur chaque contrat --
-// deux libelles qui different, ex. "TOUTON" vs "TOUTON SAS", restent deux groupes distincts : harmoniser
-// l'orthographe du nom client a la saisie/import est ce qui les reunira). Chaque carte deroulee liste
-// l'ensemble des contrats de ce client avec toutes les informations pertinentes.
+// Regroupe par client en normalisant le libellé (accents/casse/espaces ignorés, et suffixes juridiques
+// comme "SAS"/"SA"/"LTD" retirés) : "TOUTON" et "TOUTON SAS" sont donc bien la même entreprise et
+// n'affichent qu'une seule carte. Le nom affiché est le libellé le plus court parmi les variantes
+// rencontrées (ex. "TOUTON" plutôt que "TOUTON SAS"), et c'est ce nom court qui est réutilisé pour tout
+// nouveau contrat créé depuis cette carte, afin d'harmoniser progressivement la saisie.
+const CC_SUFFIXES_JURIDIQUES = ['sas','sasu','sa','sarl','eurl','ltd','llc','inc','gmbh','bv','corp','corporation','co','plc','spa','nv','ag','srl'];
+function ccClefClient(nom){
+  const mots = qcNormaliserTexte(nom).split(' ').filter(Boolean);
+  while (mots.length>1 && CC_SUFFIXES_JURIDIQUES.includes(mots[mots.length-1])) mots.pop();
+  return mots.join(' ');
+}
 function ccBasculerClient(client){ state.ccClientsOuverts = state.ccClientsOuverts||{}; state.ccClientsOuverts[client] = !state.ccClientsOuverts[client]; render(); }
 // Un client peut deja avoir des CV (bordereaux/avis de vente) avant meme que son contrat ne soit recu --
 // certains clients tardent a l'envoyer. Le regroupement par client se fait donc sur l'union des noms
@@ -5349,21 +5356,33 @@ function ccBasculerClient(client){ state.ccClientsOuverts = state.ccClientsOuver
 function renderContratsClients(){
   const contrats = (state.contratsClients||[]);
   const cvsTous = (state.cvVentes||[]);
+  const volumeGrandTotal = contrats.reduce((s,c)=>s+(Number(c.volume_contractuel_kg)||0), 0);
+  const volumeGrandTotalCvEnAttente = cvsTous.filter(c=>!c.contrat_client_id).reduce((s,c)=>s+(Number(c.volume_kg)||0), 0);
   let html = '<div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">'
     + '<button class="btn btn-primary" onclick="contratClientOuvrir()">+ Nouveau contrat client</button>'
     + '<span class="hint" style="margin:0">Regroupés par client : clique sur un client pour dérouler l\'ensemble de ses contrats. Un client dont le contrat n\'est pas encore reçu apparaît déjà grâce à ses CV ; tu pourras lui rattacher le contrat plus tard. Le niveau de traçabilité exigé par le contrat dicte le choix des sites/coopératives (décidé hors ORIGEN) ; ce registre sert de référence.</span></div>'
-    + '<input type="file" id="cc-logo-input" accept="image/*" style="display:none" onchange="ccLogoDepose(this)">';
-  const noms = new Set();
-  contrats.forEach(c=>noms.add(c.client||'—'));
-  cvsTous.forEach(c=>{ if (c.client) noms.add(c.client); });
-  if (!noms.size) return html + '<div class="hint">Aucun contrat client ni CV enregistré pour l\'instant.</div>';
+    + '<input type="file" id="cc-logo-input" accept="image/*" style="display:none" onchange="ccLogoDepose(this)">'
+    + '<div class="cc-total-global" style="margin-bottom:14px;padding:10px 14px;border-radius:10px;background:var(--surface-2);display:flex;gap:18px;flex-wrap:wrap;align-items:baseline">'
+    + '<span><b style="font-size:1.2em">'+fmtKg(volumeGrandTotal)+'</b> <span class="hint" style="margin:0">contractés, tous clients confondus</span></span>'
+    + (volumeGrandTotalCvEnAttente>0?'<span><b style="font-size:1.1em">'+fmtKg(volumeGrandTotalCvEnAttente)+'</b> <span class="hint" style="margin:0">en attente de contrat (CV reçus)</span></span>':'')
+    + '</div>';
+  const variantesParClef = new Map();
+  const ajouterVariante = (nom)=>{ const clef = ccClefClient(nom); if (!variantesParClef.has(clef)) variantesParClef.set(clef, new Set()); variantesParClef.get(clef).add(nom); };
+  contrats.forEach(c=>ajouterVariante(c.client||'—'));
+  cvsTous.forEach(c=>{ if (c.client) ajouterVariante(c.client); });
+  if (!variantesParClef.size) return html + '<div class="hint">Aucun contrat client ni CV enregistré pour l\'instant.</div>';
+  const nomCanonique = new Map();
+  variantesParClef.forEach((variantes, clef)=>{
+    const meilleur = Array.from(variantes).sort((a,b)=> (a.length-b.length) || a.localeCompare(b,'fr'))[0];
+    nomCanonique.set(clef, meilleur);
+  });
   const groupes = new Map();
-  noms.forEach(nom=>groupes.set(nom, { contrats:[], cvs:[] }));
-  contrats.forEach(c=>{ groupes.get(c.client||'—').contrats.push(c); });
-  cvsTous.forEach(c=>{ if (c.client && groupes.has(c.client)) groupes.get(c.client).cvs.push(c); });
-  const listeGroupes = Array.from(groupes.entries()).sort((a,b)=>a[0].localeCompare(b[0],'fr'));
+  variantesParClef.forEach((_, clef)=>groupes.set(clef, { nom: nomCanonique.get(clef), contrats:[], cvs:[] }));
+  contrats.forEach(c=>{ groupes.get(ccClefClient(c.client||'—')).contrats.push(c); });
+  cvsTous.forEach(c=>{ if (c.client) { const g = groupes.get(ccClefClient(c.client)); if (g) g.cvs.push(c); } });
+  const listeGroupes = Array.from(groupes.values()).sort((a,b)=>a.nom.localeCompare(b.nom,'fr'));
   html += '<div class="cc-clients">';
-  listeGroupes.forEach(([client, g])=>{
+  listeGroupes.forEach(({nom:client, ...g})=>{
     const ouvert = !!(state.ccClientsOuverts && state.ccClientsOuverts[client]);
     const liste = g.contrats.slice().sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
     const cvsClient = g.cvs.slice().sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
