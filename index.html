@@ -299,14 +299,19 @@
   .achats-defile{overflow-x:auto;}
   /* Lots & export */
   .lots-detail td{background:var(--surface-2);padding:6px 12px 10px;}
-  /* Contrats clients : ligne depliable (chevron qui tourne, detail en grille cle/valeur) */
-  .cc-ligne{cursor:pointer;} .cc-ligne:hover td{background:var(--surface-2);}
+  /* Contrats clients : regroupes par client, carte depliable avec avatar/logo */
   .cc-chevron{display:inline-block;transition:transform .15s var(--ease);color:var(--ink-faint);}
   .cc-chevron.ouvert{transform:rotate(90deg);color:var(--accent);}
-  .cc-detail td{background:var(--surface-2);padding:4px 12px 14px;}
-  .cc-detail-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px 18px;}
-  .cc-detail-grid span{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-faint);margin-bottom:2px;}
-  .cc-detail-grid b{font-weight:600;color:var(--ink);}
+  .cc-clients{display:flex;flex-direction:column;gap:10px;}
+  .cc-client-carte{background:var(--surface);border:1px solid #E6EAE8;border-radius:14px;overflow:hidden;box-shadow:var(--shadow-sm);}
+  .cc-client-tete{display:flex;align-items:center;gap:14px;padding:12px 16px;cursor:pointer;}
+  .cc-client-tete:hover{background:var(--surface-2);}
+  .cc-client-info{flex:1;display:flex;flex-direction:column;gap:2px;}
+  .cc-client-info b{font-size:15px;}
+  .cc-avatar{border-radius:10px;display:flex;align-items:center;justify-content:center;flex:none;cursor:pointer;overflow:hidden;transition:box-shadow .15s;}
+  .cc-avatar:hover{box-shadow:0 0 0 3px var(--accent-soft);}
+  .cc-client-contrats{border-top:1px solid var(--border);padding:4px 16px 14px;background:var(--surface-2);}
+  .cc-client-contrats table{background:var(--surface);border-radius:10px;overflow:hidden;margin-top:10px;}
   /* Suivi achats clients : cartes par client (volume contrat vs realise), sous les tuiles ckpt du total */
   .ckpt-tuile.alerte{border-color:var(--warn-line);background:linear-gradient(180deg,#fff 0%,var(--warn-bg) 140%);}
   .sa-ckpt{grid-template-columns:repeat(4,1fr);}
@@ -3261,7 +3266,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-09-007';
+const APP_VERSION = '2026-10-09-008';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4985,7 +4990,7 @@ function ccPortsCocher(portsStr){
 }
 async function chargerLots(){
   if (!supabaseClient) return;
-  const [u, ua, e, eu, se, cc, cv, sa] = await Promise.all([
+  const [u, ua, e, eu, se, cc, cv, sa, cm] = await Promise.all([
     supabaseClient.from('lots_usinage').select('*').order('created_at', { ascending:false }),
     supabaseClient.from('lots_usinage_achats').select('*'),
     supabaseClient.from('lots_export').select('*').order('created_at', { ascending:false }),
@@ -4994,6 +4999,7 @@ async function chargerLots(){
     supabaseClient.from('contrats_clients').select('*').order('created_at', { ascending:false }),
     supabaseClient.from('cv_ventes').select('*').order('created_at', { ascending:false }),
     supabaseClient.from('suivi_achats_clients').select('*'),
+    supabaseClient.from('clients_meta').select('*'),
   ]);
   state.lotsUsinage = (u && !u.error) ? (u.data||[]) : (state.lotsUsinage||[]);
   state.lotsUsinageAchats = (ua && !ua.error) ? (ua.data||[]) : (state.lotsUsinageAchats||[]);
@@ -5003,6 +5009,7 @@ async function chargerLots(){
   state.contratsClients = (cc && !cc.error) ? (cc.data||[]) : (state.contratsClients||[]);
   state.cvVentes = (cv && !cv.error) ? (cv.data||[]) : (state.cvVentes||[]);
   state.suiviAchatsClients = (sa && !sa.error) ? (sa.data||[]) : (state.suiviAchatsClients||[]);
+  state.clientsMeta = (cm && !cm.error) ? (cm.data||[]) : (state.clientsMeta||[]);
   state.lotsCharges = true;
 }
 function lotsSousOnglet(){ return state.lotsSousOnglet || 'contrats'; }
@@ -5276,37 +5283,86 @@ function contratClientPrixTexte(c){
   if (!(Number(c.prix_valeur)>0)) return '';
   return fmtNum(c.prix_valeur)+' '+(c.prix_devise||'').replace('/', ' / ');
 }
-// Ligne cliquable depliable : seules Client / Reference / Statut / actions restent visibles d'un coup
-// d'oeil ; le reste (campagne, type, niveau, volume, prix, embarquement, notes) n'apparait que si on
-// deplie la ligne. L'etat deplie/replie (state.ccOuverts) est un simple drapeau en memoire, perdu au
-// rechargement -- pas besoin de le persister.
-function ccBasculerLigne(id){ state.ccOuverts = state.ccOuverts||{}; state.ccOuverts[id] = !state.ccOuverts[id]; render(); }
+// Avatars client : logo depose par l'utilisateur (clients_meta.logo_b64, stocke directement en base64 --
+// pas besoin d'un bucket public ni de telechargement asynchrone pour l'afficher) sinon pastille couleur +
+// initiales, deterministe (meme client -> meme couleur a chaque rendu). Cliquer sur l'avatar propose
+// toujours de (re)deposer un logo.
+const CC_AVATAR_COULEURS = ['#1F6E5C','#2C5FAE','#B8720A','#8E5BAE','#B3261E','#0E7C86','#6B5B1F','#3D6B1F'];
+function ccAvatarCouleur(nom){
+  let h = 0; const s = String(nom||'');
+  for (let i=0;i<s.length;i++) h = (h*31 + s.charCodeAt(i)) >>> 0;
+  return CC_AVATAR_COULEURS[h % CC_AVATAR_COULEURS.length];
+}
+function ccInitiales(nom){
+  const mots = String(nom||'').trim().split(/\s+/).filter(Boolean);
+  if (!mots.length) return '?';
+  return (mots[0][0]+(mots.length>1?mots[mots.length-1][0]:(mots[0][1]||''))).toUpperCase();
+}
+function clientMetaDe(client){ return (state.clientsMeta||[]).find(m=>m.client===client) || null; }
+function ccAvatarHtml(client, taille){
+  taille = taille||40;
+  const meta = clientMetaDe(client);
+  const contenu = (meta && meta.logo_b64)
+    ? '<img src="data:'+(meta.logo_type||'image/png')+';base64,'+meta.logo_b64+'" alt="" style="width:100%;height:100%;object-fit:contain;border-radius:8px;">'
+    : '<span style="color:#fff;font-weight:700;font-size:'+Math.round(taille*0.4)+'px;">'+esc(ccInitiales(client))+'</span>';
+  return '<div class="cc-avatar" title="Cliquer pour déposer le logo de ce client" onclick="event.stopPropagation();ccLogoChoisir(\''+escJs(client)+'\')" style="width:'+taille+'px;height:'+taille+'px;background:'+(meta&&meta.logo_b64?'var(--surface-2)':ccAvatarCouleur(client))+'">'+contenu+'</div>';
+}
+function ccLogoChoisir(client){
+  state._ccLogoCible = client;
+  const i = document.getElementById('cc-logo-input'); if (i){ i.value=''; i.click(); }
+}
+async function ccLogoDepose(input){
+  const client = state._ccLogoCible; const fichier = input.files && input.files[0];
+  if (!client || !fichier) return;
+  if (!/^image\//.test(fichier.type)){ showToast('Choisis un fichier image (PNG, JPG, SVG...).', 'error'); return; }
+  if (fichier.size > 400*1024){ showToast('Image trop lourde (400 Ko maximum) : réduis-la avant de la déposer.', 'error'); return; }
+  let b64;
+  try{ b64 = await new Promise((resolve,reject)=>{ const r = new FileReader(); r.onload=()=>resolve(String(r.result).split(',')[1]); r.onerror=()=>reject(new Error('lecture impossible')); r.readAsDataURL(fichier); }); }
+  catch(e){ showToast('Échec de lecture du fichier : '+e.message); return; }
+  const ligne = { client, logo_b64: b64, logo_type: fichier.type, updated_at: new Date().toISOString() };
+  const existant = clientMetaDe(client);
+  const { error } = existant
+    ? await supabaseClient.from('clients_meta').update(ligne).eq('client', client)
+    : await supabaseClient.from('clients_meta').insert(ligne);
+  if (error){ showToast('Échec : '+error.message); return; }
+  await chargerLots(); render(); showToast('Logo mis à jour pour '+client+'.', 'success');
+}
+// Regroupe par client (recoupement exact sur le champ "client" tel qu'enregistre sur chaque contrat --
+// deux libelles qui different, ex. "TOUTON" vs "TOUTON SAS", restent deux groupes distincts : harmoniser
+// l'orthographe du nom client a la saisie/import est ce qui les reunira). Chaque carte deroulee liste
+// l'ensemble des contrats de ce client avec toutes les informations pertinentes.
+function ccBasculerClient(client){ state.ccClientsOuverts = state.ccClientsOuverts||{}; state.ccClientsOuverts[client] = !state.ccClientsOuverts[client]; render(); }
 function renderContratsClients(){
-  const contrats = (state.contratsClients||[]).slice().sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
+  const contrats = (state.contratsClients||[]);
   let html = '<div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">'
     + '<button class="btn btn-primary" onclick="contratClientOuvrir()">+ Nouveau contrat client</button>'
-    + '<span class="hint" style="margin:0">Clique sur une ligne pour voir le détail du contrat (campagne, type, niveau, volume, prix, embarquement). Le niveau de traçabilité exigé par le contrat dicte le choix des sites/coopératives (décidé hors ORIGEN) ; ce registre sert de référence.</span></div>';
+    + '<span class="hint" style="margin:0">Regroupés par client : clique sur un client pour dérouler l\'ensemble de ses contrats. Le niveau de traçabilité exigé par le contrat dicte le choix des sites/coopératives (décidé hors ORIGEN) ; ce registre sert de référence.</span></div>'
+    + '<input type="file" id="cc-logo-input" accept="image/*" style="display:none" onchange="ccLogoDepose(this)">';
   if (!contrats.length) return html + '<div class="hint">Aucun contrat client enregistré pour l\'instant.</div>';
-  html += '<table class="tbl-fiches cc-tbl"><thead><tr><th></th><th>Client</th><th>Réf. contrat</th><th>Statut</th><th></th></tr></thead><tbody>';
-  contrats.forEach(c=>{
-    const ouvert = !!(state.ccOuverts && state.ccOuverts[c.id]);
-    html += '<tr class="cc-ligne" onclick="ccBasculerLigne(\''+esc(c.id)+'\')"><td><span class="cc-chevron'+(ouvert?' ouvert':'')+'">▸</span></td><td><b>'+esc(c.client)+'</b></td><td>'+esc(c.reference||'—')+'</td><td>'+lotsBadge(CONTRATS_CLIENTS_STATUTS, c.statut)+'</td>'
-      + '<td style="white-space:nowrap" onclick="event.stopPropagation()">'+(c.fichier_path?'<button class="btn-ghost btn-compact" onclick="ccContratTelechargerFichier(\''+esc(c.id)+'\')" title="'+esc(c.fichier_nom||'')+'">Contrat</button> ':'')+'<button class="btn-ghost btn-compact" onclick="contratClientOuvrir(\''+esc(c.id)+'\')">Modifier</button> <button class="btn-danger-text btn-compact" onclick="contratClientSupprimer(\''+esc(c.id)+'\')">Supprimer</button></td></tr>';
+  const groupes = new Map();
+  contrats.forEach(c=>{ const cle = c.client||'—'; if (!groupes.has(cle)) groupes.set(cle, []); groupes.get(cle).push(c); });
+  const listeGroupes = Array.from(groupes.entries()).sort((a,b)=>a[0].localeCompare(b[0],'fr'));
+  html += '<div class="cc-clients">';
+  listeGroupes.forEach(([client, liste])=>{
+    const ouvert = !!(state.ccClientsOuverts && state.ccClientsOuverts[client]);
+    liste.sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
+    const nbActifs = liste.filter(c=>c.statut==='actif').length;
+    const volumeTotal = liste.reduce((s,c)=>s+(Number(c.volume_contractuel_kg)||0), 0);
+    html += '<div class="cc-client-carte">'
+      + '<div class="cc-client-tete" onclick="ccBasculerClient(\''+escJs(client)+'\')">'
+      + ccAvatarHtml(client, 44)
+      + '<div class="cc-client-info"><b>'+esc(client)+'</b><span class="hint" style="margin:0">'+liste.length+' contrat'+(liste.length>1?'s':'')+(nbActifs?' · '+nbActifs+' actif'+(nbActifs>1?'s':''):'')+(volumeTotal>0?' · '+fmtKg(volumeTotal)+' contractés':'')+'</span></div>'
+      + '<span class="cc-chevron'+(ouvert?' ouvert':'')+'">▸</span>'
+      + '</div>';
     if (ouvert){
-      html += '<tr class="cc-detail"><td></td><td colspan="4"><div class="cc-detail-grid">'
-        + '<div><span>Campagne</span><b>'+esc(lotsCampagneNom(c.campagne_id)||'—')+'</b></div>'
-        + '<div><span>Type de cacao</span><b>'+esc(c.type_cacao||'—')+'</b></div>'
-        + '<div><span>Niveau de traçabilité</span><b>'+esc(c.niveau_tracabilite||'—')+'</b></div>'
-        + '<div><span>Volume contractuel</span><b>'+(Number(c.volume_contractuel_kg)>0?fmtKg(c.volume_contractuel_kg):'—')+'</b></div>'
-        + '<div><span>Prix</span><b>'+esc(contratClientPrixTexte(c)||'—')+'</b></div>'
-        + '<div><span>Embarquement</span><b>'+esc(c.periode_embarquement||'—')+'</b></div>'
-        + (c.conditions_paiement?'<div><span>Conditions de paiement</span><b>'+esc(c.conditions_paiement)+'</b></div>':'')
-        + (c.port?'<div><span>Port</span><b>'+esc(c.port)+'</b></div>':'')
-        + (c.notes?'<div style="grid-column:1/-1"><span>Notes</span><b>'+esc(c.notes)+'</b></div>':'')
-        + '</div></td></tr>';
+      html += '<div class="cc-client-contrats"><table class="tbl-fiches"><thead><tr><th>Réf.</th><th>Campagne</th><th>Type</th><th>Niveau</th><th>Volume</th><th>Prix</th><th>Embarquement</th><th>Statut</th><th></th></tr></thead><tbody>'
+        + liste.map(c=>'<tr><td><b>'+esc(c.reference||'—')+'</b></td><td>'+esc(lotsCampagneNom(c.campagne_id)||'—')+'</td><td>'+esc(c.type_cacao||'—')+'</td><td>'+esc(c.niveau_tracabilite||'—')+'</td><td>'+(Number(c.volume_contractuel_kg)>0?fmtKg(c.volume_contractuel_kg):'—')+'</td><td>'+esc(contratClientPrixTexte(c)||'—')+'</td><td>'+esc(c.periode_embarquement||'—')+'</td><td>'+lotsBadge(CONTRATS_CLIENTS_STATUTS, c.statut)+'</td>'
+          + '<td style="white-space:nowrap">'+(c.fichier_path?'<button class="btn-ghost btn-compact" onclick="ccContratTelechargerFichier(\''+esc(c.id)+'\')" title="'+esc(c.fichier_nom||'')+'">Contrat</button> ':'')+'<button class="btn-ghost btn-compact" onclick="contratClientOuvrir(\''+esc(c.id)+'\')">Modifier</button> <button class="btn-danger-text btn-compact" onclick="contratClientSupprimer(\''+esc(c.id)+'\')">Supprimer</button></td></tr>').join('')
+        + '</tbody></table></div>';
     }
+    html += '</div>';
   });
-  return html + '</tbody></table>';
+  return html + '</div>';
 }
 // ---- Suivi achats clients (tableau de bord) -------------------------------------------------------
 // Alimente a partir du classeur "Suivi achats" tenu par le service commercial (feuille "Suivi achats
