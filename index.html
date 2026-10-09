@@ -3238,7 +3238,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-09-002';
+const APP_VERSION = '2026-10-09-003';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5378,19 +5378,19 @@ function cvApercuHtmlPourValeurs(v){
   const ecart = prixContrat!=null ? Math.round((prixContrat-calc.prixFobAssurance)*100)/100 : null;
   const texteContrat = prixContrat!=null ? fmtNum(prixContrat)+' FCFA/kg' : (contrat ? '<span class="hint" style="margin:0">recherche du taux USD/EUR…</span>' : '<span class="hint" style="margin:0">— choisis un contrat —</span>');
   const couleurEcart = ecart==null ? '' : (ecart<0 ? 'color:var(--danger)' : (ecart>0 ? 'color:var(--ok)' : ''));
+  // Assurance maritime, surveillance et cout CAF->FOB restent calcules (et entrent dans l'ecart) mais ne
+  // sont plus affiches a l'ecran -- seuls le prix CAF (deja saisi), le prix FOB qui en decoule et l'ecart
+  // avec le contrat interessent l'utilisateur au quotidien.
   return '<div class="info-grid">'
-    + '<div><span>Assurance maritime :</span> '+fmtNum(calc.assurance)+' FCFA/kg</div>'
     + '<div><span>Freinte maritime :</span> '+fmtNum(calc.freinte)+' FCFA/kg</div>'
-    + '<div><span>Coût CAF → FOB :</span> '+fmtNum(calc.coutCafFob)+' FCFA/kg</div>'
     + '<div><span>Prix FOB :</span> '+fmtNum(calc.prixFob)+' FCFA/kg</div>'
-    + '<div><span>Prix FOB + assurance :</span> '+fmtNum(calc.prixFobAssurance)+' FCFA/kg</div>'
     + '<div><span>Prix FOB client (contrat) :</span> '+texteContrat+'</div>'
     + '<div><span>Écart (contrat − coût réel) :</span> <b style="'+couleurEcart+'">'+(ecart!=null?fmtNum(ecart)+' FCFA/kg':'—')+'</b></div>'
     + '</div>';
 }
 function cvApercuMaj(){
   const pl = state.modal && state.modal.type==='cv' ? state.modal.payload : null; if (!pl) return;
-  const v = { contrat_client_id: pl.contrat_client_id||null, prix_caf_fcfa_kg: fv('cv_prix_caf'), fret_fcfa_kg: fv('cv_fret'), surveillance_fcfa_kg: fv('cv_surveillance') };
+  const v = { contrat_client_id: pl.contrat_client_id||null, prix_caf_fcfa_kg: fv('cv_prix_caf'), fret_fcfa_kg: fv('cv_fret'), surveillance_fcfa_kg: pl.surveillance_fcfa_kg };
   const el = document.getElementById('cvApercu'); if (el) el.innerHTML = cvApercuHtmlPourValeurs(v);
 }
 function cvContratChange(){
@@ -5420,7 +5420,7 @@ async function cvEnregistrer(){
   const ligne = { numero_cv, campagne_id: fv('cv_campagne')||null, contrat_client_id, client: contrat?contrat.client:null,
     volume_kg: Number(fv('cv_volume'))||null, periode_embarquement: fv('cv_periode')||null,
     prix_caf_fcfa_kg: Number(fv('cv_prix_caf'))||null, reversement_fcfa_kg: Number(fv('cv_reversement'))||null,
-    fret_fcfa_kg: Number(fv('cv_fret'))||40, surveillance_fcfa_kg: Number(fv('cv_surveillance'))||1,
+    fret_fcfa_kg: Number(fv('cv_fret'))||40, surveillance_fcfa_kg: (pl.surveillance_fcfa_kg!=null && pl.surveillance_fcfa_kg!=='') ? Number(pl.surveillance_fcfa_kg) : 1,
     notes: fv('cv_notes').trim()||null, updated_at: new Date().toISOString() };
   const id = pl.id || genId('cv');
   try{
@@ -5574,9 +5574,10 @@ async function cvImporterContratsPdf(input){
   showToast(nbCrees+' contrat(s) créé(s), '+nbMisAJour+' mis à jour (réf. '+refs.join(', ')+')'+(nbRelies?' · '+nbRelies+' CV rattaché(s) automatiquement':'')+'.', 'success');
 }
 // Colonnes gardees dans le tableau recapitulatif : seulement celles utiles au calcul du cout reel et a la
-// facturation (le detail complet -- fret, surveillance, assurance, cout CAF->FOB, prix FOB seul -- reste
-// visible/modifiable via "Modifier"). La decote (reversement/soutien) et la freinte maritime sont gardees
-// en evidence : ce sont les deux ecarts que le suivi commercial doit surveiller en priorite.
+// facturation. Assurance maritime et surveillance restent calculees (et entrent dans l'ecart) mais ne sont
+// affichees nulle part, ni ici ni dans la fiche de modification -- seul le passage prix CAF -> prix FOB
+// interesse l'utilisateur. La decote (reversement/soutien) et la freinte maritime restent en evidence : ce
+// sont les deux ecarts que le suivi commercial doit surveiller en priorite.
 function renderCvVentes(){
   const campagneId = (state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : null;
   const cvs = (state.cvVentes||[]).filter(c=>!campagneId || c.campagne_id===campagneId).slice().sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
@@ -5589,15 +5590,17 @@ function renderCvVentes(){
     + '</div>'
     + '<p class="hint" style="margin:0 0 12px">Récapitulatif des CV de la campagne (numéro de vente/exécution), le contrat client auquel chacun est rattaché, et l\'écart entre le coût réellement supporté (CAF ramené au FOB) et le prix FOB du contrat. Les deux imports se recoupent automatiquement : un contrat PDF mentionne les CV qu\'il couvre, qui sont alors rattachés tout seuls. Le niveau d\'apurement sera ajouté séparément.</p>';
   if (!cvs.length) return html + '<div class="hint">Aucun CV enregistré pour cette campagne pour l\'instant.</div>';
-  html += '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th>N° CV</th><th>Client</th><th>Contrat</th><th>Période</th><th>Volume</th><th>Prix CAF</th><th>Reversement/Soutien</th><th>Freinte maritime</th><th>Coût réel (FOB+assur.)</th><th>Prix FOB client (contrat)</th><th>Écart</th><th></th></tr></thead><tbody>';
+  html += '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th>N° CV</th><th>Client</th><th>Contrat</th><th>Période</th><th>Volume</th><th>Prix CAF</th><th>Reversement/Soutien</th><th>Freinte maritime</th><th>Prix FOB</th><th>Prix FOB client (contrat)</th><th>Écart</th><th></th></tr></thead><tbody>';
   cvs.forEach(cv=>{
     const contrat = cv.contrat_client_id ? contratClientParId(cv.contrat_client_id) : null;
     const calc = cvCalculs(cv);
     const prixContrat = cvPrixContratFcfaKg(contrat);
+    // L'ecart compare toujours au cout reel complet (FOB + assurance maritime), conformement a la formule
+    // d'origine -- l'assurance elle-meme n'est simplement plus affichee comme une colonne a part.
     const ecart = (prixContrat!=null) ? Math.round((prixContrat-calc.prixFobAssurance)*100)/100 : null;
     const couleurEcart = ecart==null ? '' : (ecart<0 ? 'color:var(--danger)' : (ecart>0 ? 'color:var(--ok)' : ''));
     html += '<tr><td><b>'+esc(cv.numero_cv||'—')+'</b></td><td>'+esc(cv.client||(contrat?contrat.client:'')||'—')+'</td><td>'+(contrat?esc(contrat.reference||contrat.client):'<span class="hint" style="margin:0">—</span>')+'</td><td>'+esc(cv.periode_embarquement||'—')+'</td><td>'+(Number(cv.volume_kg)>0?fmtKg(cv.volume_kg):'—')+'</td>'
-      + '<td>'+fmtNum(calc.prixCaf)+'</td><td>'+(cv.reversement_fcfa_kg!=null && cv.reversement_fcfa_kg!==''?fmtNum(cv.reversement_fcfa_kg):'—')+'</td><td>'+fmtNum(calc.freinte)+'</td><td>'+fmtNum(calc.prixFobAssurance)+'</td>'
+      + '<td>'+fmtNum(calc.prixCaf)+'</td><td>'+(cv.reversement_fcfa_kg!=null && cv.reversement_fcfa_kg!==''?fmtNum(cv.reversement_fcfa_kg):'—')+'</td><td>'+fmtNum(calc.freinte)+'</td><td>'+fmtNum(calc.prixFob)+'</td>'
       + '<td>'+(prixContrat!=null?fmtNum(prixContrat):(contrat&&contrat.prix_devise==='USD/T'?'<span class="hint" style="margin:0">recherche du taux…</span>':'<span class="hint" style="margin:0">—</span>'))+'</td>'
       + '<td style="'+couleurEcart+'"><b>'+(ecart!=null?fmtNum(ecart):'—')+'</b></td>'
       + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="cvOuvrir(\''+esc(cv.id)+'\')">Modifier</button> <button class="btn-danger-text btn-compact" onclick="cvSupprimer(\''+esc(cv.id)+'\')">Supprimer</button></td></tr>';
@@ -5996,8 +5999,8 @@ function lotsModalsHtml(){
       + '<div class="hint" style="margin:6px 0 10px">Client : <b id="cvClientAffiche">'+esc(pl.client||(contrat?contrat.client:'')||'—')+'</b> — repris automatiquement du contrat choisi.</div>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Volume (kg)<input type="number" name="cv_volume" value="'+esc(pl.volume_kg||'')+'"></label><label class="field">Période d\'embarquement<select name="cv_periode">'+lotsPeriodesEmbarquementOptions(pl.campagne_id, pl.periode_embarquement)+'</select></label></div>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Prix CAF (FCFA/kg)<input type="number" step="0.01" name="cv_prix_caf" value="'+esc(pl.prix_caf_fcfa_kg||'')+'" oninput="cvApercuMaj()"></label><label class="field">Reversement / Soutien (FCFA/kg)<input type="number" step="0.01" name="cv_reversement" value="'+esc(pl.reversement_fcfa_kg||'')+'" oninput="cvApercuMaj()"></label></div>'
-      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Fret (FCFA/kg)<input type="number" step="0.01" name="cv_fret" value="'+esc(pl.fret_fcfa_kg!=null?pl.fret_fcfa_kg:40)+'" oninput="cvApercuMaj()"></label><label class="field">Surveillance (FCFA/kg)<input type="number" step="0.01" name="cv_surveillance" value="'+esc(pl.surveillance_fcfa_kg!=null?pl.surveillance_fcfa_kg:1)+'" oninput="cvApercuMaj()"></label></div>'
-      + '<div class="hint" style="margin:6px 0 10px">Assurance maritime ('+(CV_TAUX_ASSURANCE_MARITIME*100)+' % du prix CAF) et freinte maritime ('+(CV_TAUX_FREINTE_MARITIME*100)+' % du prix CAF) calculées automatiquement ; le prix FOB client vient du contrat choisi (converti en FCFA/kg).</div>'
+      + '<label class="field">Fret (FCFA/kg)<input type="number" step="0.01" name="cv_fret" value="'+esc(pl.fret_fcfa_kg!=null?pl.fret_fcfa_kg:40)+'" oninput="cvApercuMaj()"></label>'
+      + '<div class="hint" style="margin:6px 0 10px">Assurance maritime et surveillance restent calculées automatiquement et entrent dans l\'écart, sans être affichées en détail ; le prix FOB client vient du contrat choisi (converti en FCFA/kg).</div>'
       + '<div id="cvApercu">'+cvApercuHtmlPourValeurs(pl)+'</div>'
       + '<label class="field" style="margin-top:10px">Notes<textarea name="cv_notes" rows="2">'+esc(pl.notes||'')+'</textarea></label>'
       + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="cvEnregistrer()">Enregistrer</button></div></div></div>';
