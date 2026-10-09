@@ -3266,7 +3266,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-09-008';
+const APP_VERSION = '2026-10-09-009';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5298,7 +5298,17 @@ function ccInitiales(nom){
   if (!mots.length) return '?';
   return (mots[0][0]+(mots.length>1?mots[mots.length-1][0]:(mots[0][1]||''))).toUpperCase();
 }
-function clientMetaDe(client){ return (state.clientsMeta||[]).find(m=>m.client===client) || null; }
+function clientMetaDe(client){
+  const metas = state.clientsMeta||[];
+  const exact = metas.find(m=>m.client===client);
+  if (exact) return exact;
+  const motsClient = qcNormaliserTexte(client).split(' ').filter(Boolean);
+  if (!motsClient.length) return null;
+  return metas.find(m=>{
+    const motsMeta = qcNormaliserTexte(m.client).split(' ').filter(Boolean);
+    return motsMeta.some(mot=>mot.length>=3 && motsClient.includes(mot));
+  }) || null;
+}
 function ccAvatarHtml(client, taille){
   taille = taille||40;
   const meta = clientMetaDe(client);
@@ -5332,33 +5342,67 @@ async function ccLogoDepose(input){
 // l'orthographe du nom client a la saisie/import est ce qui les reunira). Chaque carte deroulee liste
 // l'ensemble des contrats de ce client avec toutes les informations pertinentes.
 function ccBasculerClient(client){ state.ccClientsOuverts = state.ccClientsOuverts||{}; state.ccClientsOuverts[client] = !state.ccClientsOuverts[client]; render(); }
+// Un client peut deja avoir des CV (bordereaux/avis de vente) avant meme que son contrat ne soit recu --
+// certains clients tardent a l'envoyer. Le regroupement par client se fait donc sur l'union des noms
+// presents dans contrats_clients ET dans cv_ventes : un client sans contrat obtient quand meme sa carte,
+// avec ses CV en attente, et un bouton pour rattacher le contrat des qu'il arrive.
 function renderContratsClients(){
   const contrats = (state.contratsClients||[]);
+  const cvsTous = (state.cvVentes||[]);
   let html = '<div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">'
     + '<button class="btn btn-primary" onclick="contratClientOuvrir()">+ Nouveau contrat client</button>'
-    + '<span class="hint" style="margin:0">Regroupés par client : clique sur un client pour dérouler l\'ensemble de ses contrats. Le niveau de traçabilité exigé par le contrat dicte le choix des sites/coopératives (décidé hors ORIGEN) ; ce registre sert de référence.</span></div>'
+    + '<span class="hint" style="margin:0">Regroupés par client : clique sur un client pour dérouler l\'ensemble de ses contrats. Un client dont le contrat n\'est pas encore reçu apparaît déjà grâce à ses CV ; tu pourras lui rattacher le contrat plus tard. Le niveau de traçabilité exigé par le contrat dicte le choix des sites/coopératives (décidé hors ORIGEN) ; ce registre sert de référence.</span></div>'
     + '<input type="file" id="cc-logo-input" accept="image/*" style="display:none" onchange="ccLogoDepose(this)">';
-  if (!contrats.length) return html + '<div class="hint">Aucun contrat client enregistré pour l\'instant.</div>';
+  const noms = new Set();
+  contrats.forEach(c=>noms.add(c.client||'—'));
+  cvsTous.forEach(c=>{ if (c.client) noms.add(c.client); });
+  if (!noms.size) return html + '<div class="hint">Aucun contrat client ni CV enregistré pour l\'instant.</div>';
   const groupes = new Map();
-  contrats.forEach(c=>{ const cle = c.client||'—'; if (!groupes.has(cle)) groupes.set(cle, []); groupes.get(cle).push(c); });
+  noms.forEach(nom=>groupes.set(nom, { contrats:[], cvs:[] }));
+  contrats.forEach(c=>{ groupes.get(c.client||'—').contrats.push(c); });
+  cvsTous.forEach(c=>{ if (c.client && groupes.has(c.client)) groupes.get(c.client).cvs.push(c); });
   const listeGroupes = Array.from(groupes.entries()).sort((a,b)=>a[0].localeCompare(b[0],'fr'));
   html += '<div class="cc-clients">';
-  listeGroupes.forEach(([client, liste])=>{
+  listeGroupes.forEach(([client, g])=>{
     const ouvert = !!(state.ccClientsOuverts && state.ccClientsOuverts[client]);
-    liste.sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
+    const liste = g.contrats.slice().sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
+    const cvsClient = g.cvs.slice().sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
+    const cvsSansContrat = cvsClient.filter(c=>!c.contrat_client_id);
     const nbActifs = liste.filter(c=>c.statut==='actif').length;
     const volumeTotal = liste.reduce((s,c)=>s+(Number(c.volume_contractuel_kg)||0), 0);
+    const volumeCvSansContrat = cvsSansContrat.reduce((s,c)=>s+(Number(c.volume_kg)||0), 0);
+    let resume;
+    if (liste.length){
+      resume = liste.length+' contrat'+(liste.length>1?'s':'')+(nbActifs?' · '+nbActifs+' actif'+(nbActifs>1?'s':''):'')+(volumeTotal>0?' · '+fmtKg(volumeTotal)+' contractés':'')
+        + (cvsSansContrat.length?' · '+cvsSansContrat.length+' CV en attente de contrat':'');
+    } else {
+      resume = '<span style="color:var(--warn)">Aucun contrat reçu</span> · '+cvsClient.length+' CV'+(volumeCvSansContrat>0?' · '+fmtKg(volumeCvSansContrat)+' en attente':'');
+    }
     html += '<div class="cc-client-carte">'
       + '<div class="cc-client-tete" onclick="ccBasculerClient(\''+escJs(client)+'\')">'
       + ccAvatarHtml(client, 44)
-      + '<div class="cc-client-info"><b>'+esc(client)+'</b><span class="hint" style="margin:0">'+liste.length+' contrat'+(liste.length>1?'s':'')+(nbActifs?' · '+nbActifs+' actif'+(nbActifs>1?'s':''):'')+(volumeTotal>0?' · '+fmtKg(volumeTotal)+' contractés':'')+'</span></div>'
+      + '<div class="cc-client-info"><b>'+esc(client)+'</b><span class="hint" style="margin:0">'+resume+'</span></div>'
       + '<span class="cc-chevron'+(ouvert?' ouvert':'')+'">▸</span>'
       + '</div>';
     if (ouvert){
-      html += '<div class="cc-client-contrats"><table class="tbl-fiches"><thead><tr><th>Réf.</th><th>Campagne</th><th>Type</th><th>Niveau</th><th>Volume</th><th>Prix</th><th>Embarquement</th><th>Statut</th><th></th></tr></thead><tbody>'
-        + liste.map(c=>'<tr><td><b>'+esc(c.reference||'—')+'</b></td><td>'+esc(lotsCampagneNom(c.campagne_id)||'—')+'</td><td>'+esc(c.type_cacao||'—')+'</td><td>'+esc(c.niveau_tracabilite||'—')+'</td><td>'+(Number(c.volume_contractuel_kg)>0?fmtKg(c.volume_contractuel_kg):'—')+'</td><td>'+esc(contratClientPrixTexte(c)||'—')+'</td><td>'+esc(c.periode_embarquement||'—')+'</td><td>'+lotsBadge(CONTRATS_CLIENTS_STATUTS, c.statut)+'</td>'
-          + '<td style="white-space:nowrap">'+(c.fichier_path?'<button class="btn-ghost btn-compact" onclick="ccContratTelechargerFichier(\''+esc(c.id)+'\')" title="'+esc(c.fichier_nom||'')+'">Contrat</button> ':'')+'<button class="btn-ghost btn-compact" onclick="contratClientOuvrir(\''+esc(c.id)+'\')">Modifier</button> <button class="btn-danger-text btn-compact" onclick="contratClientSupprimer(\''+esc(c.id)+'\')">Supprimer</button></td></tr>').join('')
-        + '</tbody></table></div>';
+      html += '<div class="cc-client-contrats">';
+      if (liste.length){
+        html += '<table class="tbl-fiches"><thead><tr><th>Réf.</th><th>Campagne</th><th>Type</th><th>Niveau</th><th>Volume</th><th>Prix</th><th>Embarquement</th><th>Statut</th><th></th></tr></thead><tbody>'
+          + liste.map(c=>'<tr><td><b>'+esc(c.reference||'—')+'</b></td><td>'+esc(lotsCampagneNom(c.campagne_id)||'—')+'</td><td>'+esc(c.type_cacao||'—')+'</td><td>'+esc(c.niveau_tracabilite||'—')+'</td><td>'+(Number(c.volume_contractuel_kg)>0?fmtKg(c.volume_contractuel_kg):'—')+'</td><td>'+esc(contratClientPrixTexte(c)||'—')+'</td><td>'+esc(c.periode_embarquement||'—')+'</td><td>'+lotsBadge(CONTRATS_CLIENTS_STATUTS, c.statut)+'</td>'
+            + '<td style="white-space:nowrap">'+(c.fichier_path?'<button class="btn-ghost btn-compact" onclick="ccContratTelechargerFichier(\''+esc(c.id)+'\')" title="'+esc(c.fichier_nom||'')+'">Contrat</button> ':'')+'<button class="btn-ghost btn-compact" onclick="contratClientOuvrir(\''+esc(c.id)+'\')">Modifier</button> <button class="btn-danger-text btn-compact" onclick="contratClientSupprimer(\''+esc(c.id)+'\')">Supprimer</button></td></tr>').join('')
+          + '</tbody></table>';
+      } else {
+        html += '<div class="hint" style="padding:10px 14px 0">Aucun contrat reçu pour ce client pour le moment — les CV ci-dessous attendent d\'y être rattachés dès réception.</div>';
+      }
+      if (cvsSansContrat.length){
+        html += '<div style="padding:'+(liste.length?'12px 14px 4px':'10px 14px 4px')+'" class="hint">CV en attente de rattachement à un contrat :</div>'
+          + '<table class="tbl-fiches"><thead><tr><th>N° CV</th><th>Volume</th><th>Embarquement</th><th>Prix CAF</th><th></th></tr></thead><tbody>'
+          + cvsSansContrat.map(c=>'<tr><td><b>'+esc(c.numero_cv||'—')+'</b></td><td>'+(Number(c.volume_kg)>0?fmtKg(c.volume_kg):'—')+'</td><td>'+esc(c.periode_embarquement||'—')+'</td><td>'+(Number(c.prix_caf_fcfa_kg)>0?fmtNum(c.prix_caf_fcfa_kg)+' FCFA/kg':'—')+'</td>'
+            + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="cvOuvrir(\''+esc(c.id)+'\')">Modifier</button></td></tr>').join('')
+          + '</tbody></table>';
+      }
+      html += '<div style="padding:12px 14px"><button class="btn-ghost btn-compact" onclick="contratClientOuvrir(null,\''+escJs(client)+'\')">+ '+(liste.length?'Nouveau contrat pour ce client':'Associer le contrat de ce client')+'</button></div>';
+      html += '</div>';
     }
     html += '</div>';
   });
@@ -5491,9 +5535,9 @@ function renderAchatsClientsDashboard(){
   });
   return html;
 }
-function contratClientOuvrir(id){
+function contratClientOuvrir(id, clientPrefill){
   const c = id ? contratClientParId(id) : null;
-  state.modal = { type:'contratClient', payload: c ? Object.assign({}, c) : { campagne_id:(state.campagneFilter && state.campagneFilter!=='all')?state.campagneFilter:'', type_cacao:'RA', statut:'actif' } };
+  state.modal = { type:'contratClient', payload: c ? Object.assign({}, c) : { campagne_id:(state.campagneFilter && state.campagneFilter!=='all')?state.campagneFilter:'', type_cacao:'RA', statut:'actif', client: clientPrefill||'' } };
   render();
 }
 async function contratClientEnregistrer(){
