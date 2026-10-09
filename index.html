@@ -3274,7 +3274,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-09-013';
+const APP_VERSION = '2026-10-09-014';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5291,6 +5291,17 @@ function contratClientPrixTexte(c){
   if (!(Number(c.prix_valeur)>0)) return '';
   return fmtNum(c.prix_valeur)+' '+(c.prix_devise||'').replace('/', ' / ');
 }
+// Prix du contrat (FOB), toujours ramene en FCFA/kg pour l'affichage -- jamais en EUR/tonne ni dans une
+// autre devise, meme quand le contrat a ete saisi dans une autre unite (cf. cvPrixContratFcfaKg). La devise
+// et la valeur d'origine restent visibles au survol, pour tracer d'ou vient le chiffre converti.
+function contratClientPrixFcfaKgHtml(c){
+  if (!(Number(c.prix_valeur)>0)) return '<span class="hint" style="margin:0">—</span>';
+  const prixFcfaKg = cvPrixContratFcfaKg(c);
+  if (prixFcfaKg==null){
+    return (c.prix_devise==='USD/T') ? '<span class="hint" style="margin:0">recherche du taux…</span>' : '<span class="hint" style="margin:0">—</span>';
+  }
+  return '<span title="Prix du contrat saisi : '+esc(contratClientPrixTexte(c))+'">'+fmtNum(prixFcfaKg)+' FCFA/kg</span>';
+}
 // Avatars client : logo depose par l'utilisateur (clients_meta.logo_b64, stocke directement en base64 --
 // pas besoin d'un bucket public ni de telechargement asynchrone pour l'afficher) sinon pastille couleur +
 // initiales, deterministe (meme client -> meme couleur a chaque rendu). Cliquer sur l'avatar propose
@@ -5415,7 +5426,7 @@ function renderContratsClients(){
       html += '<div class="cc-client-contrats">';
       if (liste.length){
         html += '<table class="tbl-fiches"><thead><tr><th>Réf.</th><th>Campagne</th><th>Type</th><th>Niveau</th><th>Volume</th><th>Prix</th><th>Embarquement</th><th>Statut</th><th></th></tr></thead><tbody>'
-          + liste.map(c=>'<tr><td><b>'+esc(c.reference||'—')+'</b></td><td>'+esc(lotsCampagneNom(c.campagne_id)||'—')+'</td><td>'+esc(c.type_cacao||'—')+'</td><td>'+esc(c.niveau_tracabilite||'—')+'</td><td>'+(Number(c.volume_contractuel_kg)>0?fmtKg(c.volume_contractuel_kg):'—')+'</td><td>'+esc(contratClientPrixTexte(c)||'—')+'</td><td>'+esc(c.periode_embarquement||'—')+'</td><td>'+lotsBadge(CONTRATS_CLIENTS_STATUTS, c.statut)+'</td>'
+          + liste.map(c=>'<tr><td><b>'+esc(c.reference||'—')+'</b></td><td>'+esc(lotsCampagneNom(c.campagne_id)||'—')+'</td><td>'+esc(c.type_cacao||'—')+'</td><td>'+esc(c.niveau_tracabilite||'—')+'</td><td>'+(Number(c.volume_contractuel_kg)>0?fmtKg(c.volume_contractuel_kg):'—')+'</td><td>'+contratClientPrixFcfaKgHtml(c)+'</td><td>'+esc(c.periode_embarquement||'—')+'</td><td>'+lotsBadge(CONTRATS_CLIENTS_STATUTS, c.statut)+'</td>'
             + '<td style="white-space:nowrap">'+(c.fichier_path?'<button class="btn-ghost btn-compact" onclick="ccContratTelechargerFichier(\''+esc(c.id)+'\')" title="'+esc(c.fichier_nom||'')+'">Contrat</button> ':'')+'<button class="btn-ghost btn-compact" onclick="contratClientOuvrir(\''+esc(c.id)+'\')">Modifier</button> <button class="btn-danger-text btn-compact" onclick="contratClientSupprimer(\''+esc(c.id)+'\')">Supprimer</button></td></tr>').join('')
           + '</tbody></table>';
       } else {
@@ -5423,9 +5434,19 @@ function renderContratsClients(){
       }
       if (cvsSansContrat.length){
         html += '<div style="padding:'+(liste.length?'12px 14px 4px':'10px 14px 4px')+'" class="hint">CV en attente de rattachement à un contrat :</div>'
-          + '<table class="tbl-fiches"><thead><tr><th>N° CV</th><th>Volume</th><th>Embarquement</th><th>Prix CAF</th><th>Prix soutien</th><th></th></tr></thead><tbody>'
-          + cvsSansContrat.map(c=>'<tr><td><b>'+esc(c.numero_cv||'—')+'</b></td><td>'+(Number(c.volume_kg)>0?fmtT(c.volume_kg):'—')+'</td><td>'+esc(c.periode_embarquement||'—')+'</td><td>'+(Number(c.prix_caf_fcfa_kg)>0?fmtNum(c.prix_caf_fcfa_kg)+' FCFA/kg':'—')+'</td><td>'+(c.reversement_fcfa_kg!=null && c.reversement_fcfa_kg!==''?fmtNum(c.reversement_fcfa_kg)+' FCFA/kg':'—')+'</td>'
-            + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="cvOuvrir(\''+esc(c.id)+'\')">Modifier</button></td></tr>').join('')
+          + '<table class="tbl-fiches"><thead><tr><th>N° CV</th><th>Volume</th><th>Embarquement</th><th>Prix CAF</th><th>Prix FOB</th><th>Soutien</th><th></th></tr></thead><tbody>'
+          + cvsSansContrat.map(c=>{
+              const calc = cvCalculs(c);
+              const aPrixCaf = Number(c.prix_caf_fcfa_kg)>0;
+              // Indicateur a part (badge), plutot qu'une colonne de prix de plus : le reversement/soutien est
+              // une decote ou un bonus ponctuel, pas un prix au meme titre que CAF/FOB -- on signale juste pour
+              // quels CV il y en a un, avec le montant (FCFA/kg) visible au survol.
+              const badgeSoutien = (c.reversement_fcfa_kg!=null && c.reversement_fcfa_kg!=='' && Number(c.reversement_fcfa_kg)!==0)
+                ? '<span class="badge '+(Number(c.reversement_fcfa_kg)<0?'warn':'ok')+'" title="Reversement / soutien : '+fmtNum(c.reversement_fcfa_kg)+' FCFA/kg">Soutien</span>'
+                : '<span class="hint" style="margin:0">—</span>';
+              return '<tr><td><b>'+esc(c.numero_cv||'—')+'</b></td><td>'+(Number(c.volume_kg)>0?fmtT(c.volume_kg):'—')+'</td><td>'+esc(c.periode_embarquement||'—')+'</td><td>'+(aPrixCaf?fmtNum(c.prix_caf_fcfa_kg)+' FCFA/kg':'—')+'</td><td>'+(aPrixCaf?fmtNum(calc.prixFob)+' FCFA/kg':'—')+'</td><td>'+badgeSoutien+'</td>'
+                + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="cvOuvrir(\''+esc(c.id)+'\')">Modifier</button></td></tr>';
+            }).join('')
           + '</tbody></table>';
       }
       html += '<div style="padding:12px 14px"><button class="btn-ghost btn-compact" onclick="contratClientOuvrir(null,\''+escJs(client)+'\')">+ '+(liste.length?'Nouveau contrat pour ce client':'Associer le contrat de ce client')+'</button></div>';
