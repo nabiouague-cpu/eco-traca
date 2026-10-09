@@ -3229,6 +3229,14 @@ function fmtKg(n){
   if (n==null || isNaN(n)) return '—';
   return Math.round(n).toLocaleString('fr-FR') + ' kg';
 }
+// Les volumes de CV (cv_ventes.volume_kg) sont saisis en tonnes (ex. 250 pour 250 t), pas en kg malgré le
+// nom du champ -- fmtT affiche donc ces volumes avec l'unité réelle plutôt que de les faire passer pour
+// des kg. Les volumes de contrat (contrats_clients.volume_contractuel_kg), eux, sont bien en kg : fmtKg
+// reste inchangé pour ceux-là.
+function fmtT(n){
+  if (n==null || isNaN(n)) return '—';
+  return (Math.round(n*100)/100).toLocaleString('fr-FR') + ' t';
+}
 function fmtNum(n){
   return Math.round(n).toLocaleString('fr-FR');
 }
@@ -3266,7 +3274,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-09-010';
+const APP_VERSION = '2026-10-09-011';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5357,6 +5365,7 @@ function renderContratsClients(){
   const contrats = (state.contratsClients||[]);
   const cvsTous = (state.cvVentes||[]);
   const volumeGrandTotal = contrats.reduce((s,c)=>s+(Number(c.volume_contractuel_kg)||0), 0);
+  const volumeGrandTotalCv = cvsTous.reduce((s,c)=>s+(Number(c.volume_kg)||0), 0);
   const volumeGrandTotalCvEnAttente = cvsTous.filter(c=>!c.contrat_client_id).reduce((s,c)=>s+(Number(c.volume_kg)||0), 0);
   let html = '<div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">'
     + '<button class="btn btn-primary" onclick="contratClientOuvrir()">+ Nouveau contrat client</button>'
@@ -5364,7 +5373,8 @@ function renderContratsClients(){
     + '<input type="file" id="cc-logo-input" accept="image/*" style="display:none" onchange="ccLogoDepose(this)">'
     + '<div class="cc-total-global" style="margin-bottom:14px;padding:10px 14px;border-radius:10px;background:var(--surface-2);display:flex;gap:18px;flex-wrap:wrap;align-items:baseline">'
     + '<span><b style="font-size:1.2em">'+fmtKg(volumeGrandTotal)+'</b> <span class="hint" style="margin:0">contractés, tous clients confondus</span></span>'
-    + (volumeGrandTotalCvEnAttente>0?'<span><b style="font-size:1.1em">'+fmtKg(volumeGrandTotalCvEnAttente)+'</b> <span class="hint" style="margin:0">en attente de contrat (CV reçus)</span></span>':'')
+    + '<span><b style="font-size:1.2em">'+fmtT(volumeGrandTotalCv)+'</b> <span class="hint" style="margin:0">volume CV total, tous clients et toutes périodes</span></span>'
+    + (volumeGrandTotalCvEnAttente>0?'<span><b style="font-size:1.1em">'+fmtT(volumeGrandTotalCvEnAttente)+'</b> <span class="hint" style="margin:0">en attente de contrat (CV reçus)</span></span>':'')
     + '</div>';
   const variantesParClef = new Map();
   const ajouterVariante = (nom)=>{ const clef = ccClefClient(nom); if (!variantesParClef.has(clef)) variantesParClef.set(clef, new Set()); variantesParClef.get(clef).add(nom); };
@@ -5395,7 +5405,7 @@ function renderContratsClients(){
       resume = liste.length+' contrat'+(liste.length>1?'s':'')+(nbActifs?' · '+nbActifs+' actif'+(nbActifs>1?'s':''):'')+(volumeTotal>0?' · '+fmtKg(volumeTotal)+' contractés':'')
         + (cvsSansContrat.length?' · '+cvsSansContrat.length+' CV en attente de contrat':'');
     } else {
-      resume = '<span style="color:var(--warn)">Aucun contrat reçu</span> · '+cvsClient.length+' CV'+(volumeCvSansContrat>0?' · '+fmtKg(volumeCvSansContrat)+' en attente':'');
+      resume = '<span style="color:var(--warn)">Aucun contrat reçu</span> · '+cvsClient.length+' CV'+(volumeCvSansContrat>0?' · '+fmtT(volumeCvSansContrat)+' en attente':'');
     }
     html += '<div class="cc-client-carte">'
       + '<div class="cc-client-tete" onclick="ccBasculerClient(\''+escJs(client)+'\')">'
@@ -5416,7 +5426,7 @@ function renderContratsClients(){
       if (cvsSansContrat.length){
         html += '<div style="padding:'+(liste.length?'12px 14px 4px':'10px 14px 4px')+'" class="hint">CV en attente de rattachement à un contrat :</div>'
           + '<table class="tbl-fiches"><thead><tr><th>N° CV</th><th>Volume</th><th>Embarquement</th><th>Prix CAF</th><th></th></tr></thead><tbody>'
-          + cvsSansContrat.map(c=>'<tr><td><b>'+esc(c.numero_cv||'—')+'</b></td><td>'+(Number(c.volume_kg)>0?fmtKg(c.volume_kg):'—')+'</td><td>'+esc(c.periode_embarquement||'—')+'</td><td>'+(Number(c.prix_caf_fcfa_kg)>0?fmtNum(c.prix_caf_fcfa_kg)+' FCFA/kg':'—')+'</td>'
+          + cvsSansContrat.map(c=>'<tr><td><b>'+esc(c.numero_cv||'—')+'</b></td><td>'+(Number(c.volume_kg)>0?fmtT(c.volume_kg):'—')+'</td><td>'+esc(c.periode_embarquement||'—')+'</td><td>'+(Number(c.prix_caf_fcfa_kg)>0?fmtNum(c.prix_caf_fcfa_kg)+' FCFA/kg':'—')+'</td>'
             + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="cvOuvrir(\''+esc(c.id)+'\')">Modifier</button></td></tr>').join('')
           + '</tbody></table>';
       }
@@ -5918,7 +5928,7 @@ function renderCvVentes(){
     const ecartRef = (prixContrat!=null && calc.prixFobAssuranceRef!=null) ? Math.round((prixContrat-calc.prixFobAssuranceRef)*100)/100 : null;
     const couleurEcart = ecart==null ? '' : (ecart<0 ? 'color:var(--danger)' : (ecart>0 ? 'color:var(--ok)' : ''));
     const couleurEcartRef = ecartRef==null ? '' : (ecartRef<0 ? 'color:var(--danger)' : (ecartRef>0 ? 'color:var(--ok)' : ''));
-    html += '<tr><td><b>'+esc(cv.numero_cv||'—')+'</b></td><td>'+esc(cv.client||(contrat?contrat.client:'')||'—')+'</td><td>'+(contrat?esc(contrat.reference||contrat.client):'<span class="hint" style="margin:0">—</span>')+'</td><td>'+esc(cv.periode_embarquement||'—')+'</td><td>'+(Number(cv.volume_kg)>0?fmtKg(cv.volume_kg):'—')+'</td>'
+    html += '<tr><td><b>'+esc(cv.numero_cv||'—')+'</b></td><td>'+esc(cv.client||(contrat?contrat.client:'')||'—')+'</td><td>'+(contrat?esc(contrat.reference||contrat.client):'<span class="hint" style="margin:0">—</span>')+'</td><td>'+esc(cv.periode_embarquement||'—')+'</td><td>'+(Number(cv.volume_kg)>0?fmtT(cv.volume_kg):'—')+'</td>'
       + '<td>'+fmtNum(calc.prixCaf)+'</td><td>'+(cv.reversement_fcfa_kg!=null && cv.reversement_fcfa_kg!==''?fmtNum(cv.reversement_fcfa_kg):'—')+'</td><td>'+fmtNum(calc.freinte)+'</td><td>'+fmtNum(calc.prixFob)+'</td>'
       + '<td>'+(prixContrat!=null?fmtNum(prixContrat):(contrat&&contrat.prix_devise==='USD/T'?'<span class="hint" style="margin:0">recherche du taux…</span>':'<span class="hint" style="margin:0">—</span>'))+'</td>'
       + '<td style="'+couleurEcart+'"><b>'+(ecart!=null?fmtNum(ecart):'—')+'</b></td>'
@@ -6317,7 +6327,7 @@ function lotsModalsHtml(){
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">N° CV<input type="text" name="cv_numero" value="'+esc(pl.numero_cv||'')+'" placeholder="ex : 009-2143"></label><label class="field">Campagne<select name="cv_campagne" onchange="cvCampagneChange()">'+lotsCampagneOptions(pl.campagne_id)+'</select></label></div>'
       + '<label class="field">Contrat client<select name="cv_contrat" onchange="cvContratChange()">'+ccContratsOptions(pl.campagne_id, pl.contrat_client_id)+'</select></label>'
       + '<div class="hint" style="margin:6px 0 10px">Client : <b id="cvClientAffiche">'+esc(pl.client||(contrat?contrat.client:'')||'—')+'</b> — repris automatiquement du contrat choisi.</div>'
-      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Volume (kg)<input type="number" name="cv_volume" value="'+esc(pl.volume_kg||'')+'"></label><label class="field">Période d\'embarquement<select name="cv_periode">'+lotsPeriodesEmbarquementOptions(pl.campagne_id, pl.periode_embarquement)+'</select></label></div>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Volume (tonnes)<input type="number" name="cv_volume" value="'+esc(pl.volume_kg||'')+'"></label><label class="field">Période d\'embarquement<select name="cv_periode">'+lotsPeriodesEmbarquementOptions(pl.campagne_id, pl.periode_embarquement)+'</select></label></div>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Prix CAF (FCFA/kg)<input type="number" step="0.01" name="cv_prix_caf" value="'+esc(pl.prix_caf_fcfa_kg||'')+'" oninput="cvApercuMaj()"></label><label class="field">Reversement / Soutien (FCFA/kg)<input type="number" step="0.01" name="cv_reversement" value="'+esc(pl.reversement_fcfa_kg||'')+'" oninput="cvApercuMaj()"></label></div>'
       + '<label class="field">Prix CAF de référence (FCFA/kg)<input type="number" step="0.01" name="cv_prix_caf_ref" value="'+esc(pl.prix_caf_ref_fcfa_kg||'')+'" oninput="cvApercuMaj()" placeholder="optionnel"></label>'
       + '<label class="field">Fret (FCFA/kg)<input type="number" step="0.01" name="cv_fret" value="'+esc(pl.fret_fcfa_kg!=null?pl.fret_fcfa_kg:40)+'" oninput="cvApercuMaj()"></label>'
