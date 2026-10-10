@@ -314,8 +314,9 @@
   .cc-client-contrats table{background:var(--surface);border-radius:10px;overflow:hidden;margin-top:10px;}
   /* Suivi achats clients : cartes par client (volume contrat vs realise), sous les tuiles ckpt du total */
   .ckpt-tuile.alerte{border-color:var(--warn-line);background:linear-gradient(180deg,#fff 0%,var(--warn-bg) 140%);}
-  .ckpt.sa-ckpt{grid-template-columns:repeat(4,1fr);}
-  @media (max-width:1280px){ .ckpt.sa-ckpt{grid-template-columns:repeat(2,1fr);} }
+  .ckpt.sa-ckpt{grid-template-columns:repeat(5,1fr);}
+  @media (max-width:1480px){ .ckpt.sa-ckpt{grid-template-columns:repeat(3,1fr);} }
+  @media (max-width:900px){ .ckpt.sa-ckpt{grid-template-columns:repeat(2,1fr);} }
   @media (max-width:640px){ .ckpt.sa-ckpt{grid-template-columns:1fr;} }
   .sa-ckpt .ckpt-tuile .v{text-align:center;}
   .sa-grille{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:10px;}
@@ -324,10 +325,10 @@
   .sa-carte-tete{display:flex;justify-content:space-between;align-items:baseline;gap:8px;}
   .sa-carte-tete b{font-size:14px;}
   .sa-pct{font-family:var(--mono);font-weight:700;font-size:15px;}
-  .sa-carte-chiffres{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:12px;}
+  .sa-carte-chiffres{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-top:12px;}
   .sa-carte-chiffres span{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:var(--ink-faint);}
   .sa-carte-chiffres b{font-family:var(--mono);font-size:13.5px;font-weight:600;}
-  @media (max-width:760px){ .sa-carte-chiffres{grid-template-columns:repeat(3,1fr);} }
+  @media (max-width:900px){ .sa-carte-chiffres{grid-template-columns:repeat(3,1fr);} }
   .lots-compo{display:flex;flex-wrap:wrap;gap:6px;}
   .lots-puce{display:inline-block;font-size:12px;padding:3px 9px;border-radius:14px;background:#fff;border:1px solid var(--border);color:var(--ink-soft);}
   .lots-chaine{display:flex;flex-direction:column;gap:4px;}
@@ -3275,7 +3276,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-09-019';
+const APP_VERSION = '2026-10-10-020';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5539,6 +5540,7 @@ function suiviAchatsCarteClient(l){
   const contrat = Number(l.volume_contrat_t)||0;
   const valide = Number(l.volume_valide_connaissement_t)||0;
   const brousse = Number(l.livraison_brousse_t)||0;
+  const export_ = Number(l.production_lots_exports_t)||0;
   const agreage = Number(l.presente_agreage_t)||0;
   const reste = Number(l.reste_a_acheter_t)||0;
   const pct = contrat>0 ? Math.min(100, Math.round(valide/contrat*100)) : 0;
@@ -5551,6 +5553,7 @@ function suiviAchatsCarteClient(l){
       + '<div><span>Contrat</span><b>'+fmtNum(contrat)+' T</b></div>'
       + '<div><span>Validé</span><b>'+fmtNum(valide)+' T</b></div>'
       + '<div><span>Brousse</span><b>'+fmtNum(brousse)+' T</b></div>'
+      + '<div><span>Export</span><b>'+fmtNum(export_)+' T</b></div>'
       + '<div><span>Agréage</span><b>'+fmtNum(agreage)+' T</b></div>'
       + '<div><span>Reste</span><b style="'+(reste>0?'color:var(--warn)':'color:var(--ok)')+'">'+fmtNum(reste)+' T</b></div>'
     + '</div></div>';
@@ -5566,17 +5569,27 @@ function renderAchatsClientsDashboard(){
 
   const somme = champ => lignes.reduce((s,l)=>s+(Number(l[champ])||0), 0);
   const totalContrat = somme('volume_contrat_t'), totalValide = somme('volume_valide_connaissement_t'),
-    totalAgreage = somme('presente_agreage_t'), totalReste = somme('reste_a_acheter_t');
+    totalExport = somme('production_lots_exports_t'), totalAgreage = somme('presente_agreage_t'), totalReste = somme('reste_a_acheter_t');
   const pctRealise = totalContrat>0 ? Math.round(totalValide/totalContrat*100) : 0;
+  const pctExport = totalContrat>0 ? Math.round(totalExport/totalContrat*100) : 0;
 
   html += '<div class="ckpt sa-ckpt">'
     + '<div class="ckpt-tuile"><div class="k">Volume contracté</div><div class="v" data-n="'+Math.round(totalContrat)+'">'+fmtNum(totalContrat)+' <small>tonnes</small></div><div class="s">Tous clients confondus</div></div>'
     + '<div class="ckpt-tuile"><div class="k">Validé sur connaissement</div><div class="v" data-n="'+Math.round(totalValide)+'">'+fmtNum(totalValide)+' <small>tonnes</small></div><div class="s">'+pctRealise+' % du volume contracté</div><div class="ckpt-barre"><i style="width:'+Math.min(100,pctRealise)+'%;background:var(--ok)"></i></div></div>'
+    + '<div class="ckpt-tuile"><div class="k">Lots export produits</div><div class="v" data-n="'+Math.round(totalExport)+'">'+fmtNum(totalExport)+' <small>tonnes</small></div><div class="s">'+pctExport+' % du volume contracté</div><div class="ckpt-barre"><i style="width:'+Math.min(100,pctExport)+'%;background:var(--accent)"></i></div></div>'
     + '<div class="ckpt-tuile"><div class="k">Présenté en agréage</div><div class="v" data-n="'+Math.round(totalAgreage)+'">'+fmtNum(totalAgreage)+' <small>tonnes</small></div><div class="s">En cours de validation</div></div>'
     + '<div class="ckpt-tuile'+(totalReste>0?' alerte':'')+'"><div class="k">Reste à acheter</div><div class="v" data-n="'+Math.round(totalReste)+'">'+fmtNum(totalReste)+' <small>tonnes</small></div><div class="s">Pour honorer les contrats en cours</div></div>'
     + '</div>';
 
-  const periodes = Array.from(new Set(lignes.map(l=>l.periode||'—'))).sort();
+  // Ordre chronologique de campagne (OD = octobre-decembre, puis JM = janvier-mars qui suit), pas alphabetique
+  // (sinon "JM 2027" passerait avant "OD 2026" alors qu'OD est la periode la plus ancienne des deux).
+  const periodeCle = p=>{
+    const m = String(p||'').trim().match(/^(OD|JM)\s*(\d{4})?$/i);
+    if (!m) return 999999999;
+    const annee = Number(m[2])||0, mois = m[1].toUpperCase()==='OD' ? 10 : 1;
+    return annee*100+mois;
+  };
+  const periodes = Array.from(new Set(lignes.map(l=>l.periode||'—'))).sort((a,b)=>periodeCle(a)-periodeCle(b));
   periodes.forEach(periode=>{
     const lignesPeriode = lignes.filter(l=>(l.periode||'—')===periode).slice().sort((a,b)=>(Number(b.volume_contrat_t)||0)-(Number(a.volume_contrat_t)||0));
     html += '<h3 style="margin:22px 0 10px;font-size:14px;color:var(--ink-soft)">'+esc(periode)+'</h3>'
