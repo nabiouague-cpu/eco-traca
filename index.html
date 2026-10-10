@@ -3277,7 +3277,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-10-030';
+const APP_VERSION = '2026-10-10-031';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -6191,6 +6191,7 @@ function renderLotsUsinage(){
     + '<button class="btn btn-primary" onclick="lotUsinageOuvrir()">+ Nouveau lot d\'usinage</button>'
     + '<button class="btn" onclick="lotsUsinageChoisirFichier()">⭱ Importer le rapport d\'usinage (Excel)</button>'
     + '<input type="file" id="lu-import-excel" accept=".xlsx,.xls,.csv" style="display:none" onchange="lotsUsinageImporterExcel(this)">'
+    + (lots.length ? '<button class="btn-danger-text" onclick="lotsUsinageSupprimerTout()">Tout supprimer</button>' : '')
     + '<span class="hint" style="margin:0">'+recus.length+' livraison'+(recus.length>1?'s':'')+' reçue'+(recus.length>1?'s':'')+' à l\'usine · <b>'+fmtKg(dispo)+'</b> pas encore affectés à un lot</span></div>'
     + '<div class="hint" style="margin:-6px 0 14px">Le rapport d\'usinage reprend les numéros déjà attribués par les séries de numérotation : le client de chaque lot importé est retrouvé automatiquement à partir de son numéro.</div>';
   html += renderLotsRepartitionClients(campagneId);
@@ -6441,6 +6442,24 @@ function lotUsinageSupprimer(id){
     const { error } = await supabaseClient.from('lots_usinage').delete().eq('id', id);
     if (error){ showToast('Échec : '+error.message); return; }
     await chargerLots(); render(); showToast('Lot supprimé.', 'success');
+  });
+}
+// Supprime en une fois tous les lots d'usinage affiches dans le tableau (toutes campagnes confondues,
+// comme le tableau lui-meme) plutot que de cliquer "Supprimer" ligne par ligne. Memes garde-fous que la
+// suppression individuelle : un lot deja affecte a un OT (lot d'export) n'est jamais supprime, il est
+// simplement conserve et compte a part dans le recapitulatif.
+async function lotsUsinageSupprimerTout(){
+  const lots = (state.lotsUsinage||[]);
+  if (!lots.length){ showToast('Aucun lot à supprimer.'); return; }
+  const bloques = lots.filter(l=>lotsUsinageAffecteExport(l.id)>0);
+  const aSupprimer = lots.filter(l=>lotsUsinageAffecteExport(l.id)===0);
+  if (!aSupprimer.length){ showToast('Tous les lots sont affectés à un export : retire-les d\'abord de leurs OT pour pouvoir les supprimer.'); return; }
+  askConfirm('Supprimer les '+aSupprimer.length+' lot'+(aSupprimer.length>1?'s':'')+' d\'usinage affichés (toutes campagnes confondues) ? Les livraisons qu\'ils contenaient redeviennent disponibles. Cette action est irréversible.'+(bloques.length?' ('+bloques.length+' lot'+(bloques.length>1?'s':'')+' affecté'+(bloques.length>1?'s':'')+' à un export seront conservés.)':''), async()=>{
+    try{
+      for (const l of aSupprimer){ const { error } = await supabaseClient.from('lots_usinage').delete().eq('id', l.id); if (error) throw error; }
+      await chargerLots(); render();
+      showToast(aSupprimer.length+' lot(s) supprimé(s)'+(bloques.length?' · '+bloques.length+' conservé(s) (affecté(s) à un export)':'')+'.', 'success');
+    }catch(e){ showToast('Échec : '+e.message); }
   });
 }
 function lotUsinageComposer(id){
