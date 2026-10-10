@@ -3277,7 +3277,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-10-025';
+const APP_VERSION = '2026-10-10-026';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5182,13 +5182,13 @@ function renderLotsSeries(){
     + '<button class="btn btn-primary" onclick="lotsSerieGrilleOuvrir()">+ Nouvelle série</button>'
     + '<span class="hint" style="margin:0">Coche les types de cacao utilisés (par client ou en générique) et indique le numéro de départ de chacun : la création d\'un lot d\'usinage choisit alors automatiquement le bon numéro suivant.</span></div>';
   if (!liste.length) return html + '<div class="hint">Aucune série définie pour l\'instant. Exemple : Rainforest Alliance n° 1001, Cocoa Horizon n° 500.</div>';
-  html += '<table class="tbl-fiches"><thead><tr><th>Campagne</th><th>Client</th><th>Types de cacao et numérotation</th><th>Lots numérotés</th><th></th></tr></thead><tbody>';
+  html += '<table class="tbl-fiches"><thead><tr><th>Campagne</th><th>Client</th><th>Type de cacao</th><th>Série</th><th>Lots numérotés</th><th></th></tr></thead><tbody>';
   liste.forEach(g=>{
-    const typesHtml = g.series.slice().sort((a,b)=>LOTS_TYPES_CACAO.indexOf(a.type_cacao)-LOTS_TYPES_CACAO.indexOf(b.type_cacao)).map(s=>
-      '<span class="badge" style="margin:2px 6px 2px 0">'+esc(lotsLibelleTypeCacao(s.type_cacao))+' n° '+esc(String(s.numero_debut))+(s.numero_fin?'–'+esc(String(s.numero_fin)):'')+(lotsSerieComplet(s)?' · épuisée':'')+'</span>'
-    ).join('') || '<span class="hint" style="margin:0">—</span>';
+    const ordre = g.series.slice().sort((a,b)=>LOTS_TYPES_CACAO.indexOf(a.type_cacao)-LOTS_TYPES_CACAO.indexOf(b.type_cacao));
+    const typesHtml = ordre.map(s=>'<div>'+esc(lotsLibelleTypeCacao(s.type_cacao))+'</div>').join('') || '<span class="hint" style="margin:0">—</span>';
+    const serieHtml = ordre.map(s=>'<div>n° '+esc(String(s.numero_debut))+(s.numero_fin?'–'+esc(String(s.numero_fin)):'')+(lotsSerieComplet(s)?' · <span class="badge warn">épuisée</span>':'')+'</div>').join('');
     const utilises = g.series.reduce((sum,s)=>sum+(state.lotsUsinage||[]).filter(l=>l.serie_id===s.id).length, 0);
-    html += '<tr><td>'+esc(lotsCampagneNom(g.campagne_id)||'—')+'</td><td>'+(g.client?esc(g.client):'<span class="hint" style="margin:0">— générique —</span>')+'</td><td>'+typesHtml+'</td><td>'+utilises+'</td>'
+    html += '<tr><td>'+esc(lotsCampagneNom(g.campagne_id)||'—')+'</td><td>'+(g.client?esc(g.client):'<span class="hint" style="margin:0">— générique —</span>')+'</td><td>'+typesHtml+'</td><td>'+serieHtml+'</td><td>'+utilises+'</td>'
       + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="lotsSerieGrilleOuvrir(\''+esc(g.campagne_id)+'\',\''+esc(g.client)+'\')">Modifier</button></td></tr>';
   });
   return html + '</tbody></table>';
@@ -5199,9 +5199,12 @@ function lotsSerieGrilleOuvrir(campagneId, client){
   const campagne_id = campagneId!=null ? campagneId : ((state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : '');
   const clientNorm = client||'';
   const lignes = {};
-  LOTS_TYPES_CACAO.forEach(t=>{ lignes[t] = { coche:false, numero_debut:'', numero_fin:'', id:null }; });
+  LOTS_TYPES_CACAO.forEach(t=>{ lignes[t] = { coche:false, numero_debut:'', numero_fin:null, id:null }; });
+  // numero_fin n'est pas affiche dans cette grille (volume de reference largement suffisant pour qu'on ne
+  // s'en inquiete pas) mais une valeur deja enregistree sur une serie existante est conservee telle quelle
+  // (jamais effacee par cet ecran) au cas ou elle aurait ete fixee autrement.
   (state.lotsSeries||[]).filter(s=>s.campagne_id===campagne_id && (s.client||'')===clientNorm).forEach(s=>{
-    if (lignes[s.type_cacao]) lignes[s.type_cacao] = { coche:true, numero_debut:s.numero_debut, numero_fin:s.numero_fin||'', id:s.id };
+    if (lignes[s.type_cacao]) lignes[s.type_cacao] = { coche:true, numero_debut:s.numero_debut, numero_fin:s.numero_fin||null, id:s.id };
   });
   state.modal = { type:'lotsSerieGrille', payload: { campagne_id, client:clientNorm, lignes } };
   render();
@@ -5212,10 +5215,8 @@ function lotsSerieGrilleSyncDepuisDom(pl){
   LOTS_TYPES_CACAO.forEach((t,i)=>{
     const cCase = document.querySelector('[name="grille_coche_'+i+'"]');
     const cDebut = document.querySelector('[name="grille_debut_'+i+'"]');
-    const cFin = document.querySelector('[name="grille_fin_'+i+'"]');
     if (cCase) pl.lignes[t].coche = cCase.checked;
     if (cDebut) pl.lignes[t].numero_debut = cDebut.value;
-    if (cFin) pl.lignes[t].numero_fin = cFin.value;
   });
 }
 function lotsSerieGrilleCocher(i, coche){
@@ -5240,10 +5241,8 @@ async function lotsSerieGrilleEnregistrer(){
     const ligne = pl.lignes[t];
     if (ligne.coche){
       const numero_debut = Number(ligne.numero_debut);
-      if (!numero_debut || numero_debut<1){ showToast('Indique le numéro de départ pour '+lotsLibelleTypeCacao(t)+'.'); return; }
-      const numero_fin = String(ligne.numero_fin||'').trim() ? Number(ligne.numero_fin) : null;
-      if (numero_fin!=null && numero_fin<numero_debut){ showToast('Le numéro de fin doit être supérieur ou égal au numéro de départ pour '+lotsLibelleTypeCacao(t)+'.'); return; }
-      aEnregistrer.push({ id:ligne.id, type_cacao:t, numero_debut, numero_fin });
+      if (!numero_debut || numero_debut<1){ showToast('Indique le numéro de série pour '+lotsLibelleTypeCacao(t)+'.'); return; }
+      aEnregistrer.push({ id:ligne.id, type_cacao:t, numero_debut });
     } else if (ligne.id){
       aSupprimer.push(ligne);
     }
@@ -5252,8 +5251,10 @@ async function lotsSerieGrilleEnregistrer(){
     try{
       for (const s of aSupprimer){ const { error } = await supabaseClient.from('lots_series').delete().eq('id', s.id); if (error) throw error; }
       for (const l of aEnregistrer){
-        if (l.id){ const { error } = await supabaseClient.from('lots_series').update({ numero_debut:l.numero_debut, numero_fin:l.numero_fin }).eq('id', l.id); if (error) throw error; }
-        else { const ligne = { id:genId('ls'), campagne_id, client, type_cacao:l.type_cacao, niveau_tracabilite:null, libelle:null, numero_debut:l.numero_debut, numero_fin:l.numero_fin }; const { error } = await supabaseClient.from('lots_series').insert(ligne); if (error) throw error; }
+        // numero_fin n'est pas gere ici : on ne touche jamais ce champ sur une mise a jour (une valeur deja
+        // en base reste ce qu'elle est), et il est simplement absent sur une creation (null par defaut).
+        if (l.id){ const { error } = await supabaseClient.from('lots_series').update({ numero_debut:l.numero_debut }).eq('id', l.id); if (error) throw error; }
+        else { const ligne = { id:genId('ls'), campagne_id, client, type_cacao:l.type_cacao, niveau_tracabilite:null, libelle:null, numero_debut:l.numero_debut, numero_fin:null }; const { error } = await supabaseClient.from('lots_series').insert(ligne); if (error) throw error; }
       }
       await chargerLots(); closeModal(); showToast('Séries enregistrées.', 'success');
     }catch(e){ showToast('Échec : '+e.message); }
@@ -6396,15 +6397,14 @@ function lotsModalsHtml(){
         + '<td><input type="checkbox" name="grille_coche_'+i+'" '+(ligne.coche?'checked':'')+' onchange="lotsSerieGrilleCocher('+i+', this.checked)"></td>'
         + '<td><b>'+lotsLibelleTypeCacao(t)+'</b></td>'
         + '<td><input type="number" name="grille_debut_'+i+'" value="'+esc(ligne.numero_debut||'')+'" placeholder="ex : 1001" style="width:110px" '+(ligne.coche?'':'disabled')+'></td>'
-        + '<td><input type="number" name="grille_fin_'+i+'" value="'+esc(ligne.numero_fin||'')+'" placeholder="illimité" style="width:110px" '+(ligne.coche?'':'disabled')+'></td>'
         + '<td>'+(serie?(utilises+' lot'+(utilises>1?'s':'')+(lotsSerieComplet(serie)?' · <span class="badge warn">épuisée</span>':'')):'—')+'</td>'
         + '</tr>';
     }).join('');
     return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>Séries de numérotation'+(pl.client?' — '+esc(pl.client):' — générique')+'</h3>'
-      + '<div class="hint" style="margin-bottom:10px">Coche les types de cacao utilisés dans cette campagne et indique, pour chacun, le numéro de départ de sa série de lots (et, si besoin, le dernier numéro). Les numéros suivants ne sont jamais calculés ou imposés automatiquement : communique-les au fur et à mesure, même s\'il y a des sauts (ex. 1001, 1002, puis 1004).</div>'
+      + '<div class="hint" style="margin-bottom:10px">Coche les types de cacao utilisés dans cette campagne et indique, pour chacun, le numéro de série (le premier numéro de lot). Les numéros suivants ne sont jamais calculés ou imposés automatiquement : communique-les au fur et à mesure, même s\'il y a des sauts (ex. 1001, 1002, puis 1004). Le niveau de traçabilité se renseigne plus tard, à l\'export, une fois les instructions d\'embarquement du client reçues.</div>'
       + '<div id="modal-fields">'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Campagne<select name="grille_campagne" onchange="lotsSerieGrilleScopeChange()">'+lotsCampagneOptions(pl.campagne_id)+'</select></label><label class="field">Client (laisser vide pour une série générique)<select name="grille_client" onchange="lotsSerieGrilleScopeChange()">'+lotsClientsOptions(pl.campagne_id, pl.client)+'</select></label></div>'
-      + '<table class="tbl-fiches" style="margin-top:12px"><thead><tr><th></th><th>Type de cacao</th><th>Numéro de départ</th><th>Numéro de fin (optionnel)</th><th>Lots numérotés</th></tr></thead><tbody>'+lignesHtml+'</tbody></table>'
+      + '<table class="tbl-fiches" style="margin-top:12px"><thead><tr><th></th><th>Type de cacao</th><th>Série</th><th>Lots numérotés</th></tr></thead><tbody>'+lignesHtml+'</tbody></table>'
       + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="lotsSerieGrilleEnregistrer()">Enregistrer</button></div></div></div>';
   }
   if (m.type==='contratClient'){
