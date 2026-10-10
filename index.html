@@ -3277,7 +3277,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-10-022';
+const APP_VERSION = '2026-10-10-023';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5071,8 +5071,20 @@ function lotsCampagneOptions(valeur){
 // Clients proposes pour une campagne donnee (ou tous si campagne pas encore choisie) -- une serie de
 // numerotation ou un lot d'usinage se rattachent au CLIENT lui-meme (pas a un contrat precis) : un client
 // garde la meme serie meme s'il signe plusieurs contrats.
+// Union des clients connus de l'app (contrats, CV sans contrat encore rattache, et suivi achats
+// importe) -- pas seulement ceux qui ont deja un contrat enregistre, sinon un client present
+// uniquement via ses CV ou le fichier de suivi achats n'apparaissait jamais dans ces listes.
+// Deduplique les variantes d'un meme client (ex. « TOUTON » / « TOUTON SAS ») comme dans l'onglet
+// Contrats clients, via la meme clef normalisee (ccClefClient).
 function lotsClientsOptions(campagneId, valeur){
-  const noms = Array.from(new Set((state.contratsClients||[]).filter(c=>!campagneId || c.campagne_id===campagneId).map(c=>c.client).filter(Boolean))).sort((a,b)=>a.localeCompare(b));
+  const variantesParClef = new Map();
+  const ajouter = nom=>{ const n = String(nom||'').trim(); if (!n) return; const clef = ccClefClient(n); if (!variantesParClef.has(clef)) variantesParClef.set(clef, new Set()); variantesParClef.get(clef).add(n); };
+  (state.contratsClients||[]).filter(c=>!campagneId || c.campagne_id===campagneId).forEach(c=>ajouter(c.client));
+  (state.cvVentes||[]).forEach(c=>ajouter(c.client));
+  (state.suiviAchatsClients||[]).filter(l=>!campagneId || l.campagne_id===campagneId).forEach(l=>ajouter(l.client));
+  const noms = Array.from(variantesParClef.values())
+    .map(variantes=>Array.from(variantes).sort((a,b)=>(a.length-b.length)||a.localeCompare(b,'fr'))[0])
+    .sort((a,b)=>a.localeCompare(b,'fr'));
   return '<option value="">— Aucun (générique) —</option>'+noms.map(n=>'<option value="'+esc(n)+'"'+(n===valeur?' selected':'')+'>'+esc(n)+'</option>').join('');
 }
 // Un contrat quelconque de ce client (dans la campagne si precisee), pour pre-remplir type de cacao et
@@ -5129,7 +5141,7 @@ function renderLotsTab(){
     // « État des CV » est retiré de la navigation pour le moment (temporaire, cf. renderCvVentes et la
     // table cv_ventes conservees intactes plus bas : rattacher le sous-onglet suffira a tout remettre en
     // place quand on reprendra ce chantier avec plus d'elements).
-    + [['contrats','Contrats clients'],['achats_clients','Suivi achats clients'],['series','Séries de numérotation'],['usinage','Lots d\'usinage'],['export','OT (ordres de transit)'],['chaine','Chaîne de traçabilité']].map(([id,l])=>'<button class="'+(actif===id?'active':'')+'" onclick="lotsSetSousOnglet(\''+id+'\')">'+l+'</button>').join('')
+    + [['contrats','Contrats clients'],['series','Séries de numérotation'],['achats_clients','Suivi achats clients'],['usinage','Lots d\'usinage'],['export','OT (ordres de transit)'],['chaine','Chaîne de traçabilité']].map(([id,l])=>'<button class="'+(actif===id?'active':'')+'" onclick="lotsSetSousOnglet(\''+id+'\')">'+l+'</button>').join('')
     + '</div>';
   if (!state.lotsCharges) html += '<div class="hint">Chargement des lots…</div>';
   else if (actif==='cv') html += renderCvVentes();
