@@ -3277,7 +3277,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-10-027';
+const APP_VERSION = '2026-10-10-028';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5195,17 +5195,21 @@ function renderLotsSeries(){
 }
 // Construit l'etat de la grille (une ligne par type de cacao) pour une portee (campagne + client, ou
 // campagne + generique si client est vide) a partir des series deja enregistrees.
+// numero_fin n'est pas affiche dans cette grille (volume de reference largement suffisant pour qu'on ne
+// s'en inquiete pas) mais une valeur deja enregistree sur une serie existante est conservee telle quelle
+// (jamais effacee par cet ecran) au cas ou elle aurait ete fixee autrement.
+function lotsSerieGrilleLignesDepuisEtat(campagneId, client){
+  const lignes = {};
+  LOTS_TYPES_CACAO.forEach(t=>{ lignes[t] = { coche:false, numero_debut:'', numero_fin:null, id:null }; });
+  (state.lotsSeries||[]).filter(s=>s.campagne_id===campagneId && (s.client||'')===client).forEach(s=>{
+    if (lignes[s.type_cacao]) lignes[s.type_cacao] = { coche:true, numero_debut:s.numero_debut, numero_fin:s.numero_fin||null, id:s.id };
+  });
+  return lignes;
+}
 function lotsSerieGrilleOuvrir(campagneId, client){
   const campagne_id = campagneId!=null ? campagneId : ((state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : '');
   const clientNorm = client||'';
-  const lignes = {};
-  LOTS_TYPES_CACAO.forEach(t=>{ lignes[t] = { coche:false, numero_debut:'', numero_fin:null, id:null }; });
-  // numero_fin n'est pas affiche dans cette grille (volume de reference largement suffisant pour qu'on ne
-  // s'en inquiete pas) mais une valeur deja enregistree sur une serie existante est conservee telle quelle
-  // (jamais effacee par cet ecran) au cas ou elle aurait ete fixee autrement.
-  (state.lotsSeries||[]).filter(s=>s.campagne_id===campagne_id && (s.client||'')===clientNorm).forEach(s=>{
-    if (lignes[s.type_cacao]) lignes[s.type_cacao] = { coche:true, numero_debut:s.numero_debut, numero_fin:s.numero_fin||null, id:s.id };
-  });
+  const lignes = lotsSerieGrilleLignesDepuisEtat(campagne_id, clientNorm);
   state.modal = { type:'lotsSerieGrille', payload: { campagne_id, client:clientNorm, lignes } };
   render();
 }
@@ -5228,10 +5232,41 @@ function lotsSerieGrilleCocher(i, coche){
   const champ = document.querySelector('[name="grille_debut_'+i+'"]');
   if (champ){ champ.disabled = !coche; if (coche) champ.focus(); }
 }
-// Changer de campagne ou de client ouvre la grille de cette nouvelle portee (les eventuelles modifications
-// non enregistrees sur la portee precedente sont abandonnees).
+// Construit le corps du tableau (une ligne par type de cacao) -- partagee entre le rendu initial de la
+// modale et le rafraichissement cible lors d'un changement de campagne/client (voir lotsSerieGrilleScopeChange).
+function lotsSerieGrilleLignesHtml(pl){
+  return LOTS_TYPES_CACAO.map((t,i)=>{
+    const ligne = pl.lignes[t];
+    const serie = ligne.id ? lotsSerieParId(ligne.id) : null;
+    const utilises = serie ? (state.lotsUsinage||[]).filter(l=>l.serie_id===serie.id).length : 0;
+    return '<tr>'
+      + '<td><input type="checkbox" name="grille_coche_'+i+'" '+(ligne.coche?'checked':'')+' onchange="lotsSerieGrilleCocher('+i+', this.checked)"></td>'
+      + '<td><b>'+lotsLibelleTypeCacao(t)+'</b></td>'
+      + '<td><input type="number" name="grille_debut_'+i+'" value="'+esc(ligne.numero_debut||'')+'" placeholder="ex : 1001" style="width:110px" '+(ligne.coche?'':'disabled')+'></td>'
+      + '<td>'+(serie?(utilises+' lot'+(utilises>1?'s':'')+(lotsSerieComplet(serie)?' · <span class="badge warn">épuisée</span>':'')):'—')+'</td>'
+      + '</tr>';
+  }).join('');
+}
+// Changer de campagne ou de client charge les series de cette nouvelle portee SANS render() complet (meme
+// principe que lotsSerieGrilleCocher) : seuls le titre, les options du client (dependantes de la campagne)
+// et les lignes du tableau sont rafraichis dans le DOM, pour que ca se comporte comme une selection normale,
+// sans sursaut visuel. Les eventuelles modifications non enregistrees sur la portee precedente sont
+// abandonnees.
 function lotsSerieGrilleScopeChange(){
-  lotsSerieGrilleOuvrir(fv('grille_campagne')||'', fv('grille_client')||'');
+  const pl = state.modal && state.modal.type==='lotsSerieGrille' ? state.modal.payload : null; if (!pl) return;
+  const campagne_id = fv('grille_campagne')||'';
+  const client = fv('grille_client')||'';
+  pl.campagne_id = campagne_id;
+  pl.client = client;
+  pl.lignes = lotsSerieGrilleLignesDepuisEtat(campagne_id, client);
+  const titre = document.getElementById('grille-titre');
+  if (titre) titre.textContent = 'Séries de numérotation'+(client?' — '+client:' — générique');
+  const corps = document.getElementById('grille-lignes');
+  if (corps) corps.innerHTML = lotsSerieGrilleLignesHtml(pl);
+  // Les clients proposes dependent de la campagne (contrats/suivi achats filtres par campagne) : on
+  // rafraichit les options du select Client sans toucher au select Campagne.
+  const champClient = document.querySelector('[name=grille_client]');
+  if (champClient){ champClient.innerHTML = lotsClientsOptions(campagne_id, client); champClient.value = client; }
 }
 async function lotsSerieGrilleEnregistrer(){
   const pl = state.modal && state.modal.type==='lotsSerieGrille' ? state.modal.payload : null; if (!pl) return;
@@ -6392,22 +6427,11 @@ function lotsModalsHtml(){
   }
   if (m.type==='lotsSerieGrille'){
     const pl = m.payload;
-    const lignesHtml = LOTS_TYPES_CACAO.map((t,i)=>{
-      const ligne = pl.lignes[t];
-      const serie = ligne.id ? lotsSerieParId(ligne.id) : null;
-      const utilises = serie ? (state.lotsUsinage||[]).filter(l=>l.serie_id===serie.id).length : 0;
-      return '<tr>'
-        + '<td><input type="checkbox" name="grille_coche_'+i+'" '+(ligne.coche?'checked':'')+' onchange="lotsSerieGrilleCocher('+i+', this.checked)"></td>'
-        + '<td><b>'+lotsLibelleTypeCacao(t)+'</b></td>'
-        + '<td><input type="number" name="grille_debut_'+i+'" value="'+esc(ligne.numero_debut||'')+'" placeholder="ex : 1001" style="width:110px" '+(ligne.coche?'':'disabled')+'></td>'
-        + '<td>'+(serie?(utilises+' lot'+(utilises>1?'s':'')+(lotsSerieComplet(serie)?' · <span class="badge warn">épuisée</span>':'')):'—')+'</td>'
-        + '</tr>';
-    }).join('');
-    return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>Séries de numérotation'+(pl.client?' — '+esc(pl.client):' — générique')+'</h3>'
+    return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3 id="grille-titre">Séries de numérotation'+(pl.client?' — '+esc(pl.client):' — générique')+'</h3>'
       + '<div class="hint" style="margin-bottom:10px">Coche les types de cacao utilisés dans cette campagne et indique, pour chacun, le numéro de série (le premier numéro de lot). Les numéros suivants ne sont jamais calculés ou imposés automatiquement : communique-les au fur et à mesure, même s\'il y a des sauts (ex. 1001, 1002, puis 1004). Le niveau de traçabilité se renseigne plus tard, à l\'export, une fois les instructions d\'embarquement du client reçues.</div>'
       + '<div id="modal-fields">'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Campagne<select name="grille_campagne" onchange="lotsSerieGrilleScopeChange()">'+lotsCampagneOptions(pl.campagne_id)+'</select></label><label class="field">Client<select name="grille_client" onchange="lotsSerieGrilleScopeChange()">'+lotsClientsOptions(pl.campagne_id, pl.client)+'</select></label></div>'
-      + '<table class="tbl-fiches" style="margin-top:12px"><thead><tr><th></th><th>Type de cacao</th><th>Série</th><th>Lots numérotés</th></tr></thead><tbody>'+lignesHtml+'</tbody></table>'
+      + '<table class="tbl-fiches" style="margin-top:12px"><thead><tr><th></th><th>Type de cacao</th><th>Série</th><th>Lots numérotés</th></tr></thead><tbody id="grille-lignes">'+lotsSerieGrilleLignesHtml(pl)+'</tbody></table>'
       + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="lotsSerieGrilleEnregistrer()">Enregistrer</button></div></div></div>';
   }
   if (m.type==='contratClient'){
