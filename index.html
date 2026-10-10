@@ -3277,7 +3277,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-10-028';
+const APP_VERSION = '2026-10-10-029';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4451,7 +4451,7 @@ async function ccImporterContrat(inputEl){
     const d = ccContratExtraireDuTexte(lignes);
     const set = (name, val) => { const el = document.querySelector('#modal-fields [name="'+name+'"]'); if (el && val) el.value = val; };
     set('cc_reference', d.reference);
-    set('cc_client', d.client);
+    if (d.client) ccClientDefinirDepuisExtraction(d.client);
     if (d.volumeKg) set('cc_volume', String(d.volumeKg));
     if (d.prixValeur) set('cc_prix_valeur', String(d.prixValeur));
     if (d.prixDevise) set('cc_prix_devise', ccDeviseTexteVersCode(d.prixDevise));
@@ -5466,6 +5466,67 @@ function ccClefClient(nom){
   while (mots.length>1 && CC_SUFFIXES_JURIDIQUES.includes(mots[mots.length-1])) mots.pop();
   return mots.join(' ');
 }
+// Clients deja connus de l'application (contrats, CV, suivi achats, logos), deduplique comme dans le
+// regroupement de l'ecran "Contrats clients" : meme logique de cle normalisee, meme nom court retenu
+// pour les variantes avec/sans suffixe juridique. Sert a proposer une liste deroulante plutot qu'un champ
+// texte libre sur le formulaire de contrat, pour que la meme societe ne finisse plus enregistree sous
+// plusieurs orthographes differentes (c'est ainsi que "TOUTON" et "TOUTON SAS" s'etaient retrouves
+// enregistres comme deux clients distincts).
+function ccClientsConnus(){
+  const variantesParClef = new Map();
+  const ajouter = nom=>{ const n = String(nom||'').trim(); if (!n) return; const clef = ccClefClient(n); if (!variantesParClef.has(clef)) variantesParClef.set(clef, new Set()); variantesParClef.get(clef).add(n); };
+  (state.contratsClients||[]).forEach(c=>ajouter(c.client));
+  (state.cvVentes||[]).forEach(c=>ajouter(c.client));
+  (state.suiviAchatsClients||[]).forEach(l=>ajouter(l.client));
+  (state.clientsMeta||[]).forEach(m=>ajouter(m.client));
+  const parClef = new Map();
+  variantesParClef.forEach((variantes, clef)=>{
+    parClef.set(clef, Array.from(variantes).sort((a,b)=>(a.length-b.length)||a.localeCompare(b,'fr'))[0]);
+  });
+  return parClef; // Map clef normalisee -> nom canonique (le plus court des variantes rencontrees)
+}
+// "+ Nouveau client" est toujours la premiere option : coche par defaut quand le client du formulaire
+// n'est pas (encore) parmi les clients connus, pour laisser le champ de saisie libre visible sans action
+// supplementaire ; sinon c'est le client connu correspondant qui est deja selectionne.
+function ccClientsConnusOptions(valeur){
+  const parClef = ccClientsConnus();
+  const noms = Array.from(parClef.values()).sort((a,b)=>a.localeCompare(b,'fr'));
+  const clefValeur = valeur ? ccClefClient(valeur) : '';
+  const connu = !!(clefValeur && parClef.has(clefValeur));
+  return '<option value="__nouveau__"'+(!connu?' selected':'')+'>+ Nouveau client…</option>'
+    + noms.map(n=>'<option value="'+esc(n)+'"'+(connu && ccClefClient(n)===clefValeur?' selected':'')+'>'+esc(n)+'</option>').join('');
+}
+// Choisir un client connu dans la liste deroulante reprend directement son nom (le champ texte, masque,
+// garde la valeur reellement enregistree) ; choisir "+ Nouveau client" revele le champ de saisie libre.
+function ccClientChoixChange(valeur){
+  const champ = document.getElementById('cc_client_nouveau_champ');
+  const input = document.querySelector('[name="cc_client"]');
+  if (valeur==='__nouveau__'){
+    if (champ) champ.style.display='';
+    if (input){ input.value=''; input.focus(); }
+  } else {
+    if (champ) champ.style.display='none';
+    if (input) input.value = valeur;
+  }
+}
+// Le client extrait d'un PDF importe (ccImporterContrat) doit aussi resynchroniser la liste deroulante :
+// s'il correspond a un client deja connu, on le selectionne (et on masque le champ libre) ; sinon on
+// bascule sur "+ Nouveau client" avec le nom extrait propose tel quel.
+function ccClientDefinirDepuisExtraction(nom){
+  const select = document.querySelector('[name="cc_client_choix"]');
+  const champ = document.getElementById('cc_client_nouveau_champ');
+  const input = document.querySelector('[name="cc_client"]');
+  const connu = ccClientsConnus().get(ccClefClient(nom));
+  if (connu){
+    if (select) select.value = connu;
+    if (input) input.value = connu;
+    if (champ) champ.style.display = 'none';
+  } else {
+    if (select) select.value = '__nouveau__';
+    if (input) input.value = nom;
+    if (champ) champ.style.display = '';
+  }
+}
 function ccBasculerClient(client){ state.ccClientsOuverts = state.ccClientsOuverts||{}; state.ccClientsOuverts[client] = !state.ccClientsOuverts[client]; render(); }
 // Un client peut deja avoir des CV (bordereaux/avis de vente) avant meme que son contrat ne soit recu --
 // certains clients tardent a l'envoyer. Le regroupement par client se fait donc sur l'union des noms
@@ -6437,11 +6498,14 @@ function lotsModalsHtml(){
   if (m.type==='contratClient'){
     const pl = m.payload;
     const fichierActuel = pl._fichierSupprime ? null : (pl.fichier_nom || null);
+    const clefClientPl = pl.client ? ccClefClient(pl.client) : '';
+    const clientDejaConnu = !!(clefClientPl && ccClientsConnus().has(clefClientPl));
     return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>'+(pl.id?'Modifier le contrat client':'Nouveau contrat client')+'</h3><div id="modal-fields">'
       + '<label class="field">Contrat signé (PDF, optionnel)<input type="file" accept=".pdf" onchange="ccImporterContrat(this)"></label>'
       + '<div class="hint" id="ccImportStatut" style="margin:6px 0 10px">Dépose le contrat scanné/signé : les champs reconnus (référence, client, volume, prix…) sont pré-remplis automatiquement — à vérifier avant d\'enregistrer.</div>'
       + (fichierActuel ? '<div class="hint" style="margin:6px 0 10px">Fichier joint : <b id="ccFichierNom">'+esc(fichierActuel)+'</b> <a href="javascript:void(0)" onclick="ccContratFichierRetirer()">Retirer</a></div>' : '')
-      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Client<input type="text" name="cc_client" value="'+esc(pl.client||'')+'" placeholder="ex : TOUTON SAS"></label><label class="field">Réf. contrat<input type="text" name="cc_reference" value="'+esc(pl.reference||'')+'"></label></div>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Client<select name="cc_client_choix" onchange="ccClientChoixChange(this.value)">'+ccClientsConnusOptions(pl.client)+'</select></label><label class="field">Réf. contrat<input type="text" name="cc_reference" value="'+esc(pl.reference||'')+'"></label></div>'
+      + '<label class="field" id="cc_client_nouveau_champ" style="margin-top:-6px'+(clientDejaConnu?';display:none':'')+'">Nom du nouveau client<input type="text" name="cc_client" value="'+esc(pl.client||'')+'" placeholder="ex : TOUTON"></label>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Campagne<select name="cc_campagne" onchange="contratClientCampagneChange()">'+lotsCampagneOptions(pl.campagne_id)+'</select></label><label class="field">Type de cacao<select name="cc_type">'+LOTS_TYPES_CACAO.map(t=>'<option value="'+t+'"'+(t===(pl.type_cacao||'RA')?' selected':'')+'>'+lotsLibelleTypeCacao(t)+'</option>').join('')+'</select></label></div>'
       + '<label class="field">Niveau de traçabilité exigé<select name="cc_niveau"><option value="">—</option>'+OC_NIVEAUX_TRACABILITE.map(n=>'<option value="'+esc(n)+'"'+(n===(pl.niveau_tracabilite||'')?' selected':'')+'>'+esc(n)+'</option>').join('')+'</select></label>'
       + '<label class="field">Volume contractuel (kg)<input type="number" name="cc_volume" value="'+esc(pl.volume_contractuel_kg||'')+'"></label>'
