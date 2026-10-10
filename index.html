@@ -3277,7 +3277,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-10-029';
+const APP_VERSION = '2026-10-10-030';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5067,6 +5067,27 @@ function lotsSerieEtiquette(serie){
     + (serie.client ? ' — '+serie.client : '')
     + ' ('+serie.numero_debut+(serie.numero_fin?'–'+serie.numero_fin:' et suivants')+')';
 }
+// Retrouve la serie (donc le client) a partir d'un SEUL numero de lot, sans connaitre a l'avance son type
+// de cacao -- c'est ce que permet le rapport d'usinage importe : l'usinier reprend les numeros deja
+// attribues par ORIGEN, donc le numero seul suffit a identifier le client. Parmi toutes les series de la
+// campagne dont le numero de depart est <= au numero cherche (et qui ne sont pas deja epuisees a ce
+// numero), on retient celle dont le depart est le plus proche -- les plages ne se chevauchent pas en
+// pratique (chaque serie commence a un numero suffisamment eloigne des autres).
+function lotsSerieParNumero(campagneId, numero){
+  const n = parseInt(String(numero||'').replace(/\D+/g,''), 10);
+  if (!n) return null;
+  const candidates = (state.lotsSeries||[]).filter(s=>s.campagne_id===campagneId && Number(s.numero_debut)<=n && !(Number(s.numero_fin)>0 && Number(s.numero_fin)<n));
+  if (!candidates.length) return null;
+  return candidates.sort((a,b)=>Number(b.numero_debut)-Number(a.numero_debut))[0];
+}
+// Liste deroulante des series d'une campagne, pour corriger a la main la serie detectee automatiquement
+// lors d'un import (numero hors de toute serie connue, ou plages ambigues).
+function lotsSeriesOptionsPourImport(campagneId, valeur){
+  const options = (state.lotsSeries||[]).filter(s=>s.campagne_id===campagneId).slice()
+    .sort((a,b)=>String(a.client||'').localeCompare(String(b.client||''),'fr')||LOTS_TYPES_CACAO.indexOf(a.type_cacao)-LOTS_TYPES_CACAO.indexOf(b.type_cacao));
+  return '<option value=""'+(!valeur?' selected':'')+'>— Non reconnu (numérotation libre) —</option>'
+    + options.map(s=>'<option value="'+esc(s.id)+'"'+(s.id===valeur?' selected':'')+'>'+esc((s.client||'— générique —')+' · '+lotsLibelleTypeCacao(s.type_cacao)+' (n° '+s.numero_debut+'+)')+'</option>').join('');
+}
 function lotsCampagneNom(id){ const c = (state.campagnes||[]).find(x=>x.id===id); return c ? c.nom : ''; }
 function lotsCampagneOptions(valeur){
   return '<option value="">—</option>'+(state.campagnes||[]).slice().sort((a,b)=>String(b.nom||'').localeCompare(String(a.nom||''))).map(c=>'<option value="'+esc(c.id)+'"'+(c.id===valeur?' selected':'')+'>'+esc(c.nom)+'</option>').join('');
@@ -6128,14 +6149,52 @@ function renderCvVentes(){
   });
   return html + '</tbody></table></div>';
 }
+// ---- Repartition des lots d'usinage par client -----------------------------------------------------
+// Vue de synthese : combien de lots (et quel poids) ont ete produits pour chaque client sur la campagne
+// affichee. Le client de chaque lot est retrouve automatiquement a l'import (a partir de son numero, via
+// la serie de numerotation correspondante) ou choisi a la main sur sa fiche ; les lots sans client
+// identifie apparaissent a part ("Non rattache"), a corriger si besoin.
+function lotsRepartitionParClient(campagneId){
+  const lots = (state.lotsUsinage||[]).filter(l=>!campagneId || l.campagne_id===campagneId);
+  const groupes = new Map();
+  lots.forEach(l=>{
+    const cle = l.client||'';
+    if (!groupes.has(cle)) groupes.set(cle, { client:cle, lots:[] });
+    groupes.get(cle).lots.push(l);
+  });
+  return Array.from(groupes.values()).map(g=>({
+    client:g.client, nb:g.lots.length, poids: g.lots.reduce((s,l)=>s+(Number(l.poids_sortie_kg)||0),0),
+    lots: g.lots.slice().sort((a,b)=>String(a.numero).localeCompare(String(b.numero),'fr',{numeric:true})),
+  })).sort((a,b)=>(b.poids-a.poids)||String(a.client).localeCompare(String(b.client),'fr'));
+}
+function lotsRepartitionBasculer(client){ state.lotsRepartitionOuverts = state.lotsRepartitionOuverts||{}; state.lotsRepartitionOuverts[client] = !state.lotsRepartitionOuverts[client]; render(); }
+function renderLotsRepartitionClients(campagneId){
+  const groupes = lotsRepartitionParClient(campagneId);
+  if (!groupes.length) return '';
+  const total = groupes.reduce((s,g)=>s+g.poids,0);
+  let html = '<h3 style="margin:0 0 10px;font-size:14px;color:var(--ink-soft)">Répartition par client</h3>'
+    + '<div class="lots-repartition" style="margin-bottom:16px"><table class="tbl-fiches"><thead><tr><th>Client</th><th>Lots</th><th>Poids total</th><th></th></tr></thead><tbody>';
+  groupes.forEach(g=>{
+    const ouvert = !!(state.lotsRepartitionOuverts && state.lotsRepartitionOuverts[g.client]);
+    html += '<tr><td>'+(g.client?'<b>'+esc(g.client)+'</b>':'<span style="color:var(--warn)">— Non rattaché —</span>')+'</td><td>'+g.nb+'</td><td>'+fmtKg(g.poids)+(total>0?' <span class="hint" style="margin:0">('+Math.round(g.poids/total*1000)/10+' %)</span>':'')+'</td>'
+      + '<td><button class="btn-ghost btn-compact" onclick="lotsRepartitionBasculer(\''+escJs(g.client)+'\')">'+(ouvert?'Masquer':'Détail')+'</button></td></tr>';
+    if (ouvert) html += '<tr class="lots-detail"><td colspan="4"><div class="lots-compo">'+g.lots.map(l=>'<span class="lots-puce">'+esc(l.numero)+' — <b>'+fmtKg(l.poids_sortie_kg||0)+'</b></span>').join('')+'</div></td></tr>';
+  });
+  return html + '</tbody></table></div>';
+}
 function renderLotsUsinage(){
   const lots = (state.lotsUsinage||[]);
   const recus = lotsAchatsRecus();
   const dispo = recus.reduce((s,a)=>s+lotsAchatSolde(a), 0);
+  const campagneId = (state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : null;
   let html = '<div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">'
     + '<button class="btn btn-primary" onclick="lotUsinageOuvrir()">+ Nouveau lot d\'usinage</button>'
-    + '<span class="hint" style="margin:0">'+recus.length+' livraison'+(recus.length>1?'s':'')+' reçue'+(recus.length>1?'s':'')+' à l\'usine · <b>'+fmtKg(dispo)+'</b> pas encore affectés à un lot</span></div>';
-  if (!lots.length) return html + '<div class="hint">Aucun lot d\'usinage. Crée le premier, puis compose-le à partir des livraisons reçues.</div>';
+    + '<button class="btn" onclick="lotsUsinageChoisirFichier()">⭱ Importer le rapport d\'usinage (Excel)</button>'
+    + '<input type="file" id="lu-import-excel" accept=".xlsx,.xls,.csv" style="display:none" onchange="lotsUsinageImporterExcel(this)">'
+    + '<span class="hint" style="margin:0">'+recus.length+' livraison'+(recus.length>1?'s':'')+' reçue'+(recus.length>1?'s':'')+' à l\'usine · <b>'+fmtKg(dispo)+'</b> pas encore affectés à un lot</span></div>'
+    + '<div class="hint" style="margin:-6px 0 14px">Le rapport d\'usinage reprend les numéros déjà attribués par les séries de numérotation : le client de chaque lot importé est retrouvé automatiquement à partir de son numéro.</div>';
+  html += renderLotsRepartitionClients(campagneId);
+  if (!lots.length) return html + '<div class="hint">Aucun lot d\'usinage. Crée le premier, ou importe le rapport d\'usinage de l\'usinier.</div>';
   html += '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th>N° lot</th><th>Campagne</th><th>Client</th><th>Période</th><th>Site</th><th>Type</th><th>Niveau</th><th>Livraisons</th><th>Entrée</th><th>Sortie</th><th>Dispo. export</th><th>Statut</th><th></th></tr></thead><tbody>';
   lots.forEach(l=>{
     const compo = lotsUsinageCompo(l.id), entree = lotsUsinageEntree(l), sortie = lotsUsinageSortie(l), solde = lotsUsinageSoldeExport(l);
@@ -6228,6 +6287,93 @@ async function lotsExporterDossier(id){
   const w6 = wb.addWorksheet('Producteurs'); w6.columns = [{ header:'Coopérative', width:28 }, { header:'Connaissement', width:22 }, { header:'Producteur', width:30 }, { header:'N° carte CCC', width:16 }, { header:'Volume tracé (kg)', width:16 }];
   ch.livraisons.forEach(l=>{ const c = coopById(l.achat.cooperative_id)||{}; l.producteurs.forEach(p=>w6.addRow([c.nom||'', l.achat.connaissement||'', p.nom, p.matricule, p.kg])); }); entete(w6);
   await qcTelechargerClasseur(wb, 'Tracabilite_'+String(lot.numero).replace(/[^A-Za-z0-9]+/g,'_')+'.xlsx');
+}
+// ---- Import du rapport d'usinage (Excel) -------------------------------------------------------------
+// L'usinier produit les lots en reprenant la numerotation deja attribuee par ORIGEN (series de
+// numerotation) : son rapport de production liste donc des numeros de lots qui permettent, a eux seuls,
+// de retrouver automatiquement le client (et le type de cacao) de chaque lot, sans ressaisie manuelle.
+// Le fichier est d'abord analyse et presente en revue -- une serie detectee par numero, modifiable a la
+// main en cas d'erreur ou de numero hors de toute serie connue -- avant toute ecriture en base.
+function lotsUsinageChoisirFichier(){ const i = document.getElementById('lu-import-excel'); if (i){ i.value=''; i.click(); } }
+async function lotsUsinageImporterExcel(input){
+  const fichier = input.files && input.files[0]; if (!fichier) return;
+  const campagne_id = (state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : null;
+  if (!campagne_id){ showToast('Choisis d\'abord une campagne (en haut de la page) avant d\'importer le rapport d\'usinage.', 'error'); return; }
+  if (typeof XLSX === 'undefined'){ showToast('La bibliothèque Excel ne s\'est pas chargée (connexion internet requise).'); return; }
+  let wb;
+  try{ wb = XLSX.read(await fichier.arrayBuffer(), { type:'array', cellDates:true }); }
+  catch(e){ showToast('Fichier illisible : '+e.message, 'error'); return; }
+  const aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header:1, defval:'' });
+  if (!aoa.length){ showToast('Le fichier est vide.', 'error'); return; }
+  let ligneEntetes = -1;
+  for (let i=0; i<Math.min(10, aoa.length); i++){
+    if ((aoa[i]||[]).some(c=>qcNormaliserTexte(c).includes('lot'))){ ligneEntetes = i; break; }
+  }
+  if (ligneEntetes<0){ showToast('Colonne « N° de lot » introuvable dans ce fichier.', 'error'); return; }
+  const entetes = (aoa[ligneEntetes]||[]).map(qcNormaliserTexte);
+  const col = pred => entetes.findIndex(pred);
+  const colLot = col(e=>e.includes('lot'));
+  const colPoids = col(e=>e.includes('poids'));
+  const colSite = col(e=>e.includes('site'));
+  const colDate = col(e=>e.includes('date'));
+  if (colLot<0){ showToast('Colonne « N° de lot » introuvable dans ce fichier.', 'error'); return; }
+  const val = (row,i)=> i>=0 ? row[i] : '';
+  const existants = new Set((state.lotsUsinage||[]).filter(l=>l.campagne_id===campagne_id).map(l=>String(l.numero).trim()));
+  const lignes = [];
+  for (let i=ligneEntetes+1; i<aoa.length; i++){
+    const row = aoa[i]; if (!row) continue;
+    const numero = String(val(row, colLot)||'').trim(); if (!numero) continue;
+    const serie = lotsSerieParNumero(campagne_id, numero);
+    const dejaExistant = existants.has(numero);
+    lignes.push({
+      numero, poids_sortie_kg: Number(val(row, colPoids))||null, site: String(val(row, colSite)||'').trim()||null,
+      date_production: normDateValue(val(row, colDate))||null,
+      serie_id: serie ? serie.id : null, client: serie ? (serie.client||null) : null,
+      type_cacao: serie ? serie.type_cacao : null, niveau_tracabilite: serie ? serie.niveau_tracabilite : null,
+      dejaExistant, inclure: !dejaExistant,
+    });
+  }
+  if (!lignes.length){ showToast('Aucun lot reconnu dans ce fichier.', 'error'); return; }
+  state.modal = { type:'lotsUsinageImport', payload: { campagne_id, lignes, nomFichier: fichier.name } };
+  render();
+}
+// Ne refait pas un render() complet (meme principe que la grille de series) : seul le compteur du bouton
+// "Importer" est mis a jour directement dans le DOM.
+function lotsUsinageImportCocher(i, coche){
+  const pl = state.modal && state.modal.type==='lotsUsinageImport' ? state.modal.payload : null; if (!pl) return;
+  pl.lignes[i].inclure = coche;
+  const nb = pl.lignes.filter(l=>l.inclure).length;
+  const btn = document.getElementById('lu-import-btn-valider');
+  if (btn) btn.textContent = 'Importer '+nb+' lot'+(nb>1?'s':'');
+}
+function lotsUsinageImportSerieChange(i, serieId){
+  const pl = state.modal && state.modal.type==='lotsUsinageImport' ? state.modal.payload : null; if (!pl) return;
+  const ligne = pl.lignes[i];
+  const serie = serieId ? lotsSerieParId(serieId) : null;
+  ligne.serie_id = serie ? serie.id : null;
+  ligne.client = serie ? (serie.client||null) : null;
+  ligne.type_cacao = serie ? serie.type_cacao : null;
+  ligne.niveau_tracabilite = serie ? serie.niveau_tracabilite : null;
+  const cellClient = document.getElementById('lu-import-client-'+i);
+  if (cellClient) cellClient.textContent = ligne.client || (ligne.serie_id ? '— générique —' : '—');
+}
+async function lotsUsinageImportValider(){
+  const pl = state.modal && state.modal.type==='lotsUsinageImport' ? state.modal.payload : null; if (!pl) return;
+  const aImporter = pl.lignes.filter(l=>l.inclure);
+  if (!aImporter.length){ showToast('Aucun lot coché à importer.'); return; }
+  try{
+    const maintenant = new Date().toISOString();
+    const rows = aImporter.map(l=>({
+      id: genId('lu'), numero:l.numero, campagne_id: pl.campagne_id, client:l.client||null, site:l.site||null,
+      type_cacao:l.type_cacao||null, niveau_tracabilite:l.niveau_tracabilite||null, date_production:l.date_production||null,
+      serie_id:l.serie_id||null, poids_sortie_kg:l.poids_sortie_kg||null, statut:'ouvert', updated_at:maintenant,
+    }));
+    const { error } = await supabaseClient.from('lots_usinage').insert(rows);
+    if (error) throw error;
+    const nonRattaches = aImporter.filter(l=>!l.serie_id).length;
+    await chargerLots(); closeModal();
+    showToast(aImporter.length+' lot(s) importé(s)'+(nonRattaches?' · '+nonRattaches+' non rattaché(s) à un client (numéro hors des séries connues)':'')+'.', 'success');
+  }catch(e){ showToast('Échec : '+e.message); }
 }
 // ---- Lots d'usinage : fiche, composition, statut, suppression ----
 function lotUsinageOuvrir(id){
@@ -6438,6 +6584,23 @@ function lotsModalsHtml(){
       + '<label class="field">Poids de sortie après usinage (kg)<input type="number" name="lot_sortie" value="'+esc(pl.poids_sortie_kg||'')+'" placeholder="vide = poids d\'entrée"></label>'
       + '<label class="field">Notes<textarea name="lot_notes" rows="2">'+esc(pl.notes||'')+'</textarea></label>'
       + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="lotUsinageEnregistrer()">Enregistrer</button></div></div></div>';
+  }
+  if (m.type==='lotsUsinageImport'){
+    const pl = m.payload;
+    const nbCoches = pl.lignes.filter(l=>l.inclure).length;
+    const nbNonReconnus = pl.lignes.filter(l=>!l.serie_id).length;
+    return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal xl"><h3>Importer le rapport d\'usinage</h3>'
+      + '<div class="hint" style="margin-bottom:10px">Fichier : <b>'+esc(pl.nomFichier)+'</b> — '+pl.lignes.length+' lot(s) détecté(s)'+(nbNonReconnus?', dont <b>'+nbNonReconnus+'</b> avec un numéro hors des séries connues (à rattacher à la main ci-dessous, ou à laisser en numérotation libre)':'')+'. Vérifie la répartition par client avant de valider.</div>'
+      + '<div id="modal-fields"><div class="achats-defile" style="max-height:52vh;overflow:auto"><table class="tbl-fiches"><thead><tr><th></th><th>N° lot</th><th>Poids (kg)</th><th>Série / client détecté</th><th>Site</th><th>Date</th></tr></thead><tbody>'
+      + pl.lignes.map((l,i)=>'<tr'+(l.dejaExistant?' style="opacity:.55"':'')+'>'
+          + '<td><input type="checkbox" '+(l.inclure?'checked':'')+' onchange="lotsUsinageImportCocher('+i+', this.checked)"></td>'
+          + '<td><b>'+esc(l.numero)+'</b>'+(l.dejaExistant?' <span class="badge warn">déjà importé</span>':'')+'</td>'
+          + '<td>'+(l.poids_sortie_kg?fmtNum(l.poids_sortie_kg):'—')+'</td>'
+          + '<td><select onchange="lotsUsinageImportSerieChange('+i+', this.value)">'+lotsSeriesOptionsPourImport(pl.campagne_id, l.serie_id)+'</select> <span id="lu-import-client-'+i+'" class="hint" style="margin:0">'+esc(l.client||(l.serie_id?'— générique —':'—'))+'</span></td>'
+          + '<td>'+esc(l.site||'—')+'</td><td>'+esc(dateFr(l.date_production)||'—')+'</td>'
+          + '</tr>').join('')
+      + '</tbody></table></div></div>'
+      + '<div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" id="lu-import-btn-valider" onclick="lotsUsinageImportValider()">Importer '+nbCoches+' lot'+(nbCoches>1?'s':'')+'</button></div></div></div>';
   }
   if (m.type==='lotUsinageCompo'){
     const pl = m.payload, lot = lotUsinageParId(pl.lotId); if (!lot) return '';
