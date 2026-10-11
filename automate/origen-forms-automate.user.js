@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → Forms CARGILL (automate de saisie)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      1.10.0
+// @version      1.11.0
 // @description  Saisit automatiquement dans le formulaire Microsoft Forms de CARGILL les questionnaires producteurs collectés dans ORIGEN (ECORIGINE). Un lot copié depuis ORIGEN, un producteur par réponse, reprise automatique après chaque envoi.
 // @author       ECORIGINE — ORIGEN
 // @match        https://forms.office.com/*
@@ -175,27 +175,31 @@
       return true;
     } catch (e) { return false; }
   }
-  // Clique sur une case/bouton radio et VERIFIE que ca a reellement pris (au lieu de supposer que ca a
-  // marche). Essaie d'abord la technique React (voir cocherReact) sur le vrai <input> s'il existe, puis a
-  // defaut clique le controle et jusqu'a 3 niveaux de parents (certains composants "maison" n'ecoutent que
-  // sur une zone cliquable plus large que l'element accessible/visuel), avec un clic simple puis un clic
-  // plus complet (pointerdown/mousedown/mouseup/click) a chaque niveau.
-  async function cocherEtVerifier(cible) {
+  // Clique sur une case/bouton radio et VERIFIE que ca a reellement pris -- EN INTERROGEANT LE DOM EN
+  // DIRECT a chaque verification, jamais une reference mise en cache. C'est le point critique : si Forms
+  // re-rend le bloc entre deux de nos actions (ce qui semble arriver ici), la reference "cible" capturee
+  // au debut devient un noeud orphelin/obsolete -- la cocher et verifier SUR CETTE MEME reference donne
+  // l'illusion d'un succes (on vient de modifier cette copie), alors que la vraie page, elle, n'a jamais
+  // bouge. `trouverCible` refait donc la recherche en direct a chaque fois plutot que de reutiliser une
+  // variable capturee, pour que la verification porte sur ce qui est reellement affiche.
+  async function cocherEtVerifier(trouverCible) {
+    let cible = trouverCible();
+    if (!cible) return false;
     if (estCoche(cible)) return true;
-    const natif = cible.tagName === 'INPUT' ? cible : cible.querySelector('input[type="radio"], input[type="checkbox"]');
-    if (natif) { cocherReact(natif); await dormir(200); if (estCoche(cible)) return true; }
-    const cibles = [cible.closest('label') || cible];
-    let p = cible.parentElement;
-    for (let i = 0; i < 3 && p; i++) { cibles.push(p); p = p.parentElement; }
-    for (const c of cibles) {
-      if (estCoche(cible)) break;
-      try { c.click(); } catch (e) {}
+    for (let essai = 0; essai < 3; essai++) {
+      cible = trouverCible(); if (!cible) return false;
+      if (estCoche(cible)) return true;
+      const natif = cible.tagName === 'INPUT' ? cible : cible.querySelector('input[type="radio"], input[type="checkbox"]');
+      if (natif) cocherReact(natif);
       await dormir(200);
-      if (estCoche(cible)) break;
-      clicComplet(c);
-      await dormir(200);
+      cible = trouverCible(); if (cible && estCoche(cible)) return true;
+      const cliquable = cible && (cible.closest('label') || cible);
+      if (cliquable) { try { cliquable.click(); } catch (e) {} await dormir(200); }
+      cible = trouverCible(); if (cible && estCoche(cible)) return true;
+      if (cliquable) { clicComplet(cliquable); await dormir(200); }
     }
-    return estCoche(cible);
+    cible = trouverCible();
+    return !!(cible && estCoche(cible));
   }
   // Diagnostic detaille sur l'element cible quand meme les clics "parents" echouent -- pour comprendre
   // enfin pourquoi (element detache du document ? structure differente de ce qu'on attend ?) au lieu de
@@ -218,33 +222,34 @@
     while (Date.now() - debut < (max || ATTENTE_MAX)) { const r = fn(); if (r) return r; await dormir(200); }
     return null;
   }
-  async function repondreBloc(bloc, q, valeur) {
+  async function repondreBloc(bloc, titreBloc, q, valeur) {
     const v = String(valeur == null ? '' : valeur);
     if (!v) return 'vide';
     // Forms peut ne pas avoir fini de monter les options si le bloc n'a jamais ete visible a l'ecran.
     try { bloc.scrollIntoView({ block: 'center' }); } catch (e) {}
     await dormir(250);
+    const correspond = (r) => {
+      const lab = r.getAttribute('aria-label') || r.value || (r.closest('label') && r.closest('label').textContent) || (r.parentElement && r.parentElement.textContent) || '';
+      return N(lab) === N(v) || N(lab).indexOf(N(v)) === 0;
+    };
+    // Le bloc passe en argument peut devenir obsolete si Forms re-rend entre-temps (voir cocherEtVerifier) :
+    // on retrouve donc le conteneur ACTUEL par son titre a chaque recherche, plutot que de reutiliser `bloc`.
+    const conteneurActuel = () => blocsQuestions().find((x) => texteTitre(x) === titreBloc) || bloc;
     // 1. choix (boutons radio)
     const radios = Array.from(bloc.querySelectorAll('input[type="radio"], [role="radio"]')).filter(visible);
     if (radios.length) {
-      const cible = radios.find((r) => {
-        const lab = r.getAttribute('aria-label') || r.value || (r.closest('label') && r.closest('label').textContent) || (r.parentElement && r.parentElement.textContent) || '';
-        return N(lab) === N(v) || N(lab).indexOf(N(v)) === 0;
-      });
-      if (!cible) return 'option « ' + v + ' » introuvable';
-      const ok = await cocherEtVerifier(cible);
-      return ok ? 'ok' : 'clic sans effet sur l\'option « ' + v + ' » (essayé plusieurs fois, y compris les parents) — ' + diagnosticElement(cible);
+      const trouverCible = () => Array.from(conteneurActuel().querySelectorAll('input[type="radio"], [role="radio"]')).filter(visible).find(correspond);
+      if (!trouverCible()) return 'option « ' + v + ' » introuvable';
+      const ok = await cocherEtVerifier(trouverCible);
+      return ok ? 'ok' : 'clic sans effet sur l\'option « ' + v + ' » (vérifié en direct sur le DOM, essayé plusieurs fois) — ' + diagnosticElement(trouverCible());
     }
     // 1bis. certaines questions a reponse unique sont rendues par Forms avec des cases a cocher (pas des boutons radio)
     const cases = Array.from(bloc.querySelectorAll('input[type="checkbox"], [role="checkbox"]')).filter(visible);
     if (cases.length) {
-      const cible = cases.find((r) => {
-        const lab = r.getAttribute('aria-label') || r.value || (r.closest('label') && r.closest('label').textContent) || (r.parentElement && r.parentElement.textContent) || '';
-        return N(lab) === N(v) || N(lab).indexOf(N(v)) === 0;
-      });
-      if (!cible) return 'option « ' + v + ' » introuvable';
-      const ok = await cocherEtVerifier(cible);
-      return ok ? 'ok' : 'clic sans effet sur l\'option « ' + v + ' » (essayé plusieurs fois, y compris les parents) — ' + diagnosticElement(cible);
+      const trouverCible = () => Array.from(conteneurActuel().querySelectorAll('input[type="checkbox"], [role="checkbox"]')).filter(visible).find(correspond);
+      if (!trouverCible()) return 'option « ' + v + ' » introuvable';
+      const ok = await cocherEtVerifier(trouverCible);
+      return ok ? 'ok' : 'clic sans effet sur l\'option « ' + v + ' » (vérifié en direct sur le DOM, essayé plusieurs fois) — ' + diagnosticElement(trouverCible());
     }
     // 2. liste deroulante
     const combo = bloc.querySelector('select') || bloc.querySelector('[role="combobox"]') || bloc.querySelector('[data-automation-id="dropdown"] button') || bloc.querySelector('[data-automation-id="dropdown"]');
@@ -371,7 +376,7 @@
             const bloc = await attendre(() => blocsQuestions().find((x) => texteTitre(x) === titre) || null, 4000);
             if (!bloc) { problemes.push(q.libelle.slice(0, 60) + ' → question disparue de la page'); continue; }
             let r;
-            try { r = await repondreBloc(bloc, q, valeur); } catch (e) { r = 'erreur : ' + e.message; }
+            try { r = await repondreBloc(bloc, titre, q, valeur); } catch (e) { r = 'erreur : ' + e.message; }
             await dormir(200);
             if (r === 'ok') reponduSurCettePage.push({ titre, q, valeur });
             else if (r !== 'vide') problemes.push(q.libelle.slice(0, 60) + ' → ' + r);
@@ -388,7 +393,7 @@
           const bloc2 = blocsQuestions().find((x) => texteTitre(x) === r1.titre);
           if (!bloc2) { problemes.push(r1.q.libelle.slice(0, 60) + ' → question disparue avant l\'envoi'); continue; }
           let r2;
-          try { r2 = await repondreBloc(bloc2, r1.q, r1.valeur); } catch (e) { r2 = 'erreur : ' + e.message; }
+          try { r2 = await repondreBloc(bloc2, r1.titre, r1.q, r1.valeur); } catch (e) { r2 = 'erreur : ' + e.message; }
           if (r2 !== 'ok' && r2 !== 'vide') problemes.push(r1.q.libelle.slice(0, 60) + ' → effacée entre-temps, ' + r2);
         }
         if (problemes.length) { marquerErreur(lot, id, problemes.join(' ; ')); return; }
