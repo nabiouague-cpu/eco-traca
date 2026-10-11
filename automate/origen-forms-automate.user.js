@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → Forms CARGILL (automate de saisie)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      1.3.0
+// @version      1.4.0
 // @description  Saisit automatiquement dans le formulaire Microsoft Forms de CARGILL les questionnaires producteurs collectés dans ORIGEN (ECORIGINE). Un lot copié depuis ORIGEN, un producteur par réponse, reprise automatique après chaque envoi.
 // @author       ECORIGINE — ORIGEN
 // @match        https://forms.office.com/*
@@ -163,6 +163,32 @@
       if (!opt) { document.body.click(); return 'option « ' + v + ' » introuvable dans la liste'; }
       opt.click(); await dormir(PAUSE);
       return 'ok';
+    }
+    // 2bis. "fausse" liste deroulante : ni <select>, ni role=combobox, ni data-automation-id=dropdown, juste un
+    // bloc cliquable "maison" (souvent une icone svg en forme de fleche + le texte "Selectionnez votre reponse").
+    // On clique l'element le plus proche de l'icone (ou, a defaut, celui qui porte ce texte), puis on cherche les
+    // options qui apparaissent dans tout le document (le menu ouvert est souvent place hors du bloc).
+    {
+      let declencheur = null;
+      const icone = bloc.querySelector('svg');
+      if (icone) {
+        let el = icone.parentElement;
+        while (el && el !== bloc) {
+          if (visible(el) && el.getBoundingClientRect().width > 20) { declencheur = el; break; }
+          el = el.parentElement;
+        }
+      }
+      if (!declencheur) {
+        declencheur = Array.from(bloc.querySelectorAll('div, span')).filter(visible)
+          .find((el) => el.children.length <= 3 && /selectionnez|select your|choisissez|choose/.test(N(el.textContent)));
+      }
+      if (declencheur) {
+        declencheur.click(); await dormir(PAUSE);
+        const opt = await attendre(() => Array.from(document.querySelectorAll('[role="option"], [data-automation-id="dropdownOption"], li[role="menuitem"], li')).filter(visible).find((o) => N(o.textContent) === N(v) || N(o.textContent).indexOf(N(v)) === 0), 4000);
+        if (opt) { opt.click(); await dormir(PAUSE); return 'ok'; }
+        document.body.click();
+        return 'option « ' + v + ' » introuvable dans le menu (liste déroulante "maison")';
+      }
     }
     // 3. texte
     const champ = bloc.querySelector('textarea, input[type="text"], input:not([type]), input[data-automation-id="textInput"]');
