@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → Forms CARGILL (automate de saisie)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      1.1.0
+// @version      1.2.0
 // @description  Saisit automatiquement dans le formulaire Microsoft Forms de CARGILL les questionnaires producteurs collectés dans ORIGEN (ECORIGINE). Un lot copié depuis ORIGEN, un producteur par réponse, reprise automatique après chaque envoi.
 // @author       ECORIGINE — ORIGEN
 // @match        https://forms.office.com/*
@@ -164,7 +164,14 @@
     // 3. texte
     const champ = bloc.querySelector('textarea, input[type="text"], input:not([type]), input[data-automation-id="textInput"]');
     if (champ) { champ.focus(); setValeurReact(champ, v); champ.blur(); return 'ok'; }
-    return 'aucun champ reconnu';
+    // diagnostic : ce qu'il y a reellement dans ce bloc, pour comprendre pourquoi rien n'a ete reconnu
+    const vu = Array.from(bloc.querySelectorAll('*')).map((el) => {
+      let s = el.tagName.toLowerCase();
+      const role = el.getAttribute && el.getAttribute('role'); if (role) s += '[role=' + role + ']';
+      if (el.type) s += ':' + el.type;
+      return s;
+    }).filter((v2, i, a) => a.indexOf(v2) === i && !/^(div|span|label|p|svg|path|img|i)(\[|:|$)/.test(v2)).slice(0, 12);
+    return 'aucun champ reconnu (contenu du bloc : ' + (vu.length ? vu.join(', ') : 'rien de visible') + ')';
   }
   function boutonParTexte(regex, selecteur) {
     const direct = selecteur ? document.querySelector(selecteur) : null;
