@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → Forms CARGILL (automate de saisie)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      1.14.0
+// @version      1.15.0
 // @description  Saisit automatiquement dans le formulaire Microsoft Forms de CARGILL les questionnaires producteurs collectés dans ORIGEN (ECORIGINE). Un lot copié depuis ORIGEN, un producteur par réponse, reprise automatique après chaque envoi.
 // @author       ECORIGINE — ORIGEN
 // @match        https://forms.office.com/*
@@ -43,17 +43,31 @@
       + '<button id="oa-demarrer" style="background:#F2B705;border:0;border-radius:8px;padding:8px 12px;font-weight:700;cursor:pointer;">Démarrer</button>'
       + '<button id="oa-pause" style="background:#fff;border:1px solid #cfd8d4;border-radius:8px;padding:8px 12px;cursor:pointer;">Pause</button>'
       + '<button id="oa-copier" style="background:#fff;border:1px solid #cfd8d4;border-radius:8px;padding:8px 12px;cursor:pointer;">Copier le résultat</button>'
+      + '<button id="oa-diagnostic" style="background:#fff;border:1px solid #cfd8d4;border-radius:8px;padding:8px 12px;cursor:pointer;">Copier diagnostic</button>'
       + '<button id="oa-stop" style="background:#fff;border:1px solid #cfd8d4;border-radius:8px;padding:8px 12px;cursor:pointer;color:#B3261E;">Effacer le lot</button>'
       + '</div></div>';
     document.body.appendChild(panneau);
     zoneTexte = panneau.querySelector('#oa-lot'); zoneEtat = panneau.querySelector('#oa-etat');
     btnDemarrer = panneau.querySelector('#oa-demarrer'); btnPause = panneau.querySelector('#oa-pause'); btnStop = panneau.querySelector('#oa-stop'); btnCopier = panneau.querySelector('#oa-copier');
+    const btnDiagnostic = panneau.querySelector('#oa-diagnostic');
     panneau.querySelector('#oa-ferme').onclick = () => { panneau.style.display = 'none'; };
     btnDemarrer.onclick = demarrer;
     btnPause.onclick = () => { const lot = lireLot(); if (!lot) return; lot.pause = !lot.pause; ecrireLot(lot); afficherEtat(); if (!lot.pause) boucle(); };
     btnStop.onclick = () => { if (confirm('Effacer le lot en cours sur cette page ? (Les réponses déjà envoyées à Forms restent envoyées.)')) { effacerLot(); afficherEtat(); } };
     btnCopier.onclick = copierResultat;
+    btnDiagnostic.onclick = copierDiagnostic;
     afficherEtat();
+  }
+  // Copie le HTML reel capture au moment du dernier echec d'envoi (toutes les questions de la page, pas
+  // seulement celle qui semble bloquer) -- a coller directement dans la conversation avec Claude pour une
+  // analyse sur donnees reelles plutot que sur une nouvelle hypothese.
+  function copierDiagnostic() {
+    const lot = lireLot();
+    if (!lot || !lot.dernierDiagnostic) { alert('Aucun diagnostic disponible pour le moment : il n\'est capturé qu\'après un échec d\'envoi.'); return; }
+    const txt = lot.dernierDiagnostic;
+    const fin = () => alert('Diagnostic copié. Colle-le directement dans la conversation avec Claude.');
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(fin, () => prompt('Copie ce texte et colle-le à Claude :', txt));
+    else prompt('Copie ce texte et colle-le à Claude :', txt);
   }
   function afficherEtat(msg) {
     const lot = lireLot();
@@ -454,7 +468,19 @@
             derniereErreur = 'pas de confirmation après Envoyer' + (resume ? ' — ' + resume.trim() : ' (champ obligatoire manquant ?)');
           }
         }
-        if (!confirme) { marquerErreur(lot, id, derniereErreur + ' (essayé 3 fois)'); return; }
+        if (!confirme) {
+          // On a devine 3 hypotheses successives (reference perimee, composant React non informe, clic
+          // simule non ecoute) sans jamais avoir vu le vrai HTML de la question qui bloque. Plutot que
+          // d'en deviner une 4e, on capture ici le HTML reel de TOUTES les questions de la page au moment
+          // precis de l'echec -- de quoi comparer directement une question qui marche et une qui bloque,
+          // au lieu de supposer.
+          const diag = blocsQuestions().map((b, i) => {
+            let html = ''; try { html = b.outerHTML.replace(/\s+/g, ' ').slice(0, 2500); } catch (e) {}
+            return '--- Question ' + (i + 1) + ' : ' + texteTitre(b).slice(0, 90) + ' ---\n' + html;
+          }).join('\n\n');
+          marquerErreur(lot, id, derniereErreur + ' (essayé 3 fois)', diag);
+          return;
+        }
         lot = lireLot(); lot.restants = lot.restants.filter((x) => x !== id); lot.faits.push(id); lot.journal.push({ id, le: new Date().toISOString() }); ecrireLot(lot);
         afficherEtat('✓ ' + rep.nom + ' envoyé.');
         await dormir(800);
@@ -465,9 +491,12 @@
     } catch (e) { const lot2 = lireLot(); if (lot2) { lot2.pause = true; ecrireLot(lot2); } afficherEtat('⚠ Erreur inattendue : ' + e.message); }
     finally { enCours = false; }
   }
-  function marquerErreur(lot, id, detail) {
-    lot = lireLot(); lot.restants = lot.restants.filter((x) => x !== id); lot.erreurs.push({ id, detail }); lot.pause = true; ecrireLot(lot);
-    afficherEtat('⚠ Erreur sur ce producteur : ' + detail + '\nLe formulaire est laissé tel quel pour vérification. Corrige à la main ou recharge la page puis « Reprendre » pour passer au suivant.');
+  function marquerErreur(lot, id, detail, diagnostic) {
+    lot = lireLot(); lot.restants = lot.restants.filter((x) => x !== id); lot.erreurs.push({ id, detail }); lot.pause = true;
+    if (diagnostic) lot.dernierDiagnostic = diagnostic;   // HTML reel de la page au moment de l'echec -- voir copierDiagnostic()
+    ecrireLot(lot);
+    afficherEtat('⚠ Erreur sur ce producteur : ' + detail + '\nLe formulaire est laissé tel quel pour vérification. Corrige à la main ou recharge la page puis « Reprendre » pour passer au suivant.'
+      + (diagnostic ? '\n\n(Un diagnostic détaillé a été capturé : clique « Copier diagnostic » et colle-le à Claude.)' : ''));
   }
 
   // ---------- demarrage ----------
