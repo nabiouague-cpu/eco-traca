@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → Forms CARGILL (automate de saisie)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      1.18.0
+// @version      1.19.0
 // @description  Saisit automatiquement dans le formulaire Microsoft Forms de CARGILL les questionnaires producteurs collectés dans ORIGEN (ECORIGINE). Un lot copié depuis ORIGEN, un producteur par réponse, reprise automatique après chaque envoi.
 // @author       ECORIGINE — ORIGEN
 // @match        https://forms.office.com/*
@@ -461,10 +461,29 @@
         // Passes successives : Forms fait apparaitre des questions apres certaines reponses (branchement),
         // et peut re-rendre la page ; on re-cherche donc chaque bloc par son titre, jusqu'a ce que plus
         // aucune nouvelle question n'apparaisse.
+        //
+        // DECOUVERTE CLE (journal de trace v1.18.0 sur SCOOPS UPS) : EPI et proximite de l'eau n'apparaissaient
+        // JAMAIS dans le journal de cette boucle -- ni succes ni echec -- alors qu'elles finissaient par
+        // exister dans le HTML au moment de l'echec final. Ca veut dire que `blocsQuestions()` ne les
+        // trouvait tout simplement PAS pendant cette boucle : Forms ne les avait pas encore montees dans le
+        // DOM. Tres probablement parce que ce sont des questions plus bas dans une page longue, que Forms ne
+        // monte qu'au fur et a mesure du defilement -- et notre boucle ne scrollait que vers des blocs DEJA
+        // trouves, jamais vers le bas de la page pour en reveler de nouveaux. Avant d'abandonner une passe
+        // faute de nouveau titre, on force donc un defilement jusqu'en bas de la page et on rescanne.
         const dejaFaits = new Set();
-        for (let passe = 0; passe < 4; passe++) {
-          const titres = blocsQuestions().map(texteTitre).filter((t) => t && !dejaFaits.has(t));
-          if (!titres.length) break;
+        for (let passe = 0; passe < 6; passe++) {
+          let titres = blocsQuestions().map(texteTitre).filter((t) => t && !dejaFaits.has(t));
+          if (!titres.length) {
+            // Une page longue peut se monter progressivement a mesure qu'on avance dedans (une nouvelle
+            // question reveleele seulement une fois qu'on a scrolle jusqu'a la precedente) : un seul
+            // defilement peut donc ne pas suffire a tout reveler d'un coup. On reessaie quelques fois.
+            for (let essaiScroll = 0; essaiScroll < 3 && !titres.length; essaiScroll++) {
+              try { window.scrollTo(0, document.body.scrollHeight); } catch (e) {}
+              await dormir(700);
+              titres = blocsQuestions().map(texteTitre).filter((t) => t && !dejaFaits.has(t));
+            }
+            if (!titres.length) break;
+          }
           for (const titre of titres) {
             dejaFaits.add(titre);
             const blocActuel = blocsQuestions().find((x) => texteTitre(x) === titre) || null;
