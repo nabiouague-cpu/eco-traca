@@ -18188,6 +18188,21 @@ async function qcSupprimer(id){
   render();
   showToast('Questionnaire supprimé.', 'success');
 }
+async function qcSupprimerTout(demandeId){
+  const reps = qcReponsesDeDemande(demandeId);
+  if (!reps.length){ showToast('Aucune réponse à supprimer pour ce questionnaire.'); return; }
+  const transmis = reps.filter(x=>x.transmis_forms_le).length;
+  const msg = 'Supprimer les '+reps.length+' réponse'+(reps.length>1?'s':'')+' de ce questionnaire ? Tout le monde repart de zéro (à faire).'
+    + (transmis ? ' Attention : '+transmis+' réponse'+(transmis>1?'s ont':' a')+' déjà été saisie'+(transmis>1?'s':'')+' dans le formulaire Cargill — les supprimer ici ne les retire pas de Forms, ça efface seulement leur suivi dans ORIGEN.' : '')
+    + ' Cette action est irréversible.';
+  askConfirm(msg, async()=>{
+    const { error } = await supabaseClient.from('questionnaire_reponses').delete().eq('demande_id', demandeId);
+    if (error){ showToast('Suppression impossible : '+error.message, 'error'); return; }
+    state.questionnaireReponses = (state.questionnaireReponses||[]).filter(x=>x.demande_id!==demandeId);
+    render();
+    showToast(reps.length+' réponse'+(reps.length>1?'s':'')+' supprimée'+(reps.length>1?'s':'')+'.', 'success');
+  });
+}
 function qcFiltrer(v){ state.qcFiltre = v; render(); }
 
 function qcModalHtml(){
@@ -18256,6 +18271,7 @@ function qcPanneauHtml(demande, producteurs, opts){
         + '<input type="file" accept=".xlsx,.xls,.csv" id="qc-import-'+esc(demande.id.replace(/[^A-Za-z0-9_-]/g,'_'))+'" style="display:none;" onchange="qcImporterFichier(this, \''+qcJs(demande.id)+'\')">')
     + (s.remplis>0 ? '<button class="btn btn-primary" onclick="qcTransfertOuvrir(\''+qcJs(demande.id)+'\')" title="CARGILL exige la saisie dans son formulaire en ligne : cet assistant présente chaque questionnaire terminé dans l\'ordre du formulaire, avec copie et suivi">Saisir dans Forms CARGILL ('+(s.reps.filter(x=>(qcEtatReponse(x)==="complet"||qcEtatReponse(x)==="refus") && !x.transmis_forms_le).length)+' restants)</button>' : '')
     + (s.remplis>0 ? '<button class="btn" onclick="qcExporterExcel(\''+qcJs(demande.id)+'\')" title="Usage interne : extraction Excel au format des réponses Forms">⭳ Export Excel (interne)</button>' : '')
+    + (!opts.lectureSeule && s.reps.length>0 ? '<button class="btn-danger-text" onclick="qcSupprimerTout(\''+qcJs(demande.id)+'\')" title="Supprime toutes les réponses de ce questionnaire pour repartir de zéro">🗑 Supprimer toutes les réponses ('+s.reps.length+')</button>' : '')
     + '</div>';
   if (filtrees.length===0){
     html += '<div class="empty">'+(lignes.length===0 ? 'Aucun producteur dans le registre de cette coopérative. Utilisez « + Producteur hors registre ».' : 'Aucun producteur ne correspond à la recherche.')+'</div>';
