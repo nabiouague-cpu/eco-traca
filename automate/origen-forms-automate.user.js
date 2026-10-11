@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → Forms CARGILL (automate de saisie)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      1.2.0
+// @version      1.3.0
 // @description  Saisit automatiquement dans le formulaire Microsoft Forms de CARGILL les questionnaires producteurs collectés dans ORIGEN (ECORIGINE). Un lot copié depuis ORIGEN, un producteur par réponse, reprise automatique après chaque envoi.
 // @author       ECORIGINE — ORIGEN
 // @match        https://forms.office.com/*
@@ -123,6 +123,9 @@
   async function repondreBloc(bloc, q, valeur) {
     const v = String(valeur == null ? '' : valeur);
     if (!v) return 'vide';
+    // Forms peut ne pas avoir fini de monter les options si le bloc n'a jamais ete visible a l'ecran.
+    try { bloc.scrollIntoView({ block: 'center' }); } catch (e) {}
+    await dormir(250);
     // 1. choix (boutons radio)
     const radios = Array.from(bloc.querySelectorAll('input[type="radio"], [role="radio"]')).filter(visible);
     if (radios.length) {
@@ -164,14 +167,20 @@
     // 3. texte
     const champ = bloc.querySelector('textarea, input[type="text"], input:not([type]), input[data-automation-id="textInput"]');
     if (champ) { champ.focus(); setValeurReact(champ, v); champ.blur(); return 'ok'; }
-    // diagnostic : ce qu'il y a reellement dans ce bloc, pour comprendre pourquoi rien n'a ete reconnu
-    const vu = Array.from(bloc.querySelectorAll('*')).map((el) => {
+    // diagnostic : ce qu'il y a reellement dans ce bloc (sans filtrer les div/span cette fois), pour comprendre
+    // pourquoi rien n'a ete reconnu -- soit le bloc ne contient vraiment aucun controle, soit ce n'est pas le bon bloc.
+    const decrire = (el) => {
       let s = el.tagName.toLowerCase();
       const role = el.getAttribute && el.getAttribute('role'); if (role) s += '[role=' + role + ']';
+      const aid = el.getAttribute && el.getAttribute('data-automation-id'); if (aid) s += '{' + aid + '}';
       if (el.type) s += ':' + el.type;
+      if (el.hasAttribute && el.hasAttribute('tabindex')) s += '#tab';
       return s;
-    }).filter((v2, i, a) => a.indexOf(v2) === i && !/^(div|span|label|p|svg|path|img|i)(\[|:|$)/.test(v2)).slice(0, 12);
-    return 'aucun champ reconnu (contenu du bloc : ' + (vu.length ? vu.join(', ') : 'rien de visible') + ')';
+    };
+    const tousLesElements = Array.from(bloc.querySelectorAll('*'));
+    const distincts = tousLesElements.map(decrire).filter((v2, i, a) => a.indexOf(v2) === i).slice(0, 20);
+    const texte = N(bloc.textContent).slice(0, 140);
+    return 'aucun champ reconnu — bloc=' + decrire(bloc) + ' (' + tousLesElements.length + ' element' + (tousLesElements.length > 1 ? 's' : '') + ') : ' + (distincts.length ? distincts.join(', ') : 'aucun') + ' — texte du bloc : "' + texte + '"';
   }
   function boutonParTexte(regex, selecteur) {
     const direct = selecteur ? document.querySelector(selecteur) : null;
