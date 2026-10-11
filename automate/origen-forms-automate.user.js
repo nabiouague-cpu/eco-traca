@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → Forms CARGILL (automate de saisie)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      1.11.0
+// @version      1.12.0
 // @description  Saisit automatiquement dans le formulaire Microsoft Forms de CARGILL les questionnaires producteurs collectés dans ORIGEN (ECORIGINE). Un lot copié depuis ORIGEN, un producteur par réponse, reprise automatique après chaque envoi.
 // @author       ECORIGINE — ORIGEN
 // @match        https://forms.office.com/*
@@ -183,12 +183,14 @@
   // bouge. `trouverCible` refait donc la recherche en direct a chaque fois plutot que de reutiliser une
   // variable capturee, pour que la verification porte sur ce qui est reellement affiche.
   async function cocherEtVerifier(trouverCible) {
-    let cible = trouverCible();
-    if (!cible) return false;
-    if (estCoche(cible)) return true;
-    for (let essai = 0; essai < 3; essai++) {
-      cible = trouverCible(); if (!cible) return false;
-      if (estCoche(cible)) return true;
+    // IMPORTANT : si `trouverCible()` ne trouve rien a l'instant T (ex. Forms est en plein re-rendu de ce
+    // bloc suite a la reponse precedente), on ATTEND et on retente -- on ne doit JAMAIS retomber sur une
+    // reference perimee en guise de secours (c'est justement le piege qu'on corrige ici : un tel repli
+    // silencieux fait croire au succes alors qu'on agit sur une copie morte que personne ne voit).
+    for (let essai = 0; essai < 6; essai++) {
+      let cible = trouverCible();
+      if (cible && estCoche(cible)) return true;
+      if (!cible) { await dormir(250); continue; }
       const natif = cible.tagName === 'INPUT' ? cible : cible.querySelector('input[type="radio"], input[type="checkbox"]');
       if (natif) cocherReact(natif);
       await dormir(200);
@@ -196,10 +198,10 @@
       const cliquable = cible && (cible.closest('label') || cible);
       if (cliquable) { try { cliquable.click(); } catch (e) {} await dormir(200); }
       cible = trouverCible(); if (cible && estCoche(cible)) return true;
-      if (cliquable) { clicComplet(cliquable); await dormir(200); }
+      if (cliquable) { clicComplet(cliquable); await dormir(250); }
     }
-    cible = trouverCible();
-    return !!(cible && estCoche(cible));
+    const finale = trouverCible();
+    return !!(finale && estCoche(finale));
   }
   // Diagnostic detaille sur l'element cible quand meme les clics "parents" echouent -- pour comprendre
   // enfin pourquoi (element detache du document ? structure differente de ce qu'on attend ?) au lieu de
@@ -232,22 +234,24 @@
       const lab = r.getAttribute('aria-label') || r.value || (r.closest('label') && r.closest('label').textContent) || (r.parentElement && r.parentElement.textContent) || '';
       return N(lab) === N(v) || N(lab).indexOf(N(v)) === 0;
     };
-    // Le bloc passe en argument peut devenir obsolete si Forms re-rend entre-temps (voir cocherEtVerifier) :
-    // on retrouve donc le conteneur ACTUEL par son titre a chaque recherche, plutot que de reutiliser `bloc`.
-    const conteneurActuel = () => blocsQuestions().find((x) => texteTitre(x) === titreBloc) || bloc;
+    // Le bloc passe en argument peut devenir obsolete si Forms re-rend entre-temps (voir cocherEtVerifier).
+    // On retrouve donc le conteneur ACTUEL par son titre a chaque recherche -- et surtout, SANS repli sur
+    // `bloc` quand il est introuvable a l'instant T (un tel repli silencieux reintroduirait exactement le
+    // bug qu'on corrige : agir sur une copie perimee en pensant agir sur la vraie page).
+    const conteneurActuel = () => blocsQuestions().find((x) => texteTitre(x) === titreBloc) || null;
     // 1. choix (boutons radio)
     const radios = Array.from(bloc.querySelectorAll('input[type="radio"], [role="radio"]')).filter(visible);
     if (radios.length) {
-      const trouverCible = () => Array.from(conteneurActuel().querySelectorAll('input[type="radio"], [role="radio"]')).filter(visible).find(correspond);
-      if (!trouverCible()) return 'option « ' + v + ' » introuvable';
+      const trouverCible = () => { const c = conteneurActuel(); return c ? Array.from(c.querySelectorAll('input[type="radio"], [role="radio"]')).filter(visible).find(correspond) : null; };
+      if (!(await attendre(trouverCible, 3000))) return 'option « ' + v + ' » introuvable';
       const ok = await cocherEtVerifier(trouverCible);
       return ok ? 'ok' : 'clic sans effet sur l\'option « ' + v + ' » (vérifié en direct sur le DOM, essayé plusieurs fois) — ' + diagnosticElement(trouverCible());
     }
     // 1bis. certaines questions a reponse unique sont rendues par Forms avec des cases a cocher (pas des boutons radio)
     const cases = Array.from(bloc.querySelectorAll('input[type="checkbox"], [role="checkbox"]')).filter(visible);
     if (cases.length) {
-      const trouverCible = () => Array.from(conteneurActuel().querySelectorAll('input[type="checkbox"], [role="checkbox"]')).filter(visible).find(correspond);
-      if (!trouverCible()) return 'option « ' + v + ' » introuvable';
+      const trouverCible = () => { const c = conteneurActuel(); return c ? Array.from(c.querySelectorAll('input[type="checkbox"], [role="checkbox"]')).filter(visible).find(correspond) : null; };
+      if (!(await attendre(trouverCible, 3000))) return 'option « ' + v + ' » introuvable';
       const ok = await cocherEtVerifier(trouverCible);
       return ok ? 'ok' : 'clic sans effet sur l\'option « ' + v + ' » (vérifié en direct sur le DOM, essayé plusieurs fois) — ' + diagnosticElement(trouverCible());
     }
