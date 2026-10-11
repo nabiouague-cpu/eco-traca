@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → Forms CARGILL (automate de saisie)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      1.15.0
+// @version      1.16.0
 // @description  Saisit automatiquement dans le formulaire Microsoft Forms de CARGILL les questionnaires producteurs collectés dans ORIGEN (ECORIGINE). Un lot copié depuis ORIGEN, un producteur par réponse, reprise automatique après chaque envoi.
 // @author       ECORIGINE — ORIGEN
 // @match        https://forms.office.com/*
@@ -217,22 +217,32 @@
     for (let essai = 0; essai < 6; essai++) {
       let cible = trouverCible();
       if (!cible) { await dormir(250); continue; }
-      if (essai === 0 && estCoche(cible)) return true;    // deja coche avant toute action -> rien a faire
-      const cliquable = cible.closest('label') || cible;
-      try { cliquable.click(); } catch (e) {}
-      await dormir(200);
-      cible = trouverCible();
-      if (!(cible && estCoche(cible))) {
-        clicComplet(cliquable);
-        await dormir(250);
+      if (!(essai === 0 && estCoche(cible))) {
+        const cliquable = cible.closest('label') || cible;
+        try { cliquable.click(); } catch (e) {}
+        await dormir(200);
         cible = trouverCible();
+        if (!(cible && estCoche(cible))) {
+          clicComplet(cliquable);
+          await dormir(250);
+          cible = trouverCible();
+        }
+        if (!(cible && estCoche(cible))) {
+          const base = cible || cliquable;
+          const natif = base && (base.tagName === 'INPUT' ? base : base.querySelector('input[type="radio"], input[type="checkbox"]'));
+          if (natif) { cocherReact(natif); await dormir(200); cible = trouverCible(); }
+        }
       }
-      if (!(cible && estCoche(cible))) {
-        const base = cible || cliquable;
-        const natif = base && (base.tagName === 'INPUT' ? base : base.querySelector('input[type="radio"], input[type="checkbox"]'));
-        if (natif) { cocherReact(natif); await dormir(200); cible = trouverCible(); }
+      // PERSISTANCE : le diagnostic capture sur EPI / proximite de l'eau a montre qu'un clic qui semblait
+      // avoir pris (coche a l'instant T) finit par se retrouver DECOCHE un peu plus tard, sans qu'on ait
+      // rien refait -- Forms "oublie" la reponse sur un cycle retarde, pour ces deux questions precises.
+      // Une verification immediate ne suffit donc pas a prouver que c'est vraiment acquis : on reverifie
+      // apres un court delai avant de declarer un succes, et on reessaie si la case s'est decochee seule.
+      if (cible && estCoche(cible)) {
+        await dormir(500);
+        cible = trouverCible();
+        if (cible && estCoche(cible)) return true;
       }
-      if (cible && estCoche(cible)) return true;
     }
     const finale = trouverCible();
     return !!(finale && estCoche(finale));
