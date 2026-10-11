@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → Forms CARGILL (automate de saisie)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      1.5.0
+// @version      1.6.0
 // @description  Saisit automatiquement dans le formulaire Microsoft Forms de CARGILL les questionnaires producteurs collectés dans ORIGEN (ECORIGINE). Un lot copié depuis ORIGEN, un producteur par réponse, reprise automatique après chaque envoi.
 // @author       ECORIGINE — ORIGEN
 // @match        https://forms.office.com/*
@@ -90,6 +90,14 @@
     const t = bloc.querySelector('[data-automation-id="questionTitle"], [role="heading"], .question-title-box, h3, h2');
     let s = t ? t.textContent : bloc.textContent;
     return N(s.replace(/^\s*\d+\s*[.)]?\s*/, '').replace(/\*/g, '').replace(/obligatoire|required/gi, ''));
+  }
+  // Une question Forms obligatoire porte un asterisque dans son titre (ou aria-required="true" sur son
+  // champ). Sert a distinguer un champ realmente facultatif (qu'on peut ignorer sans risque) d'un champ
+  // qu'ORIGEN ne reconnait pas / n'a pas rempli alors qu'il bloquera l'envoi.
+  function estObligatoire(bloc) {
+    if (bloc.querySelector('[aria-required="true"]')) return true;
+    const t = bloc.querySelector('[data-automation-id="questionTitle"], [role="heading"], .question-title-box, h3, h2');
+    return /\*/.test(t ? t.textContent : bloc.textContent);
   }
   function blocsQuestions() {
     let b = Array.from(document.querySelectorAll('[data-automation-id="questionItem"]'));
@@ -256,10 +264,21 @@
           if (!titres.length) break;
           for (const titre of titres) {
             dejaFaits.add(titre);
+            const blocActuel = blocsQuestions().find((x) => texteTitre(x) === titre) || null;
+            const requis = blocActuel ? estObligatoire(blocActuel) : false;
             const q = trouverQuestion(titre, lot.questions);
-            if (!q) continue;                                   // question inconnue d'ORIGEN : on la laisse
+            if (!q) {
+              // Avant, une question inconnue d'ORIGEN etait silencieusement laissee de cote -> si elle est
+              // obligatoire sur Forms, l'envoi se bloquait plus tard sans qu'on sache pourquoi (ex. lot copie
+              // depuis ORIGEN avant l'ajout d'une nouvelle question : recharge ORIGEN et recopie le lot).
+              if (requis) problemes.push('Question inconnue d\'ORIGEN (lot obsolète ? recharge ORIGEN et recopie le lot) : ' + titre.slice(0, 70));
+              continue;
+            }
             const valeur = rep.valeurs[q.cle];
-            if (valeur == null || valeur === '') continue;      // pas sur le chemin suivi
+            if (valeur == null || valeur === '') {
+              if (requis) problemes.push(q.libelle.slice(0, 60) + ' → aucune réponse enregistrée dans ORIGEN pour ce producteur');
+              continue;                                          // pas sur le chemin suivi
+            }
             const bloc = await attendre(() => blocsQuestions().find((x) => texteTitre(x) === titre) || null, 4000);
             if (!bloc) { problemes.push(q.libelle.slice(0, 60) + ' → question disparue de la page'); continue; }
             let r;
@@ -277,7 +296,14 @@
         if (!envoyer) { marquerErreur(lot, id, 'bouton Envoyer introuvable sur la page ' + (page + 1)); return; }
         envoyer.click();
         const ok = await attendre(() => pageMerci() ? true : null, 12000);
-        if (!ok) { marquerErreur(lot, id, 'pas de confirmation après Envoyer (champ obligatoire manquant ?)'); return; }
+        if (!ok) {
+          // Forms affiche sa propre liste de questions obligatoires non repondues ("Vous devez encore
+          // repondre a N question(s)... Question X, Question Y.") -- on la recupere telle quelle pour eviter
+          // d'avoir a reprendre une capture d'ecran a chaque fois.
+          const resume = (document.body.innerText.match(/Vous devez encore répondre[^\n]*|You still need to answer[^\n]*/i) || [])[0];
+          marquerErreur(lot, id, 'pas de confirmation après Envoyer' + (resume ? ' — ' + resume.trim() : ' (champ obligatoire manquant ?)'));
+          return;
+        }
         lot = lireLot(); lot.restants = lot.restants.filter((x) => x !== id); lot.faits.push(id); lot.journal.push({ id, le: new Date().toISOString() }); ecrireLot(lot);
         afficherEtat('✓ ' + rep.nom + ' envoyé.');
         await dormir(800);
