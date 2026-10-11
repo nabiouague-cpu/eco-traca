@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → Forms CARGILL (automate de saisie)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      1.9.0
+// @version      1.10.0
 // @description  Saisit automatiquement dans le formulaire Microsoft Forms de CARGILL les questionnaires producteurs collectés dans ORIGEN (ECORIGINE). Un lot copié depuis ORIGEN, un producteur par réponse, reprise automatique après chaque envoi.
 // @author       ECORIGINE — ORIGEN
 // @match        https://forms.office.com/*
@@ -159,13 +159,31 @@
     } catch (e) {}
   }
   const estCoche = (el) => !!(el && (el.checked || el.getAttribute('aria-checked') === 'true' || el.getAttribute('aria-selected') === 'true'));
+  // Pose .checked via le VRAI setter natif (celui que React a patché sur le prototype est ainsi contourné),
+  // puis declenche les evenements -- technique standard pour les composants controles par React. Un simple
+  // .click() peut cocher la case visuellement SANS que React n'en soit informe ; React la remet alors a zero
+  // au premier re-rendu suivant (ce qui ressemble a un succes immediat suivi d'un blocage silencieux a
+  // l'envoi -- exactement le symptome observe sur les questions EPI / proximite de l'eau).
+  function cocherReact(input) {
+    if (!input || input.tagName !== 'INPUT') return false;
+    try {
+      const descripteur = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked');
+      descripteur.set.call(input, true);
+      input.dispatchEvent(new Event('click', { bubbles: true }));
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    } catch (e) { return false; }
+  }
   // Clique sur une case/bouton radio et VERIFIE que ca a reellement pris (au lieu de supposer que ca a
-  // marche). Certains composants "maison" de Forms n'ecoutent pas le controle lui-meme mais un de ses
-  // parents (zone cliquable plus grande que l'element accessible/visuel) -- on essaie donc le controle,
-  // puis jusqu'a 3 niveaux de parents, avec a chaque fois un clic simple puis un clic plus complet
-  // (pointerdown/mousedown/mouseup/click) si le simple ne suffit pas.
+  // marche). Essaie d'abord la technique React (voir cocherReact) sur le vrai <input> s'il existe, puis a
+  // defaut clique le controle et jusqu'a 3 niveaux de parents (certains composants "maison" n'ecoutent que
+  // sur une zone cliquable plus large que l'element accessible/visuel), avec un clic simple puis un clic
+  // plus complet (pointerdown/mousedown/mouseup/click) a chaque niveau.
   async function cocherEtVerifier(cible) {
     if (estCoche(cible)) return true;
+    const natif = cible.tagName === 'INPUT' ? cible : cible.querySelector('input[type="radio"], input[type="checkbox"]');
+    if (natif) { cocherReact(natif); await dormir(200); if (estCoche(cible)) return true; }
     const cibles = [cible.closest('label') || cible];
     let p = cible.parentElement;
     for (let i = 0; i < 3 && p; i++) { cibles.push(p); p = p.parentElement; }
@@ -325,6 +343,7 @@
         const blocs = await attendre(() => { const b = blocsQuestions(); return b.length ? b : null; }, 8000);
         if (!blocs) { marquerErreur(lot, id, 'aucune question visible sur la page ' + (page + 1)); return; }
         const problemes = [];
+        const reponduSurCettePage = [];    // {titre,q,valeur} : pour re-verifier juste avant Envoyer (voir plus bas)
         // Passes successives : Forms fait apparaitre des questions apres certaines reponses (branchement),
         // et peut re-rendre la page ; on re-cherche donc chaque bloc par son titre, jusqu'a ce que plus
         // aucune nouvelle question n'apparaisse.
@@ -354,9 +373,23 @@
             let r;
             try { r = await repondreBloc(bloc, q, valeur); } catch (e) { r = 'erreur : ' + e.message; }
             await dormir(200);
-            if (r !== 'ok' && r !== 'vide') problemes.push(q.libelle.slice(0, 60) + ' → ' + r);
+            if (r === 'ok') reponduSurCettePage.push({ titre, q, valeur });
+            else if (r !== 'vide') problemes.push(q.libelle.slice(0, 60) + ' → ' + r);
           }
           await dormir(300);
+        }
+        if (problemes.length) { marquerErreur(lot, id, problemes.join(' ; ')); return; }
+        // Derniere verification juste avant de cliquer Envoyer : repondre a une question suivante peut
+        // parfois faire re-rendre une question precedente et effacer silencieusement sa reponse (cas
+        // observe sur EPI / proximite de l'eau -- le clic semblait reussi au moment ou on l'a fait, mais
+        // Forms l'avait deja "oublie"). On repasse donc une fois sur tout ce qui a ete repondu sur cette
+        // page pour s'assurer que c'est toujours bien en place, et on corrige si besoin avant d'envoyer.
+        for (const r1 of reponduSurCettePage) {
+          const bloc2 = blocsQuestions().find((x) => texteTitre(x) === r1.titre);
+          if (!bloc2) { problemes.push(r1.q.libelle.slice(0, 60) + ' → question disparue avant l\'envoi'); continue; }
+          let r2;
+          try { r2 = await repondreBloc(bloc2, r1.q, r1.valeur); } catch (e) { r2 = 'erreur : ' + e.message; }
+          if (r2 !== 'ok' && r2 !== 'vide') problemes.push(r1.q.libelle.slice(0, 60) + ' → effacée entre-temps, ' + r2);
         }
         if (problemes.length) { marquerErreur(lot, id, problemes.join(' ; ')); return; }
         await dormir(PAUSE);
