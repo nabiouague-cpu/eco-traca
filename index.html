@@ -17876,6 +17876,7 @@ const QC_QUESTIONS = [
   { cle:'intrants', page:2, libelle:'Utilisez-vous des pesticides et/ou engrais sur vos parcelles?', type:'choix', options:QC_OUI_NON, requis:true, si:qcConsent },
   { cle:'intrants_lesquels', page:2, libelle:'Si oui, lesquels?', type:'long', requis:true, si:r=>qcConsent(r) && r.intrants==='Oui' },
   { cle:'intrants_fournisseur', page:2, libelle:'Qui fournit les pesticides ou les engrais utilisés ?', type:'choix', options:['Coopérative','Particulier','CCC','Autres'], requis:true, si:r=>qcConsent(r) && r.intrants==='Oui' },
+  { cle:'intrants_elimination', page:2, libelle:"Eliminez-vous les emballages des pesticides et des engrais utilisés sur vos parcelles?", type:'choix', options:QC_OUI_NON, requis:true, si:r=>qcConsent(r) && r.intrants==='Oui' },
 ];
 const QC_ETATS = { a_faire:['neutral','À faire'], en_cours:['warn','En cours'], complet:['ok','Répondu'], refus:['danger','Consentement refusé'] };
 
@@ -18440,7 +18441,7 @@ async function qcTelechargerModele(demandeId){
     else if (q.cle==='historique_acquisition') cond[q.cle] = r=>'AND('+proprio(r)+',$'+L.documents_acquisition+r+'="Non")';
     else if (q.cle==='litige_explication') cond[q.cle] = r=>'AND('+proprio(r)+',$'+L.litige+r+'="Oui")';
     else if (q.cle==='conservation_actions') cond[q.cle] = r=>'AND('+consent(r)+',$'+L.conservation+r+'="Oui")';
-    else if (q.cle==='intrants_lesquels' || q.cle==='intrants_fournisseur') cond[q.cle] = r=>'AND('+consent(r)+',$'+L.intrants+r+'="Oui")';
+    else if (q.cle==='intrants_lesquels' || q.cle==='intrants_fournisseur' || q.cle==='intrants_elimination') cond[q.cle] = r=>'AND('+consent(r)+',$'+L.intrants+r+'="Oui")';
     else cond[q.cle] = consent;
   });
   // Feuille cachee des listes : une colonne par question a choix (A1 reste vide = « liste vide »).
@@ -18482,7 +18483,7 @@ async function qcTelechargerModele(demandeId){
       : q.cle==='historique_acquisition' ? 'Si Propriétaire et documents = Non'
       : q.cle==='litige_explication' ? 'Si litige = Oui'
       : q.cle==='conservation_actions' ? 'Si conservation = Oui'
-      : (q.cle==='intrants_lesquels' || q.cle==='intrants_fournisseur') ? 'Si pesticides/engrais = Oui'
+      : (q.cle==='intrants_lesquels' || q.cle==='intrants_fournisseur' || q.cle==='intrants_elimination') ? 'Si pesticides/engrais = Oui'
       : 'Si consentement = Oui';
     const vals = [(i+1)+'. '+q.libelle, q.options ? q.options.join('  /  ') : 'Texte libre', quand];
     vals.forEach((v,j)=>{ const c = wa.getCell(i+2, j+1); c.value = v; qcStyleCellule(c, { fill: i%2 ? QC_XL.zebre : QC_XL.blanc, taille:10.5, retour:true }); });
@@ -18587,6 +18588,7 @@ async function qcRapportLegalite(demandeIds, titrePerimetre){
   const intrants = base.filter(t=>qcValeur(t.r,'intrants')==='Oui');
   indicateur('Utilisation de pesticides et/ou engrais', intrants.length, base.length, '');
   QC_QUESTIONS.find(q=>q.cle==='intrants_fournisseur').options.forEach(o=>indicateur('   fournis par : '+o, compte(intrants,'intrants_fournisseur',o), intrants.length, 'Base : utilisateurs d\'intrants'));
+  indicateur('   éliminent les emballages des pesticides/engrais', compte(intrants,'intrants_elimination','Oui'), intrants.length, 'Base : utilisateurs d\'intrants');
   ligne++;
   ws.mergeCells(ligne, 2, ligne, 5); const note = ws.getCell(ligne, 2);
   note.value = 'Méthode : réponses saisies dans ORIGEN par les coopératives (assistant en ligne ou modèle Excel importé), producteur par producteur, selon le questionnaire « '+QC_TITRE+' ». Les réponses sont déclaratives et n\'ont pas fait l\'objet d\'une vérification documentaire à ce stade. Rapport généré par ORIGEN le '+dateRapport+'.';
@@ -18627,7 +18629,7 @@ async function qcRapportLegalite(demandeIds, titrePerimetre){
 
   // ---- Feuille Detail (sans donnees personnelles : ni telephone ni numero de piece) ----
   const wd = wb.addWorksheet('Détail', { views:[{ state:'frozen', xSplit:2, ySplit:3 }] });
-  const clesDetail = ['consentement','piece_nature','ccc','statut_parcelle','contrat_location','type_proprietaire','mode_acquisition','documents_acquisition','documents_partage','historique_acquisition','litige','litige_explication','conservation','conservation_actions','intrants','intrants_lesquels','intrants_fournisseur'];
+  const clesDetail = ['consentement','piece_nature','ccc','statut_parcelle','contrat_location','type_proprietaire','mode_acquisition','documents_acquisition','documents_partage','historique_acquisition','litige','litige_explication','conservation','conservation_actions','intrants','intrants_lesquels','intrants_fournisseur','intrants_elimination'];
   const colsD = ['Coopérative','Producteur'].concat(clesDetail.map(k=>QC_QUESTIONS.find(q=>q.cle===k).libelle));
   wd.columns = colsD.map((h,i)=>({ width: i<2 ? 30 : Math.min(42, Math.max(14, Math.round(h.length*0.6))) }));
   qcBandeauTitre(wd, colsD.length, 'Détail des réponses par producteur', 'Une ligne par questionnaire terminé. Le numéro de téléphone et le numéro de pièce d\'identité ne figurent pas dans ce rapport.');
