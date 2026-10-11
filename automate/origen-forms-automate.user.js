@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → Forms CARGILL (automate de saisie)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      1.16.0
+// @version      1.17.0
 // @description  Saisit automatiquement dans le formulaire Microsoft Forms de CARGILL les questionnaires producteurs collectés dans ORIGEN (ECORIGINE). Un lot copié depuis ORIGEN, un producteur par réponse, reprise automatique après chaque envoi.
 // @author       ECORIGINE — ORIGEN
 // @match        https://forms.office.com/*
@@ -263,6 +263,32 @@
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
   }
+  // Meme logique que cocherEtVerifier, pour les champs texte : le diagnostic a montre qu'un champ
+  // (notamment le "Si oui, lesquelles ?" en texte court de la question precautions sol) peut se vider tout
+  // seul apres coup exactement comme les cases a cocher EPI/eau avant correction -- remplir sans jamais
+  // reverifier (l'ancien code) laissait donc passer un champ en realite vide. Live-requery via
+  // `trouverChamp` (jamais une reference figee), remplissage, puis re-verification apres un court delai
+  // avant de declarer un succes.
+  async function remplirEtVerifier(trouverChamp, v) {
+    for (let essai = 0; essai < 6; essai++) {
+      let champ = trouverChamp();
+      if (!champ) { await dormir(250); continue; }
+      if (champ.value !== v) {
+        champ.focus();
+        setValeurReact(champ, v);
+        champ.blur();
+        await dormir(200);
+        champ = trouverChamp();
+      }
+      if (champ && champ.value === v) {
+        await dormir(500);
+        champ = trouverChamp();
+        if (champ && champ.value === v) return true;
+      }
+    }
+    const finale = trouverChamp();
+    return !!(finale && finale.value === v);
+  }
   async function attendre(fn, max) {
     const debut = Date.now();
     while (Date.now() - debut < (max || ATTENTE_MAX)) { const r = fn(); if (r) return r; await dormir(200); }
@@ -340,8 +366,13 @@
       }
     }
     // 3. texte
-    const champ = bloc.querySelector('textarea, input[type="text"], input:not([type]), input[data-automation-id="textInput"]');
-    if (champ) { champ.focus(); setValeurReact(champ, v); champ.blur(); return 'ok'; }
+    const SEL_TEXTE = 'textarea, input[type="text"], input:not([type]), input[data-automation-id="textInput"]';
+    const champ = bloc.querySelector(SEL_TEXTE);
+    if (champ) {
+      const trouverChamp = () => { const c = conteneurActuel(); return c ? c.querySelector(SEL_TEXTE) : null; };
+      const ok = await remplirEtVerifier(trouverChamp, v);
+      return ok ? 'ok' : 'champ texte vide juste après remplissage (vérifié en direct, essayé plusieurs fois)';
+    }
     // diagnostic : ce qu'il y a reellement dans ce bloc (sans filtrer les div/span cette fois), pour comprendre
     // pourquoi rien n'a ete reconnu -- soit le bloc ne contient vraiment aucun controle, soit ce n'est pas le bon bloc.
     const decrire = (el) => {
