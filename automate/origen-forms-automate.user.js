@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → Forms CARGILL (automate de saisie)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      1.17.0
+// @version      1.18.0
 // @description  Saisit automatiquement dans le formulaire Microsoft Forms de CARGILL les questionnaires producteurs collectés dans ORIGEN (ECORIGINE). Un lot copié depuis ORIGEN, un producteur par réponse, reprise automatique après chaque envoi.
 // @author       ECORIGINE — ORIGEN
 // @match        https://forms.office.com/*
@@ -22,6 +22,24 @@
   const N = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
   const visible = (el) => !!el && el.offsetParent !== null && !el.disabled;
+  // Trace fine (par tentative) de ce que voit cocherEtVerifier/remplirEtVerifier pour LA question en cours
+  // de traitement -- remise a zero a chaque appel de repondreBloc, incluse dans le message d'erreur si ca
+  // echoue. Sert a distinguer un clic qui n'a jamais pris (echec des le depart) d'un clic qui prend puis se
+  // decoche tout seul (echec seulement apres le delai de persistance) -- deux causes tres differentes.
+  let traceActuelle = [];
+  const tracer = (s) => traceActuelle.push(s);
+  // Journal complet de TOUTES les questions traitees sur la page en cours (succes compris), avec leur
+  // trace detaillee -- contrairement a traceActuelle (qui ne sert qu'au message d'erreur d'UNE question),
+  // celui-ci est inclus dans le diagnostic final meme pour les questions qui semblaient avoir reussi. C'est
+  // le seul moyen de voir si EPI/eau "passent" la verification immediate pour finalement se faire oublier
+  // par Forms plus tard (apres le clic sur Envoyer, ou a cause d'une question suivante) -- ce qu'un simple
+  // succes/echec ne montre pas.
+  let journalPage = [];
+  async function repondreBlocTrace(bloc, titreBloc, q, valeur) {
+    const resultat = await repondreBloc(bloc, titreBloc, q, valeur);
+    journalPage.push(titreBloc.slice(0, 70) + ' → ' + resultat.slice(0, 50) + (traceActuelle.length ? ' | trace : ' + traceActuelle.join(' ; ') : ''));
+    return resultat;
+  }
 
   // ---------- lot (stocke dans localStorage de la page Forms) ----------
   function lireLot() { try { return JSON.parse(localStorage.getItem(CLE) || 'null'); } catch (e) { return null; } }
@@ -216,8 +234,9 @@
     // silencieux fait croire au succes alors qu'on agit sur une copie morte que personne ne voit).
     for (let essai = 0; essai < 6; essai++) {
       let cible = trouverCible();
-      if (!cible) { await dormir(250); continue; }
-      if (!(essai === 0 && estCoche(cible))) {
+      if (!cible) { tracer('essai ' + essai + ' : cible introuvable'); await dormir(250); continue; }
+      const avant = estCoche(cible);
+      if (!(essai === 0 && avant)) {
         const cliquable = cible.closest('label') || cible;
         try { cliquable.click(); } catch (e) {}
         await dormir(200);
@@ -233,15 +252,19 @@
           if (natif) { cocherReact(natif); await dormir(200); cible = trouverCible(); }
         }
       }
-      // PERSISTANCE : le diagnostic capture sur EPI / proximite de l'eau a montre qu'un clic qui semblait
-      // avoir pris (coche a l'instant T) finit par se retrouver DECOCHE un peu plus tard, sans qu'on ait
-      // rien refait -- Forms "oublie" la reponse sur un cycle retarde, pour ces deux questions precises.
-      // Une verification immediate ne suffit donc pas a prouver que c'est vraiment acquis : on reverifie
-      // apres un court delai avant de declarer un succes, et on reessaie si la case s'est decochee seule.
-      if (cible && estCoche(cible)) {
+      const apresClic = !!(cible && estCoche(cible));
+      // PERSISTANCE : si le clic semble avoir pris, on reverifie apres un court delai avant de declarer un
+      // succes -- une hypothese testee est qu'il se decoche tout seul peu apres pour certaines questions ;
+      // la trace (visible via « Copier diagnostic ») dira si c'est bien ca ou si en realite le clic ne
+      // prend jamais du tout.
+      if (apresClic) {
         await dormir(500);
         cible = trouverCible();
-        if (cible && estCoche(cible)) return true;
+        const apres500 = !!(cible && estCoche(cible));
+        tracer('essai ' + essai + ' : avant=' + avant + ' apresClic=true apres500ms=' + apres500);
+        if (apres500) return true;
+      } else {
+        tracer('essai ' + essai + ' : avant=' + avant + ' apresClic=false');
       }
     }
     const finale = trouverCible();
@@ -272,7 +295,7 @@
   async function remplirEtVerifier(trouverChamp, v) {
     for (let essai = 0; essai < 6; essai++) {
       let champ = trouverChamp();
-      if (!champ) { await dormir(250); continue; }
+      if (!champ) { tracer('essai ' + essai + ' : champ introuvable'); await dormir(250); continue; }
       if (champ.value !== v) {
         champ.focus();
         setValeurReact(champ, v);
@@ -280,10 +303,15 @@
         await dormir(200);
         champ = trouverChamp();
       }
-      if (champ && champ.value === v) {
+      const apresRemplissage = !!(champ && champ.value === v);
+      if (apresRemplissage) {
         await dormir(500);
         champ = trouverChamp();
-        if (champ && champ.value === v) return true;
+        const apres500 = !!(champ && champ.value === v);
+        tracer('essai ' + essai + ' : apresRemplissage=true apres500ms=' + apres500);
+        if (apres500) return true;
+      } else {
+        tracer('essai ' + essai + ' : apresRemplissage=false');
       }
     }
     const finale = trouverChamp();
@@ -297,6 +325,7 @@
   async function repondreBloc(bloc, titreBloc, q, valeur) {
     const v = String(valeur == null ? '' : valeur);
     if (!v) return 'vide';
+    traceActuelle = [];   // remise a zero : la trace ci-dessous ne doit porter que sur CETTE question
     // Forms peut ne pas avoir fini de monter les options si le bloc n'a jamais ete visible a l'ecran.
     try { bloc.scrollIntoView({ block: 'center' }); } catch (e) {}
     await dormir(250);
@@ -315,7 +344,7 @@
       const trouverCible = () => { const c = conteneurActuel(); return c ? Array.from(c.querySelectorAll('input[type="radio"], [role="radio"]')).filter(visible).find(correspond) : null; };
       if (!(await attendre(trouverCible, 3000))) return 'option « ' + v + ' » introuvable';
       const ok = await cocherEtVerifier(trouverCible);
-      return ok ? 'ok' : 'clic sans effet sur l\'option « ' + v + ' » (vérifié en direct sur le DOM, essayé plusieurs fois) — ' + diagnosticElement(trouverCible());
+      return ok ? 'ok' : 'clic sans effet sur l\'option « ' + v + ' » (essayé plusieurs fois) — ' + diagnosticElement(trouverCible()) + ' — trace : ' + traceActuelle.join(' | ');
     }
     // 1bis. certaines questions a reponse unique sont rendues par Forms avec des cases a cocher (pas des boutons radio)
     const cases = Array.from(bloc.querySelectorAll('input[type="checkbox"], [role="checkbox"]')).filter(visible);
@@ -323,7 +352,7 @@
       const trouverCible = () => { const c = conteneurActuel(); return c ? Array.from(c.querySelectorAll('input[type="checkbox"], [role="checkbox"]')).filter(visible).find(correspond) : null; };
       if (!(await attendre(trouverCible, 3000))) return 'option « ' + v + ' » introuvable';
       const ok = await cocherEtVerifier(trouverCible);
-      return ok ? 'ok' : 'clic sans effet sur l\'option « ' + v + ' » (vérifié en direct sur le DOM, essayé plusieurs fois) — ' + diagnosticElement(trouverCible());
+      return ok ? 'ok' : 'clic sans effet sur l\'option « ' + v + ' » (essayé plusieurs fois) — ' + diagnosticElement(trouverCible()) + ' — trace : ' + traceActuelle.join(' | ');
     }
     // 2. liste deroulante
     const combo = bloc.querySelector('select') || bloc.querySelector('[role="combobox"]') || bloc.querySelector('[data-automation-id="dropdown"] button') || bloc.querySelector('[data-automation-id="dropdown"]');
@@ -371,7 +400,7 @@
     if (champ) {
       const trouverChamp = () => { const c = conteneurActuel(); return c ? c.querySelector(SEL_TEXTE) : null; };
       const ok = await remplirEtVerifier(trouverChamp, v);
-      return ok ? 'ok' : 'champ texte vide juste après remplissage (vérifié en direct, essayé plusieurs fois)';
+      return ok ? 'ok' : 'champ texte vide juste après remplissage (essayé plusieurs fois) — trace : ' + traceActuelle.join(' | ');
     }
     // diagnostic : ce qu'il y a reellement dans ce bloc (sans filtrer les div/span cette fois), pour comprendre
     // pourquoi rien n'a ete reconnu -- soit le bloc ne contient vraiment aucun controle, soit ce n'est pas le bon bloc.
@@ -428,6 +457,7 @@
         if (!blocs) { marquerErreur(lot, id, 'aucune question visible sur la page ' + (page + 1)); return; }
         const problemes = [];
         const reponduSurCettePage = [];    // {titre,q,valeur} : pour re-verifier juste avant Envoyer (voir plus bas)
+        journalPage = [];                  // journal detaille de cette page, inclus dans « Copier diagnostic »
         // Passes successives : Forms fait apparaitre des questions apres certaines reponses (branchement),
         // et peut re-rendre la page ; on re-cherche donc chaque bloc par son titre, jusqu'a ce que plus
         // aucune nouvelle question n'apparaisse.
@@ -455,7 +485,7 @@
             const bloc = await attendre(() => blocsQuestions().find((x) => texteTitre(x) === titre) || null, 4000);
             if (!bloc) { problemes.push(q.libelle.slice(0, 60) + ' → question disparue de la page'); continue; }
             let r;
-            try { r = await repondreBloc(bloc, titre, q, valeur); } catch (e) { r = 'erreur : ' + e.message; }
+            try { r = await repondreBlocTrace(bloc, titre, q, valeur); } catch (e) { r = 'erreur : ' + e.message; }
             await dormir(200);
             if (r === 'ok') reponduSurCettePage.push({ titre, q, valeur });
             else if (r !== 'vide') problemes.push(q.libelle.slice(0, 60) + ' → ' + r);
@@ -472,7 +502,7 @@
           const bloc2 = blocsQuestions().find((x) => texteTitre(x) === r1.titre);
           if (!bloc2) { problemes.push(r1.q.libelle.slice(0, 60) + ' → question disparue avant l\'envoi'); continue; }
           let r2;
-          try { r2 = await repondreBloc(bloc2, r1.titre, r1.q, r1.valeur); } catch (e) { r2 = 'erreur : ' + e.message; }
+          try { r2 = await repondreBlocTrace(bloc2, r1.titre, r1.q, r1.valeur); } catch (e) { r2 = 'erreur : ' + e.message; }
           if (r2 !== 'ok' && r2 !== 'vide') problemes.push(r1.q.libelle.slice(0, 60) + ' → effacée entre-temps, ' + r2);
         }
         if (problemes.length) { marquerErreur(lot, id, problemes.join(' ; ')); return; }
@@ -494,7 +524,7 @@
             for (const r1 of reponduSurCettePage) {
               const bloc2 = blocsQuestions().find((x) => texteTitre(x) === r1.titre);
               if (!bloc2) { pb.push(r1.q.libelle.slice(0, 60) + ' → question disparue avant l\'envoi'); continue; }
-              let r2; try { r2 = await repondreBloc(bloc2, r1.titre, r1.q, r1.valeur); } catch (e) { r2 = 'erreur : ' + e.message; }
+              let r2; try { r2 = await repondreBlocTrace(bloc2, r1.titre, r1.q, r1.valeur); } catch (e) { r2 = 'erreur : ' + e.message; }
               if (r2 !== 'ok' && r2 !== 'vide') pb.push(r1.q.libelle.slice(0, 60) + ' → ' + r2);
             }
             if (pb.length) { marquerErreur(lot, id, pb.join(' ; ')); return; }
@@ -510,15 +540,18 @@
           }
         }
         if (!confirme) {
-          // On a devine 3 hypotheses successives (reference perimee, composant React non informe, clic
-          // simule non ecoute) sans jamais avoir vu le vrai HTML de la question qui bloque. Plutot que
-          // d'en deviner une 4e, on capture ici le HTML reel de TOUTES les questions de la page au moment
-          // precis de l'echec -- de quoi comparer directement une question qui marche et une qui bloque,
-          // au lieu de supposer.
-          const diag = blocsQuestions().map((b, i) => {
-            let html = ''; try { html = b.outerHTML.replace(/\s+/g, ' ').slice(0, 2500); } catch (e) {}
-            return '--- Question ' + (i + 1) + ' : ' + texteTitre(b).slice(0, 90) + ' ---\n' + html;
-          }).join('\n\n');
+          // Le HTML seul (capture precedente) ne suffit pas : il montre l'etat a l'instant T, mais pas CE
+          // QUI S'EST PASSE pour y arriver -- notamment si une question avait semble reussir (verifiee
+          // "ok", y compris apres le delai de persistance) avant de se faire oublier plus tard par Forms.
+          // On fait donc precede le HTML de TOUTES les questions par le journal detaille (trace essai par
+          // essai) de chacune, succes compris.
+          const diag = 'JOURNAL DE LA PAGE (chaque question traitee, succes et echecs, avec sa trace) :\n'
+            + journalPage.join('\n') + '\n\n'
+            + 'HTML REEL AU MOMENT DE L\'ECHEC :\n\n'
+            + blocsQuestions().map((b, i) => {
+                let html = ''; try { html = b.outerHTML.replace(/\s+/g, ' ').slice(0, 2500); } catch (e) {}
+                return '--- Question ' + (i + 1) + ' : ' + texteTitre(b).slice(0, 90) + ' ---\n' + html;
+              }).join('\n\n');
           marquerErreur(lot, id, derniereErreur + ' (essayé 3 fois)', diag);
           return;
         }
