@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → Forms CARGILL (automate de saisie)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      1.8.0
+// @version      1.9.0
 // @description  Saisit automatiquement dans le formulaire Microsoft Forms de CARGILL les questionnaires producteurs collectés dans ORIGEN (ECORIGINE). Un lot copié depuis ORIGEN, un producteur par réponse, reprise automatique après chaque envoi.
 // @author       ECORIGINE — ORIGEN
 // @match        https://forms.office.com/*
@@ -160,16 +160,33 @@
   }
   const estCoche = (el) => !!(el && (el.checked || el.getAttribute('aria-checked') === 'true' || el.getAttribute('aria-selected') === 'true'));
   // Clique sur une case/bouton radio et VERIFIE que ca a reellement pris (au lieu de supposer que ca a
-  // marche) -- essaie plusieurs fois avec une methode de clic plus complete si le premier essai echoue,
-  // et ne renvoie "ok" que si l'etat coche est effectivement confirme dans le DOM.
+  // marche). Certains composants "maison" de Forms n'ecoutent pas le controle lui-meme mais un de ses
+  // parents (zone cliquable plus grande que l'element accessible/visuel) -- on essaie donc le controle,
+  // puis jusqu'a 3 niveaux de parents, avec a chaque fois un clic simple puis un clic plus complet
+  // (pointerdown/mousedown/mouseup/click) si le simple ne suffit pas.
   async function cocherEtVerifier(cible) {
     if (estCoche(cible)) return true;
-    for (let essai = 0; essai < 3 && !estCoche(cible); essai++) {
-      const cliquable = cible.closest('label') || cible;
-      if (essai === 0) cliquable.click(); else clicComplet(cliquable);
+    const cibles = [cible.closest('label') || cible];
+    let p = cible.parentElement;
+    for (let i = 0; i < 3 && p; i++) { cibles.push(p); p = p.parentElement; }
+    for (const c of cibles) {
+      if (estCoche(cible)) break;
+      try { c.click(); } catch (e) {}
+      await dormir(200);
+      if (estCoche(cible)) break;
+      clicComplet(c);
       await dormir(200);
     }
     return estCoche(cible);
+  }
+  // Diagnostic detaille sur l'element cible quand meme les clics "parents" echouent -- pour comprendre
+  // enfin pourquoi (element detache du document ? structure differente de ce qu'on attend ?) au lieu de
+  // devoir redemander une capture d'ecran a chaque fois.
+  function diagnosticElement(el) {
+    if (!el) return 'élément absent';
+    const attache = document.contains(el) ? 'attaché au document' : 'DÉTACHÉ du document (élément obsolète ?)';
+    let html = ''; try { html = el.outerHTML.replace(/\s+/g, ' ').slice(0, 220); } catch (e) {}
+    return attache + ' — ' + html;
   }
   function setValeurReact(el, valeur) {
     const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
@@ -198,7 +215,7 @@
       });
       if (!cible) return 'option « ' + v + ' » introuvable';
       const ok = await cocherEtVerifier(cible);
-      return ok ? 'ok' : 'clic sans effet sur l\'option « ' + v + ' » (essayé plusieurs fois, toujours décochée)';
+      return ok ? 'ok' : 'clic sans effet sur l\'option « ' + v + ' » (essayé plusieurs fois, y compris les parents) — ' + diagnosticElement(cible);
     }
     // 1bis. certaines questions a reponse unique sont rendues par Forms avec des cases a cocher (pas des boutons radio)
     const cases = Array.from(bloc.querySelectorAll('input[type="checkbox"], [role="checkbox"]')).filter(visible);
@@ -209,7 +226,7 @@
       });
       if (!cible) return 'option « ' + v + ' » introuvable';
       const ok = await cocherEtVerifier(cible);
-      return ok ? 'ok' : 'clic sans effet sur l\'option « ' + v + ' » (essayé plusieurs fois, toujours décochée)';
+      return ok ? 'ok' : 'clic sans effet sur l\'option « ' + v + ' » (essayé plusieurs fois, y compris les parents) — ' + diagnosticElement(cible);
     }
     // 2. liste deroulante
     const combo = bloc.querySelector('select') || bloc.querySelector('[role="combobox"]') || bloc.querySelector('[data-automation-id="dropdown"] button') || bloc.querySelector('[data-automation-id="dropdown"]');
