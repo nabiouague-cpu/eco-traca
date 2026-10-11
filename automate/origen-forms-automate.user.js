@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → Forms CARGILL (automate de saisie)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      1.12.0
+// @version      1.13.0
 // @description  Saisit automatiquement dans le formulaire Microsoft Forms de CARGILL les questionnaires producteurs collectés dans ORIGEN (ECORIGINE). Un lot copié depuis ORIGEN, un producteur par réponse, reprise automatique après chaque envoi.
 // @author       ECORIGINE — ORIGEN
 // @match        https://forms.office.com/*
@@ -406,16 +406,35 @@
         if (suivant) { suivant.click(); await dormir(900); continue; }
         const envoyer = boutonEnvoyer();
         if (!envoyer) { marquerErreur(lot, id, 'bouton Envoyer introuvable sur la page ' + (page + 1)); return; }
-        envoyer.click();
-        const ok = await attendre(() => pageMerci() ? true : null, 12000);
-        if (!ok) {
-          // Forms affiche sa propre liste de questions obligatoires non repondues ("Vous devez encore
-          // repondre a N question(s)... Question X, Question Y.") -- on la recupere telle quelle pour eviter
-          // d'avoir a reprendre une capture d'ecran a chaque fois.
-          const resume = (document.body.innerText.match(/Vous devez encore répondre[^\n]*|You still need to answer[^\n]*/i) || [])[0];
-          marquerErreur(lot, id, 'pas de confirmation après Envoyer' + (resume ? ' — ' + resume.trim() : ' (champ obligatoire manquant ?)'));
-          return;
+        // A chaque correctif, le blocage se deplaçait vers la DERNIERE question repondue avant Envoyer --
+        // ce schema ressemble moins a un probleme propre a chaque question qu'a une course de vitesse entre
+        // nos clics et la validation interne de Forms (qui semble se mettre a jour apres un delai, pas
+        // instantanement). On laisse donc le temps a Forms de "digerer" avant de cliquer Envoyer, et si la
+        // confirmation ne vient pas, on reverifie/recorrige puis on retente -- jusqu'a 3 fois -- avant de
+        // vraiment signaler une erreur.
+        let confirme = false, derniereErreur = '';
+        for (let tentative = 0; tentative < 3 && !confirme; tentative++) {
+          if (tentative > 0) {
+            const pb = [];
+            for (const r1 of reponduSurCettePage) {
+              const bloc2 = blocsQuestions().find((x) => texteTitre(x) === r1.titre);
+              if (!bloc2) { pb.push(r1.q.libelle.slice(0, 60) + ' → question disparue avant l\'envoi'); continue; }
+              let r2; try { r2 = await repondreBloc(bloc2, r1.titre, r1.q, r1.valeur); } catch (e) { r2 = 'erreur : ' + e.message; }
+              if (r2 !== 'ok' && r2 !== 'vide') pb.push(r1.q.libelle.slice(0, 60) + ' → ' + r2);
+            }
+            if (pb.length) { marquerErreur(lot, id, pb.join(' ; ')); return; }
+          }
+          await dormir(1200);                                     // laisse Forms digerer les derniers changements
+          const envoyerMaintenant = boutonEnvoyer();
+          if (!envoyerMaintenant) { marquerErreur(lot, id, 'bouton Envoyer introuvable sur la page ' + (page + 1)); return; }
+          envoyerMaintenant.click();
+          confirme = !!(await attendre(() => pageMerci() ? true : null, 10000));
+          if (!confirme) {
+            const resume = (document.body.innerText.match(/Vous devez encore répondre[^\n]*|You still need to answer[^\n]*/i) || [])[0];
+            derniereErreur = 'pas de confirmation après Envoyer' + (resume ? ' — ' + resume.trim() : ' (champ obligatoire manquant ?)');
+          }
         }
+        if (!confirme) { marquerErreur(lot, id, derniereErreur + ' (essayé 3 fois)'); return; }
         lot = lireLot(); lot.restants = lot.restants.filter((x) => x !== id); lot.faits.push(id); lot.journal.push({ id, le: new Date().toISOString() }); ecrireLot(lot);
         afficherEtat('✓ ' + rep.nom + ' envoyé.');
         await dormir(800);
