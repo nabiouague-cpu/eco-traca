@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → Forms CARGILL (automate de saisie)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      1.19.0
+// @version      1.20.0
 // @description  Saisit automatiquement dans le formulaire Microsoft Forms de CARGILL les questionnaires producteurs collectés dans ORIGEN (ECORIGINE). Un lot copié depuis ORIGEN, un producteur par réponse, reprise automatique après chaque envoi.
 // @author       ECORIGINE — ORIGEN
 // @match        https://forms.office.com/*
@@ -471,15 +471,24 @@
         // trouves, jamais vers le bas de la page pour en reveler de nouveaux. Avant d'abandonner une passe
         // faute de nouveau titre, on force donc un defilement jusqu'en bas de la page et on rescanne.
         const dejaFaits = new Set();
-        for (let passe = 0; passe < 6; passe++) {
+        for (let passe = 0; passe < 8; passe++) {
+          // Defilement systematique EN DEBUT de chaque passe (pas seulement quand rien de nouveau n'est
+          // trouve) : une question revelee par branchement conditionnel (ex. « Si oui, lesquelles ? » qui
+          // n'apparait qu'apres avoir repondu Oui a la question precedente) peut avoir besoin d'un nouveau
+          // defilement pour se monter, et ce defilement doit arriver APRES que la reponse qui la revele ait
+          // ete donnee -- donc au debut de la passe SUIVANTE, pas seulement au tout debut de la page. Sur un
+          // branchement a plusieurs niveaux (ex. intrants → EPI/eau/sol → « si oui lesquelles »), chaque
+          // niveau supplementaire a besoin de sa propre passe + son propre defilement.
+          try { window.scrollTo(0, document.body.scrollHeight); } catch (e) {}
+          await dormir(passe === 0 ? 100 : 500);
           let titres = blocsQuestions().map(texteTitre).filter((t) => t && !dejaFaits.has(t));
           if (!titres.length) {
-            // Une page longue peut se monter progressivement a mesure qu'on avance dedans (une nouvelle
-            // question reveleele seulement une fois qu'on a scrolle jusqu'a la precedente) : un seul
-            // defilement peut donc ne pas suffire a tout reveler d'un coup. On reessaie quelques fois.
-            for (let essaiScroll = 0; essaiScroll < 3 && !titres.length; essaiScroll++) {
+            // Rien de nouveau meme apres ce defilement : on insiste encore un peu avant de conclure que la
+            // page est vraiment complete, au cas ou Forms ait besoin d'un peu plus de temps pour monter la
+            // question suivante du branchement.
+            for (let essaiScroll = 0; essaiScroll < 4 && !titres.length; essaiScroll++) {
               try { window.scrollTo(0, document.body.scrollHeight); } catch (e) {}
-              await dormir(700);
+              await dormir(800);
               titres = blocsQuestions().map(texteTitre).filter((t) => t && !dejaFaits.has(t));
             }
             if (!titres.length) break;
@@ -510,6 +519,19 @@
             else if (r !== 'vide') problemes.push(q.libelle.slice(0, 60) + ' → ' + r);
           }
           await dormir(300);
+        }
+        // Filet de securite : meme avec le defilement systematique ci-dessus, rien ne garantit a 100% que
+        // TOUTE question reveleele par un branchement a plusieurs niveaux a bien ete trouvee (cas reel
+        // observe : « Si oui, lesquelles ? », revelee seulement apres la question precautions sol, jamais
+        // detectee par la boucle de decouverte). Plutot que de foncer vers Envoyer en silence si une
+        // question obligatoire et VISIBLE n'a jamais ete traitee, on la signale explicitement ici.
+        try { window.scrollTo(0, document.body.scrollHeight); } catch (e) {}
+        await dormir(500);
+        for (const b of blocsQuestions()) {
+          const t = texteTitre(b);
+          if (t && !dejaFaits.has(t) && estObligatoire(b)) {
+            problemes.push('Question obligatoire jamais traitee par la boucle de decouverte (branchement a plusieurs niveaux ?) : ' + t.slice(0, 70));
+          }
         }
         if (problemes.length) { marquerErreur(lot, id, problemes.join(' ; ')); return; }
         // Derniere verification juste avant de cliquer Envoyer : repondre a une question suivante peut
