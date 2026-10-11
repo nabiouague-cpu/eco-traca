@@ -3279,7 +3279,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-11-003';
+const APP_VERSION = '2026-10-11-004';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -18009,10 +18009,15 @@ async function qcAutomateCopierLot(demandeId){
   await qcCopierTexte(JSON.stringify(lot), 'Lot de '+lot.reponses.length+' questionnaire'+(lot.reponses.length>1?'s':''));
 }
 function qcAutomateCollerResultat(demandeId){
+  // Avant : si la boite de dialogue etait validee vide (collage qui n'a pas pris, ou OK clique par megarde
+  // sans coller), le code s'arretait en silence (`if (!txt) return;`) sans le moindre message -- ca donnait
+  // exactement l'impression que « rien ne se passe ». On avertit desormais clairement dans ce cas.
   const txt = prompt('Colle ici le résultat copié depuis l\'automate (bouton « Copier le résultat » sur la page Forms) :');
-  if (!txt) return;
-  let res; try{ res = JSON.parse(txt); }catch(e){ showToast('Résultat illisible : recopie-le depuis l\'automate.'); return; }
-  if (!res || !res.origen_forms_resultat || !Array.isArray(res.faits)){ showToast('Ce texte n\'est pas un résultat de l\'automate.'); return; }
+  if (txt === null) return;                                   // boite annulee : pas d'erreur, l'utilisateur a change d'avis
+  if (!txt.trim()){ showToast('Rien n\'a été collé : clique d\'abord « Copier le résultat » dans l\'automate, puis reviens ici et colle (Ctrl+V) avant de valider.', 'error'); return; }
+  let res; try{ res = JSON.parse(txt); }catch(e){ showToast('Résultat illisible : recopie-le depuis l\'automate (bouton « Copier le résultat »).', 'error'); return; }
+  if (!res || !res.origen_forms_resultat || !Array.isArray(res.faits)){ showToast('Ce texte n\'est pas un résultat de l\'automate (copie-le avec le bouton « Copier le résultat »).', 'error'); return; }
+  if (!res.faits.length){ showToast('Ce résultat ne contient aucun questionnaire envoyé — rien à marquer « saisi ».', 'error'); return; }
   qcAutomateMarquer(demandeId, res);
 }
 async function qcAutomateMarquer(demandeId, res){
