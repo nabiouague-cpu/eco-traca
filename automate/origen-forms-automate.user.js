@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → Forms CARGILL (automate de saisie)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      1.6.0
+// @version      1.7.0
 // @description  Saisit automatiquement dans le formulaire Microsoft Forms de CARGILL les questionnaires producteurs collectés dans ORIGEN (ECORIGINE). Un lot copié depuis ORIGEN, un producteur par réponse, reprise automatique après chaque envoi.
 // @author       ECORIGINE — ORIGEN
 // @match        https://forms.office.com/*
@@ -58,22 +58,51 @@
   function afficherEtat(msg) {
     const lot = lireLot();
     if (!zoneEtat) return;
-    if (!lot) { zoneEtat.textContent = msg || 'Aucun lot. Dans ORIGEN : « Copier le lot pour l\'automate », puis colle-le ci-dessous et clique Démarrer.'; zoneTexte.style.display = ''; return; }
-    zoneTexte.style.display = 'none';
+    // Le champ de collage reste TOUJOURS visible (meme lot en cours) : avant, il se cachait des qu'un lot
+    // existait, et Demarrer se contentait alors de relancer l'ancien lot sans jamais regarder ce qui avait
+    // ete colle dedans -- un nouveau lot colle par-dessus un ancien etait donc silencieusement ignore.
+    zoneTexte.style.display = '';
+    if (!lot) { zoneEtat.textContent = msg || 'Aucun lot. Dans ORIGEN : « Copier le lot pour l\'automate », puis colle-le ci-dessous et clique Démarrer.'; zoneTexte.placeholder = 'Colle ici le lot copié depuis ORIGEN (Ctrl+V)'; return; }
     const total = lot.reponses.length, faits = lot.faits.length, erreurs = lot.erreurs.length;
     zoneEtat.textContent = (msg ? msg + '\n' : '') + 'Lot ' + lot.cooperative + ' : ' + faits + ' / ' + total + ' envoyé' + (faits > 1 ? 's' : '') + (erreurs ? ' · ' + erreurs + ' en erreur' : '') + (lot.pause ? '\n⏸ En pause' : (lot.restants.length ? '\n▶ En cours…' : '\n✓ Terminé — clique « Copier le résultat » puis colle-le dans ORIGEN.'));
+    zoneTexte.placeholder = 'Colle ici un lot à jour pour remplacer celui en cours (ex. après correction dans ORIGEN)';
     btnPause.textContent = lot.pause ? 'Reprendre' : 'Pause';
   }
   function demarrer() {
-    let lot = lireLot();
-    if (!lot) {
-      const txt = zoneTexte.value.trim();
-      if (!txt) { alert('Colle d\'abord le lot copié depuis ORIGEN.'); return; }
-      try { lot = JSON.parse(txt); } catch (e) { alert('Lot illisible : recopie-le depuis ORIGEN.'); return; }
-      if (!lot || !Array.isArray(lot.reponses) || !lot.reponses.length) { alert('Lot vide.'); return; }
-      lot.restants = lot.reponses.map((r) => r.id); lot.faits = []; lot.erreurs = []; lot.pause = false; lot.journal = [];
-      ecrireLot(lot);
-    } else { lot.pause = false; ecrireLot(lot); }
+    const lot = lireLot();
+    const txt = zoneTexte.value.trim();
+    if (txt) {
+      // Quelque chose est colle dans la zone de texte : on le prend TOUJOURS en compte, meme si un lot
+      // est deja en cours -- c'est justement ce qui manquait avant (voir commentaire dans afficherEtat).
+      let nouveau;
+      try { nouveau = JSON.parse(txt); } catch (e) { alert('Lot illisible : recopie-le depuis ORIGEN.'); return; }
+      if (!nouveau || !Array.isArray(nouveau.reponses) || !nouveau.reponses.length) { alert('Lot vide.'); return; }
+      if (lot) {
+        const memeCooperative = lot.demande_id === nouveau.demande_id;
+        const confirmation = memeCooperative
+          ? 'Un lot « ' + lot.cooperative + ' » est en cours (' + lot.faits.length + '/' + lot.reponses.length + ' déjà envoyés). Le remplacer par la version à jour collée ici ? Les ' + lot.faits.length + ' déjà envoyés ne seront pas renvoyés ; les producteurs en erreur seront retentés avec les données à jour.'
+          : 'Un lot « ' + lot.cooperative + ' » est en cours (' + lot.faits.length + '/' + lot.reponses.length + ' envoyés, non terminé). Le remplacer par le nouveau lot « ' + (nouveau.cooperative || '?') + ' » ? Rien de déjà envoyé à Forms n\'est annulé, mais le suivi de progression de ' + lot.cooperative + ' sera réinitialisé ici (sans perte côté ORIGEN).';
+        if (!confirm(confirmation)) return;
+        if (memeCooperative) {
+          nouveau.faits = lot.faits.slice();
+          nouveau.journal = lot.journal || [];
+          nouveau.erreurs = [];                                                   // on retente les erreurs avec les donnees fraiches
+          nouveau.restants = nouveau.reponses.map((r) => r.id).filter((id) => nouveau.faits.indexOf(id) === -1);
+        } else {
+          nouveau.restants = nouveau.reponses.map((r) => r.id); nouveau.faits = []; nouveau.erreurs = []; nouveau.journal = [];
+        }
+      } else {
+        nouveau.restants = nouveau.reponses.map((r) => r.id); nouveau.faits = []; nouveau.erreurs = []; nouveau.journal = [];
+      }
+      nouveau.pause = false;
+      ecrireLot(nouveau);
+      zoneTexte.value = '';
+      afficherEtat();
+      boucle();
+      return;
+    }
+    if (!lot) { alert('Colle d\'abord le lot copié depuis ORIGEN.'); return; }
+    lot.pause = false; ecrireLot(lot);
     afficherEtat();
     boucle();
   }
