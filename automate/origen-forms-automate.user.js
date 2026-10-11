@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → Forms CARGILL (automate de saisie)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      1.0.0
+// @version      1.1.0
 // @description  Saisit automatiquement dans le formulaire Microsoft Forms de CARGILL les questionnaires producteurs collectés dans ORIGEN (ECORIGINE). Un lot copié depuis ORIGEN, un producteur par réponse, reprise automatique après chaque envoi.
 // @author       ECORIGINE — ORIGEN
 // @match        https://forms.office.com/*
@@ -133,6 +133,18 @@
       if (!cible) return 'option « ' + v + ' » introuvable';
       (cible.closest('label') || cible).click(); await dormir(150);
       if (cible.type === 'radio' && !cible.checked) { cible.click(); }
+      return 'ok';
+    }
+    // 1bis. certaines questions a reponse unique sont rendues par Forms avec des cases a cocher (pas des boutons radio)
+    const cases = Array.from(bloc.querySelectorAll('input[type="checkbox"], [role="checkbox"]')).filter(visible);
+    if (cases.length) {
+      const cible = cases.find((r) => {
+        const lab = r.getAttribute('aria-label') || r.value || (r.closest('label') && r.closest('label').textContent) || (r.parentElement && r.parentElement.textContent) || '';
+        return N(lab) === N(v) || N(lab).indexOf(N(v)) === 0;
+      });
+      if (!cible) return 'option « ' + v + ' » introuvable';
+      const dejaCoche = cible.checked || cible.getAttribute('aria-checked') === 'true';
+      if (!dejaCoche) { (cible.closest('label') || cible).click(); await dormir(150); }
       return 'ok';
     }
     // 2. liste deroulante
