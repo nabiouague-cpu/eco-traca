@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → Forms CARGILL (automate de saisie)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      1.13.0
+// @version      1.14.0
 // @description  Saisit automatiquement dans le formulaire Microsoft Forms de CARGILL les questionnaires producteurs collectés dans ORIGEN (ECORIGINE). Un lot copié depuis ORIGEN, un producteur par réponse, reprise automatique après chaque envoi.
 // @author       ECORIGINE — ORIGEN
 // @match        https://forms.office.com/*
@@ -160,10 +160,12 @@
   }
   const estCoche = (el) => !!(el && (el.checked || el.getAttribute('aria-checked') === 'true' || el.getAttribute('aria-selected') === 'true'));
   // Pose .checked via le VRAI setter natif (celui que React a patché sur le prototype est ainsi contourné),
-  // puis declenche les evenements -- technique standard pour les composants controles par React. Un simple
-  // .click() peut cocher la case visuellement SANS que React n'en soit informe ; React la remet alors a zero
-  // au premier re-rendu suivant (ce qui ressemble a un succes immediat suivi d'un blocage silencieux a
-  // l'envoi -- exactement le symptome observe sur les questions EPI / proximite de l'eau).
+  // puis declenche les evenements -- technique standard pour les composants controles par React. UTILE EN
+  // DERNIER RECOURS SEULEMENT : sur les questions EPI / proximite de l'eau, cette technique rend le DOM
+  // coche sans que Forms n'enregistre reellement la reponse (son propre message de validation au moment de
+  // l'envoi le confirme) -- elle cree un succes en trompe-l'oeil. `cocherEtVerifier` essaie donc toujours un
+  // vrai clic en premier, et ne retombe sur `cocherReact` que si meme un clic complet (evenements souris bas
+  // niveau inclus) echoue.
   function cocherReact(input) {
     if (!input || input.tagName !== 'INPUT') return false;
     try {
@@ -182,6 +184,17 @@
   // l'illusion d'un succes (on vient de modifier cette copie), alors que la vraie page, elle, n'a jamais
   // bouge. `trouverCible` refait donc la recherche en direct a chaque fois plutot que de reutiliser une
   // variable capturee, pour que la verification porte sur ce qui est reellement affiche.
+  //
+  // ORDRE DES TECHNIQUES -- important : sur deux questions precises (EPI, proximite de l'eau), Forms
+  // confirme lui-meme (son propre message "Vous devez encore repondre...") n'avoir JAMAIS enregistre la
+  // reponse, alors que NOTRE verification locale (estCoche sur le DOM) la voyait cochee a chaque fois, y
+  // compris juste avant l'envoi. Cela ne peut arriver que si `cocherReact` (qui force .checked via le
+  // setter natif puis simule les evenements) rend le controle visuellement/techniquement coche SANS que
+  // le vrai gestionnaire de clic de Forms ne s'execute -- l'equivalent d'un succes en trompe-l'oeil qui
+  // nous faisait arreter la boucle AVANT d'essayer un vrai clic. On inverse donc l'ordre : un vrai clic
+  // (natif, puis avec evenements bas niveau complets) est TOUJOURS tente en premier et a chaque essai --
+  // sans effet indesirable sur un bouton radio deja selectionne -- et `cocherReact` ne sert plus que de
+  // dernier recours si meme ca echoue.
   async function cocherEtVerifier(trouverCible) {
     // IMPORTANT : si `trouverCible()` ne trouve rien a l'instant T (ex. Forms est en plein re-rendu de ce
     // bloc suite a la reponse precedente), on ATTEND et on retente -- on ne doit JAMAIS retomber sur une
@@ -189,16 +202,23 @@
     // silencieux fait croire au succes alors qu'on agit sur une copie morte que personne ne voit).
     for (let essai = 0; essai < 6; essai++) {
       let cible = trouverCible();
-      if (cible && estCoche(cible)) return true;
       if (!cible) { await dormir(250); continue; }
-      const natif = cible.tagName === 'INPUT' ? cible : cible.querySelector('input[type="radio"], input[type="checkbox"]');
-      if (natif) cocherReact(natif);
+      if (essai === 0 && estCoche(cible)) return true;    // deja coche avant toute action -> rien a faire
+      const cliquable = cible.closest('label') || cible;
+      try { cliquable.click(); } catch (e) {}
       await dormir(200);
-      cible = trouverCible(); if (cible && estCoche(cible)) return true;
-      const cliquable = cible && (cible.closest('label') || cible);
-      if (cliquable) { try { cliquable.click(); } catch (e) {} await dormir(200); }
-      cible = trouverCible(); if (cible && estCoche(cible)) return true;
-      if (cliquable) { clicComplet(cliquable); await dormir(250); }
+      cible = trouverCible();
+      if (!(cible && estCoche(cible))) {
+        clicComplet(cliquable);
+        await dormir(250);
+        cible = trouverCible();
+      }
+      if (!(cible && estCoche(cible))) {
+        const base = cible || cliquable;
+        const natif = base && (base.tagName === 'INPUT' ? base : base.querySelector('input[type="radio"], input[type="checkbox"]'));
+        if (natif) { cocherReact(natif); await dormir(200); cible = trouverCible(); }
+      }
+      if (cible && estCoche(cible)) return true;
     }
     const finale = trouverCible();
     return !!(finale && estCoche(finale));
