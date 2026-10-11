@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → Forms CARGILL (automate de saisie)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      1.7.0
+// @version      1.8.0
 // @description  Saisit automatiquement dans le formulaire Microsoft Forms de CARGILL les questionnaires producteurs collectés dans ORIGEN (ECORIGINE). Un lot copié depuis ORIGEN, un producteur par réponse, reprise automatique après chaque envoi.
 // @author       ECORIGINE — ORIGEN
 // @match        https://forms.office.com/*
@@ -145,6 +145,32 @@
     }
     return score >= 15 ? meilleur : null;
   }
+  // Clic "complet" : .click() suffit d'habitude, mais certains controles de Forms (surtout role=radio
+  // sans vrai <input>) n'ecoutent que des evenements souris bas niveau et ignorent un simple .click().
+  function clicComplet(el) {
+    try { el.click(); } catch (e) {}
+    const opts = { bubbles: true, cancelable: true, view: window };
+    try {
+      if (window.PointerEvent) el.dispatchEvent(new PointerEvent('pointerdown', opts));
+      el.dispatchEvent(new MouseEvent('mousedown', opts));
+      if (window.PointerEvent) el.dispatchEvent(new PointerEvent('pointerup', opts));
+      el.dispatchEvent(new MouseEvent('mouseup', opts));
+      el.dispatchEvent(new MouseEvent('click', opts));
+    } catch (e) {}
+  }
+  const estCoche = (el) => !!(el && (el.checked || el.getAttribute('aria-checked') === 'true' || el.getAttribute('aria-selected') === 'true'));
+  // Clique sur une case/bouton radio et VERIFIE que ca a reellement pris (au lieu de supposer que ca a
+  // marche) -- essaie plusieurs fois avec une methode de clic plus complete si le premier essai echoue,
+  // et ne renvoie "ok" que si l'etat coche est effectivement confirme dans le DOM.
+  async function cocherEtVerifier(cible) {
+    if (estCoche(cible)) return true;
+    for (let essai = 0; essai < 3 && !estCoche(cible); essai++) {
+      const cliquable = cible.closest('label') || cible;
+      if (essai === 0) cliquable.click(); else clicComplet(cliquable);
+      await dormir(200);
+    }
+    return estCoche(cible);
+  }
   function setValeurReact(el, valeur) {
     const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
     const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
@@ -171,9 +197,8 @@
         return N(lab) === N(v) || N(lab).indexOf(N(v)) === 0;
       });
       if (!cible) return 'option « ' + v + ' » introuvable';
-      (cible.closest('label') || cible).click(); await dormir(150);
-      if (cible.type === 'radio' && !cible.checked) { cible.click(); }
-      return 'ok';
+      const ok = await cocherEtVerifier(cible);
+      return ok ? 'ok' : 'clic sans effet sur l\'option « ' + v + ' » (essayé plusieurs fois, toujours décochée)';
     }
     // 1bis. certaines questions a reponse unique sont rendues par Forms avec des cases a cocher (pas des boutons radio)
     const cases = Array.from(bloc.querySelectorAll('input[type="checkbox"], [role="checkbox"]')).filter(visible);
@@ -183,9 +208,8 @@
         return N(lab) === N(v) || N(lab).indexOf(N(v)) === 0;
       });
       if (!cible) return 'option « ' + v + ' » introuvable';
-      const dejaCoche = cible.checked || cible.getAttribute('aria-checked') === 'true';
-      if (!dejaCoche) { (cible.closest('label') || cible).click(); await dormir(150); }
-      return 'ok';
+      const ok = await cocherEtVerifier(cible);
+      return ok ? 'ok' : 'clic sans effet sur l\'option « ' + v + ' » (essayé plusieurs fois, toujours décochée)';
     }
     // 2. liste deroulante
     const combo = bloc.querySelector('select') || bloc.querySelector('[role="combobox"]') || bloc.querySelector('[data-automation-id="dropdown"] button') || bloc.querySelector('[data-automation-id="dropdown"]');
