@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → Forms CARGILL (automate de saisie)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      1.4.0
+// @version      1.5.0
 // @description  Saisit automatiquement dans le formulaire Microsoft Forms de CARGILL les questionnaires producteurs collectés dans ORIGEN (ECORIGINE). Un lot copié depuis ORIGEN, un producteur par réponse, reprise automatique après chaque envoi.
 // @author       ECORIGINE — ORIGEN
 // @match        https://forms.office.com/*
@@ -230,7 +230,13 @@
       if (pageMerci()) {
         const a = lienAutre();
         if (a) { afficherEtat('Réponse envoyée, passage au producteur suivant…'); await dormir(PAUSE); a.click(); await dormir(3000); if (pageMerci()) location.reload(); return; }
-        location.href = lot.lien || location.href.split('?')[0]; return;
+        // Pas de lien "repondre a nouveau" trouve sur la page de confirmation : on ne doit PAS bricoler l'URL
+        // actuelle (retirer le ?id=... casse le formulaire -> "Ce formulaire n'existe pas"). On n'utilise que le
+        // lien explicite renseigne dans ORIGEN ; sans lui, on met en pause plutot que de deviner.
+        if (lot.lien) { location.href = lot.lien; return; }
+        lot.pause = true; ecrireLot(lot);
+        afficherEtat('⚠ Réponse envoyée, mais impossible de trouver le lien "Répondre à nouveau" sur cette page.\nRenseigne le lien du formulaire dans ORIGEN (champ "Lien du formulaire Microsoft Forms de CARGILL"), ouvre ce lien ici, puis clique « Reprendre ».');
+        return;
       }
       const id = lot.restants[0];
       const rep = lot.reponses.find((r) => r.id === id);
