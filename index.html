@@ -3429,7 +3429,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-12-029';
+const APP_VERSION = '2026-10-12-030';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8515,9 +8515,9 @@ function renderOcCockpit(){
     + '<li><b>Suivi des exigences</b> — statut et échéance de chaque exigence '+ocRefInfo().nom+', preuves jointes.</li>'
     + '<li><b>Non-conformités</b> — enregistrement et traitement guidé (causes, mesures correctives et préventives, preuves).</li>'
     + '<li><b>Audits</b> — historique et préparation des audits internes et externes.</li>'
-    + '<li><b>Calendrier</b> — activités des comités, PV et rapports signés.</li>'
+    + '<li><b>Calendrier</b> — '+(ocRef()==='FT' ? 'activités de la campagne et preuves de réalisation' : 'activités des comités, PV et rapports signés')+'.</li>'
     + '<li><b>Certificats</b>, <b>Documents</b>, <b>Formation</b> — preuves : certificats d\'ECORIGINE, des sites et des coopératives ; procédures et leurs révisions ; formations et supports.</li>'
-    + '<li><b>Données principales</b>, <b>Responsabilités</b>, <b>Partenaires</b> — identité, organigramme et comités ; rôles et contacts ; sites, clients, coopératives et prestataires.</li>'
+    + '<li><b>Données principales</b>, <b>Responsabilités</b>, <b>Partenaires</b> — identité, organigramme'+(ocRef()==='FT' ? '' : ' et comités')+' ; rôles et contacts ; sites, clients, coopératives et prestataires.</li>'
     + '</ul></details>';
   return html;
 }
@@ -8989,6 +8989,9 @@ function ocRef(){ return (state && state.ocReferentiel === 'FT') ? 'FT' : 'RA'; 
 function ocRefInfo(){ return OC_REFS[ocRef()]; }
 // Cooperatives suivies dans le referentiel actif : en Fairtrade, uniquement celles marquees certifiees Fairtrade.
 function ocCoopsRef(){ return (state.cooperatives||[]).filter(c=>ocRef()==='FT' ? (c.statut==='Certifiée' && c.certifications==='Fairtrade') : true); }
+// En Fairtrade il n'y a pas de comites : on retire les champs/sections qui s'y rapportent.
+function ocCols(cfg){ return ocRef()==='FT' ? cfg.cols.filter(c=>c[1]!=='comites') : cfg.cols; }
+function ocSectionsDonnees(){ return OC_DONNEES_SECTIONS.filter(x=>!(ocRef()==='FT' && x.cle==='comites')); }
 function ocCatClasse(c){ return String(c||'').replace(/[^A-Za-zÀ-ÿ0-9]/g,''); }
 function ocAppliquerReferentiel(ref){
   ref = ref === 'FT' ? 'FT' : 'RA';
@@ -9103,7 +9106,7 @@ function renderOcDonnees(){
     // Vue compacte par defaut : 4 cases cliquables, comme les tuiles de
     // l'onglet Documents de conformite -- un clic deroule la section choisie.
     html += '<div class="oc-donnees-tuiles">'
-      + OC_DONNEES_SECTIONS.map(s=>'<button class="doc-cible-tuile" onclick="ocOuvrirDonneesSection(\''+s.cle+'\')"><div class="doc-cible-nom">'+esc(s.label)+'</div></button>').join('')
+      + ocSectionsDonnees().map(s=>'<button class="doc-cible-tuile" onclick="ocOuvrirDonneesSection(\''+s.cle+'\')"><div class="doc-cible-nom">'+esc(s.label)+'</div></button>').join('')
       + '</div>';
     return html;
   }
@@ -9328,7 +9331,7 @@ function renderOcCalendrier(){
   const nbRetard = duMois.filter(a=>etat(a)==='retard').length;
   const nbAVenir = duMois.length - nbOk - nbRetard;
 
-  let html = '<div class="panel-head"><h2>Calendrier des activités</h2><p>Réunions, sensibilisations, quiz et activités terrain des comités, mois par mois — pour prévenir les personnes concernées à l\'avance et garder la preuve de réalisation.</p></div>';
+  let html = '<div class="panel-head"><h2>Calendrier des activités</h2><p>'+(ocRef()==='FT' ? 'Activités de la campagne Fairtrade, mois par mois — pour prévenir les personnes concernées à l\'avance et garder la preuve de réalisation.' : 'Réunions, sensibilisations, quiz et activités terrain des comités, mois par mois — pour prévenir les personnes concernées à l\'avance et garder la preuve de réalisation.')+'</p></div>';
 
   html += '<div class="oc-cal2">';
   // Barre d'outils : navigation, resume du mois, message a communiquer
@@ -9345,7 +9348,7 @@ function renderOcCalendrier(){
     +   (nbAVenir ? '<span><i class="pt avenir"></i><b>'+nbAVenir+'</b> à venir</span>' : '')
     +   (nbRetard ? '<span><i class="pt retard"></i><b>'+nbRetard+'</b> en retard</span>' : '')
     + '</div>'
-    + (duMois.length ? '<button class="oc-cal2-copier principal" onclick="ocProgrammeOuvrir(\''+moisCle+'\')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v12H4z"/><path d="M4 7l8 6 8-6"/></svg>Envoyer le programme du mois</button>' : '')
+    + (duMois.length && ocRef()!=='FT' ? '<button class="oc-cal2-copier principal" onclick="ocProgrammeOuvrir(\''+moisCle+'\')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v12H4z"/><path d="M4 7l8 6 8-6"/></svg>Envoyer le programme du mois</button>' : '')
     + (duMois.length ? '<button class="oc-cal2-copier" onclick="ocCalendrierCopierMessage(\''+moisCle+'\')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>Copier le message du mois</button>' : '')
     + '</div>';
 
@@ -9377,7 +9380,7 @@ function renderOcCalendrier(){
       + selonBesoin.map(a=>{
           const faite = a.statut==='realisee';
           return '<div class="oc-cal2-ligne">'
-            + '<div><div class="t">'+esc(a.theme)+'</div><div class="s"><span class="oc-cal2-comite"><i class="'+ocPvAbrevComite(a.comite).toLowerCase()+'"></i>'+esc(a.comite)+'</span><span>·</span><span>'+esc(a.type)+'</span></div></div>'
+            + '<div><div class="t">'+esc(a.theme)+'</div><div class="s">'+(a.comite ? '<span class="oc-cal2-comite"><i class="'+ocPvAbrevComite(a.comite).toLowerCase()+'"></i>'+esc(a.comite)+'</span><span>·</span>' : '')+'<span>'+esc(a.type)+'</span></div></div>'
             + '<div class="oc-cal2-foot" style="margin:0;padding:0;border:0;">'
             + (faite
                 ? '<span class="oc-cal2-statut ok">Réalisée'+(a.realisee_le?' le '+esc(new Date(a.realisee_le+'T00:00:00').toLocaleDateString('fr-FR')):'')+'</span><button class="oc-cal2-btn" onclick="ocTelechargerPV('+a.id+')">PV</button><button class="oc-cal2-btn lien" onclick="ocCalendrierRouvrir('+a.id+')">Rouvrir</button>'
@@ -10468,7 +10471,7 @@ function ocCalendrierCarteHTML(a, etatDonne){
   const ICO_DL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></svg>';
   let html = '<article class="oc-cal2-carte'+(faite?' faite':'')+(etat==='retard'?' retard':'')+'">'
     + '<div class="oc-cal2-top">'
-    +   '<span class="oc-cal2-comite"><i class="'+ocPvAbrevComite(a.comite).toLowerCase()+'"></i>'+esc(a.comite)+'</span>'
+    +   (a.comite ? '<span class="oc-cal2-comite"><i class="'+ocPvAbrevComite(a.comite).toLowerCase()+'"></i>'+esc(a.comite)+'</span>' : '<span></span>')
     +   '<span class="oc-cal2-statut '+etat+'">'+libStatut+'</span>'
     + '</div>'
     + '<h4 class="oc-cal2-theme">'+esc(a.theme)+'</h4>'
@@ -11048,12 +11051,12 @@ function ocExporterWord(tableId){
   } else {
     rows = ocTableRows(tableId);
   }
-  const entetes = conf.cols.map(c=>c[0]);
+  const entetes = ocCols(conf).map(c=>c[0]);
   // Ne figurent sur le document que les lignes dont TOUTES les informations retenues sont renseignees ;
   // les autres sont listees dans l'apercu (hors feuille) pour qu'on sache quoi completer.
-  const toutes = rows.map(row=>({ nom: String(row[conf.cols[0][1]]||'—'), valeurs: conf.cols.map(c=>ocValeurExportTexte(c, row[c[1]])) }));
+  const toutes = rows.map(row=>({ nom: String(row[ocCols(conf)[0][1]]||'—'), valeurs: ocCols(conf).map(c=>ocValeurExportTexte(c, row[c[1]])) }));
   const completes = toutes.filter(l=>l.valeurs.every(v=>String(v||'').trim()!==''));
-  const incompletes = toutes.filter(l=>!l.valeurs.every(v=>String(v||'').trim()!=='')).map(l=>({ nom:l.nom, manque: conf.cols.filter((c,i)=>String(l.valeurs[i]||'').trim()==='').map(c=>c[0]) }));
+  const incompletes = toutes.filter(l=>!l.valeurs.every(v=>String(v||'').trim()!=='')).map(l=>({ nom:l.nom, manque: ocCols(conf).filter((c,i)=>String(l.valeurs[i]||'').trim()==='').map(c=>c[0]) }));
   const lignes = completes.map(l=>l.valeurs);
   const nomFichier = conf.titre.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9]+/g,'_')+'_ECORIGINE.docx';
   state.modal = { type:'ocApercuImpression', payload:{ tableId, titre: conf.titre, entetes, lignes, incompletes, nomFichier, exigence: conf.exigence||'', exigenceLibelle: conf.exigenceLibelle||'' } };
@@ -11436,17 +11439,17 @@ function renderOcTableSimple(tableId, opts){
   const editId = state.ocTableEditId && state.ocTableEditTable===tableId ? state.ocTableEditId : null;
   let html = (opts && opts.masquerEntete) ? '' : '<div class="panel-head"><h2>'+esc(cfg.titre)+'</h2><p>'+esc(cfg.intro)+'</p></div>';
   html += '<div class="panel oc-table-panel"><div class="oc-table-scroll"><table class="oc-table"><thead><tr>'
-    + cfg.cols.map(c=>'<th>'+esc(c[0])+'</th>').join('')
+    + ocCols(cfg).map(c=>'<th>'+esc(c[0])+'</th>').join('')
     + '<th></th></tr></thead><tbody>';
   if (rows.length===0){
-    html += '<tr><td colspan="'+(cfg.cols.length+1)+'" class="oc-table-empty">Aucune ligne pour l\'instant.</td></tr>';
+    html += '<tr><td colspan="'+(ocCols(cfg).length+1)+'" class="oc-table-empty">Aucune ligne pour l\'instant.</td></tr>';
   } else {
     rows.forEach(row=>{
       if (row.id===editId){
-        html += '<tr class="oc-table-row-edit">' + cfg.cols.map(c=>'<td>'+ocChampEditHTML(c, row[c[1]], 'ocedit')+'</td>').join('')
+        html += '<tr class="oc-table-row-edit">' + ocCols(cfg).map(c=>'<td>'+ocChampEditHTML(c, row[c[1]], 'ocedit')+'</td>').join('')
           + '<td style="white-space:nowrap;"><button class="oc-icon-btn oc-icon-btn-modif" title="Enregistrer" onclick="ocEnregistrerModifLigne(\''+tableId+'\','+row.id+')">✓</button><button class="oc-icon-btn oc-icon-btn-suppr" title="Annuler" onclick="ocAnnulerModifLigne()">✕</button></td></tr>';
       } else {
-        html += '<tr>' + cfg.cols.map(c=>'<td>'+ocValeurAffichee(c, row[c[1]])+'</td>').join('')
+        html += '<tr>' + ocCols(cfg).map(c=>'<td>'+ocValeurAffichee(c, row[c[1]])+'</td>').join('')
           + '<td style="white-space:nowrap;"><button class="oc-icon-btn oc-icon-btn-modif" title="Modifier" onclick="ocModifierLigne(\''+tableId+'\','+row.id+')">✏️</button><button class="oc-icon-btn oc-icon-btn-suppr" title="Supprimer" onclick="ocSupprimerLigne(\''+tableId+'\','+row.id+')">🗑</button></td></tr>';
       }
     });
@@ -11454,7 +11457,7 @@ function renderOcTableSimple(tableId, opts){
   html += '</tbody></table></div>';
   if (state.ocTableAjoutOuvert===tableId){
     html += '<div class="oc-table-add">'
-      + cfg.cols.map(c=>'<div class="oc-table-add-cell'+(c[2]==='checklist'?' oc-table-add-cell-large':'')+'">'+ocChampEditHTML(c, null, 'ocnew')+'</div>').join('')
+      + ocCols(cfg).map(c=>'<div class="oc-table-add-cell'+(c[2]==='checklist'?' oc-table-add-cell-large':'')+'">'+ocChampEditHTML(c, null, 'ocnew')+'</div>').join('')
       + '<div class="oc-table-add-actions"><button class="btn btn-primary" onclick="ocAjouterLigne(\''+tableId+'\')">Enregistrer</button><button class="btn-ghost" onclick="ocFermerAjoutLigne()">Annuler</button></div>'
       + '</div>';
   } else {
@@ -11488,7 +11491,7 @@ async function ocEnregistrerModifLigne(tableId, id){
   const ligne = document.querySelector('.oc-table-row-edit');
   if (!ligne) return;
   const patch = {};
-  cfg.cols.forEach(c=>{
+  ocCols(cfg).forEach(c=>{
     patch[c[1]] = ocLireChamp(ligne, c);
   });
   try{
@@ -11510,7 +11513,7 @@ async function ocAjouterLigne(tableId){
   if (!zone) return;
   const row = {};
   let auMoinsUnChamp = false;
-  cfg.cols.forEach(c=>{
+  ocCols(cfg).forEach(c=>{
     const val = ocLireChamp(zone, c);
     const rempli = Array.isArray(val) ? val.length>0 : !!val;
     if (rempli){ row[c[1]] = val; auMoinsUnChamp = true; }
