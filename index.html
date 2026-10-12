@@ -3279,7 +3279,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-11-005';
+const APP_VERSION = '2026-10-12-006';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4912,12 +4912,13 @@ function ocTracageAchatsProducteurs(tr){
 async function supprimerConnaissement(achatId){
   const a = state.achats.find(x=>x.id===achatId);
   if (!a || !a.connaissement) return;
+  if (a.refoulee){ showToast('Ce chargement est déjà marqué refoulé : son volume doit rester compté dans le potentiel du producteur, il ne peut pas être supprimé.'); return; }
   const numero = a.connaissement, coopId = a.cooperative_id;
   askConfirm(
     'Supprimer le connaissement '+numero+' ?\n\n'
     + 'Cette action retire le connaissement généré et son achat ('+fmtKg(a.quantite_kg)+'), pour pouvoir le reproduire. '
     + 'Les producteurs du traçage de volume ne sont pas touchés : ils restent enregistrés, simplement sans connaissement.\n\n'
-    + 'Pour un camion réellement refoulé, utilise plutôt « Camion refoulé / annuler ».',
+    + 'Pour un camion réellement refoulé, utilise plutôt « Camion refoulé » (le volume reste compté dans le potentiel du producteur).',
     async () => {
       try{
         await ocSupprimerConnaissementInterne(coopId, numero, achatId);
@@ -13223,12 +13224,17 @@ async function deleteAchat(id){
   render();
 }
 
-// Camion refoule / connaissement finalement rejete au CCC : la livraison n'a
-// plus lieu d'etre. Retire l'achat (remet a zero le cumul des producteurs
-// concernes pour le plafond des 70%), la fiche de tracabilite associee (entree
-// et fichier physique), et annule la demande d'origine avec un motif clair --
-// plutot qu'une simple suppression d'achat qui laisserait la fiche et la
-// demande trainer comme si de rien n'etait.
+// Camion refoule (a l'usine, a la cooperative, ou plus loin dans la chaine) :
+// ce n'est plus ECORIGINE qui achete ce chargement -- pas de pesee, pas de
+// paiement, pas de stock, pas d'export. MAIS le cacao a reellement quitte la
+// plantation : son volume doit rester compte dans le cumul du producteur pour
+// le plafond des 70% (sinon le meme producteur pourrait re-livrer un volume
+// equivalent et depasser en realite le potentiel reel de sa parcelle). On ne
+// supprime donc PLUS l'achat : on le marque refoule (poids_net_produit etc.
+// remis a vide pour qu'il n'apparaisse plus comme achete/paye/declarable),
+// tout en gardant quantite_kg intact pour cumulAchats. La fiche de
+// tracabilite associee (entree et fichier physique) et la demande d'origine
+// sont annulees comme avant, puisque la livraison chez ECORIGINE n'a pas eu lieu.
 async function annulerConnaissementRefoule(achatId){
   const a = state.achats.find(x=>x.id===achatId);
   if (!a) return;
@@ -13236,17 +13242,20 @@ async function annulerConnaissementRefoule(achatId){
   askConfirm(
     'Confirmer que le camion / connaissement '+(conn||achatId)+' a ete refoule ou rejete ?\n\n'
     + 'Cette action va :\n'
-    + '- Supprimer l\'achat enregistre ('+fmtKg(a.quantite_kg)+')\n'
+    + '- Marquer l\'achat comme refoule ('+fmtKg(a.quantite_kg)+') : ECORIGINE ne l\'achete pas (pas de pesee, pas de paiement)\n'
+    + '- Mais garder ce volume compte dans le cumul du producteur pour le plafond des 70% (le cacao a quitte la plantation)\n'
     + '- Supprimer la fiche de tracabilite associee (fichier compris)\n'
-    + '- Remettre a zero le cumul des producteurs concernes pour le plafond des 70%\n'
     + '- Annuler la demande d\'origine\n\n'
     + 'Cette action est irreversible.',
     async () => {
       try{
-        // 1) Retire l'achat -- son exclusion des futurs cumuls (cumulAchats) suffit
-        //    a "remettre a zero le compteur" du ou des producteurs concernes.
-        await supabaseClient.from('achats').delete().eq('id', achatId);
-        state.achats = state.achats.filter(x=>x.id!==achatId);
+        // 1) Marque l'achat refoule -- on NE LE SUPPRIME PAS : quantite_kg reste
+        //    intact pour que cumulAchats continue a le compter. On vide les champs
+        //    de reception/paiement pour qu'il n'apparaisse plus comme achete.
+        const patchRefoule = { refoulee: true, poids_net_produit: null, poids_brut_accepte: null, nombre_sacs_accepte: null };
+        const { error: erreurRefoule } = await supabaseClient.from('achats').update(patchRefoule).eq('id', achatId);
+        if (erreurRefoule){ showToast('Échec du marquage refoulé : '+erreurRefoule.message); return; }
+        Object.assign(a, patchRefoule);
 
         if (conn){
           // 2) Retrouve la fiche de tracabilite (fichier + entree) portant ce
@@ -13277,7 +13286,7 @@ async function annulerConnaissementRefoule(achatId){
           });
         }
 
-        showToast('Connaissement '+(conn||'')+' annulé, cumul remis à zéro.', 'success');
+        showToast('Connaissement '+(conn||'')+' marqué refoulé — volume toujours compté dans le potentiel du producteur.', 'success');
         render(); // le state local est deja a jour -- pas besoin de tout recharger depuis le serveur
       }catch(e){
         showToast('Échec de l\'annulation : '+e.message);
@@ -15288,7 +15297,7 @@ async function enregistrerReceptionUsine(){
   const pl = state.modal && state.modal.payload;
   const a = pl && state.achats.find(x=>x.id===pl.achatId);
   if (!a) return;
-  if (peseeVerrouillee(a)){ showToast(MSG_PESEE_VERROUILLEE); return; }
+  if (peseeVerrouillee(a)){ showToast(msgVerrouillageAchat(a)); return; }
   const dateLivraison = fv('fp_date_livraison');
   const poidsNet = Number(fv('fp_poids_net'))||0;
   const sacs = Number(fv('fp_sacs'))||0;
@@ -15335,7 +15344,7 @@ function ouvrirFinalisationPaiement(achatId){
   if (!achatId){ showToast('Aucun achat à finaliser pour le moment.'); return; }
   const a = state.achats.find(x=>x.id===achatId);
   if (!a) return;
-  if (peseeVerrouillee(a)){ showToast(MSG_PESEE_VERROUILLEE); return; }
+  if (peseeVerrouillee(a)){ showToast(msgVerrouillageAchat(a)); return; }
   state.modal = { type:'finaliserPaiement', payload:{ achatId } };
   render();
 }
@@ -15406,6 +15415,7 @@ function achatsFiltered(){
 // ============================================================
 function nrmAchat(t){ return String(t==null?'':t).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase(); }
 function etatAchat(a){
+  if (a && a.refoulee) return { cle:'refoulee', label:'Camion refoulé', cls:'danger' };
   const recu = Number(a.poids_net_produit)>0 || Number(a.poids_brut_accepte)>0 || Number(a.nombre_sacs_accepte)>0;
   const paye = !!String(a.numero_cheque||'').trim();
   if (paye){ const sd = soldeAchat(a); if (sd && !sd.complet) return { cle:'paye', label:'Paiement partiel', cls:'warn' }; return { cle:'paye', label:'Paiement enregistré', cls:'ok' }; }
@@ -15457,8 +15467,10 @@ function echeanceDeclaration(dateIso, aujourdhui){
 function libelleResteDeclaration(j){ return j<0 ? 'en retard de '+(-j)+' jour'+(-j>1?'s':'') : j===0 ? 'dernier jour' : 'dans '+j+' jour'+(j>1?'s':''); }
 // Compte a rebours applicable : cacao RA (Multitrace), volume pese et pas encore declare.
 function echeanceEnCours(a, k){ return (k==='ra' && plateformesDeclaration(a).indexOf('ra')>=0 && !dateDeclaration(a,k) && declarable(a)) ? echeanceDeclaration(a.date) : null; }
-function peseeVerrouillee(a){ return plateformesDeclaration(a).some(k=>!!dateDeclaration(a,k)); }
+function peseeVerrouillee(a){ return !!(a && a.refoulee) || plateformesDeclaration(a).some(k=>!!dateDeclaration(a,k)); }
 const MSG_PESEE_VERROUILLEE = "Réception clôturée : le volume a été déclaré. Pour modifier la pesée, retire d'abord la déclaration.";
+const MSG_PESEE_REFOULEE = "Camion refoulé : ECORIGINE n'a pas acheté ce chargement (pas de pesée, pas de paiement). Le volume reste néanmoins compté dans le potentiel du producteur.";
+function msgVerrouillageAchat(a){ return (a && a.refoulee) ? MSG_PESEE_REFOULEE : MSG_PESEE_VERROUILLEE; }
 function nbADeclarer(a){ return declarable(a) ? plateformesDeclaration(a).filter(k=>!dateDeclaration(a,k)).length : 0; }
 function celluleDeclarationHtml(a, avecNom){
   const ks = plateformesDeclaration(a);
@@ -15648,7 +15660,7 @@ function detailAchatHtml(a, etat){
     + (ec ? '<span class="ecart '+(ec.kg<0?'neg':ec.kg>0?'pos':'')+'">'+fmtEcartAchat(ec.kg)+'</span><small class="pct">'+fmtPctAchat(ec.pct)+'</small>' : '<span class="vide">—</span>')+'</td></tr>'
     + '</tbody></table>'
     + (etat.cle==='attente' ? '<div class="attente-note">En attente de la pesée à l\'usine : saisir la réception pour renseigner les poids retenus.</div>' : '')
-    + (peseeVerrouillee(a) ? '<div class="attente-note">Pesée verrouillée : le volume a été déclaré. Pour la modifier, retire d\'abord la déclaration.</div>' : '');
+    + (peseeVerrouillee(a) ? '<div class="attente-note">'+esc(msgVerrouillageAchat(a))+'</div>' : '');
   const prime = calcPrime(a);
   const base = poidsBaseForPrime(a);
   const declarations = plateformesDeclaration(a).map(k=>{
@@ -15680,7 +15692,8 @@ function detailAchatHtml(a, etat){
     + (Number(a.poids_net_produit)>0 ? '<button type="button" class="btn-ghost btn-compact" onclick="ouvrirTicketPesee(\''+a.id+'\')" title="Renseigner les informations de la fiche de pesée de l\'usine, puis générer le ticket (modèle Word)">Ticket de pesée (Word)</button>' : '')
     + '<button type="button" class="btn-ghost btn-compact" onclick="openModal(\'achat\','+esc(JSON.stringify(a)).replace(/&#39;/g,"&apos;")+')">Modifier le connaissement</button>'
     + (a.connaissement && !a.producteur_id ? '<button type="button" class="btn-danger-text btn-compact" onclick="supprimerConnaissement(\''+a.id+'\')" title="Retire ce connaissement et son achat pour pouvoir le reproduire, sans toucher aux producteurs ni à la demande">Supprimer le connaissement</button>' : '')
-    + '<button type="button" class="btn-danger-text btn-compact" onclick="'+(a.connaissement?'annulerConnaissementRefoule':'deleteAchat')+'(\''+a.id+'\')">'+(a.connaissement?'Camion refoulé / annuler':'Supprimer')+'</button></div>';
+    + (a.refoulee ? '<span class="hint" title="'+esc(MSG_PESEE_REFOULEE)+'">Camion refoulé — volume compté, non acheté</span>'
+        : '<button type="button" class="btn-danger-text btn-compact" onclick="'+(a.connaissement?'annulerConnaissementRefoule':'deleteAchat')+'(\''+a.id+'\')">'+(a.connaissement?'Camion refoulé':'Supprimer')+'</button>') + '</div>';
   return '<tr class="detail-achat" data-for="'+esc(a.id)+'"><td colspan="10">'
     + stepperAchatHtml(a, etat)
     + '<div class="detail-grille">'
@@ -16098,7 +16111,7 @@ function ligneAchatHtml(a, montrerCoop, ouvert, avecNomPlateforme){
   const declTexte = plateformesDeclaration(a).map(k=>PLATEFORMES_DECLARATION[k].sigle+' '+(dateDeclaration(a,k)?'declare':'non declare'+(declarable(a)?'':' attente pesee'))).join(' ');
   const q = nrmAchat([a.connaissement, coop&&coop.nom, a.type_cacao, a.date, dateFr(a.date), a.nom_transporteur, a.immat_vehicule, a.nom_chauffeur, a.lieu_origine, etat.label, declTexte].join(' '));
   const cache = nrmAchat(state.achatsRecherche).trim() && q.indexOf(nrmAchat(state.achatsRecherche).trim())<0;
-  const reception = peseeVerrouillee(a) ? '<span class="vide" title="'+esc(MSG_PESEE_VERROUILLEE)+'">—</span>' : '<button type="button" class="'+(etat.cle==='attente'?'btn-primary':'btn-ghost')+' btn-compact" onclick="ouvrirFinalisationPaiement(\''+a.id+'\')">Réception à l\'usine</button>';
+  const reception = peseeVerrouillee(a) ? '<span class="vide" title="'+esc(msgVerrouillageAchat(a))+'">—</span>' : '<button type="button" class="'+(etat.cle==='attente'?'btn-primary':'btn-ghost')+' btn-compact" onclick="ouvrirFinalisationPaiement(\''+a.id+'\')">Réception à l\'usine</button>';
   return '<tr class="ligne-achat'+(ouvert?' ouvert':'')+'" data-id="'+esc(a.id)+'" data-q="'+esc(q)+'"'+(cache?' style="display:none"':'')+'>'
     + '<td class="chev-cell" onclick="toggleAchatDetail(\''+a.id+'\')" title="Afficher le détail"><span class="chev">▸</span></td>'
     + '<td class="g cliquable" onclick="toggleAchatDetail(\''+a.id+'\')"><div class="num-conn">'+esc(a.connaissement||'(sans numéro)')+'</div>'
@@ -16117,7 +16130,7 @@ function ligneAchatHtml(a, montrerCoop, ouvert, avecNomPlateforme){
         if (!peseeVerrouillee(a) && etat.cle!=='paye') bt.push(reception);
         if (Number(a.poids_net_produit)>0 && (!sd || !sd.complet)) bt.push('<button type="button" class="btn-ghost btn-compact" onclick="ouvrirPaiement(\''+a.id+'\')" title="'+(sd ? 'Ajouter un chèque : il reste '+fmtNum(sd.reste)+' FCFA à payer' : 'Enregistrer le chèque de paiement de cette livraison')+'">Paiement</button>');
         if (sd) bt.push('<button type="button" class="btn-ghost btn-compact" onclick="genererAttestation(\''+a.id+'\')" title="Envoie à la coopérative, en demande à signer, l\'attestation de paiement de la campagne (tous ses chèques enregistrés)">Attestation → à signer</button>');
-        if (a.connaissement) bt.push('<button type="button" class="btn-danger-text btn-compact" onclick="supprimerConnaissement(\''+a.id+'\')" title="Retire ce connaissement et son achat pour pouvoir le reproduire — sans toucher aux producteurs ni à la demande (pour un camion refoulé, voir le détail)">Supprimer</button>');
+        if (a.connaissement && !a.refoulee) bt.push('<button type="button" class="btn-danger-text btn-compact" onclick="supprimerConnaissement(\''+a.id+'\')" title="Retire ce connaissement et son achat pour pouvoir le reproduire — sans toucher aux producteurs ni à la demande (pour un camion refoulé, voir le détail)">Supprimer</button>');
         return '<div class="acts-ligne'+(bt.length>1 ? ' pile' : '')+'">'+(bt.length ? bt.join('') : (etat.cle==='paye' ? '<span class="vide">—</span>' : reception))+'</div>';
       })()+'</td></tr>'
     + (ouvert ? detailAchatHtml(a, etat).replace('<tr class="detail-achat"', '<tr class="detail-achat"'+(cache?' style="display:none"':'')) : '');
@@ -17012,7 +17025,7 @@ function _renderBrut(){
       + '<label class="field">Nombre de sacs acceptés<input type="number" step="1" min="0" name="sacs_accepte" value="'+esc(a.nombre_sacs_accepte||'')+'"'+(peseeVerrouillee(a)?' disabled':'')+'></label>'
       + '<label class="field">Poids net livré<input type="number" step="0.1" min="0" name="poids_brut_accepte" value="'+esc(a.poids_brut_accepte||'')+'"'+(peseeVerrouillee(a)?' disabled':'')+'></label>'
       + '<label class="field">Poids net payé (après analyse/réfaction — base de paiement à la coopérative)<input type="number" step="0.1" min="0" name="poids_net_produit" value="'+esc(a.poids_net_produit||'')+'"'+(peseeVerrouillee(a)?' disabled':'')+'></label>'
-      + (peseeVerrouillee(a) ? '<span class="hint" style="color:var(--warn);">Pesée verrouillée : le volume a été déclaré. Retire d\'abord la déclaration pour modifier ces valeurs.</span>' : '<span class="hint">Ces 3 valeurs sont souvent connues seulement après l\'arrivée du camion — reviens compléter avec « Modifier ».</span>')
+      + (peseeVerrouillee(a) ? '<span class="hint" style="color:var(--warn);">'+esc(msgVerrouillageAchat(a))+'</span>' : '<span class="hint">Ces 3 valeurs sont souvent connues seulement après l\'arrivée du camion — reviens compléter avec « Modifier ».</span>')
       + '</fieldset>'
       + '<label class="field">N° de connaissement<input type="text" name="connaissement" value="'+esc(a.connaissement||'')+'"></label>'
       + '<label class="field">Type de cacao<select name="type_cacao">'
