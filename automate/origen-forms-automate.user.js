@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → Forms CARGILL (automate de saisie)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      1.20.0
+// @version      1.21.0
 // @description  Saisit automatiquement dans le formulaire Microsoft Forms de CARGILL les questionnaires producteurs collectés dans ORIGEN (ECORIGINE). Un lot copié depuis ORIGEN, un producteur par réponse, reprise automatique après chaque envoi.
 // @author       ECORIGINE — ORIGEN
 // @match        https://forms.office.com/*
@@ -338,6 +338,21 @@
     // `bloc` quand il est introuvable a l'instant T (un tel repli silencieux reintroduirait exactement le
     // bug qu'on corrige : agir sur une copie perimee en pensant agir sur la vraie page).
     const conteneurActuel = () => blocsQuestions().find((x) => texteTitre(x) === titreBloc) || null;
+    // Juste apres le scroll, Forms peut avoir affiche le bloc (son titre est la) sans avoir encore monte
+    // ses boutons radio -- les 250ms ci-dessus ne suffisent pas toujours (page chargee, beaucoup de
+    // questions deja repondues). Sans ca, le code ci-dessous ne trouve aucun radio, retombe en cascade
+    // jusqu'au repli "fausse liste deroulante maison" (heuristique large, peu fiable) et echoue a tort
+    // avec "option introuvable dans le menu" alors qu'il s'agissait juste de boutons radio pas encore la.
+    // On attend donc qu'UN controle reconnu (quel qu'il soit) soit present avant de trancher le type.
+    const aUnControleReconnu = (b) => !!(b && b.querySelector(
+      'input[type="radio"], [role="radio"], input[type="checkbox"], [role="checkbox"], select, ' +
+      '[role="combobox"], [data-automation-id="dropdown"], textarea, input[type="text"], ' +
+      'input:not([type]), input[data-automation-id="textInput"]'
+    ));
+    if (!aUnControleReconnu(bloc)) {
+      const pret = await attendre(() => { const c = conteneurActuel(); return aUnControleReconnu(c) ? c : null; }, 2500);
+      if (pret) bloc = pret;
+    }
     // 1. choix (boutons radio)
     const radios = Array.from(bloc.querySelectorAll('input[type="radio"], [role="radio"]')).filter(visible);
     if (radios.length) {
