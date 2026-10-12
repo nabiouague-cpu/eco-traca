@@ -3279,7 +3279,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-12-007';
+const APP_VERSION = '2026-10-12-008';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -16749,6 +16749,19 @@ function renderCoopDashboard(){
 
 function _renderBrut(){
   const app = document.getElementById('app');
+  // Modale ouverte : l'animation d'entree (dsPop/dsFade) ne doit rejouer qu'a la toute premiere
+  // apparition de cette modale -- jamais a chaque redessin provoque par une saisie, un clic sur
+  // une case/un onglet interne, etc. dans la modale elle-meme (sinon elle "pulse" a chaque
+  // interaction). state.modal reste le MEME objet d'un redessin a l'autre tant que la modale
+  // reste ouverte (on mute son .payload, on ne le remplace pas) : on s'en sert pour detecter
+  // "est-ce vraiment la premiere fois qu'on affiche CETTE modale ?". Applique globalement, en une
+  // seule passe sur le HTML final (juste avant l'ecriture dans le DOM, plus bas) -- quelle que soit
+  // la fonction (inline ici, ou un helper comme lotsModalsHtml()/qcModalHtml()) qui l'a construite.
+  let _modalSansAnim = '';
+  if (state.modal){
+    _modalSansAnim = state.modal._affiche ? ' sans-anim' : '';
+    state.modal._affiche = true;
+  }
   if (state.authLoading){
     app.innerHTML = ecranChargement('Vérification de la connexion…');
     return;
@@ -17805,6 +17818,13 @@ function _renderBrut(){
       + '</div></div></div>';
   }
 
+  // Une seule passe, globale : si une modale est deja affichee depuis au moins un redessin,
+  // on neutralise son animation d'entree partout ou elle apparait dans le HTML final (overlay
+  // ET panneau), peu importe laquelle et peu importe la fonction qui l'a construite plus haut.
+  if (_modalSansAnim){
+    html = html.replace(/class="modal-overlay"/g, 'class="modal-overlay'+_modalSansAnim+'"')
+               .replace(/class="modal(?=["\s])/g, 'class="modal'+_modalSansAnim);
+  }
   app.innerHTML = html;
   renderMapIfNeeded();
 }
