@@ -2822,22 +2822,28 @@ async function enregistrerAjoutCooperative(){
   const contact_nom = v('acContactNom').trim();
   const contact_contact = v('acContactContact').trim();
   const email1 = v('acEmail1').trim();
+  const diligence_externe = !!(document.getElementById('acDiligenceExterne')||{}).checked;
 
+  // Diligence EUDR assurée par le client : le reste de l'identité (représentant légal, contacts,
+  // email) ne sert à rien côté ECORIGINE puisque ce n'est pas ECORIGINE qui vérifie/relance cette
+  // coopérative -- seuls le nom et le nom complet restent exigés.
   const manquants = [];
   if (!nom) manquants.push('Nom');
   if (!nom_complet) manquants.push('Nom complet');
-  if (!representant_legal_nom) manquants.push('Représentant légal — Nom');
-  if (!representant_legal_contact) manquants.push('Représentant légal — Contact');
-  if (!contact_nom) manquants.push('Personne contact — Nom');
-  if (!contact_contact) manquants.push('Personne contact — Contact');
-  if (!email1) manquants.push('Email 1');
+  if (!diligence_externe){
+    if (!representant_legal_nom) manquants.push('Représentant légal — Nom');
+    if (!representant_legal_contact) manquants.push('Représentant légal — Contact');
+    if (!contact_nom) manquants.push('Personne contact — Nom');
+    if (!contact_contact) manquants.push('Personne contact — Contact');
+    if (!email1) manquants.push('Email 1');
+  }
   if (manquants.length){
     showToast('Champs obligatoires manquants : '+manquants.join(', '));
     return;
   }
 
   const payload = {
-    nom, nom_complet, type:'cooperative', statut,
+    nom, nom_complet, type:'cooperative', statut, diligence_externe,
     // Les donnees de certification ne concernent qu'une cooperative « Certifiée ».
     certifications: statut==='Certifiée' ? v('acCertifications').trim() : '',
     rccm: v('acRccm').trim(), ccc_num: v('acCccNum').trim(),
@@ -3279,7 +3285,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-12-008';
+const APP_VERSION = '2026-10-12-009';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -17374,6 +17380,9 @@ function _renderBrut(){
       + '<label class="field">Numéro CCC<input type="text" id="acCccNum"></label>'
       + '<label class="field">Siège social<input type="text" id="acSiegeSocial"></label>'
       + '<label class="field" style="grid-column:1/-1;">Adresse postale<input type="text" id="acAdressePostale"></label>'
+      + '<label class="field" style="grid-column:1/-1;display:flex;align-items:center;gap:8px;flex-direction:row;background:var(--info-bg,#eef4fb);border-radius:8px;padding:10px 12px;">'
+      +   '<input type="checkbox" id="acDiligenceExterne" style="width:auto;"><span>Diligence EUDR assurée par le client final (pas par ECORIGINE)</span></label>'
+      + '<div class="hint" style="grid-column:1/-1;margin:-4px 0 4px;">À cocher quand c\'est le client final qui gère lui-même toute la diligence raisonnée (producteurs, polygones, documents) et transmet seulement les connaissements à ECORIGINE pour l\'export. Le reste du formulaire devient alors facultatif, et cette coopérative n\'apparaîtra plus dans les rappels de documents manquants.</div>'
       + '<div id="acBlocCertif" style="display:none;grid-column:1/-1;grid-template-columns:1fr 1fr;gap:0 16px;" class="grid-2">'
       +   '<label class="field">Certifications<input type="text" id="acCertifications" placeholder="Ex : Rainforest Alliance"></label>'
       +   '<label class="field">Identifiant de certification<input type="text" id="acIdentifiantCertif"></label>'
