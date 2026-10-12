@@ -1363,7 +1363,7 @@
   .modal-overlay{background:rgba(9,42,38,.42);backdrop-filter:blur(5px) saturate(1.1);-webkit-backdrop-filter:blur(5px) saturate(1.1);animation:dsFade .16s var(--ease);}
   .modal{border-radius:16px;box-shadow:var(--shadow-lg),0 0 0 1px rgba(255,255,255,.5) inset;animation:dsPop .2s var(--ease);}
   /* Fenetres redessinees a chaque saisie (ex. questionnaire CARGILL) : pas de rejeu de l'animation d'entree. */
-  .modal-overlay.sans-anim, .modal.sans-anim{animation:none;}
+  .modal-overlay.sans-anim, .modal.sans-anim{animation:none;} .toast.sans-anim, .tb-menu.sans-anim, .rech-overlay.sans-anim, .rech-boite.sans-anim{animation:none !important;}
   .modal h2, .modal h3{margin-top:0;letter-spacing:-.012em;}
   .modal .actions{margin-top:18px;padding-top:14px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;}
   /* ---- Notifications ---- */
@@ -3438,7 +3438,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-12-037';
+const APP_VERSION = '2026-10-12-038';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8535,6 +8535,24 @@ function renderOcCockpit(){
   return html;
 }
 
+// Les fenetres (modales, confirmation, message, menus, recherche) ne doivent s'animer qu'a leur ouverture :
+// chaque clic redessine l'ecran, et l'animation d'entree rejouait alors en boucle (fenetre qui "bouge").
+// On compare ce qui est ouvert au dernier dessin : si c'est identique, on coupe l'animation.
+const _ocSigOverlays = {};
+function ocSansAnimHtml(html, ctx){
+  const sig = [
+    state.modal ? state.modal.type : '',
+    state.confirmDialog ? state.confirmDialog.message : '',
+    state.toast ? state.toast.message : '',
+    state.notifOuvert ? 'n' : '', state.menuUtilisateurOuvert ? 'u' : '',
+    state.recherche ? 'r' : ''
+  ].join('|');
+  const identique = sig !== '|||||' && sig === _ocSigOverlays[ctx];
+  _ocSigOverlays[ctx] = sig;
+  if (!identique) return html;
+  return html
+    .replace(/class="(modal-overlay|modal|toast|tb-menu|rech-overlay|rech-boite)(?=["\s])/g, 'class="$1 sans-anim');
+}
 function renderOricert(){
   const tab = (state.oricertTab==='delais' && ocRef()!=='FT') ? 'portail' : (state.oricertTab || 'portail');
   let contenu;
@@ -17274,7 +17292,7 @@ function _renderBrut(){
     return;
   }
   if (state.espaceChoisi==='oricert'){
-    app.innerHTML = renderOricert();
+    app.innerHTML = ocSansAnimHtml(renderOricert(), 'oricert');
     return;
   }
 
@@ -18283,6 +18301,7 @@ function _renderBrut(){
     html = html.replace(/class="modal-overlay"/g, 'class="modal-overlay'+_modalSansAnim+'"')
                .replace(/class="modal(?=["\s])/g, 'class="modal'+_modalSansAnim);
   }
+  html = ocSansAnimHtml(html, 'origen');
   app.innerHTML = html;
   renderMapIfNeeded();
 }
