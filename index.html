@@ -2804,8 +2804,61 @@ function ocAcToggleCertifBlock(statut){
     ['acCertifications','acIdentifiantCertif','acDateFinLicence','acVolumeCertificat'].forEach(id=>{ const el=document.getElementById(id); if (el) el.value=''; });
   }
 }
+// Diligence EUDR assuree par le client final : seuls nom / ville / client (+ son contact, pre-rempli) /
+// n° CCC / statut restent utiles -- le reste de l'identite (nom complet, representant legal, emails,
+// RCCM, siege social, adresse) est masque (pas supprime du DOM, pour pouvoir re-afficher tel quel si la
+// case est decochee par erreur).
+const AC_CHAMPS_MASQUES_DILIGENCE_EXTERNE = ['acBlocNomComplet','acBlocRepresentantNom','acBlocRepresentantContact','acBlocEmail1','acBlocEmail2','acBlocEmail3','acBlocRccm','acBlocSiegeSocial','acBlocAdressePostale'];
+function ocAcToggleDiligenceExterne(checked){
+  AC_CHAMPS_MASQUES_DILIGENCE_EXTERNE.forEach(id=>{ const el=document.getElementById(id); if (el) el.style.display = checked ? 'none' : ''; });
+  const blocClient = document.getElementById('acClientBloc');
+  if (blocClient) blocClient.style.display = checked ? '' : 'none';
+  if (checked){
+    const choix = document.getElementById('acClientChoix');
+    ocAcClientChoixChange(choix ? choix.value : '__nouveau__');
+  } else {
+    const nouveauBloc = document.getElementById('acClientNouveauBloc');
+    if (nouveauBloc) nouveauBloc.style.display = 'none';
+  }
+  // Le suivi de certification releve alors du client, pas d'ECORIGINE : masque quel que soit le statut.
+  if (checked){ const blocCertif = document.getElementById('acBlocCertif'); if (blocCertif) blocCertif.style.display = 'none'; }
+  else ocAcToggleCertifBlock((document.getElementById('acStatut')||{}).value);
+}
+// Choisir un client connu pre-remplit automatiquement son contact de reference (nom, email,
+// telephone) enregistre une fois pour toutes via "Modifier" sur la carte client (onglet Contrats
+// clients) ; "+ Nouveau client" revele la saisie libre et vide le contact (pas encore connu).
+function ocAcClientChoixChange(valeur){
+  const champ = document.getElementById('acClientNouveauBloc');
+  const input = document.getElementById('acClient');
+  if (valeur==='__nouveau__'){
+    if (champ) champ.style.display = '';
+    if (input) input.value = '';
+    ocAcAppliquerContact({});
+  } else {
+    if (champ) champ.style.display = 'none';
+    ocAcAppliquerContact(clientContactDe(valeur));
+  }
+}
+function ocAcAppliquerContact(c){
+  const nom = document.getElementById('acContactNom');
+  const email = document.getElementById('acContactEmail');
+  const tel = document.getElementById('acContactContact');
+  if (nom) nom.value = c.contact_nom||'';
+  if (email) email.value = c.contact_email||'';
+  if (tel) tel.value = c.contact_telephone||'';
+}
+function ocAcClientValeur(){
+  const sel = document.getElementById('acClientChoix');
+  if (!sel) return '';
+  if (sel.value==='__nouveau__') return (document.getElementById('acClient')||{}).value || '';
+  return sel.value;
+}
 function ouvrirAjoutCooperative(){
   state.modal = {type:'ajoutCooperative', payload:{}};
+  // La liste des clients connus (et leur contact enregistré) vient des données "Lots & export" --
+  // on s'assure qu'elles sont chargées même si on ouvre ce formulaire sans être jamais passé par cet
+  // onglet, sinon le menu déroulant "Nom du client" serait vide.
+  if (!state.lotsCharges) chargerLots().then(()=>{ if (state.modal && state.modal.type==='ajoutCooperative') render(); });
   render();
 }
 function fermerAjoutCooperative(){
@@ -2821,16 +2874,19 @@ async function enregistrerAjoutCooperative(){
   const representant_legal_contact = v('acRepresentantContact').trim();
   const contact_nom = v('acContactNom').trim();
   const contact_contact = v('acContactContact').trim();
+  const contact_email = v('acContactEmail').trim();
   const email1 = v('acEmail1').trim();
   const diligence_externe = !!(document.getElementById('acDiligenceExterne')||{}).checked;
+  const client = diligence_externe ? ocAcClientValeur().trim() : '';
 
-  // Diligence EUDR assurée par le client : le reste de l'identité (représentant légal, contacts,
-  // email) ne sert à rien côté ECORIGINE puisque ce n'est pas ECORIGINE qui vérifie/relance cette
-  // coopérative -- seuls le nom et le nom complet restent exigés.
+  // Diligence EUDR assurée par le client : le reste de l'identité (nom complet, représentant légal,
+  // emails, RCCM, siège social, adresse) ne sert à rien côté ECORIGINE puisque ce n'est pas ECORIGINE
+  // qui vérifie/relance cette coopérative -- seuls le nom, la ville, le client, son contact, le n° CCC
+  // et le statut restent exigés/utiles.
   const manquants = [];
   if (!nom) manquants.push('Nom');
-  if (!nom_complet) manquants.push('Nom complet');
   if (!diligence_externe){
+    if (!nom_complet) manquants.push('Nom complet');
     if (!representant_legal_nom) manquants.push('Représentant légal — Nom');
     if (!representant_legal_contact) manquants.push('Représentant légal — Contact');
     if (!contact_nom) manquants.push('Personne contact — Nom');
@@ -2843,16 +2899,16 @@ async function enregistrerAjoutCooperative(){
   }
 
   const payload = {
-    nom, nom_complet, type:'cooperative', statut, diligence_externe,
-    // Les donnees de certification ne concernent qu'une cooperative « Certifiée ».
-    certifications: statut==='Certifiée' ? v('acCertifications').trim() : '',
+    nom, nom_complet, type:'cooperative', statut, diligence_externe, client,
+    // Les donnees de certification ne concernent qu'une cooperative « Certifiée » dont ECORIGINE suit la diligence.
+    certifications: (!diligence_externe && statut==='Certifiée') ? v('acCertifications').trim() : '',
     rccm: v('acRccm').trim(), ccc_num: v('acCccNum').trim(),
-    identifiant_certification: statut==='Certifiée' ? v('acIdentifiantCertif').trim() : '',
-    date_fin_licence: statut==='Certifiée' ? (v('acDateFinLicence') || null) : null,
-    volume_certificat: statut==='Certifiée' && v('acVolumeCertificat') ? Number(v('acVolumeCertificat')) : null,
+    identifiant_certification: (!diligence_externe && statut==='Certifiée') ? v('acIdentifiantCertif').trim() : '',
+    date_fin_licence: (!diligence_externe && statut==='Certifiée') ? (v('acDateFinLicence') || null) : null,
+    volume_certificat: (!diligence_externe && statut==='Certifiée') && v('acVolumeCertificat') ? Number(v('acVolumeCertificat')) : null,
     ville: v('acVille').trim(), siege_social: v('acSiegeSocial').trim(), adresse_postale: v('acAdressePostale').trim(),
     representant_legal_nom, representant_legal_contact,
-    contact_nom, contact_contact,
+    contact_nom, contact_contact, contact_email,
     email1, email2: v('acEmail2').trim(), email3: v('acEmail3').trim(),
     created_by: state.session.user.id,
   };
@@ -3285,7 +3341,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-12-010';
+const APP_VERSION = '2026-10-12-011';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5469,6 +5525,34 @@ function ccLogoChoisir(client){
   state._ccLogoCible = client;
   const i = document.getElementById('cc-logo-input'); if (i){ i.value=''; i.click(); }
 }
+// Contact de reference d'un client (nom/email/telephone), enregistre une fois pour toutes dans
+// clients_meta -- sert a pre-remplir automatiquement la fiche d'une cooperative "diligence externe"
+// (geree par ce client) des que son nom est choisi, plutot que de ressaisir le contact a chaque fois.
+function clientContactDe(client){
+  const m = clientMetaDe(client) || {};
+  return { contact_nom: m.contact_nom||'', contact_email: m.contact_email||'', contact_telephone: m.contact_telephone||'' };
+}
+function ccContactOuvrir(client){
+  const c = clientContactDe(client);
+  state.modal = { type:'clientContact', payload: Object.assign({client}, c) };
+  render();
+}
+async function enregistrerClientContact(){
+  const pl = state.modal.payload;
+  const contact_nom = fv('ccc_nom').trim();
+  const contact_email = fv('ccc_email').trim();
+  const contact_telephone = fv('ccc_telephone').trim();
+  const ligne = { client: pl.client, contact_nom, contact_email, contact_telephone, updated_at: new Date().toISOString() };
+  const existant = clientMetaDe(pl.client);
+  const { error } = existant
+    ? await supabaseClient.from('clients_meta').update(ligne).eq('client', pl.client)
+    : await supabaseClient.from('clients_meta').insert(ligne);
+  if (error){ showToast('Échec : '+error.message); return; }
+  await chargerLots();
+  state.modal = null;
+  render();
+  showToast('Contact mis à jour pour '+pl.client+'.', 'success');
+}
 async function ccLogoDepose(input){
   const client = state._ccLogoCible; const fichier = input.files && input.files[0];
   if (!client || !fichier) return;
@@ -5606,10 +5690,15 @@ function renderContratsClients(){
     } else {
       resume = '<span style="color:var(--warn)">Aucun contrat reçu</span> · '+cvsClient.length+' CV'+(volumeCvSansContrat>0?' · '+fmtT(volumeCvSansContrat)+' en attente':'');
     }
+    const contact = clientContactDe(client);
+    const contactResume = (contact.contact_nom || contact.contact_email || contact.contact_telephone)
+      ? [contact.contact_nom, contact.contact_telephone, contact.contact_email].filter(Boolean).join(' · ')
+      : 'Aucun contact enregistré';
     html += '<div class="cc-client-carte">'
       + '<div class="cc-client-tete" onclick="ccBasculerClient(\''+escJs(client)+'\')">'
       + ccAvatarHtml(client, 44)
-      + '<div class="cc-client-info"><b>'+esc(client)+'</b><span class="hint" style="margin:0">'+resume+'</span></div>'
+      + '<div class="cc-client-info"><b>'+esc(client)+'</b><span class="hint" style="margin:0">'+resume+'</span>'
+      + '<span class="hint" style="margin:0">Contact : '+esc(contactResume)+' <a href="javascript:void(0)" onclick="event.stopPropagation();ccContactOuvrir(\''+escJs(client)+'\')">Modifier</a></span></div>'
       + '<span class="cc-chevron'+(ouvert?' ouvert':'')+'">▸</span>'
       + '</div>';
     if (ouvert){
@@ -6727,6 +6816,15 @@ function lotsModalsHtml(){
       + '<div id="cvApercu">'+cvApercuHtmlPourValeurs(pl)+'</div>'
       + '<label class="field" style="margin-top:10px">Notes<textarea name="cv_notes" rows="2">'+esc(pl.notes||'')+'</textarea></label>'
       + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="cvEnregistrer()">Enregistrer</button></div></div></div>';
+  }
+  if (m.type==='clientContact'){
+    const pl = m.payload;
+    return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>Contact — '+esc(pl.client)+'</h3><div id="modal-fields">'
+      + '<div class="hint" style="margin:0 0 10px">Ce contact est proposé automatiquement sur les fiches des coopératives de ce client dont la diligence EUDR est assurée par lui.</div>'
+      + '<label class="field">Nom du contact<input type="text" name="ccc_nom" value="'+esc(pl.contact_nom||'')+'"></label>'
+      + '<label class="field">Email du contact<input type="email" name="ccc_email" value="'+esc(pl.contact_email||'')+'"></label>'
+      + '<label class="field">Téléphone du contact<input type="text" name="ccc_telephone" value="'+esc(pl.contact_telephone||'')+'"></label>'
+      + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="enregistrerClientContact()">Enregistrer</button></div></div></div>';
   }
   return '';
 }
@@ -14687,7 +14785,7 @@ function renderCoopCard(c){
     + '</div>'
     + '</div>'
     + (aVerifier ? '<div style="margin-bottom:10px;"><span class="badge warn">Auto-inscrite — à vérifier</span></div>' : '')
-    + (c.diligence_externe ? '<div style="margin-bottom:10px;"><span class="badge info" title="Le client final assure lui-même la diligence raisonnée EUDR (producteurs, polygones, documents) directement de son côté. ECORIGINE n\'enregistre que les livraisons et les connaissements, pour son propre circuit export.">Diligence EUDR assurée par le client</span></div>' : '')
+    + (c.diligence_externe ? '<div style="margin-bottom:10px;"><span class="badge info" title="'+esc('Le client final assure lui-même la diligence raisonnée EUDR (producteurs, polygones, documents) directement de son côté. ECORIGINE n\'enregistre que les livraisons et les connaissements, pour son propre circuit export.'+((c.contact_nom||c.contact_email||c.contact_contact)?' Contact : '+[c.contact_nom,c.contact_contact,c.contact_email].filter(Boolean).join(' · '):''))+'">Diligence EUDR assurée par '+(c.client?esc(c.client):'le client')+'</span></div>' : '')
     + '<div class="coop-card-stats">'
     + '<div><span class="lbl">Producteurs</span><span class="val">'+fmtNum(stats.count)+'</span></div>'
     + '<div><span class="lbl">Potentiel</span><span class="val">'+fmtKg(stats.potentiel)+'</span></div>'
@@ -17363,26 +17461,29 @@ function _renderBrut(){
       + '<h2>Ajouter une coopérative</h2>'
       + '<p class="hint" style="margin:0 0 14px;">Mêmes informations que celles demandées à la coopérative lors de la création de son propre accès.</p>'
       + '<label class="field" style="display:flex;align-items:center;gap:8px;flex-direction:row;background:var(--info-bg,#eef4fb);border-radius:8px;padding:10px 12px;margin-bottom:12px;">'
-      +   '<input type="checkbox" id="acDiligenceExterne" style="width:18px;height:18px;flex:none;margin:0;"><span>Diligence EUDR assurée par le client final (pas par ECORIGINE)</span></label>'
-      + '<div class="hint" style="margin:-8px 0 14px;">À cocher quand c\'est le client final qui gère lui-même toute la diligence raisonnée (producteurs, polygones, documents) et transmet seulement les connaissements à ECORIGINE pour l\'export. Le reste du formulaire devient alors facultatif, et cette coopérative n\'apparaîtra plus dans les rappels de documents manquants.</div>'
+      +   '<input type="checkbox" id="acDiligenceExterne" style="width:18px;height:18px;flex:none;margin:0;" onchange="ocAcToggleDiligenceExterne(this.checked)"><span>Diligence EUDR assurée par le client final (pas par ECORIGINE)</span></label>'
+      + '<div class="hint" style="margin:-8px 0 14px;">À cocher quand c\'est le client final qui gère lui-même toute la diligence raisonnée (producteurs, polygones, documents) et transmet seulement les connaissements à ECORIGINE pour l\'export. Seuls le nom, la ville, le client, son contact, le n° CCC et le statut restent alors utiles ; le reste du formulaire disparaît et cette coopérative n\'apparaîtra plus dans les rappels de documents manquants.</div>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 16px;">'
       + '<label class="field">Nom (sigle) *<input type="text" id="acNom" placeholder="Ex : SCOOPS SAMATOU"></label>'
-      + '<label class="field">Nom complet *<input type="text" id="acNomComplet" placeholder="Raison sociale complète"></label>'
+      + '<label class="field" id="acBlocNomComplet">Nom complet *<input type="text" id="acNomComplet" placeholder="Raison sociale complète"></label>'
       + '<label class="field">Statut *<select id="acStatut" onchange="ocAcToggleCertifBlock(this.value)">'
       +   '<option value="Non certifiée">Non certifiée</option><option value="En cours de certification">En cours de certification</option><option value="Certifiée">Certifiée</option>'
       + '</select></label>'
       + '<label class="field">Ville<input type="text" id="acVille" placeholder="Ex : Daloa"></label>'
-      + '<label class="field">Représentant légal — Nom *<input type="text" id="acRepresentantNom"></label>'
-      + '<label class="field">Représentant légal — Contact *<input type="text" id="acRepresentantContact" placeholder="Téléphone"></label>'
+      + '<label class="field" id="acClientBloc" style="display:none;">Nom du client<select id="acClientChoix" onchange="ocAcClientChoixChange(this.value)">'+ccClientsConnusOptions('')+'</select></label>'
+      + '<label class="field" id="acClientNouveauBloc" style="display:none;">Nom du nouveau client<input type="text" id="acClient" placeholder="ex : TOUTON"></label>'
+      + '<label class="field" id="acBlocRepresentantNom">Représentant légal — Nom *<input type="text" id="acRepresentantNom"></label>'
+      + '<label class="field" id="acBlocRepresentantContact">Représentant légal — Contact *<input type="text" id="acRepresentantContact" placeholder="Téléphone"></label>'
       + '<label class="field">Personne contact — Nom *<input type="text" id="acContactNom"></label>'
-      + '<label class="field">Personne contact — Contact *<input type="text" id="acContactContact" placeholder="Téléphone"></label>'
-      + '<label class="field">Email 1 *<input type="email" id="acEmail1"></label>'
-      + '<label class="field">Email 2<input type="email" id="acEmail2"></label>'
-      + '<label class="field">Email 3<input type="email" id="acEmail3"></label>'
-      + '<label class="field">RCCM<input type="text" id="acRccm"></label>'
+      + '<label class="field">Personne contact — Téléphone *<input type="text" id="acContactContact" placeholder="Téléphone"></label>'
+      + '<label class="field">Personne contact — Email<input type="email" id="acContactEmail"></label>'
+      + '<label class="field" id="acBlocEmail1">Email 1<input type="email" id="acEmail1"></label>'
+      + '<label class="field" id="acBlocEmail2">Email 2<input type="email" id="acEmail2"></label>'
+      + '<label class="field" id="acBlocEmail3">Email 3<input type="email" id="acEmail3"></label>'
+      + '<label class="field" id="acBlocRccm">RCCM<input type="text" id="acRccm"></label>'
       + '<label class="field">Numéro CCC<input type="text" id="acCccNum"></label>'
-      + '<label class="field">Siège social<input type="text" id="acSiegeSocial"></label>'
-      + '<label class="field" style="grid-column:1/-1;">Adresse postale<input type="text" id="acAdressePostale"></label>'
+      + '<label class="field" id="acBlocSiegeSocial">Siège social<input type="text" id="acSiegeSocial"></label>'
+      + '<label class="field" id="acBlocAdressePostale" style="grid-column:1/-1;">Adresse postale<input type="text" id="acAdressePostale"></label>'
       + '<div id="acBlocCertif" style="display:none;grid-column:1/-1;grid-template-columns:1fr 1fr;gap:0 16px;" class="grid-2">'
       +   '<label class="field">Certifications<input type="text" id="acCertifications" placeholder="Ex : Rainforest Alliance"></label>'
       +   '<label class="field">Identifiant de certification<input type="text" id="acIdentifiantCertif"></label>'
