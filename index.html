@@ -2826,11 +2826,25 @@ function ocAcToggleDiligenceExterne(checked){
 function ocAcCampagneId(){
   return (state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : ((campagneCourante()||{}).id || '');
 }
-// Choisir un client dans la liste (deja connus de la campagne, aucune saisie libre) pre-remplit
-// automatiquement son contact de reference (nom, email, telephone), enregistre une fois pour toutes
-// via "Modifier" sur la carte client (onglet Lots & export > Contrats clients).
+// Clients deja connus de la campagne en cours, + une option pour en enregistrer un nouveau (saisie
+// libre revelee seulement dans ce cas -- jamais besoin de taper le nom d'un client deja present).
+function ocAcClientOptions(valeur){
+  const base = lotsClientsOptions(ocAcCampagneId(), valeur).replace('<option value="">— Aucun (générique) —</option>', '');
+  return '<option value="__nouveau__">+ Nouveau client…</option>' + base;
+}
+// Choisir un client connu pre-remplit automatiquement son contact de reference (nom, email,
+// telephone) enregistre une fois pour toutes des la premiere coopérative creee pour ce client (ou
+// modifiable ensuite via "Modifier" sur la carte client, onglet Lots & export > Contrats clients).
+// "+ Nouveau client" revele la saisie libre et vide le contact (pas encore connu).
 function ocAcClientChoixChange(valeur){
-  ocAcAppliquerContact(valeur ? clientContactDe(valeur) : {});
+  const champ = document.getElementById('acClientNouveauBloc');
+  if (valeur==='__nouveau__'){
+    if (champ) champ.style.display = '';
+    ocAcAppliquerContact({});
+  } else {
+    if (champ) champ.style.display = 'none';
+    ocAcAppliquerContact(valeur ? clientContactDe(valeur) : {});
+  }
 }
 function ocAcAppliquerContact(c){
   const nom = document.getElementById('acContactNom');
@@ -2841,7 +2855,59 @@ function ocAcAppliquerContact(c){
   if (tel) tel.value = c.contact_telephone||'';
 }
 function ocAcClientValeur(){
-  return (document.getElementById('acClientChoix')||{}).value || '';
+  const sel = document.getElementById('acClientChoix');
+  if (!sel) return '';
+  if (sel.value==='__nouveau__') return (document.getElementById('acClientNouveau')||{}).value || '';
+  return sel.value;
+}
+// Si ce client n'a pas encore de contact de reference enregistre, le contact saisi pour la toute
+// premiere coopérative creee pour lui devient automatiquement sa reference -- les coopératives
+// suivantes du meme client se rempliront alors seules. Un contact deja enregistre n'est jamais ecrase
+// ici (on l'edite volontairement via "Modifier" sur la carte client).
+async function ocEnregistrerContactClientSiNouveau(client, contact_nom, contact_contact, contact_email){
+  if (!client || !(contact_nom||contact_contact||contact_email)) return;
+  const existant = clientMetaDe(client);
+  if (existant && (existant.contact_nom||existant.contact_email||existant.contact_telephone)) return;
+  const ligne = { client, contact_nom, contact_email, contact_telephone: contact_contact, updated_at: new Date().toISOString() };
+  const { error } = existant
+    ? await supabaseClient.from('clients_meta').update(ligne).eq('client', client)
+    : await supabaseClient.from('clients_meta').insert(ligne);
+  if (!error) await chargerLots();
+}
+// Meme logique de masquage/client/contact que le formulaire d'ajout, mais pour la modale "Modifier"
+// (pattern #modal-fields [name=...] au lieu des id directs).
+const COOP_CHAMPS_MASQUES_DILIGENCE_EXTERNE = ['coopBlocNomComplet','coopBlocRccm','coopBlocAdressePostale','coopBlocSiegeSocial','coopBlocRepresentantLegal','coopBlocEmail2','coopBlocEmail3'];
+function ocCoopToggleDiligenceExterne(checked){
+  COOP_CHAMPS_MASQUES_DILIGENCE_EXTERNE.forEach(id=>{ const el=document.getElementById(id); if (el) el.style.display = checked ? 'none' : ''; });
+  const blocClient = document.getElementById('coopClientBloc');
+  if (blocClient) blocClient.style.display = checked ? '' : 'none';
+  if (checked){
+    const cf = document.getElementById('certif-fields'); if (cf) cf.style.display = 'none';
+    const choix = document.querySelector('#modal-fields [name="client_choix"]');
+    ocCoopClientChoixChange(choix ? choix.value : '');
+  } else {
+    const nouveauBloc = document.getElementById('coopClientNouveauBloc');
+    if (nouveauBloc) nouveauBloc.style.display = 'none';
+    toggleCertifFields();
+  }
+}
+function ocCoopClientChoixChange(valeur){
+  const champ = document.getElementById('coopClientNouveauBloc');
+  if (valeur==='__nouveau__'){
+    if (champ) champ.style.display = '';
+    ocCoopAppliquerContact({});
+  } else {
+    if (champ) champ.style.display = 'none';
+    ocCoopAppliquerContact(valeur ? clientContactDe(valeur) : {});
+  }
+}
+function ocCoopAppliquerContact(c){
+  const nom = document.querySelector('#modal-fields [name="contact_nom"]');
+  const tel = document.querySelector('#modal-fields [name="contact_contact"]');
+  const email = document.querySelector('#modal-fields [name="contact_email"]');
+  if (nom) nom.value = c.contact_nom||'';
+  if (tel) tel.value = c.contact_telephone||'';
+  if (email) email.value = c.contact_email||'';
 }
 function ouvrirAjoutCooperative(){
   state.modal = {type:'ajoutCooperative', payload:{}};
@@ -2907,6 +2973,7 @@ async function enregistrerAjoutCooperative(){
     const { error } = await supabaseClient.from('cooperatives').insert(Object.assign({id: coopId}, payload));
     if (error){ showToast("Échec de la création : "+error.message); return; }
     state.cooperatives = (state.cooperatives||[]).concat(Object.assign({id: coopId}, payload));
+    if (diligence_externe && client) await ocEnregistrerContactClientSiNouveau(client, contact_nom, contact_contact, contact_email);
     state.modal = null;
     showToast('Coopérative ajoutée.', 'success');
     render();
@@ -3331,7 +3398,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-12-012';
+const APP_VERSION = '2026-10-12-013';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -13006,7 +13073,14 @@ function renderOcNcTraitement(id){
 }
 function ocNcApercuExigence(code){ state.ocNcNewExigenceApercu = code; render(); }
 
-function openModal(type, payload){ state.modal = {type, payload: payload||{}}; render(); }
+function openModal(type, payload){
+  state.modal = {type, payload: payload||{}};
+  // La fiche coopérative propose un "Nom du client" (diligence externe) dont la liste et le contact
+  // enregistré viennent des données "Lots & export" -- on s'assure qu'elles sont chargées même en
+  // ouvrant "Modifier" sans être jamais passé par cet onglet.
+  if (type==='cooperative' && !state.lotsCharges) chargerLots().then(()=>{ if (state.modal && state.modal.type==='cooperative') render(); });
+  render();
+}
 function closeModal(){
   // libere le fichier charge pour l'apercu (sinon il reste en memoire tant que la page est ouverte)
   const p = state.modal && state.modal.payload;
@@ -13038,17 +13112,21 @@ async function submitCooperative(){
   const nom = fv('nom').trim();
   if (!nom){ showToast('Le nom de la coopérative est obligatoire.'); return; }
   const editId = fv('edit_id');
+  const diligence_externe = !!document.querySelector('#modal-fields [name="diligence_externe"]:checked');
+  const clientChoix = fv('client_choix');
+  const client = diligence_externe ? (clientChoix==='__nouveau__' ? fv('client_nouveau').trim() : clientChoix) : '';
   const data = {
     nom: nom,
     nom_complet: fv('nom_complet').trim(),
     code_court: fv('code_court').trim().toUpperCase() || null,
-    diligence_externe: !!document.querySelector('#modal-fields [name="diligence_externe"]:checked'),
+    diligence_externe, client,
     statut: fv('statut'),
     certifications: fv('certifications').trim(),
     representant_legal_nom: fv('representant_legal_nom').trim(),
     representant_legal_contact: fv('representant_legal_contact').trim(),
     contact_nom: fv('contact_nom').trim(),
     contact_contact: fv('contact_contact').trim(),
+    contact_email: fv('contact_email').trim(),
     rccm: fv('rccm').trim(),
     ccc_num: fv('ccc_num').trim(),
     adresse_postale: fv('adresse_postale').trim(),
@@ -13085,6 +13163,7 @@ async function submitCooperative(){
     showToast(doublon ? "Une coopérative avec ce numéro d'agrément CCC existe déjà : la fiche n'a pas été enregistrée." : 'Échec de l\'enregistrement : '+error.message);
     return;
   }
+  if (diligence_externe && client) await ocEnregistrerContactClientSiNouveau(client, data.contact_nom, data.contact_contact, data.contact_email);
   showToast('Coopérative enregistrée.', 'success');
   closeModal();
 }
@@ -17016,29 +17095,36 @@ function _renderBrut(){
   if (state.modal && state.modal.type==='cooperative'){
     const c = state.modal.payload || {};
     const certificatFichier = (state.docCheck||[]).find(d=>d.cooperative_id===c.id && d.doc==='Certificat' && d.disponible && d.fichier_path);
+    const externe = !!c.diligence_externe;
+    const clientConnu = !!(c.client && new RegExp('<option value="'+String(c.client).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'"').test(lotsClientsOptions(ocAcCampagneId(), '')));
+    const d = id=>externe?'none':''; // masque (sans retirer du DOM) les champs qui ne servent plus en diligence externe
     html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
       + '<h3>'+(c.id?'Modifier la coopérative':'Ajouter une coopérative')+'</h3>'
       + '<div id="modal-fields">'
       + '<input type="hidden" name="edit_id" value="'+esc(c.id||'')+'">'
       + '<label class="field">Nom (sigle)<input type="text" name="nom" value="'+esc(c.nom||'')+'" placeholder="ex : SCOOPS BEHIRA"></label>'
+      + '<div id="coopBlocNomComplet" style="display:'+d()+'">'
       + '<label class="field">Nom complet<input type="text" name="nom_complet" value="'+esc(c.nom_complet||'')+'" placeholder="ex : La Société Coopérative BEHIRA"></label>'
       + '<div class="hint" style="margin:6px 0 14px;">Utilisé dans les contrats : « Nom complet (Sigle) ». Laisse vide pour n\'afficher que le sigle.</div>'
+      + '</div>'
       + '<label class="field">Code court<input type="text" name="code_court" value="'+esc(c.code_court||'')+'" placeholder="ex : PADOU" style="text-transform:uppercase;"></label>'
       + '<div class="hint" style="margin:6px 0 14px;">Génère automatiquement le nom des demandes de fiche de traçabilité et le nom du fichier téléchargé par la coopérative : {code court}_{numéro de connaissement}.</div>'
       + '<label class="field" style="display:flex;align-items:center;gap:8px;flex-direction:row;background:var(--info-bg,#eef4fb);border-radius:8px;padding:10px 12px;margin-bottom:14px;">'
-      + '<input type="checkbox" name="diligence_externe" style="width:auto;" '+(c.diligence_externe?'checked':'')+'><span>Diligence EUDR assurée par le client final (pas par ECORIGINE)</span></label>'
-      + '<div class="hint" style="margin:-8px 0 14px;">À cocher quand c\'est le client final qui gère lui-même toute la diligence raisonnée (producteurs, polygones, documents) et transmet seulement les connaissements à ECORIGINE pour l\'export. Dans ce cas, le reste du formulaire ci-dessous (identité légale, certification...) est facultatif, et cette coopérative n\'apparaît plus dans les rappels de documents manquants.</div>'
+      + '<input type="checkbox" name="diligence_externe" style="width:18px;height:18px;flex:none;margin:0;" '+(externe?'checked':'')+' onchange="ocCoopToggleDiligenceExterne(this.checked)"><span>Diligence EUDR assurée par le client final (pas par ECORIGINE)</span></label>'
+      + '<div class="hint" style="margin:-8px 0 14px;">À cocher quand c\'est le client final qui gère lui-même toute la diligence raisonnée (producteurs, polygones, documents) et transmet seulement les connaissements à ECORIGINE pour l\'export. Seuls le nom, la ville, le client, son contact, le n° CCC et le statut restent alors utiles ; le reste du formulaire disparaît et cette coopérative n\'apparaît plus dans les rappels de documents manquants.</div>'
+      + '<label class="field" id="coopClientBloc" style="display:'+(externe?'':'none')+'">Nom du client<select name="client_choix" onchange="ocCoopClientChoixChange(this.value)">'+ocAcClientOptions(clientConnu?c.client:'')+'</select></label>'
+      + '<label class="field" id="coopClientNouveauBloc" style="display:'+(externe && !clientConnu && c.client?'':'none')+'">Nom du nouveau client<input type="text" name="client_nouveau" value="'+esc(!clientConnu?(c.client||''):'')+'"></label>'
       + '<fieldset><legend>Identité légale</legend>'
-      + '<label class="field">N° RCCM<input type="text" name="rccm" value="'+esc(c.rccm||'')+'"></label>'
+      + '<div id="coopBlocRccm" style="display:'+d()+'"><label class="field">N° RCCM<input type="text" name="rccm" value="'+esc(c.rccm||'')+'"></label></div>'
       + '<label class="field">N° agrément CCC<input type="text" name="ccc_num" value="'+esc(c.ccc_num||'')+'" placeholder="ex : SC101416"></label>'
-      + '<label class="field">Adresse postale (BP)<input type="text" name="adresse_postale" value="'+esc(c.adresse_postale||'')+'" placeholder="ex : BP 123 Abidjan 01"></label>'
+      + '<div id="coopBlocAdressePostale" style="display:'+d()+'"><label class="field">Adresse postale (BP)<input type="text" name="adresse_postale" value="'+esc(c.adresse_postale||'')+'" placeholder="ex : BP 123 Abidjan 01"></label></div>'
       + '<label class="field">Ville<input type="text" name="ville" value="'+esc(c.ville||'')+'"></label>'
-      + '<label class="field">Siège social (adresse)<input type="text" name="siege_social" value="'+esc(c.siege_social||'')+'"></label>'
+      + '<div id="coopBlocSiegeSocial" style="display:'+d()+'"><label class="field">Siège social (adresse)<input type="text" name="siege_social" value="'+esc(c.siege_social||'')+'"></label></div>'
       + '</fieldset>'
       + '<label class="field">Statut<select name="statut" onchange="toggleCertifFields()">'
       + ['Certifiée','En cours de certification','Non certifiée'].map(s=>'<option value="'+s+'"'+(c.statut===s?' selected':'')+'>'+s+'</option>').join('')
       + '</select></label>'
-      + '<div id="certif-fields" style="display:'+(c.statut==='Certifiée'?'block':'none')+'">'
+      + '<div id="certif-fields" style="display:'+((!externe && c.statut==='Certifiée')?'block':'none')+'">'
       + '<label class="field">Certification<select name="certifications">'
       + ['','Rainforest Alliance','Fairtrade','Cocoa Horizon'].map(s=>'<option value="'+s+'"'+(c.certifications===s?' selected':'')+'>'+(s||'—')+'</option>').join('')
       + '</select></label>'
@@ -17047,19 +17133,20 @@ function _renderBrut(){
       + '<label class="field">Volume certificat (kg)<input type="number" id="volume-certificat-input" name="volume_certificat" value="'+esc(c.volume_certificat||'')+'"></label>'
       + (certificatFichier ? '<button type="button" class="btn-ghost" onclick="extraireVolumeCertificat(\''+certificatFichier.fichier_path+'\')" id="btn-extraire-volume">🔎 Extraire automatiquement depuis le certificat fourni</button><div id="extraction-volume-resultat"></div>' : '<div class="hint">Aucun certificat téléversé par la coopérative pour le moment — l\'extraction automatique sera possible dès qu\'elle en fournira un (checklist de conformité, « Certificat(s) »).</div>')
       + '</div>'
-      + '<fieldset><legend>Représentant légal (signataire des contrats)</legend>'
+      + '<div id="coopBlocRepresentantLegal" style="display:'+d()+'"><fieldset><legend>Représentant légal (signataire des contrats)</legend>'
       + '<label class="field">Nom<input type="text" name="representant_legal_nom" value="'+esc(c.representant_legal_nom||'')+'"></label>'
       + '<label class="field">Contact<input type="text" name="representant_legal_contact" value="'+esc(c.representant_legal_contact||'')+'"></label>'
       + '<div class="hint">Fonction déduite automatiquement du nom : SCOOPS → Président du Comité de gestion, COOP-CA → Président du Conseil d\'Administration.</div>'
-      + '</fieldset>'
+      + '</fieldset></div>'
       + '<fieldset><legend>Personne contact</legend>'
       + '<label class="field">Nom<input type="text" name="contact_nom" value="'+esc(c.contact_nom||'')+'"></label>'
       + '<label class="field">Contact<input type="text" name="contact_contact" value="'+esc(c.contact_contact||'')+'"></label>'
+      + '<label class="field">Email<input type="email" name="contact_email" value="'+esc(c.contact_email||'')+'"></label>'
       + '</fieldset>'
-      + '<fieldset><legend>Adresses email (jusqu\'à 3, pour les envois groupés)</legend>'
-      + '<label class="field">Email 1<input type="email" name="email1" value="'+esc(c.email1||'')+'"></label>'
-      + '<label class="field">Email 2<input type="email" name="email2" value="'+esc(c.email2||'')+'"></label>'
-      + '<label class="field">Email 3<input type="email" name="email3" value="'+esc(c.email3||'')+'"></label>'
+      + '<fieldset><legend>Adresses email'+(externe?'':' (jusqu\'à 3, pour les envois groupés)')+'</legend>'
+      + '<label class="field">'+(externe?'Email':'Email 1')+'<input type="email" name="email1" value="'+esc(c.email1||'')+'"></label>'
+      + '<div id="coopBlocEmail2" style="display:'+d()+'"><label class="field">Email 2<input type="email" name="email2" value="'+esc(c.email2||'')+'"></label></div>'
+      + '<div id="coopBlocEmail3" style="display:'+d()+'"><label class="field">Email 3<input type="email" name="email3" value="'+esc(c.email3||'')+'"></label></div>'
       + '<label class="field">Libellé de chèque possible 1 (personne mandatée)<input type="text" name="libelle1" value="'+esc(c.libelle1||'')+'"></label>'
       + '<label class="field">Libellé de chèque possible 2<input type="text" name="libelle2" value="'+esc(c.libelle2||'')+'"></label>'
       + '<label class="field">Libellé de chèque possible 3<input type="text" name="libelle3" value="'+esc(c.libelle3||'')+'"></label>'
@@ -17460,7 +17547,8 @@ function _renderBrut(){
       +   '<option value="Non certifiée">Non certifiée</option><option value="En cours de certification">En cours de certification</option><option value="Certifiée">Certifiée</option>'
       + '</select></label>'
       + '<label class="field">Ville<input type="text" id="acVille" placeholder="Ex : Daloa"></label>'
-      + '<label class="field" id="acClientBloc" style="display:none;">Nom du client<select id="acClientChoix" onchange="ocAcClientChoixChange(this.value)">'+lotsClientsOptions(ocAcCampagneId(), '')+'</select></label>'
+      + '<label class="field" id="acClientBloc" style="display:none;">Nom du client<select id="acClientChoix" onchange="ocAcClientChoixChange(this.value)">'+ocAcClientOptions('')+'</select></label>'
+      + '<label class="field" id="acClientNouveauBloc" style="display:none;">Nom du nouveau client<input type="text" id="acClientNouveau" placeholder="ex : TOUTON"></label>'
       + '<label class="field" id="acBlocRepresentantNom">Représentant légal — Nom *<input type="text" id="acRepresentantNom"></label>'
       + '<label class="field" id="acBlocRepresentantContact">Représentant légal — Contact *<input type="text" id="acRepresentantContact" placeholder="Téléphone"></label>'
       + '<label class="field">Personne contact — Nom *<input type="text" id="acContactNom"></label>'
