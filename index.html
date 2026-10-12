@@ -3417,7 +3417,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-12-019';
+const APP_VERSION = '2026-10-12-020';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8295,16 +8295,16 @@ async function chargerDonneesOricert(){
   try{
     const [exigences, interlocuteurs, sites, partenaires, clients, prestataires, documents, audits, nc, exigenceFichiers, certificats, documentsLegaux, calendrierActivites] = await Promise.all([
       supabaseClient.from('cert_exigences_statuts').select('*').eq('referentiel', ocRef()),
-      supabaseClient.from('cert_interlocuteurs').select('*').order('created_at'),
-      supabaseClient.from('cert_sites').select('*').order('created_at'),
-      supabaseClient.from('cert_partenaires').select('*').order('created_at'),
-      supabaseClient.from('cert_clients').select('*').order('created_at'),
-      supabaseClient.from('cert_prestataires').select('*').order('created_at'),
+      supabaseClient.from('cert_interlocuteurs').select('*').eq('referentiel', ocRef()).order('created_at'),
+      supabaseClient.from('cert_sites').select('*').eq('referentiel', ocRef()).order('created_at'),
+      supabaseClient.from('cert_partenaires').select('*').eq('referentiel', ocRef()).order('created_at'),
+      supabaseClient.from('cert_clients').select('*').eq('referentiel', ocRef()).order('created_at'),
+      supabaseClient.from('cert_prestataires').select('*').eq('referentiel', ocRef()).order('created_at'),
       supabaseClient.from('cert_documents').select('*').eq('referentiel', ocRef()).order('created_at'),
       supabaseClient.from('cert_audits').select('*').eq('referentiel', ocRef()).order('created_at'),
       supabaseClient.from('cert_non_conformites').select('*').eq('referentiel', ocRef()).order('created_at'),
       supabaseClient.from('cert_exigence_fichiers').select('*').eq('referentiel', ocRef()).order('created_at'),
-      supabaseClient.from('cert_certificats').select('*').order('created_at', {ascending:false}),
+      supabaseClient.from('cert_certificats').select('*').eq('referentiel', ocRef()).order('created_at', {ascending:false}),
       supabaseClient.from('cert_documents_legaux').select('*').order('created_at', {ascending:false}),
       supabaseClient.from('cert_calendrier_activites').select('*').eq('referentiel', ocRef()).order('date_prevue', {ascending:true, nullsFirst:false}),
     ]);
@@ -8414,7 +8414,7 @@ function ocIndicateursOricert(){
   const activitesAVenir = activites.filter(a=>a.date_prevue>=auj);
   const documents = state.oc_documents||[];
   const certificats = state.oc_certificats||[];
-  const coopsCertifiees = (state.cooperatives||[]).filter(c=>typeof ocCertificatDeCooperative==='function' && ocCertificatDeCooperative(c.id)).length;
+  const coopsCertifiees = ocCoopsRef().filter(c=>typeof ocCertificatDeCooperative==='function' && ocCertificatDeCooperative(c.id)).length;
   return { total:reqs.length, fait:fait.length, enCours:enCours.length, aFaire:reqs.length-fait.length-enCours.length,
     pct: reqs.length ? Math.round(fait.length/reqs.length*100) : 0, enRetard, bientot, prochaine, ncOuvertes, ncEnRetard, audit,
     activitesRetard, activitesAVenir, documents, certificats, coopsCertifiees };
@@ -8472,7 +8472,7 @@ function renderOcCockpit(){
     + '<div class="ckpt-tuile"><div class="k">Audit externe</div><div class="v">'+(I.audit ? (I.audit.jours<0 ? 'Dépassé' : '<span data-n="'+I.audit.jours+'">'+I.audit.jours+'</span> <small>jours</small>') : '—')+'</div>'
       + '<div class="s">'+(I.audit ? esc(new Date(I.audit.date+'T00:00:00').toLocaleDateString('fr-FR', { day:'numeric', month:'long', year:'numeric' })) : 'Date non renseignée (Suivi des exigences → AUDIT)')+'</div></div>'
     + '<div class="ckpt-tuile"><div class="k">Preuves & documents</div><div class="v" data-n="'+I.documents.length+'">'+I.documents.length+'</div>'
-      + '<div class="s">'+I.certificats.length+' certificat'+(I.certificats.length>1?'s':'')+' · '+I.coopsCertifiees+' / '+(state.cooperatives||[]).length+' coopérative'+((state.cooperatives||[]).length>1?'s':'')+' avec certificat</div></div>'
+      + '<div class="s">'+I.certificats.length+' certificat'+(I.certificats.length>1?'s':'')+' · '+I.coopsCertifiees+' / '+ocCoopsRef().length+' coopérative'+(ocCoopsRef().length>1?'s':'')+' avec certificat</div></div>'
     + '</div>';
   // Deux colonnes : a traiter en priorite / agenda
   const prioritaires = I.enRetard.concat(I.bientot).slice(0, 7);
@@ -8975,6 +8975,8 @@ const OC_REFS = {
 };
 function ocRef(){ return (state && state.ocReferentiel === 'FT') ? 'FT' : 'RA'; }
 function ocRefInfo(){ return OC_REFS[ocRef()]; }
+// Cooperatives suivies dans le referentiel actif : en Fairtrade, uniquement celles marquees certifiees Fairtrade.
+function ocCoopsRef(){ return (state.cooperatives||[]).filter(c=>ocRef()==='FT' ? (c.statut==='Certifiée' && c.certifications==='Fairtrade') : true); }
 function ocCatClasse(c){ return String(c||'').replace(/[^A-Za-zÀ-ÿ0-9]/g,''); }
 function ocAppliquerReferentiel(ref){
   ref = ref === 'FT' ? 'FT' : 'RA';
@@ -11233,7 +11235,7 @@ function ocDetecterNiveauTracabilite(coopId){
 // une ligne manuelle sans coopérative correspondante reste un partenaire "hors registre".
 function ocPartenairesLignesFusionnees(){
   const norm = s => String(s||'').trim().toLowerCase();
-  const coops = (state.cooperatives||[]).filter(c=>ocRef()==='FT' ? c.certifications==='Fairtrade' : true).sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'}));
+  const coops = ocCoopsRef().slice().sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'}));
   const manuels = state.oc_partenaires || [];
   const lignes = coops.map(c=>{
     const correction = manuels.find(r=>norm(r.cooperative_nom)===norm(c.nom));
@@ -11502,7 +11504,7 @@ async function ocAjouterLigne(tableId){
     if (rempli){ row[c[1]] = val; auMoinsUnChamp = true; }
   });
   if (!auMoinsUnChamp){ showToast('Renseigne au moins un champ avant d\'ajouter une ligne.'); return; }
-  if (['cert_documents','cert_audits','cert_calendrier_activites'].indexOf(cfg.table)>=0) row.referentiel = ocRef();
+  if (['cert_documents','cert_audits','cert_calendrier_activites','cert_interlocuteurs','cert_sites','cert_partenaires','cert_clients','cert_prestataires'].indexOf(cfg.table)>=0) row.referentiel = ocRef();
   try{
     const { data, error } = await supabaseClient.from(cfg.table).insert(row).select().single();
     if (error){ showToast("Échec de l'ajout : "+error.message); return; }
@@ -11551,8 +11553,8 @@ function renderOcCertificat(){
   OC_CERT_DOSSIERS.forEach(d=>{
     let compte;
     if (d.cle==='cooperatives'){
-      const nb = (state.cooperatives||[]).filter(c=>ocCertificatDeCooperative(c.id)).length;
-      compte = nb+' / '+(state.cooperatives||[]).length+' coopérative(s)';
+      const nb = ocCoopsRef().filter(c=>ocCertificatDeCooperative(c.id)).length;
+      compte = nb+' / '+ocCoopsRef().length+' coopérative(s)';
     } else {
       const n = (state.oc_certificats||[]).filter(c=>c.dossier===d.cle).length;
       compte = n+' certificat'+(n>1?'s':'');
@@ -11612,7 +11614,7 @@ function ocCertificatDeCooperative(coopId){
   return (state.docCheck||[]).find(d=>d.cooperative_id===coopId && d.doc==='Certificat' && d.disponible && d.fichier_path);
 }
 function renderOcCertCooperativesListe(){
-  const coops = (state.cooperatives||[]).slice().sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'}));
+  const coops = ocCoopsRef().slice().sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'}));
   let html = '<div class="panel-head"><button class="btn-ghost" onclick="ocFermerCertDossier()" style="margin-bottom:10px;">← Retour aux certificats</button><h2>Coopératives</h2><p>Un dossier par coopérative ECORIGINE — le certificat s\'affiche automatiquement dès qu\'il est déposé sur le portail de la coopérative.</p></div>';
   html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px;">';
   coops.forEach(c=>{
@@ -11670,7 +11672,7 @@ async function ocDeposerCertificatCooperative(input, coopId, coopNom){
     const { error: upErr } = await supabaseClient.storage.from('documents-coop').upload(path, file, { upsert: true });
     if (upErr){ showToast("Échec de l'envoi : "+upErr.message); return; }
     const { data, error } = await supabaseClient.from('cert_certificats').insert({
-      dossier:'cooperatives', rattachement_id: String(coopId), rattachement_nom: coopNom,
+      referentiel: ocRef(), dossier:'cooperatives', rattachement_id: String(coopId), rattachement_nom: coopNom,
       nom: file.name, path, date_expiration: dateExpiration, uploaded_by: state.session.user.id,
     }).select().single();
     if (error){ showToast("Échec de l'enregistrement : "+error.message); return; }
@@ -11734,7 +11736,7 @@ async function ocDeposerCertificatSite(input, siteId, siteNom){
     const { error: upErr } = await supabaseClient.storage.from('documents-coop').upload(path, file, { upsert: true });
     if (upErr){ showToast("Échec de l'envoi : "+upErr.message); return; }
     const { data, error } = await supabaseClient.from('cert_certificats').insert({
-      dossier:'sites', rattachement_id: String(siteId), rattachement_nom: siteNom,
+      referentiel: ocRef(), dossier:'sites', rattachement_id: String(siteId), rattachement_nom: siteNom,
       nom: file.name, path, date_expiration: dateExpiration, uploaded_by: state.session.user.id,
     }).select().single();
     if (error){ showToast("Échec de l'enregistrement : "+error.message); return; }
@@ -11761,7 +11763,7 @@ async function ocDeposerCertificat(input, cle){
     const { error: upErr } = await supabaseClient.storage.from('documents-coop').upload(path, file, { upsert: true });
     if (upErr){ showToast("Échec de l'envoi : "+upErr.message); return; }
     const { data, error } = await supabaseClient.from('cert_certificats').insert({
-      dossier: cle, nom: file.name, path, date_expiration: dateExpiration, uploaded_by: state.session.user.id,
+      referentiel: ocRef(), dossier: cle, nom: file.name, path, date_expiration: dateExpiration, uploaded_by: state.session.user.id,
     }).select().single();
     if (error){ showToast("Échec de l'enregistrement : "+error.message); return; }
     state.oc_certificats = (state.oc_certificats||[]).concat(data);
