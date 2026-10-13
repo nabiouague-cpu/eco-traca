@@ -3496,7 +3496,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-13-061';
+const APP_VERSION = '2026-10-13-062';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5847,8 +5847,9 @@ function renderLotsSeries(){
   // Regroupe par campagne + client : un client est caractérisé par l'ensemble de ses séries (site, projet de durabilité).
   const parClient = new Map();
   (state.lotsSeries||[]).forEach(sr=>{
-    const cle = sr.campagne_id+'|'+(sr.client||'');
-    if (!parClient.has(cle)) parClient.set(cle, { campagne_id:sr.campagne_id, client:sr.client||'', portees:new Map() });
+    const prog0 = String(sr.programme||'').trim();
+    const cle = sr.campagne_id+'|'+ccClefClient(sr.client||'')+'|'+prog0.toLowerCase();
+    if (!parClient.has(cle)) parClient.set(cle, { campagne_id:sr.campagne_id, client:sr.client||'', programme:prog0, portees:new Map() });
     const g = parClient.get(cle);
     const pk = (sr.site_code||'')+'|'+(sr.programme||'');
     if (!g.portees.has(pk)) g.portees.set(pk, { site_code:sr.site_code||'', programme:sr.programme||'', series:[] });
@@ -5856,7 +5857,7 @@ function renderLotsSeries(){
   });
   const liste = Array.from(parClient.values()).sort((a,b)=>
     String(lotsCampagneNom(b.campagne_id)||'').localeCompare(String(lotsCampagneNom(a.campagne_id)||''))
-    || String(a.client||'').localeCompare(String(b.client||''), 'fr'));
+    || ccClefClient(a.client||'').localeCompare(ccClefClient(b.client||''), 'fr') || a.programme.localeCompare(b.programme,'fr'));
   let html = '<div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">'
     + '<button class="btn btn-primary" onclick="lotsSerieGrilleOuvrir()">+ Nouvelle série</button>'
     + '<span class="hint" style="margin:0 8px;padding-left:4px">Une série = un client, un type de cacao et un numéro de départ. Pour un usinier partenaire (AWAHUS, SITAPA) ou un projet de durabilité (Ferrero, Mars, Mondelez…), ajoute une série de plus au même client : ses lots restent comptés pour ce client.</span></div>';
@@ -5864,13 +5865,13 @@ function renderLotsSeries(){
   if (!(state.lotsSeriesOuverts instanceof Set)) state.lotsSeriesOuverts = new Set();
   html += '<div class="series-accordeon">';
   liste.forEach(g=>{
-    const cle = g.campagne_id+'|'+g.client;
+    const cle = g.campagne_id+'|'+ccClefClient(g.client)+'|'+g.programme.toLowerCase();
     const ouvert = state.lotsSeriesOuverts.has(cle);
     const portees = Array.from(g.portees.values()).sort((x,y)=>(x.site_code||x.programme?1:0)-(y.site_code||y.programme?1:0) || String(x.programme).localeCompare(String(y.programme),'fr') || String(x.site_code).localeCompare(String(y.site_code)));
     const toutes = portees.reduce((acc,pt)=>acc.concat(pt.series),[]);
     const nbLots = toutes.reduce((sum,sr)=>sum+(state.lotsUsinage||[]).filter(l=>l.serie_id===sr.id).length, 0);
     const types = Array.from(new Set(toutes.map(sr=>sr.type_cacao)));
-    const progs = Array.from(new Set(portees.map(pt=>pt.programme).filter(Boolean)));
+    const progs = [];
     const sites = Array.from(new Set(portees.map(pt=>pt.site_code).filter(Boolean)));
     const debuts = toutes.map(sr=>Number(sr.numero_debut)).sort((x,y)=>x-y);
     const resume = [types.map(lotsLibelleTypeCacao).join(', '), toutes.length+' série'+(toutes.length>1?'s':'')+(debuts.length?' (n° '+debuts.join(', ')+')':''),
@@ -5879,7 +5880,7 @@ function renderLotsSeries(){
       + '<div class="serie-client-tete" onclick="lotsSeriesBasculer(\''+escJs(cle)+'\')">'
       + '<span class="chev">'+(ouvert?'▾':'▸')+'</span>'
       + ccAvatarHtml(g.client||'?', 38)
-      + '<div class="serie-client-nom"><b>'+(g.client?esc(g.client):'— générique —')+'</b><small>'+esc(lotsCampagneNom(g.campagne_id)||'')+'</small></div>'
+      + '<div class="serie-client-nom"><b>'+(g.client?esc(g.client):'— générique —')+(g.programme?' → '+esc(g.programme):'')+'</b><small>'+esc(lotsCampagneNom(g.campagne_id)||'')+'</small></div>'
       + '<div class="serie-client-resume">'+resume.map(r=>'<span>'+esc(r)+'</span>').join('')+'</div>'
       + '</div>';
     if (ouvert){
@@ -5894,7 +5895,7 @@ function renderLotsSeries(){
         html += '<tr><td>'+portee+'</td><td>'+site+'</td><td>'+typesHtml+'</td><td>'+serieHtml+'</td><td>'+utilises+'</td>'
           + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="lotsSerieGrilleOuvrir(\''+esc(g.campagne_id)+'\',\''+esc(g.client)+'\',\''+esc(pt.site_code)+'\',\''+esc(pt.programme)+'\',\'modifier\')">Modifier</button></td></tr>';
       });
-      html += '</tbody></table><div style="padding:6px 12px 10px"><button class="btn-ghost btn-compact" onclick="lotsSerieGrilleOuvrir(\''+esc(g.campagne_id)+'\',\''+esc(g.client)+'\',\'\',\'\',\'ajouter\')">+ Ajouter une série à ce client</button></div>';
+      html += '</tbody></table><div style="padding:6px 12px 10px"><button class="btn-ghost btn-compact" onclick="lotsSerieGrilleOuvrir(\''+esc(g.campagne_id)+'\',\''+esc(g.client)+'\',\'\',\''+esc(g.programme)+'\',\'ajouter\')">+ Ajouter une série à ce client</button></div>';
     }
     html += '</div>';
   });
@@ -6207,7 +6208,7 @@ async function ccLogoDepose(input){
 // n'affichent qu'une seule carte. Le nom affiché est le libellé le plus court parmi les variantes
 // rencontrées (ex. "TOUTON" plutôt que "TOUTON SAS"), et c'est ce nom court qui est réutilisé pour tout
 // nouveau contrat créé depuis cette carte, afin d'harmoniser progressivement la saisie.
-const CC_SUFFIXES_JURIDIQUES = ['sas','sasu','sa','sarl','eurl','ltd','llc','inc','gmbh','bv','corp','corporation','co','plc','spa','nv','ag','srl'];
+const CC_SUFFIXES_JURIDIQUES = ['sas','sasu','sa','sarl','eurl','ltd','llc','inc','gmbh','bv','corp','corporation','co','plc','spa','nv','ag','srl','international'];
 function ccClefClient(nom){
   const mots = qcNormaliserTexte(nom).split(' ').filter(Boolean);
   while (mots.length>1 && CC_SUFFIXES_JURIDIQUES.includes(mots[mots.length-1])) mots.pop();
@@ -6523,13 +6524,13 @@ function renderLivraisonsClients(campagneId){
   const achats = (state.achats||[]).filter(a=>!a.producteur_id && !a.refoulee && (!campagneId || a.campagne_id===campagneId));
   const parClef = new Map();
   const cleDe = n=>ccClefClient(n);
-  const groupe = (nom)=>{ const k = cleDe(nom); if (!parClef.has(k)) parClef.set(k, { client:nom, contrats:[], achats:[], lots:[], series:[] }); return parClef.get(k); };
+  const groupe = (nom, prog)=>{ const p = String(prog||'').trim(); const k = cleDe(nom)+'|'+p.toLowerCase(); if (!parClef.has(k)) parClef.set(k, { cle:k, client:nom, programme:p, contrats:[], achats:[], lots:[], series:[] }); return parClef.get(k); };
   (state.contratsClients||[]).filter(c=>(!campagneId || c.campagne_id===campagneId) && c.client).forEach(c=>groupe(c.client).contrats.push(c));
-  (state.lotsSeries||[]).filter(sr=>sr.client && (!campagneId || sr.campagne_id===campagneId)).forEach(sr=>groupe(sr.client).series.push(sr));
-  (state.lotsUsinage||[]).filter(l=>l.client && (!campagneId || l.campagne_id===campagneId)).forEach(l=>groupe(l.client).lots.push(l));
+  (state.lotsSeries||[]).filter(sr=>sr.client && (!campagneId || sr.campagne_id===campagneId)).forEach(sr=>groupe(sr.client, sr.programme).series.push(sr));
+  (state.lotsUsinage||[]).filter(l=>l.client && (!campagneId || l.campagne_id===campagneId)).forEach(l=>groupe(l.client, l.programme).lots.push(l));
   const sansClient = [];
-  achats.forEach(a=>{ const c = achatClientEffectif(a); if (c) groupe(c).achats.push(a); else sansClient.push(a); });
-  const groupes = Array.from(parClef.values()).sort((x,y)=>x.client.localeCompare(y.client,'fr'));
+  achats.forEach(a=>{ const c = achatClientEffectif(a); if (c) groupe(c, a.programme).achats.push(a); else sansClient.push(a); });
+  const groupes = Array.from(parClef.values()).sort((x,y)=>ccClefClient(x.client).localeCompare(ccClefClient(y.client),'fr') || x.programme.localeCompare(y.programme,'fr'));
   const kgLivre = l=>l.reduce((s,a)=>s+(Number(a.poids_net_produit)||0),0);
   const kgSans = kgLivre(sansClient);
   let html = '<h3 style="margin:0 0 10px;font-size:14px;color:var(--ink-soft)">Livraisons aux clients — calculées depuis les pesées attribuées</h3>';
@@ -6540,24 +6541,23 @@ function renderLivraisonsClients(campagneId){
     const contracte = g.contrats.filter(c=>c.statut!=='annule' && c.statut!=='annulé').reduce((s,c)=>s+(Number(c.volume_contractuel_kg)||0),0);
     const livre = kgLivre(g.achats), reste = Math.max(contracte - livre, 0), pct = contracte>0 ? Math.round(livre/contracte*100) : null;
     const lotsKg = g.lots.reduce((s,l)=>s+(Number(l.poids_sortie_kg)||0),0);
-    const ouvert = !!(state.livrClientsOuverts && state.livrClientsOuverts[g.client]);
-    html += '<div class="sa-carte"><div class="sa-tete"><b>'+esc(g.client)+'</b>'+(g.series.length ? '<span class="hint" style="margin:0">Lots n° '+g.series.map(sr=>esc(String(sr.numero_debut))+(sr.numero_fin?'–'+esc(String(sr.numero_fin)):'…')+' ('+esc(sr.type_cacao||'')+')').join(', ')+'</span>' : '')+'</div>'
+    const ouvert = !!(state.livrClientsOuverts && state.livrClientsOuverts[g.cle]);
+    html += '<div class="sa-carte"><div class="sa-tete">'+ccAvatarHtml(g.client, 30)+'<b>'+esc(g.client)+(g.programme?' → '+esc(g.programme):'')+'</b>'+(g.series.length ? '<span class="hint" style="margin:0">Lots n° '+g.series.map(sr=>esc(String(sr.numero_debut))+(sr.numero_fin?'–'+esc(String(sr.numero_fin)):'…')+' ('+esc(sr.type_cacao||'')+')').join(', ')+'</span>' : '')+'</div>'
       + '<div class="sa-lignes">'
-      + '<div><span>Contracté</span><b>'+(contracte>0 ? fmtKg(contracte) : '—')+'</b></div>'
+      + (g.programme ? '' : '<div><span>Contracté</span><b>'+(contracte>0 ? fmtKg(contracte) : '—')+'</b></div>')
       + '<div><span>Livré à l\'usine (net payé)</span><b>'+fmtKg(livre)+'</b><small>'+fmtNum(g.achats.length)+' connaissement'+(g.achats.length>1?'s':'')+'</small></div>'
-      + '<div><span>Reste à livrer</span><b'+(reste>0?' style="color:var(--warn)"':'')+'>'+(contracte>0 ? fmtKg(reste) : '—')+'</b>'+(pct!=null ? '<small>'+pct+' % réalisé</small>' : '')+'</div>'
+      + (g.programme ? '' : '<div><span>Reste à livrer</span><b'+(reste>0?' style="color:var(--warn)"':'')+'>'+(contracte>0 ? fmtKg(reste) : '—')+'</b>'+(pct!=null ? '<small>'+pct+' % réalisé</small>' : '')+'</div>')
       + '<div><span>Lots d\'usinage produits</span><b>'+(g.lots.length ? fmtNum(g.lots.length)+' lot'+(g.lots.length>1?'s':'')+' · '+fmtKg(lotsKg) : '—')+'</b></div>'
       + '</div>'
       + (function(){
-          const progs = lotsProgrammesDuClient(g.client, campagneId); if (!progs.length) return '';
-          const lig = progs.map(p=>{ const kp = p.toLowerCase(); const ach = g.achats.filter(a=>String(a.programme||'').toLowerCase()===kp); const lots = g.lots.filter(l=>String(l.programme||'').toLowerCase()===kp);
-            return '<div><span>→ '+esc(p)+'</span><b>'+fmtKg(kgLivre(ach))+'</b><small>'+fmtNum(ach.length)+' connaissement'+(ach.length>1?'s':'')+(lots.length?' · '+fmtNum(lots.length)+' lot'+(lots.length>1?'s':''):'')+'</small></div>'; });
+          if (g.programme) return ''; const progs = lotsProgrammesDuClient(g.client, campagneId); if (!progs.length || !g.achats.length) return '';
+          const lig = [];
           const sans = g.achats.filter(a=>!a.programme);
           if (sans.length) lig.push('<div><span>→ sans projet</span><b style="color:var(--warn)">'+fmtKg(kgLivre(sans))+'</b><small>'+fmtNum(sans.length)+' à préciser</small></div>');
           return '<div class="sa-lignes" style="margin-top:4px;padding-top:6px;border-top:1px dashed var(--border)">'+lig.join('')+'</div>';
         })()
       + (pct!=null ? '<div class="sa-barre"><i style="width:'+Math.min(pct,100)+'%"></i></div>' : '')
-      + '<div style="margin-top:8px"><button class="btn-ghost btn-compact" onclick="livrClientsBasculer(\''+escJs(g.client)+'\')">'+(ouvert?'Masquer les connaissements':'Voir les connaissements')+'</button></div>'
+      + '<div style="margin-top:8px"><button class="btn-ghost btn-compact" onclick="livrClientsBasculer(\''+escJs(g.cle)+'\')">'+(ouvert?'Masquer les connaissements':'Voir les connaissements')+'</button></div>'
       + (ouvert ? '<div class="livr-tbl"><table class="tbl-fiches"><thead><tr><th>Date</th><th>Connaissement</th><th>Coopérative</th><th class="num">Net payé</th></tr></thead><tbody>'
           + g.achats.slice().sort((x,y)=>String(y.date).localeCompare(String(x.date))).map(a=>'<tr><td>'+esc(dateFr(a.date)||'')+'</td><td>'+esc(a.connaissement||'')+(a.programme?' <span class="hint" style="margin:0">→ '+esc(a.programme)+'</span>':'')+(a.client?'':' <span class="hint" style="margin:0">(défaut coop.)</span>')+'</td><td>'+esc((coopById(a.cooperative_id)||{}).nom||a.fournisseur_saigic||'—')+'</td><td class="num">'+(Number(a.poids_net_produit)>0?fmtNum(a.poids_net_produit):'—')+'</td></tr>').join('')
           + '</tbody></table></div>' : '')
