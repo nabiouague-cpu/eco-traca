@@ -169,6 +169,15 @@
   .row.coop-row{grid-template-columns:2fr 1fr 1fr 1fr auto;}
   .coop-columns{display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start;}
   .coop-card-list{padding:14px 16px;}
+  .achat-client-sel{font-size:11px;padding:2px 4px;border:1px solid var(--border);border-radius:6px;background:#fff;max-width:150px;color:var(--ink);}
+  .achat-client-sel.a-attribuer{border-color:#E0B000;background:#FFF9E6;}
+  .sa-carte .sa-tete{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px}
+  .sa-carte .livr-tbl{overflow:auto;margin-top:8px}.sa-carte .livr-tbl table{font-size:12px;width:100%}.sa-carte .livr-tbl th,.sa-carte .livr-tbl td{padding:4px 6px;white-space:nowrap}
+  .sa-carte .sa-lignes{display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;margin-top:8px}
+  .sa-carte .sa-lignes div{display:flex;flex-direction:column}
+  .sa-carte .sa-lignes span{font-size:11px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.03em}
+  .sa-carte .sa-lignes small{font-size:11px;color:var(--ink-soft)}
+  .sa-barre{height:6px;background:var(--border);border-radius:4px;margin-top:8px;overflow:hidden}.sa-barre i{display:block;height:100%;background:var(--accent)}
   .coop-nouvelles-label{display:flex;align-items:center;gap:7px;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--accent);margin:0 0 8px 2px;}
   .coop-nouvelles-label .pt{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px rgba(16,122,96,.15);}
   .coop-nouvelles-separateur{border-top:2px solid var(--accent-line);margin:6px 0 18px;}
@@ -3477,7 +3486,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-13-051';
+const APP_VERSION = '2026-10-13-052';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -6346,6 +6355,88 @@ function suiviAchatsCarteClient(l){
       + '<div><span>Reste</span><b style="'+(reste>0?'color:var(--warn)':'color:var(--ok)')+'">'+fmtNum(reste)+'<small>T</small></b></div>'
     + '</div></div>';
 }
+
+// ===== Attribution d'un connaissement à un client =====
+// Chaque connaissement est attribué à UN client (TOUTON, ACT, CARGILL…) : c'est cette attribution qui alimente le tableau de
+// bord « livraison aux clients ». Une même coopérative peut livrer aujourd'hui pour un client et demain pour un autre, donc
+// l'attribution se fait ligne par ligne ; le client renseigné sur la fiche de la coopérative n'est qu'une proposition par défaut.
+function achatClientsConnus(campagneId){
+  const variantes = new Map();
+  const ajouter = nom=>{ const n = String(nom||'').trim(); if (!n) return; const k = ccClefClient(n); if (!variantes.has(k)) variantes.set(k, n); };
+  (state.contratsClients||[]).filter(c=>!campagneId || c.campagne_id===campagneId).forEach(c=>ajouter(c.client));
+  (state.lotsSeries||[]).forEach(sr=>ajouter(sr.client));
+  (state.clientsMeta||[]).forEach(m=>ajouter(m.client));
+  (state.cooperatives||[]).forEach(c=>ajouter(c.client));
+  (state.achats||[]).forEach(a=>ajouter(a.client));
+  return Array.from(variantes.values()).sort((a,b)=>a.localeCompare(b,'fr'));
+}
+function achatClientSelectHtml(a){
+  if (a.producteur_id) return '';
+  const coop = coopById(a.cooperative_id);
+  const defaut = (!a.client && coop && coop.client) ? String(coop.client).trim() : '';
+  const clients = achatClientsConnus(null);
+  return '<div class="sous achat-client"><select class="achat-client-sel'+(a.client?'':' a-attribuer')+'" onchange="achatSetClient(\''+escJs(a.id)+'\', this.value)" title="Client auquel ce connaissement est attribué">'
+    + '<option value="">'+(defaut ? '— défaut : '+esc(defaut)+' —' : '— client à attribuer —')+'</option>'
+    + clients.map(c=>'<option value="'+esc(c)+'"'+(c===(a.client||'')?' selected':'')+'>'+esc(c)+'</option>').join('')
+    + '<option value="__autre">Autre client…</option></select></div>';
+}
+async function achatSetClient(achatId, client){
+  const a = (state.achats||[]).find(x=>x.id===achatId); if (!a) return;
+  if (client==='__autre'){ client = (prompt('Nom du client :')||'').trim(); if (!client){ render(); return; } }
+  const avant = a.client || null;
+  a.client = client || null;
+  const { error } = await supabaseClient.from('achats').update({ client: a.client }).eq('id', achatId);
+  if (error){ a.client = avant; showToast('Échec : '+error.message); render(); return; }
+  showToast(client ? (a.connaissement||'Connaissement')+' attribué à '+client+'.' : 'Attribution retirée.', 'success');
+  render();
+}
+// Effectif d'un connaissement pour un client : son attribution explicite, sinon le client par défaut de sa coopérative.
+function achatClientEffectif(a){
+  if (a.client) return String(a.client).trim();
+  const coop = coopById(a.cooperative_id);
+  return coop && coop.client ? String(coop.client).trim() : '';
+}
+// ---- Tableau de bord « livraison aux clients », calculé depuis les pesées attribuées ----
+function renderLivraisonsClients(campagneId){
+  const achats = (state.achats||[]).filter(a=>!a.producteur_id && !a.refoulee && (!campagneId || a.campagne_id===campagneId));
+  const parClef = new Map();
+  const cleDe = n=>ccClefClient(n);
+  const groupe = (nom)=>{ const k = cleDe(nom); if (!parClef.has(k)) parClef.set(k, { client:nom, contrats:[], achats:[], lots:[], series:[] }); return parClef.get(k); };
+  (state.contratsClients||[]).filter(c=>(!campagneId || c.campagne_id===campagneId) && c.client).forEach(c=>groupe(c.client).contrats.push(c));
+  (state.lotsSeries||[]).filter(sr=>sr.client && (!campagneId || sr.campagne_id===campagneId)).forEach(sr=>groupe(sr.client).series.push(sr));
+  (state.lotsUsinage||[]).filter(l=>l.client && (!campagneId || l.campagne_id===campagneId)).forEach(l=>groupe(l.client).lots.push(l));
+  const sansClient = [];
+  achats.forEach(a=>{ const c = achatClientEffectif(a); if (c) groupe(c).achats.push(a); else sansClient.push(a); });
+  const groupes = Array.from(parClef.values()).sort((x,y)=>x.client.localeCompare(y.client,'fr'));
+  const kgLivre = l=>l.reduce((s,a)=>s+(Number(a.poids_net_produit)||0),0);
+  const kgSans = kgLivre(sansClient);
+  let html = '<h3 style="margin:0 0 10px;font-size:14px;color:var(--ink-soft)">Livraisons aux clients — calculées depuis les pesées attribuées</h3>';
+  if (sansClient.length) html += '<div class="hint" style="margin:0 0 10px;padding:8px 10px;background:#FFF6E0;border-radius:8px;color:#7a5200"><b>'+fmtNum(sansClient.length)+' connaissement'+(sansClient.length>1?'s':'')+' sans client</b> ('+fmtKg(kgSans)+') — attribue-les depuis la liste des achats (colonne « Fiche de traçabilité », menu client) pour qu\'ils comptent ici.</div>';
+  if (!groupes.length) return html + '<div class="hint" style="margin-bottom:16px">Aucun client connu pour cette campagne.</div>';
+  html += '<div class="sa-grille" style="margin-bottom:18px">';
+  groupes.forEach(g=>{
+    const contracte = g.contrats.filter(c=>c.statut!=='annule' && c.statut!=='annulé').reduce((s,c)=>s+(Number(c.volume_contractuel_kg)||0),0);
+    const livre = kgLivre(g.achats), reste = Math.max(contracte - livre, 0), pct = contracte>0 ? Math.round(livre/contracte*100) : null;
+    const lotsKg = g.lots.reduce((s,l)=>s+(Number(l.poids_sortie_kg)||0),0);
+    const ouvert = !!(state.livrClientsOuverts && state.livrClientsOuverts[g.client]);
+    html += '<div class="sa-carte"><div class="sa-tete"><b>'+esc(g.client)+'</b>'+(g.series.length ? '<span class="hint" style="margin:0">Lots n° '+g.series.map(sr=>esc(String(sr.numero_debut))+(sr.numero_fin?'–'+esc(String(sr.numero_fin)):'…')+' ('+esc(sr.type_cacao||'')+')').join(', ')+'</span>' : '')+'</div>'
+      + '<div class="sa-lignes">'
+      + '<div><span>Contracté</span><b>'+(contracte>0 ? fmtKg(contracte) : '—')+'</b></div>'
+      + '<div><span>Livré à l\'usine (net payé)</span><b>'+fmtKg(livre)+'</b><small>'+fmtNum(g.achats.length)+' connaissement'+(g.achats.length>1?'s':'')+'</small></div>'
+      + '<div><span>Reste à livrer</span><b'+(reste>0?' style="color:var(--warn)"':'')+'>'+(contracte>0 ? fmtKg(reste) : '—')+'</b>'+(pct!=null ? '<small>'+pct+' % réalisé</small>' : '')+'</div>'
+      + '<div><span>Lots d\'usinage produits</span><b>'+(g.lots.length ? fmtNum(g.lots.length)+' lot'+(g.lots.length>1?'s':'')+' · '+fmtKg(lotsKg) : '—')+'</b></div>'
+      + '</div>'
+      + (pct!=null ? '<div class="sa-barre"><i style="width:'+Math.min(pct,100)+'%"></i></div>' : '')
+      + '<div style="margin-top:8px"><button class="btn-ghost btn-compact" onclick="livrClientsBasculer(\''+escJs(g.client)+'\')">'+(ouvert?'Masquer les connaissements':'Voir les connaissements')+'</button></div>'
+      + (ouvert ? '<div class="livr-tbl"><table class="tbl-fiches"><thead><tr><th>Date</th><th>Connaissement</th><th>Coopérative</th><th class="num">Net payé</th></tr></thead><tbody>'
+          + g.achats.slice().sort((x,y)=>String(y.date).localeCompare(String(x.date))).map(a=>'<tr><td>'+esc(dateFr(a.date)||'')+'</td><td>'+esc(a.connaissement||'')+(a.client?'':' <span class="hint" style="margin:0">(défaut coop.)</span>')+'</td><td>'+esc((coopById(a.cooperative_id)||{}).nom||a.fournisseur_saigic||'—')+'</td><td class="num">'+(Number(a.poids_net_produit)>0?fmtNum(a.poids_net_produit):'—')+'</td></tr>').join('')
+          + '</tbody></table></div>' : '')
+      + '</div>';
+  });
+  return html + '</div>';
+}
+function livrClientsBasculer(client){ state.livrClientsOuverts = state.livrClientsOuverts || {}; state.livrClientsOuverts[client] = !state.livrClientsOuverts[client]; render(); }
+
 function renderAchatsClientsDashboard(){
   const campagneId = (state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : null;
   const lignes = (state.suiviAchatsClients||[]).filter(l=>!campagneId || l.campagne_id===campagneId);
@@ -6353,6 +6444,7 @@ function renderAchatsClientsDashboard(){
     + '<button class="btn" onclick="suiviAchatsChoisirFichier()">⭱ Importer le suivi achats (Excel)</button>'
     + '<input type="file" id="sa-import-excel" accept=".xlsx,.xls,.csv" style="display:none" onchange="suiviAchatsImporterExcel(this)">'
     + '<span class="hint" style="margin:0">Volumes par client : contrat vs validé sur connaissement, livraison brousse, agréage, reste à acheter. Réimporter le fichier remplace entièrement les données de la campagne affichée.</span></div>';
+  html = renderLivraisonsClients(campagneId) + '<h3 style="margin:8px 0 10px;font-size:14px;color:var(--ink-soft)">Suivi achats importé (Excel)</h3>' + html;
   if (!lignes.length) return html + '<div class="hint">Aucune donnée importée pour l\'instant'+(campagneId?' pour cette campagne':'')+'.</div>';
 
   const somme = champ => lignes.reduce((s,l)=>s+(Number(l[champ])||0), 0);
@@ -17022,7 +17114,7 @@ function ligneAchatHtml(a, montrerCoop, ouvert, avecNomPlateforme){
     + '<td class="g cliquable" onclick="toggleAchatDetail(\''+a.id+'\')"><div class="num-conn">'+esc(a.connaissement||'(sans numéro)')+'</div>'
       + '<div class="sous">'+(!coop && (a.code_fourn||a.fournisseur_saigic) ? '<span class="badge warn" title="Fournisseur SAIGIC : '+esc((a.fournisseur_saigic||'')+' '+(a.code_fourn||''))+'">À identifier : '+esc(a.fournisseur_saigic||a.code_fourn)+'</span> <button type="button" class="btn-ghost btn-compact" onclick="identifierCoopSaigic(\''+escJs(a.id)+'\')">Identifier</button>' : (montrerCoop ? esc(coop?coop.nom:'—') : ''))+(montrerCoop && a.type_cacao ? ' · ' : '')+(a.type_cacao ? '<span class="type">'+esc(a.type_cacao)+'</span>' : '')+'</div></td>'
     + '<td class="n">'+esc(dateFr(a.date)||'—')+'<div class="sous">'+(a.periode ? (a.periode==='principale' ? 'Principale' : 'Intermédiaire') : '')+'</div></td>'
-    + '<td>'+verif+'</td>'
+    + '<td>'+verif+achatClientSelectHtml(a)+'</td>'
     + '<td class="n">'+(Number(a.quantite_kg)>0 ? fmtNum(a.quantite_kg) : '<span class="vide">—</span>')+'</td>'
     + '<td><span class="badge '+etat.cls+'">'+esc(etat.label)+'</span></td>'
     + '<td class="n">'+(Number(a.poids_net_produit)>0 ? '<b>'+fmtNum(a.poids_net_produit)+'</b>' : '<span class="vide">—</span>')+'</td>'
@@ -17041,6 +17133,7 @@ function ligneAchatHtml(a, montrerCoop, ouvert, avecNomPlateforme){
     + (ouvert ? detailAchatHtml(a, etat).replace('<tr class="detail-achat"', '<tr class="detail-achat"'+(cache?' style="display:none"':'')) : '');
 }
 function renderAchatsConnaissementPanel(){
+  if (!state.lotsCharges && !state.lotsChargementLance){ state.lotsChargementLance = true; chargerLots().then(()=>render()); }
   const list = achatsFiltered().filter(a=>!a.producteur_id);
   const statut = ['attente','recu','paye','ecart','nondecl'].indexOf(state.achatsStatut)>=0 ? state.achatsStatut : 'tous';
   const nb = { tous:list.length, attente:list.filter(a=>etatAchat(a).cle==='attente').length, recu:list.filter(a=>etatAchat(a).cle==='recu').length,
