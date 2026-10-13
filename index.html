@@ -3496,7 +3496,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-13-068';
+const APP_VERSION = '2026-10-13-069';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -6534,8 +6534,25 @@ async function achatEnregistrerClient(achatId, client, programme){
   a.client = client || null; a.programme = programme;
   const { error } = await supabaseClient.from('achats').update({ client: a.client, programme: a.programme }).eq('id', achatId);
   if (error){ Object.assign(a, avant); showToast('Échec : '+error.message); render(); return; }
+  // Client qui assure lui-même la diligence EUDR et les paiements (SUCDEN, TOUTON) : la coopérative passe automatiquement
+  // en « diligence externe » (fiche allégée, client et contact du client renseignés, plus rien à compléter côté ECORIGINE).
+  try{ await coopPasserEnDiligenceExterne(a, client); }catch(e){ console.warn('diligence externe auto', e); }
   // Pas de message animé : le menu affiche déjà le client (et le projet) choisis.
   render();
+}
+async function coopPasserEnDiligenceExterne(a, client){
+  if (!client || CLIENTS_PAYANT_DIRECT.indexOf(ccClefClient(client))<0) return;
+  const coop = coopById(a.cooperative_id); if (!coop) return;
+  if (coop.diligence_externe && coop.client && ccClefClient(coop.client)!==ccClefClient(client)) return;   // déjà gérée par un autre client : on n'y touche pas
+  const ct = clientContactDe(client);
+  const maj = { diligence_externe:true, client, fiche_a_completer:false };
+  if (!String(coop.contact_nom||'').trim() && ct.contact_nom) maj.contact_nom = ct.contact_nom;
+  if (!String(coop.contact_contact||'').trim() && ct.contact_telephone) maj.contact_contact = ct.contact_telephone;
+  if (!String(coop.contact_email||'').trim() && ct.contact_email) maj.contact_email = ct.contact_email;
+  if (coop.diligence_externe && coop.client===client && !coop.fiche_a_completer && Object.keys(maj).length===3) return;
+  const { error } = await supabaseClient.from('cooperatives').update(maj).eq('id', coop.id);
+  if (error){ showToast('Coopérative non mise à jour : '+error.message); return; }
+  Object.assign(coop, maj);
 }
 // Effectif d'un connaissement pour un client : son attribution explicite, sinon le client par défaut de sa coopérative.
 function achatClientEffectif(a){
