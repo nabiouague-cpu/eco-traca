@@ -3496,7 +3496,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-13-059';
+const APP_VERSION = '2026-10-13-060';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5941,11 +5941,11 @@ function lotsSerieGrilleLignesHtml(pl){
     const ligne = pl.lignes[t];
     const serie = ligne.id ? lotsSerieParId(ligne.id) : null;
     const utilises = serie ? (state.lotsUsinage||[]).filter(l=>l.serie_id===serie.id).length : 0;
-    const fige = pl.mode==='modifier' && !!ligne.id;   // série déjà enregistrée : coche et numéro figés
-    return '<tr'+(fige?' style="background:var(--surface-2)"':'')+'>'
-      + '<td><input type="checkbox" name="grille_coche_'+i+'" '+(ligne.coche?'checked':'')+(fige?' disabled':'')+' onchange="lotsSerieGrilleCocher('+i+', this.checked)"></td>'
-      + '<td><b>'+lotsLibelleTypeCacao(t)+'</b>'+(fige?'<div class="hint" style="margin:0">enregistrée</div>':'')+'</td>'
-      + '<td><input type="number" name="grille_debut_'+i+'" value="'+esc(ligne.numero_debut||'')+'" placeholder="ex : 1001" style="width:110px" '+(ligne.coche?'':'disabled')+(fige?' readonly':'')+'></td>'
+    const existante = pl.mode==='modifier' && !!ligne.id;   // série déjà enregistrée : pré-remplie, toujours modifiable
+    return '<tr>'
+      + '<td><input type="checkbox" name="grille_coche_'+i+'" '+(ligne.coche?'checked':'')+' onchange="lotsSerieGrilleCocher('+i+', this.checked)"></td>'
+      + '<td><b>'+lotsLibelleTypeCacao(t)+'</b>'+(existante?'<div class="hint" style="margin:0">enregistrée</div>':'')+'</td>'
+      + '<td><input type="number" name="grille_debut_'+i+'" value="'+esc(ligne.numero_debut||'')+'" placeholder="ex : 1001" style="width:110px" '+(ligne.coche?'':'disabled')+'></td>'
       + '<td>'+(serie?(utilises+' lot'+(utilises>1?'s':'')+(lotsSerieComplet(serie)?' · <span class="badge warn">épuisée</span>':'')):'—')+'</td>'
       + '</tr>';
   }).join('');
@@ -6001,7 +6001,7 @@ async function lotsSerieGrilleEnregistrer(){
       for (const l of aEnregistrer){
         // numero_fin n'est pas gere ici : on ne touche jamais ce champ sur une mise a jour (une valeur deja
         // en base reste ce qu'elle est), et il est simplement absent sur une creation (null par defaut).
-        if (l.id){ const { error } = await supabaseClient.from('lots_series').update({ numero_debut:l.numero_debut, site_code: site_code||null, programme }).eq('id', l.id); if (error) throw error; }
+        if (l.id){ const { error } = await supabaseClient.from('lots_series').update({ numero_debut:l.numero_debut, campagne_id, client, site_code: site_code||null, programme }).eq('id', l.id); if (error) throw error; }
         else { const ligne = { id:genId('ls'), campagne_id, client, site_code: site_code||null, programme, type_cacao:l.type_cacao, niveau_tracabilite:null, libelle:null, numero_debut:l.numero_debut, numero_fin:null }; const { error } = await supabaseClient.from('lots_series').insert(ligne); if (error) throw error; }
       }
       await chargerLots(); closeModal(); showToast('Séries enregistrées.', 'success');
@@ -7497,10 +7497,9 @@ function lotsModalsHtml(){
   }
   if (m.type==='lotsSerieGrille'){
     const pl = m.payload;
-    const verrou = pl.mode==='modifier' ? ' disabled' : '';   // campagne
-    const verrouClient = (pl.mode==='modifier' || pl.mode==='ajouter') ? ' disabled' : '';
+    const verrou = '', verrouClient = '';   // tout reste modifiable ; en mode « modifier », rien ne se réinitialise
     return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3 id="grille-titre">'+(pl.mode==='modifier' ? 'Modifier la série' : pl.mode==='ajouter' ? 'Nouvelle série' : 'Séries de numérotation')+(pl.client?' — '+esc(pl.client):' — générique')+(pl.programme?' → '+esc(pl.programme):'')+(pl.site_code?' · '+esc(lotsSiteNom(pl.site_code)):'')+'</h3>'
-      + (pl.mode==='modifier' ? '<div class="hint" style="margin-bottom:10px">Série déjà enregistrée : son type de cacao et son numéro de départ sont figés. Tu peux lui ajouter ou changer le projet de durabilité et le site / usinier, ou cocher un autre type de cacao. Pour une numérotation différente, utilise « + Ajouter une série à ce client ».</div>' : '')
+      + (pl.mode==='modifier' ? '<div class="hint" style="margin-bottom:10px">Série déjà enregistrée : tout est pré-rempli et reste modifiable. Changer le client, le projet ou le site ne réinitialise rien : la série garde son type et son numéro, et tu valides.</div>' : '')
       + '<div class="hint" style="margin-bottom:10px">Coche les types de cacao utilisés dans cette campagne et indique, pour chacun, le numéro de série (le premier numéro de lot). Les numéros suivants ne sont jamais calculés ou imposés automatiquement : communique-les au fur et à mesure, même s\'il y a des sauts (ex. 1001, 1002, puis 1004). Le niveau de traçabilité se renseigne plus tard, à l\'export, une fois les instructions d\'embarquement du client reçues.</div>'
       + '<div id="modal-fields">'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Campagne<select name="grille_campagne"'+verrou+' onchange="lotsSerieGrilleScopeChange()">'+lotsCampagneOptions(pl.campagne_id)+'</select></label><label class="field">Client<select name="grille_client"'+verrouClient+' onchange="lotsSerieGrilleScopeChange()">'+lotsClientsOptions(pl.campagne_id, pl.client)+'</select></label></div>'
