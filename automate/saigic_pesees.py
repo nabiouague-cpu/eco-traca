@@ -28,7 +28,7 @@ ETAT = os.environ.get('PESEES_ETAT', '/root/.saigic_pesees_etat.json')
 STOP = os.environ.get('PESEES_STOP', '/root/.saigic_pesees.stop')
 FAILS = os.environ.get('PESEES_FAILS', '/root/.saigic_pesees.fails')
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36'
-VERSION = '3'
+VERSION = '4'
 DRY = '--dry-run' in sys.argv
 UNE = '--une' in sys.argv
 
@@ -152,7 +152,7 @@ CHAMPS = [  # (motif du libellé, clé ORIGEN)
     (r'^N.?\s*TICKET', 'ticket'), (r'^DATE\s*P2', 'date_p2'), (r'^NSDECHARG', 'sacs_decharges'), (r'^NSACCEPT', 'sacs_acceptes'),
     (r'^NSDECLAR', 'sacs_declares'), (r'^PDSBRUT', 'poids_brut'), (r'^POIDS\s*NET$', 'poids_net'), (r'^PDSREFAC', 'poids_refac'),
     (r'^PDSNETACC', 'poids_net_acc'), (r'^TRANSPORTEUR', 'transporteur'), (r'^IMMATRICULATION', 'immatriculation'),
-    (r'^MAGASIN', 'magasin'), (r'^LOCALIT', 'localite'), (r'^NATURE', 'nature'), (r'^CODE\s*PESEE', 'code_pesee_detail'),
+    (r'^MAGASIN', 'magasin'), (r'^LOCALIT', 'localite'), (r'^DEPARTEMENT', 'departement'), (r'^NATURE', 'nature'), (r'^CODE\s*PESEE', 'code_pesee_detail'),
 ]
 def norm(s): return re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]+>', '', s))).strip()
 def lire_detail(c, pesee_id):
@@ -264,6 +264,7 @@ def main():
              'sacs_decharges': nombre(d.get('sacs_decharges')), 'sacs_acceptes': nombre(d.get('sacs_acceptes')) if d.get('sacs_acceptes') not in (None, '') else nombre(row.get('NbSacsAcceptes')),
              'poids_brut': nombre(d.get('poids_brut')), 'poids_net': nombre(d.get('poids_net')), 'poids_refac': nombre(d.get('poids_refac')),
              'poids_net_acc': nombre(d.get('poids_net_acc')) if d.get('poids_net_acc') not in (None, '') else nombre(row.get('PoidsNetAccepte')),
+             'localite': d.get('localite', ''), 'departement': d.get('departement', ''), 'nature': d.get('nature', ''),
              'transporteur': d.get('transporteur', ''), 'immatriculation': d.get('immatriculation', ''), 'magasin': d.get('magasin', ''),
              'statut_saigic': row.get('ValidationExp') or '', 'declare_saigic': bool(row.get('Declaration_Id'))}
         if not p['connaissement']: log('⚠ %s : pas de n° de connaissement dans le détail (libellés : %s)' % (code, ' | '.join(d.get('_libelles', [])[:30])))
