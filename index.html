@@ -3496,7 +3496,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-13-069';
+const APP_VERSION = '2026-10-13-070';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -6182,10 +6182,19 @@ async function enregistrerClientContact(){
     ? await supabaseClient.from('clients_meta').update(ligne).eq('client', pl.client)
     : await supabaseClient.from('clients_meta').insert(ligne);
   if (error){ showToast('Échec : '+error.message); return; }
+  // Le contact du client est reporté automatiquement sur toutes ses coopératives en diligence externe.
+  const cibles = (state.cooperatives||[]).filter(c=>c.diligence_externe && c.client && ccClefClient(c.client)===ccClefClient(pl.client));
+  let nbCoops = 0;
+  if (cibles.length){
+    const maj = { contact_nom, contact_contact: contact_telephone, contact_email };
+    const { error: e2 } = await supabaseClient.from('cooperatives').update(maj).in('id', cibles.map(c=>c.id));
+    if (e2) showToast('Contact enregistré, mais non reporté sur les coopératives : '+e2.message);
+    else { cibles.forEach(c=>Object.assign(c, maj)); nbCoops = cibles.length; }
+  }
   await chargerLots();
   state.modal = null;
   render();
-  showToast('Contact mis à jour pour '+pl.client+'.', 'success');
+  showToast('Contact mis à jour pour '+pl.client+(nbCoops ? ' et reporté sur '+nbCoops+' coopérative'+(nbCoops>1?'s':'') : '')+'.', 'success');
 }
 async function ccLogoDepose(input){
   const client = state._ccLogoCible; const fichier = input.files && input.files[0];
