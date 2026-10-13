@@ -3496,7 +3496,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-13-067';
+const APP_VERSION = '2026-10-13-068';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -17318,7 +17318,11 @@ function ligneAchatHtml(a, montrerCoop, ouvert, avecNomPlateforme){
 }
 function renderAchatsConnaissementPanel(){
   if (!state.lotsCharges && !state.lotsChargementLance){ state.lotsChargementLance = true; chargerLots().then(()=>render()); }
-  const list = achatsFiltered().filter(a=>!a.producteur_id);
+  // Camions refoulés : retirés de la liste (ECORIGINE ne les a pas achetés), mais leur chargement et ce que les producteurs
+  // ont livré restent en base et comptent toujours dans la traçabilité / le potentiel des producteurs.
+  const tousConn = achatsFiltered().filter(a=>!a.producteur_id);
+  const nbRefoules = tousConn.filter(a=>a.refoulee).length;
+  const list = state.achatsMontrerRefoules ? tousConn : tousConn.filter(a=>!a.refoulee);
   const statut = ['attente','recu','paye','ecart','nondecl'].indexOf(state.achatsStatut)>=0 ? state.achatsStatut : 'tous';
   const nb = { tous:list.length, attente:list.filter(a=>etatAchat(a).cle==='attente').length, recu:list.filter(a=>etatAchat(a).cle==='recu').length,
                paye:list.filter(a=>etatAchat(a).cle==='paye').length, ecart:list.filter(a=>a.verification_tracabilite==='ecart').length,
@@ -17359,6 +17363,8 @@ function renderAchatsConnaissementPanel(){
     + '<div class="achats-filtres">'
     + [['tous','Tous'],['attente','En attente de pesée'],['recu',"Reçus à l'usine"],['paye','Paiement enregistré'],['ecart','Écarts avec la fiche'],['nondecl','À déclarer']].map(([k,l])=>'<button type="button" class="chip-coop'+(statut===k?' actif':'')+'" onclick="setAchatsStatut(\''+k+'\')">'+esc(l)+' <small>('+nb[k]+')</small></button>').join('')
     + '</div><span class="hint" id="achats-compte"></span></div>';
+  if (nbRefoules>0) html += '<div class="achats-note" style="margin-bottom:8px">'+fmtNum(nbRefoules)+' camion'+(nbRefoules>1?'s':'')+' refoulé'+(nbRefoules>1?'s':'')+(state.achatsMontrerRefoules?' affiché'+(nbRefoules>1?'s':''):' retiré'+(nbRefoules>1?'s':'')+' de la liste')+' — le chargement et les volumes des producteurs restent conservés pour la traçabilité. '
+    + '<button type="button" class="lien-param" onclick="state.achatsMontrerRefoules=!state.achatsMontrerRefoules;render()">'+(state.achatsMontrerRefoules?'Masquer':'Afficher')+'</button></div>';
   html += '<div class="achats-note">Poids net payé : poids retenu par l\'usine après analyse qualité et réfaction éventuelle (validé par le Conseil Café-Cacao). C\'est la base du paiement de la coopérative et de la prime de certification.</div>';
 
   const groupes = new Map();
