@@ -28,6 +28,7 @@ ETAT = os.environ.get('PESEES_ETAT', '/root/.saigic_pesees_etat.json')
 STOP = os.environ.get('PESEES_STOP', '/root/.saigic_pesees.stop')
 FAILS = os.environ.get('PESEES_FAILS', '/root/.saigic_pesees.fails')
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36'
+VERSION = '3'
 DRY = '--dry-run' in sys.argv
 UNE = '--une' in sys.argv
 
@@ -223,6 +224,7 @@ def main():
     if os.path.exists(STOP): log('arrêté (fichier %s présent : refus de mot de passe antérieur). Supprime-le après vérification.' % STOP); return 3
     ident, popup, form, secret = (os.environ[env[k]] for k in ('identifiant', 'popup', 'formulaire', 'secret'))
 
+    log('robot pesées v' + VERSION)
     c = Client(ident, popup)
     try:
         connexion(c, ident, form)
