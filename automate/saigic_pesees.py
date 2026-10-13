@@ -28,7 +28,7 @@ ETAT = os.environ.get('PESEES_ETAT', '/root/.saigic_pesees_etat.json')
 STOP = os.environ.get('PESEES_STOP', '/root/.saigic_pesees.stop')
 FAILS = os.environ.get('PESEES_FAILS', '/root/.saigic_pesees.fails')
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36'
-VERSION = '4'
+VERSION = '5'
 DRY = '--dry-run' in sys.argv
 UNE = '--une' in sys.argv
 
@@ -152,7 +152,8 @@ CHAMPS = [  # (motif du libellé, clé ORIGEN)
     (r'^N.?\s*TICKET', 'ticket'), (r'^DATE\s*P2', 'date_p2'), (r'^NSDECHARG', 'sacs_decharges'), (r'^NSACCEPT', 'sacs_acceptes'),
     (r'^NSDECLAR', 'sacs_declares'), (r'^PDSBRUT', 'poids_brut'), (r'^POIDS\s*NET$', 'poids_net'), (r'^PDSREFAC', 'poids_refac'),
     (r'^PDSNETACC', 'poids_net_acc'), (r'^TRANSPORTEUR', 'transporteur'), (r'^IMMATRICULATION', 'immatriculation'),
-    (r'^MAGASIN', 'magasin'), (r'^LOCALIT', 'localite'), (r'^DEPARTEMENT', 'departement'), (r'^NATURE', 'nature'), (r'^CODE\s*PESEE', 'code_pesee_detail'),
+    (r'^MAGASIN', 'magasin'), (r'^LOCALIT', 'localite'), (r'^DEPARTEMENT', 'departement'), (r'^NATURE', 'nature'), (r'^CODE\s*PESEE', 'code_pesee_detail'), (r'^MONTANT\s*TRANSPORT', 'montant_transport'), (r'^MONTANT\s*BAR', 'montant_bareme'),
+    (r'^HUMIDIT', 'humidite'), (r'^GRADE', 'grade'), (r'^CONFORMIT', 'conformite'), (r'^ACCEPTATION', 'acceptation'),
 ]
 def norm(s): return re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]+>', '', s))).strip()
 def lire_detail(c, pesee_id):
@@ -164,22 +165,26 @@ def lire_detail(c, pesee_id):
     for i in range(1, len(morceaux) - 1, 2):
         lib = norm(morceaux[i]); suite = morceaux[i + 1]
         if not lib: continue
-        val = None
-        m = re.search(r'<(input|select|textarea)\b[^>]*>', suite, re.I)
-        if m:
+        vals = []
+        for m in re.finditer(r'<(input|select|textarea)\b[^>]*>', suite, re.I):
             tag = m.group(1).lower(); ouv = m.group(0)
             if tag == 'input':
-                v = re.search(r'\bvalue="([^"]*)"', ouv); val = html.unescape(v.group(1)) if v else ''
+                if re.search(r'type="hidden"', ouv, re.I): continue
+                v = re.search(r'\bvalue="([^"]*)"', ouv); vals.append(html.unescape(v.group(1)) if v else '')
             elif tag == 'select':
                 bloc = suite[m.start():]; fin = bloc.find('</select>'); bloc = bloc[:fin if fin > 0 else None]
-                s = re.search(r'<option\b[^>]*\bselected\b[^>]*>(.*?)</option>', bloc, re.S | re.I)
-                val = norm(s.group(1)) if s else ''
+                sel = re.search(r'<option\b[^>]*\bselected\b[^>]*>(.*?)</option>', bloc, re.S | re.I)
+                vals.append(norm(sel.group(1)) if sel else '')
             else:
-                bloc = suite[m.end():]; fin = bloc.find('</textarea>'); val = norm(bloc[:fin if fin > 0 else None])
+                bloc = suite[m.end():]; fin = bloc.find('</textarea>'); vals.append(norm(bloc[:fin if fin > 0 else None]))
+            if len(vals) >= 2: break
+        val = vals[0] if vals else None
         libelles.append(lib)
         L = lib.upper()
         for motif, cle in CHAMPS:
-            if re.search(motif, L) and cle not in out: out[cle] = (val or '').strip()
+            if re.search(motif, L) and cle not in out:
+                out[cle] = (val or '').strip()
+                if len(vals) > 1: out[cle + '_2'] = vals[1].strip()
     out['_libelles'] = libelles
     return out
 
@@ -265,6 +270,9 @@ def main():
              'poids_brut': nombre(d.get('poids_brut')), 'poids_net': nombre(d.get('poids_net')), 'poids_refac': nombre(d.get('poids_refac')),
              'poids_net_acc': nombre(d.get('poids_net_acc')) if d.get('poids_net_acc') not in (None, '') else nombre(row.get('PoidsNetAccepte')),
              'localite': d.get('localite', ''), 'departement': d.get('departement', ''), 'nature': d.get('nature', ''),
+             'tkm': nombre(d.get('montant_transport')), 'montant_transport': nombre(d.get('montant_transport_2')),
+             'bareme': nombre(d.get('montant_bareme')), 'montant_bareme': nombre(d.get('montant_bareme_2')),
+             'humidite': nombre(d.get('humidite')), 'grade': d.get('grade', ''), 'conformite': d.get('conformite', ''), 'acceptation': d.get('acceptation', ''),
              'transporteur': d.get('transporteur', ''), 'immatriculation': d.get('immatriculation', ''), 'magasin': d.get('magasin', ''),
              'statut_saigic': row.get('ValidationExp') or '', 'declare_saigic': bool(row.get('Declaration_Id'))}
         if not p['connaissement']: log('⚠ %s : pas de n° de connaissement dans le détail (libellés : %s)' % (code, ' | '.join(d.get('_libelles', [])[:30])))
