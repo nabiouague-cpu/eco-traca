@@ -3496,7 +3496,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-13-060';
+const APP_VERSION = '2026-10-13-061';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5213,6 +5213,14 @@ const LOTS_TYPES_CACAO = ['Ordinaire', 'RA', 'Fairtrade', 'Cocoa Horizon'];
 // Libelle affiche pour un type de cacao dans les listes deroulantes -- le code reste la valeur stockee
 // (inchangee pour ne pas casser les contrats/series/lots deja enregistres avec 'RA').
 function lotsLibelleTypeCacao(t){ return t==='RA' ? 'Rainforest Alliance' : (t||''); }
+// Logo de la certification d'un type de cacao (RA, Fairtrade), petit, devant le libelle ; rien pour les autres types.
+function lotsLogoTypeCacao(t, taille){
+  taille = taille||22;
+  const src = t==='RA' ? LOGO_RAINFOREST_ALLIANCE_B64 : (t==='Fairtrade' ? LOGO_FAIRTRADE_B64 : '');
+  if (!src) return '<span style="display:inline-block;width:'+taille+'px;flex:none"></span>';
+  return '<img src="'+src+'" alt="" style="height:'+taille+'px;width:'+taille+'px;object-fit:contain;flex:none;">';
+}
+function lotsTypeAvecLogo(t, taille){ return '<span style="display:inline-flex;align-items:center;gap:7px">'+lotsLogoTypeCacao(t, taille)+esc(lotsLibelleTypeCacao(t))+'</span>'; }
 const LOTS_STATUTS_USINAGE = { ouvert:['info','Ouvert'], clos:['ok','Clos'] };
 const LOTS_STATUTS_EXPORT = { preparation:['warn','En préparation'], embarque:['ok','Embarqué'] };
 const CONTRATS_CLIENTS_STATUTS = { actif:['ok','Actif'], clos:['neutral','Clos'] };
@@ -5861,15 +5869,16 @@ function renderLotsSeries(){
     const portees = Array.from(g.portees.values()).sort((x,y)=>(x.site_code||x.programme?1:0)-(y.site_code||y.programme?1:0) || String(x.programme).localeCompare(String(y.programme),'fr') || String(x.site_code).localeCompare(String(y.site_code)));
     const toutes = portees.reduce((acc,pt)=>acc.concat(pt.series),[]);
     const nbLots = toutes.reduce((sum,sr)=>sum+(state.lotsUsinage||[]).filter(l=>l.serie_id===sr.id).length, 0);
-    const types = Array.from(new Set(toutes.map(sr=>lotsLibelleTypeCacao(sr.type_cacao))));
+    const types = Array.from(new Set(toutes.map(sr=>sr.type_cacao)));
     const progs = Array.from(new Set(portees.map(pt=>pt.programme).filter(Boolean)));
     const sites = Array.from(new Set(portees.map(pt=>pt.site_code).filter(Boolean)));
     const debuts = toutes.map(sr=>Number(sr.numero_debut)).sort((x,y)=>x-y);
-    const resume = [types.join(', '), toutes.length+' série'+(toutes.length>1?'s':'')+(debuts.length?' (n° '+debuts.join(', ')+')':''),
+    const resume = [types.map(lotsLibelleTypeCacao).join(', '), toutes.length+' série'+(toutes.length>1?'s':'')+(debuts.length?' (n° '+debuts.join(', ')+')':''),
       progs.length ? '→ '+progs.join(' / ') : '', sites.length ? 'usines : '+sites.map(lotsSiteNom).join(', ') : '', nbLots+' lot'+(nbLots>1?'s':'')+' numéroté'+(nbLots>1?'s':'')].filter(Boolean);
     html += '<div class="serie-client'+(ouvert?' ouvert':'')+'">'
       + '<div class="serie-client-tete" onclick="lotsSeriesBasculer(\''+escJs(cle)+'\')">'
       + '<span class="chev">'+(ouvert?'▾':'▸')+'</span>'
+      + ccAvatarHtml(g.client||'?', 38)
       + '<div class="serie-client-nom"><b>'+(g.client?esc(g.client):'— générique —')+'</b><small>'+esc(lotsCampagneNom(g.campagne_id)||'')+'</small></div>'
       + '<div class="serie-client-resume">'+resume.map(r=>'<span>'+esc(r)+'</span>').join('')+'</div>'
       + '</div>';
@@ -5877,8 +5886,8 @@ function renderLotsSeries(){
       html += '<table class="tbl-fiches serie-detail"><thead><tr><th>Portée</th><th>Site / usine</th><th>Type de cacao</th><th>Série</th><th>Lots</th><th></th></tr></thead><tbody>';
       portees.forEach(pt=>{
         const ordre = pt.series.slice().sort((a,b)=>LOTS_TYPES_CACAO.indexOf(a.type_cacao)-LOTS_TYPES_CACAO.indexOf(b.type_cacao));
-        const typesHtml = ordre.map(sr=>'<div>'+esc(lotsLibelleTypeCacao(sr.type_cacao))+'</div>').join('');
-        const serieHtml = ordre.map(sr=>'<div><b>n° '+esc(String(sr.numero_debut))+'</b>'+(sr.numero_fin?' – '+esc(String(sr.numero_fin)):' et suivants')+(lotsSerieComplet(sr)?' · <span class="badge warn">épuisée</span>':'')+'</div>').join('');
+        const typesHtml = ordre.map(sr=>'<div style="margin:2px 0">'+lotsTypeAvecLogo(sr.type_cacao)+'</div>').join('');
+        const serieHtml = ordre.map(sr=>'<div style="margin:2px 0;min-height:22px"><b>n° '+esc(String(sr.numero_debut))+'</b>'+(sr.numero_fin?' – '+esc(String(sr.numero_fin)):' et suivants')+(lotsSerieComplet(sr)?' · <span class="badge warn">épuisée</span>':'')+'</div>').join('');
         const utilises = pt.series.reduce((sum,sr)=>sum+(state.lotsUsinage||[]).filter(l=>l.serie_id===sr.id).length, 0);
         const site = pt.site_code ? '<b>'+esc(lotsSiteNom(pt.site_code))+'</b> <span class="hint" style="margin:0">('+esc(pt.site_code)+(lotsSiteParCode(pt.site_code)&&lotsSiteParCode(pt.site_code).ville?' · '+esc(lotsSiteParCode(pt.site_code).ville):'')+')</span>' : '<span class="hint" style="margin:0">—</span>';
         const portee = pt.programme ? '→ <b>'+esc(pt.programme)+'</b>' : (pt.site_code ? 'usinier partenaire' : 'coopératives du client');
@@ -5944,7 +5953,7 @@ function lotsSerieGrilleLignesHtml(pl){
     const existante = pl.mode==='modifier' && !!ligne.id;   // série déjà enregistrée : pré-remplie, toujours modifiable
     return '<tr>'
       + '<td><input type="checkbox" name="grille_coche_'+i+'" '+(ligne.coche?'checked':'')+' onchange="lotsSerieGrilleCocher('+i+', this.checked)"></td>'
-      + '<td><b>'+lotsLibelleTypeCacao(t)+'</b>'+(existante?'<div class="hint" style="margin:0">enregistrée</div>':'')+'</td>'
+      + '<td><b>'+lotsTypeAvecLogo(t, 24)+'</b>'+(existante?'<div class="hint" style="margin:0">enregistrée</div>':'')+'</td>'
       + '<td><input type="number" name="grille_debut_'+i+'" value="'+esc(ligne.numero_debut||'')+'" placeholder="ex : 1001" style="width:110px" '+(ligne.coche?'':'disabled')+'></td>'
       + '<td>'+(serie?(utilises+' lot'+(utilises>1?'s':'')+(lotsSerieComplet(serie)?' · <span class="badge warn">épuisée</span>':'')):'—')+'</td>'
       + '</tr>';
