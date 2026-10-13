@@ -3022,7 +3022,7 @@ async function enregistrerAjoutCooperative(){
     const coopId = 'coop_'+Date.now();
     const { error } = await supabaseClient.from('cooperatives').insert(Object.assign({id: coopId}, payload));
     if (error){ showToast("Échec de la création : "+error.message); return; }
-    state.cooperatives = (state.cooperatives||[]).concat(Object.assign({id: coopId}, payload));
+    state.cooperatives = (state.cooperatives||[]).concat(Object.assign({id: coopId, created_at: new Date().toISOString()}, payload));
     if (diligence_externe && client) await ocEnregistrerContactClientSiNouveau(client, contact_nom, contact_contact, contact_email);
     state.modal = null;
     showToast('Coopérative ajoutée.', 'success');
@@ -3476,7 +3476,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-13-046';
+const APP_VERSION = '2026-10-13-047';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3704,17 +3704,17 @@ async function safeGet(key, fallback){
       if (error) return fallback;
       all = all.concat(data||[]);
     }
-    return all.map(rowToRecord);
+    return all.map(r=>rowToRecord(r, table==='cooperatives'));
   }catch(e){
     return fallback;
   }
 }
 
 // Supabase renvoie null pour les champs vides ; l'outil attend des chaines vides ('')
-function rowToRecord(row){
+function rowToRecord(row, garderCreation){
   const out = {};
   for (const k in row){
-    if (k==='created_at') continue;
+    if (k==='created_at' && !garderCreation) continue;   // gardee pour les cooperatives : sert au groupe « Récemment enregistrées »
     out[k] = row[k]==null ? '' : row[k];
   }
   return out;
