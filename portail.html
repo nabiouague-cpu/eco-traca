@@ -592,6 +592,8 @@ const DOCS_REQUIS = [
   'Certificat'
 ];
 
+// Une demande rejetee par ECORIGINE revient « en attente » avec son motif : la cooperative corrige et renvoie la meme demande.
+function demandeRejeteeACorriger(d){ return !!d && (d.statut==='rejetee' || d.statut==='demandee') && !!d.commentaire_ecorigine; }
 const STATUT_LABELS = {
   demandee: 'Requête',
   en_validation: 'En cours de validation',
@@ -2541,7 +2543,7 @@ function renderRequestsTable(list, isAccepted){
   list.forEach(d=>{
     const types = (d.types||[]).map(t=>'<span class="type-chip">'+esc(TYPE_LABELS[t]||t)+'</span>').join('');
     html += '<tr><td>'+esc(d.name)+'</td><td>'+esc(state.coop.nom)+'</td><td>'+types+'</td>'
-      + '<td><span class="badge '+d.statut+'" '+(d.statut==='rejetee' && d.commentaire_ecorigine ? 'title="Motif : '+esc(d.commentaire_ecorigine)+'"' : '')+'>'+esc(STATUT_LABELS[d.statut]||d.statut)+(d.statut==='rejetee' && d.commentaire_ecorigine ? ' ⓘ' : '')+'</span></td>'
+      + '<td><span class="badge '+(demandeRejeteeACorriger(d)?'rejetee':d.statut)+'" '+(demandeRejeteeACorriger(d) ? 'title="Motif : '+esc(d.commentaire_ecorigine)+'"' : '')+'>'+esc(demandeRejeteeACorriger(d) ? 'Rejeté — à corriger et renvoyer' : (STATUT_LABELS[d.statut]||d.statut))+(demandeRejeteeACorriger(d) ? ' ⓘ' : '')+'</span></td>'
       + '<td>'+fmtDate(d.deadline)+'</td><td>'+fmtDate(d.requested_at)+'</td>'
       + '<td><span class="link-action" onclick="'+((isAccepted && !qcEstQuestionnaire(d))?"openModal('sommaireDemande', {id:'"+d.id+"'})":"openRequestDetail('"+d.id+"')")+'">'+((isAccepted && !qcEstQuestionnaire(d))?'Sommaire':'Voir')+'</span></td></tr>';
   });
@@ -4039,7 +4041,7 @@ function renderRequestDetail(id){
   html += '<div class="detail-col"><div class="panel"><div class="panel-head">'
     + '<h2>Demande de données de '+esc(d.demandeur_nom||'ECORIGINE')+'</h2></div>'
     + '<div style="padding:16px 18px;">'
-    + (d.statut==='rejetee' && d.commentaire_ecorigine ? '<div class="hint" style="background:var(--danger-bg);border:1px solid var(--danger-line);color:var(--danger);border-radius:8px;padding:10px 14px;margin-bottom:14px;"><strong>⚠ Motif du rejet :</strong><br>'+esc(d.commentaire_ecorigine)+'</div>' : '')
+    + (demandeRejeteeACorriger(d) ? '<div class="hint" style="background:var(--danger-bg);border:1px solid var(--danger-line);color:var(--danger);border-radius:8px;padding:10px 14px;margin-bottom:14px;"><strong>⚠ Motif du rejet :</strong><br>'+esc(d.commentaire_ecorigine)+'</div>' : '')
     + (d.message ? '<div class="req-message">"'+esc(d.message)+'"</div>' : '')
     + '<div class="step-item"><div class="step-num">1</div><div><h4>Examiner la demande</h4><p>Prends connaissance des données demandées ci-contre avant de commencer.</p></div></div>'
     + '<div class="step-item"><div class="step-num">2</div><div><h4>Envoyer votre réponse</h4><p>Télécharge le(s) modèle(s) fourni(s), remplis les informations demandées (localisation des fermes, données de traçabilité, certifications...).</p></div></div>'
@@ -4673,7 +4675,7 @@ function renderModal(){
       + '<h3 style="margin:0;">'+esc(d.name)+'</h3>'
       + '<span class="badge '+esc(d.statut)+'" style="flex-shrink:0;">'+esc(STATUT_LABELS[d.statut]||d.statut)+'</span>'
       + '</div>'
-      + (d.statut==='rejetee' && d.commentaire_ecorigine ? '<div class="hint" style="background:var(--danger-bg);border:1px solid var(--danger-line);color:var(--danger);border-radius:8px;padding:8px 12px;margin-bottom:12px;"><strong>Motif du rejet :</strong> '+esc(d.commentaire_ecorigine)+'</div>' : '')
+      + (demandeRejeteeACorriger(d) ? '<div class="hint" style="background:var(--danger-bg);border:1px solid var(--danger-line);color:var(--danger);border-radius:8px;padding:8px 12px;margin-bottom:12px;"><strong>Motif du rejet :</strong> '+esc(d.commentaire_ecorigine)+'</div>' : '')
       + '<div class="hint" style="margin-bottom:16px;">'+types.map(t=>esc(TYPE_LABELS[t]||t)).join(', ')+' · '+mine.length+' fichier(s) soumis</div>'
       + '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;">'
       + types.filter(t=>t!=='autres').map(t=>'<button class="btn btn-teal" onclick="'+(t==='product_movements'?'genererTemplateTracabiliteDynamique(\''+escJs(d.name||'')+'\',\''+escJs(d.connaissement||'')+'\')':'genererTemplate(\''+t+'\')')+'">Télécharger un nouveau modèle'+(types.length>1?' — '+esc(TYPE_LABELS[t]||t):'')+'</button>').join('')
@@ -5748,7 +5750,7 @@ function qcDetailPortailHtml(d){
   let html = '<span class="detail-back" onclick="closeRequestDetail()">← Toutes les demandes</span>';
   html += '<div class="panel"><div class="panel-head"><h2>'+esc(d.name)+'</h2><span class="badge '+esc(d.statut)+'">'+esc(STATUT_LABELS[d.statut]||d.statut)+'</span></div>'
     + '<div class="qc-intro">'
-    + (d.statut==='rejetee' && d.commentaire_ecorigine ? '<div class="hint" style="background:var(--danger-bg);border:1px solid var(--danger-line);color:var(--danger);border-radius:8px;padding:10px 14px;margin-bottom:14px;"><strong>⚠ Motif du rejet :</strong><br>'+esc(d.commentaire_ecorigine)+'</div>' : '')
+    + (demandeRejeteeACorriger(d) ? '<div class="hint" style="background:var(--danger-bg);border:1px solid var(--danger-line);color:var(--danger);border-radius:8px;padding:10px 14px;margin-bottom:14px;"><strong>⚠ Motif du rejet :</strong><br>'+esc(d.commentaire_ecorigine)+'</div>' : '')
     + (d.message ? '<div class="req-message">"'+esc(d.message)+'"</div>' : '')
     + '<p><strong>'+esc(QC_TITRE)+'</strong><br><span class="hint">'+esc(QC_INTRO)+'</span></p>'
     + '<p>Ce questionnaire de CARGILL est à remplir <strong>pour chaque producteur</strong> de votre coopérative : touchez « Répondre » sur la ligne du producteur, répondez aux 3 pages (le nom de la coopérative, le nom du producteur et son n° CCC sont déjà pré-remplis), puis « Envoyer ». Vous pouvez enregistrer un brouillon et reprendre plus tard. Un producteur absent du registre s\'ajoute avec « + Producteur hors registre ».</p>'

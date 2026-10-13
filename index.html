@@ -3474,7 +3474,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-13-040';
+const APP_VERSION = '2026-10-13-041';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7579,14 +7579,14 @@ function ouvrirRejetDemande(id, motifPrefill){
 // reutilisee a la fois par le rejet manuel (formulaire) et par le rejet automatique de la
 // plateforme quand une fiche de tracabilite ne passe pas les controles obligatoires.
 async function rejeterDemandeAvecMotif(id, motif){
-  const { error } = await supabaseClient.from('demandes').update({statut:'rejetee', commentaire_ecorigine: motif}).eq('id', id);
+  const { error } = await supabaseClient.from('demandes').update({statut:'demandee', commentaire_ecorigine: motif}).eq('id', id);   // la demande revient « en attente » avec son motif : la cooperative corrige et renvoie
   if (error){ showToast('Échec : '+error.message); return { erreur: error.message }; }
   const demandeRejetee = (state.demandesCoop||[]).find(d=>d.id===id);
-  if (demandeRejetee) demandeRejetee.statut = 'rejetee';
+  if (demandeRejetee){ demandeRejetee.statut = 'demandee'; demandeRejetee.commentaire_ecorigine = motif; }
   const regen = await regenererDocumentDeBase(demandeRejetee);   // le meme modele est regenere pour la cooperative (le cycle se repete)
-  if (regen.nom) showToast('Demande rejetée. Un nouveau document « '+regen.nom+' » a été généré pour la coopérative : elle verra le motif et pourra le télécharger puis le renvoyer.', 'success');
+  if (regen.nom) showToast('Demande rejetée et remise en attente. Un nouveau document « '+regen.nom+' » a été généré pour la coopérative : elle verra le motif et pourra le télécharger puis le renvoyer.', 'success');
   else if (regen.erreur) showToast('Demande rejetée, mais le nouveau document n\'a pas pu être généré : '+regen.erreur, 'error');
-  else showToast('Demande rejetée, la coopérative verra le motif.', 'success');
+  else showToast('Demande rejetée et remise en attente : la coopérative verra le motif et pourra corriger.', 'success');
   return { ok:true };
 }
 
@@ -7725,6 +7725,9 @@ async function apercuFichier(path, nom, titre){
   }
 }
 
+// Demande rejetee : elle revient en attente (statut « demandee ») et garde son motif jusqu'a la validation.
+function demandeRejeteeACorriger(d){ return !!d && d.statut==='demandee' && !!d.commentaire_ecorigine; }
+function demandeCorrigeeRenvoyee(d){ return !!d && d.statut==='en_validation' && !!d.commentaire_ecorigine; }
 const STATUT_BADGE = { demandee:['warn','Requête'], en_validation:['info','En cours de validation'], acceptee:['ok','Accepté'], rejetee:['danger','Rejeté'], annulee:['neutral','Annulé'] };
 
 function focusDemandeStatus(key){ state.demandesFocusStatus = key; render(); }
@@ -7740,7 +7743,9 @@ function renderDemandeStatusPanel(title, list, mode){
     list.forEach(d=>{
       const coop = coopById(d.cooperative_id);
       const types = (d.types||[]).map(t=>'<span class="badge neutral" style="margin:1px 3px 1px 0;">'+esc(DEMANDE_TYPE_LABELS[t]||t)+'</span>').join('');
-      const [badgeClass, badgeLabel] = STATUT_BADGE[d.statut] || ['neutral', d.statut];
+      let [badgeClass, badgeLabel] = STATUT_BADGE[d.statut] || ['neutral', d.statut];
+      if (demandeRejeteeACorriger(d)){ badgeClass = 'danger'; badgeLabel = 'Rejetée — la coopérative doit corriger'; }
+      else if (demandeCorrigeeRenvoyee(d)){ badgeClass = 'info'; badgeLabel = 'Corrigée et renvoyée — à valider'; }
       const fichiersDemande = (state.demandeFichiers||[]).filter(f=>f.demande_id===d.id);
       html += '<div class="row-demandes">'
         + '<div class="dem-nom">'+esc(d.name)+'</div>'
@@ -7759,7 +7764,7 @@ function renderDemandeStatusPanel(title, list, mode){
         + ((mode==='acceptee') && d.fichier_path && (d.types||[]).includes('masterdata') ? '<button class="btn-ghost" onclick="lancerAnalyseWhisp(\''+d.id+'\')" id="whisp-btn-'+d.id+'">Lancer l\'analyse Whisp</button>' : '')
         + (mode==='attente' ? '<button class="btn-danger-text" onclick="annulerDemande(\''+d.id+'\')">Annuler</button>' : '')
         + (mode==='attente' ? '<button class="btn-ghost" onclick="renvoyerEmailDemande(\''+d.id+'\', this)">✉ Renvoyer l\'email</button>' : '')
-        + (d.commentaire_ecorigine ? '<div class="hint" style="width:100%;margin-top:4px;">Motif : '+esc(d.commentaire_ecorigine)+'</div>' : '')
+        + (d.commentaire_ecorigine ? '<div class="hint" style="width:100%;margin-top:4px;">'+(demandeCorrigeeRenvoyee(d) ? 'Motif du rejet précédent : ' : 'Motif : ')+esc(d.commentaire_ecorigine)+'</div>' : '')
         + '</div>'
         + (fichiersDemande.length>0 ? '<div class="dem-fichiers">'
             + fichiersDemande.map(f=>'<div class="dem-fichier-ligne"><span style="flex:1;color:var(--ink-soft);">📄 '+esc(f.nom||f.path.split('/').pop())+'</span><button class="btn-ghost" onclick="apercuFichier(\''+f.path+'\',\''+escJs(f.nom||'')+'\')">👁 Aperçu</button><button class="btn-ghost" onclick="telechargerFichierDemande(\''+f.path+'\',\''+escJs(f.nom||'')+'\')">Télécharger</button></div>').join('')
@@ -7801,7 +7806,7 @@ function renderDemandesTab(){
     if (qcDemandes.length>0) html += '<div class="controls" style="margin-top:-4px;"><button class="btn" '+(nbRemplis>0?'':'disabled')+' onclick="qcRapportLegalite('+esc(JSON.stringify(qcDemandes.map(d=>d.id)))+', \'Toutes coopératives\')">📊 Rapport de légalité — toutes les coopératives ('+nbRemplis+' questionnaire'+(nbRemplis>1?'s':'')+' terminé'+(nbRemplis>1?'s':'')+')</button></div>';
   }
 
-  const pending = forType.filter(d=>d.statut==='demandee');
+  const pending = forType.filter(d=>d.statut==='demandee').sort((a,b)=>(demandeRejeteeACorriger(b)?1:0)-(demandeRejeteeACorriger(a)?1:0));
   const enValidation = forType.filter(d=>d.statut==='en_validation');
   const accepted = forType.filter(d=>d.statut==='acceptee');
   const rejected = forType.filter(d=>d.statut==='rejetee');
@@ -7824,7 +7829,7 @@ function renderDemandesTab(){
   } else {
     html += '<div class="cards" style="grid-template-columns:repeat(5,1fr);">'
       + GROUPS.map(([title,list,key,alertable])=>
-          '<div class="card'+(alertable && list.length>0?' alert':'')+'" style="cursor:pointer;" onclick="focusDemandeStatus(\''+key+'\')"><div class="label">'+title+'</div><div class="value">'+fmtNum(list.length)+'</div></div>'
+          '<div class="card'+(alertable && list.length>0?' alert':'')+'" style="cursor:pointer;" onclick="focusDemandeStatus(\''+key+'\')"><div class="label">'+title+'</div><div class="value">'+fmtNum(list.length)+'</div>'+(key==='attente' && list.filter(demandeRejeteeACorriger).length ? '<div class="hint" style="color:var(--danger);margin-top:4px;">dont '+list.filter(demandeRejeteeACorriger).length+' rejetée(s) à corriger</div>' : '')+(key==='validation' && list.filter(demandeCorrigeeRenvoyee).length ? '<div class="hint" style="margin-top:4px;">dont '+list.filter(demandeCorrigeeRenvoyee).length+' corrigée(s) et renvoyée(s)</div>' : '')+'</div>'
         ).join('')
       + '</div>';
   }
