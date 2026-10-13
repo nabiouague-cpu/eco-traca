@@ -171,7 +171,8 @@
   .coop-card-list{padding:14px 16px;}
   .achat-client-sel{font-size:11px;padding:2px 4px;border:1px solid var(--border);border-radius:6px;background:#fff;max-width:150px;color:var(--ink);}
   .achat-client-sel.a-attribuer{border-color:#E0B000;background:#FFF9E6;}
-  .series-accordeon{display:flex;flex-direction:column;gap:10px}
+  .series-accordeon{display:flex;flex-direction:column;gap:10px;margin-top:6px}
+  .modal .hint{margin-left:2px;margin-right:2px;line-height:1.45}
   .serie-client{border:1px solid var(--border);border-radius:12px;background:var(--surface);overflow:hidden}
   .serie-client.ouvert{border-color:var(--accent-line);box-shadow:var(--shadow-sm)}
   .serie-client-tete{display:flex;align-items:center;gap:12px;padding:12px 14px;cursor:pointer;user-select:none}
@@ -3495,7 +3496,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-13-057';
+const APP_VERSION = '2026-10-13-058';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5850,7 +5851,7 @@ function renderLotsSeries(){
     || String(a.client||'').localeCompare(String(b.client||''), 'fr'));
   let html = '<div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">'
     + '<button class="btn btn-primary" onclick="lotsSerieGrilleOuvrir()">+ Nouvelle série</button>'
-    + '<span class="hint" style="margin:0">Une série = un client, un type de cacao et un numéro de départ. Pour un usinier partenaire (AWAHUS, SITAPA) ou un projet de durabilité (Ferrero, Mars, Mondelez…), ajoute une série de plus au même client : ses lots restent comptés pour ce client.</span></div>';
+    + '<span class="hint" style="margin:0 8px;padding-left:4px">Une série = un client, un type de cacao et un numéro de départ. Pour un usinier partenaire (AWAHUS, SITAPA) ou un projet de durabilité (Ferrero, Mars, Mondelez…), ajoute une série de plus au même client : ses lots restent comptés pour ce client.</span></div>';
   if (!liste.length) return html + '<div class="hint">Aucune série définie pour l\'instant. Exemple : Rainforest Alliance n° 1001, Cocoa Horizon n° 500.</div>';
   if (!(state.lotsSeriesOuverts instanceof Set)) state.lotsSeriesOuverts = new Set();
   html += '<div class="series-accordeon">';
@@ -5882,9 +5883,9 @@ function renderLotsSeries(){
         const site = pt.site_code ? '<b>'+esc(lotsSiteNom(pt.site_code))+'</b> <span class="hint" style="margin:0">('+esc(pt.site_code)+(lotsSiteParCode(pt.site_code)&&lotsSiteParCode(pt.site_code).ville?' · '+esc(lotsSiteParCode(pt.site_code).ville):'')+')</span>' : '<span class="hint" style="margin:0">—</span>';
         const portee = pt.programme ? '→ <b>'+esc(pt.programme)+'</b>' : (pt.site_code ? 'usinier partenaire' : 'coopératives du client');
         html += '<tr><td>'+portee+'</td><td>'+site+'</td><td>'+typesHtml+'</td><td>'+serieHtml+'</td><td>'+utilises+'</td>'
-          + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="lotsSerieGrilleOuvrir(\''+esc(g.campagne_id)+'\',\''+esc(g.client)+'\',\''+esc(pt.site_code)+'\',\''+esc(pt.programme)+'\')">Modifier</button></td></tr>';
+          + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="lotsSerieGrilleOuvrir(\''+esc(g.campagne_id)+'\',\''+esc(g.client)+'\',\''+esc(pt.site_code)+'\',\''+esc(pt.programme)+'\',\'modifier\')">Modifier</button></td></tr>';
       });
-      html += '</tbody></table><div style="padding:6px 12px 10px"><button class="btn-ghost btn-compact" onclick="lotsSerieGrilleOuvrir(\''+esc(g.campagne_id)+'\',\''+esc(g.client)+'\',\'\',\'\')">+ Ajouter une série à ce client</button></div>';
+      html += '</tbody></table><div style="padding:6px 12px 10px"><button class="btn-ghost btn-compact" onclick="lotsSerieGrilleOuvrir(\''+esc(g.campagne_id)+'\',\''+esc(g.client)+'\',\'\',\'\',\'ajouter\')">+ Ajouter une série à ce client</button></div>';
     }
     html += '</div>';
   });
@@ -5905,11 +5906,13 @@ function lotsSerieGrilleLignesDepuisEtat(campagneId, client, siteCode, programme
   });
   return lignes;
 }
-function lotsSerieGrilleOuvrir(campagneId, client, siteCode, programme){
+// mode : 'modifier' (série existante : campagne, client, projet et site verrouillés, seuls les numéros changent),
+//        'ajouter' (nouvelle série pour un client déjà connu : client pré-rempli, projet/site libres), ou libre.
+function lotsSerieGrilleOuvrir(campagneId, client, siteCode, programme, mode){
   const campagne_id = campagneId!=null ? campagneId : ((state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : '');
   const clientNorm = client||'', site_code = siteCode||'', prog = programme||'';
   const lignes = lotsSerieGrilleLignesDepuisEtat(campagne_id, clientNorm, site_code, prog);
-  state.modal = { type:'lotsSerieGrille', payload: { campagne_id, client:clientNorm, site_code, programme:prog, lignes } };
+  state.modal = { type:'lotsSerieGrille', payload: { campagne_id, client:clientNorm, site_code, programme:prog, lignes, mode: mode||'' } };
   render();
 }
 // Relit les valeurs actuelles des cases/champs dans le DOM avant de re-rendre (ex. quand on coche une case,
@@ -7492,13 +7495,16 @@ function lotsModalsHtml(){
   }
   if (m.type==='lotsSerieGrille'){
     const pl = m.payload;
-    return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3 id="grille-titre">Séries de numérotation'+(pl.client?' — '+esc(pl.client):' — générique')+'</h3>'
+    const verrou = pl.mode==='modifier' ? ' disabled' : '';
+    const verrouClient = (pl.mode==='modifier' || pl.mode==='ajouter') ? ' disabled' : '';
+    return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3 id="grille-titre">'+(pl.mode==='modifier' ? 'Modifier la série' : pl.mode==='ajouter' ? 'Nouvelle série' : 'Séries de numérotation')+(pl.client?' — '+esc(pl.client):' — générique')+(pl.programme?' → '+esc(pl.programme):'')+(pl.site_code?' · '+esc(lotsSiteNom(pl.site_code)):'')+'</h3>'
+      + (pl.mode==='modifier' ? '<div class="hint" style="margin-bottom:10px">Tu modifies une série existante : le client, le projet et le site ne changent pas ici. Pour une autre portée, utilise « + Ajouter une série à ce client ».</div>' : '')
       + '<div class="hint" style="margin-bottom:10px">Coche les types de cacao utilisés dans cette campagne et indique, pour chacun, le numéro de série (le premier numéro de lot). Les numéros suivants ne sont jamais calculés ou imposés automatiquement : communique-les au fur et à mesure, même s\'il y a des sauts (ex. 1001, 1002, puis 1004). Le niveau de traçabilité se renseigne plus tard, à l\'export, une fois les instructions d\'embarquement du client reçues.</div>'
       + '<div id="modal-fields">'
-      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Campagne<select name="grille_campagne" onchange="lotsSerieGrilleScopeChange()">'+lotsCampagneOptions(pl.campagne_id)+'</select></label><label class="field">Client<select name="grille_client" onchange="lotsSerieGrilleScopeChange()">'+lotsClientsOptions(pl.campagne_id, pl.client)+'</select></label></div>'
-      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Projet de durabilité (optionnel)<input type="text" name="grille_programme" list="liste-programmes" value="'+esc(pl.programme||'')+'" placeholder="ex : Ferrero, Mars, Mondelez" onchange="lotsSerieGrilleScopeChange()"><datalist id="liste-programmes">'+lotsProgrammesConnus().map(x=>'<option value="'+esc(x)+'">').join('')+'</datalist></label>'
-      + '<label class="field">Site / usinier (optionnel)<select name="grille_site" onchange="lotsSiteAjouterDepuisSelect(this, lotsSerieGrilleScopeChange)">'+lotsSitesOptions(pl.site_code||'')+'</select></label></div>'
-      + '<div class="hint" style="margin:-4px 0 10px">Laisse les deux vides pour la série normale du client. Projet de durabilité : quand le client écoule le même cacao sous plusieurs projets nommés d\'après le chocolatier (ex. SUCDEN → Ferrero, SUCDEN → Mars), une série par projet. Site : quand un usinier partenaire (AWAHUS, SITAPA) a sa propre numérotation. Dans les deux cas les lots restent comptés pour le client.</div>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Campagne<select name="grille_campagne"'+verrou+' onchange="lotsSerieGrilleScopeChange()">'+lotsCampagneOptions(pl.campagne_id)+'</select></label><label class="field">Client<select name="grille_client"'+verrouClient+' onchange="lotsSerieGrilleScopeChange()">'+lotsClientsOptions(pl.campagne_id, pl.client)+'</select></label></div>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Projet de durabilité (optionnel)<input type="text" name="grille_programme" list="liste-programmes" value="'+esc(pl.programme||'')+'" placeholder="ex : Ferrero, Mars, Mondelez"'+verrou+' onchange="lotsSerieGrilleScopeChange()"><datalist id="liste-programmes">'+lotsProgrammesConnus().map(x=>'<option value="'+esc(x)+'">').join('')+'</datalist></label>'
+      + '<label class="field">Site / usinier (optionnel)<select name="grille_site"'+verrou+' onchange="lotsSiteAjouterDepuisSelect(this, lotsSerieGrilleScopeChange)">'+lotsSitesOptions(pl.site_code||'')+'</select></label></div>'
+      + (pl.mode==='modifier' ? '' : '<div class="hint" style="margin:6px 0 12px">Laisse les deux vides pour la série normale du client. Projet de durabilité : quand le client écoule le même cacao sous plusieurs projets nommés d\'après le chocolatier (ex. SUCDEN → Ferrero, SUCDEN → Mars), une série par projet. Site : quand un usinier partenaire (AWAHUS, SITAPA) a sa propre numérotation. Dans les deux cas les lots restent comptés pour le client.</div>')
       + '<table class="tbl-fiches" style="margin-top:12px"><thead><tr><th></th><th>Type de cacao</th><th>Série</th><th>Lots numérotés</th></tr></thead><tbody id="grille-lignes">'+lotsSerieGrilleLignesHtml(pl)+'</tbody></table>'
       + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="lotsSerieGrilleEnregistrer()">Enregistrer</button></div></div></div>';
   }
