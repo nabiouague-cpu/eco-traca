@@ -3496,7 +3496,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-13-064';
+const APP_VERSION = '2026-10-13-065';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -16177,6 +16177,7 @@ function soldeAchat(a){
 function aujourdhuiIso(){ return new Date().toISOString().slice(0,10); }
 function ouvrirPaiement(achatId, paiementId){
   const a = state.achats.find(x=>x.id===achatId); if (!a) return;
+  if (clientPayeCoop(a)){ showToast('Ce client paie lui-même la coopérative : aucun paiement à enregistrer ici.'); return; }
   if (!(Number(a.poids_net_produit)>0)){ showToast('Le paiement se renseigne après la pesée à l\'usine.'); return; }
   const sd = soldeAchat(a);
   if (!paiementId && sd && sd.complet){ showToast('Cette livraison est entièrement payée. Pour corriger un chèque, utilise « Modifier » dans le détail du connaissement.'); return; }
@@ -16340,6 +16341,7 @@ function construireAttestationDocx(lib, d){
 function nomFichierSur(t){ return String(t||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Za-z0-9]+/g,'_').replace(/^_+|_+$/g,'') || 'cooperative'; }
 async function genererAttestation(achatId){
   const a0 = state.achats.find(x=>x.id===achatId); if (!a0) return;
+  if (clientPayeCoop(a0)){ showToast('Ce client paie lui-même la coopérative : pas d\'attestation de paiement.'); return; }
   const coop = coopById(a0.cooperative_id), camp = state.campagnes.find(c=>c.id===a0.campagne_id);
   if (!coop || !camp){ showToast('Coopérative ou campagne introuvable pour ce connaissement.'); return; }
   if (!paiementsDeAchat(a0.id).length){ showToast('Aucun paiement enregistré pour ce connaissement : renseigne d\'abord le paiement.'); return; }
@@ -16572,10 +16574,19 @@ function achatsFiltered(){
 // Avancement : Declare -> Recu a l'usine (pesee saisie) -> Paiement enregistre (n° de cheque)
 // ============================================================
 function nrmAchat(t){ return String(t==null?'':t).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase(); }
+// Clients qui paient eux-mêmes les coopératives (SUCDEN, TOUTON) : ECORIGINE n'enregistre aucun paiement
+// (chèque, attestation) pour leurs connaissements. Le montant du cacao et la prime restent calculés et affichés,
+// et la déclaration sur le portail RA / FT reste possible.
+const CLIENTS_PAYANT_DIRECT = ['sucden','touton'];
+function clientPayeCoop(a){
+  if (!a) return false;
+  const c = a.client ? String(a.client).trim() : (function(){ const co = coopById(a.cooperative_id); return co && co.client ? String(co.client).trim() : ''; })();
+  return !!c && CLIENTS_PAYANT_DIRECT.indexOf(ccClefClient(c))>=0;
+}
 function etatAchat(a){
   if (a && a.refoulee) return { cle:'refoulee', label:'Camion refoulé', cls:'danger' };
   const recu = Number(a.poids_net_produit)>0 || Number(a.poids_brut_accepte)>0 || Number(a.nombre_sacs_accepte)>0;
-  const paye = !!String(a.numero_cheque||'').trim();
+  const paye = !!String(a.numero_cheque||'').trim() && !clientPayeCoop(a);
   if (paye){ const sd = soldeAchat(a); if (sd && !sd.complet) return { cle:'paye', label:'Paiement partiel', cls:'warn' }; return { cle:'paye', label:'Paiement enregistré', cls:'ok' }; }
   if (recu) return { cle:'recu', label:"Reçu à l'usine", cls:'info' };
   return { cle:'attente', label:'En attente de pesée', cls:'neutral' };
@@ -16784,6 +16795,7 @@ function stepperAchatHtml(a, etat){
     ["Reçu à l'usine", fait[1] ? 'Pesée enregistrée' : 'En attente de la pesée'],
     ['Paiement', fait[2] ? 'Chèque n° '+esc(a.numero_cheque) : 'Non enregistré'],
   ];
+  if (clientPayeCoop(a)){ fait.length = 2; etapes.length = 2; }
   const courant = fait.indexOf(false);
   let h = '<div class="stepper">';
   etapes.forEach((e,i)=>{
@@ -16830,13 +16842,14 @@ function detailAchatHtml(a, etat){
   const paiement = dl('Type de cacao', a.type_cacao ? esc(a.type_cacao) : '')
     + dl('Poids pesé à l\'usine', base>0 ? fmtKg(base) : '<span class="vide">En attente de la pesée</span>')
     + dl('Prime de certification', base>0 ? (prime>0 ? '<b>'+fmtNum(prime)+' FCFA</b>' : '<span class="vide">Taux de prime non renseigné</span>') : '<span class="vide">À déterminer</span>')
-    + (function(){ const m = calcMontantPaiement(a); if (!m) return dl('Montant à payer', '<span class="vide">À déterminer</span>');
+    + (function(){ const m = calcMontantPaiement(a); if (!m) return dl(clientPayeCoop(a) ? 'Montant du cacao' : 'Montant à payer', '<span class="vide">À déterminer</span>');
         return dl('Prix d\'entrée usine', m.prixEntreeUsine>0 ? fmtNum(m.prixEntreeUsine)+' FCFA/kg' : '<span class="vide">Non renseigné</span>')
           + dl('TKM', m.tkm>0 ? fmtNum(m.tkm)+' FCFA/kg' : '<span class="vide">Non renseigné</span>')
           + (m.commission>0 ? dl('Commission', fmtNum(m.commission)+' FCFA/kg') : '')
           + dl('Retenue BIC', m.tauxBic>0 ? fmtNum(m.retenueBic)+' FCFA'+(m.aBic ? ' <span class="vide">(BIC fourni — à reverser en fin de campagne)</span>' : '') : '<span class="vide">Aucune</span>')
-          + dl('Montant à payer', m.montant!==null ? '<b>'+fmtNum(m.montant)+' FCFA</b>' : '<span class="vide">'+(m.manque==='prix' ? 'Prix d\'entrée usine à renseigner' : 'TKM à compléter')+'</span>'); })()
+          + dl(clientPayeCoop(a) ? 'Montant du cacao' : 'Montant à payer', m.montant!==null ? '<b>'+fmtNum(m.montant)+' FCFA</b>' : '<span class="vide">'+(m.manque==='prix' ? 'Prix d\'entrée usine à renseigner' : 'TKM à compléter')+'</span>'); })()
     + (function(){ const ps = paiementsDeAchat(a.id), sd = soldeAchat(a);
+        if (clientPayeCoop(a)) return dl('Paiement', '<span class="vide">Payé directement par le client</span>');
         if (!ps.length && !String(a.numero_cheque||'').trim()) return dl('Paiement', '<span class="vide">Non enregistré</span>');
         if (!ps.length) return dl('Paiement', 'Chèque n° '+esc(a.numero_cheque)) + dl('Banque', a.banque ? esc(a.banque) : '') + dl('Libellé', a.libelle_cheque ? esc(a.libelle_cheque) : '');
         return ps.map((p,i)=>dl('Chèque'+(ps.length>1 ? ' '+(i+1) : ''), 'n° '+esc(p.numero_cheque)+' · '+esc(p.banque||'—')+' · '+esc(p.libelle_cheque||'—'))
@@ -16844,7 +16857,7 @@ function detailAchatHtml(a, etat){
           + (sd ? dl('Reste à payer', sd.reste>0 ? '<b>'+fmtNum(sd.reste)+' FCFA</b> <span class="vide">sur '+fmtNum(sd.du)+'</span>' : '<span class="vide">Soldé</span>') : ''); })()
     + declarations;
   const actionsDetail = '<div class="detail-actions">'
-    + (function(){ const sd = soldeAchat(a);
+    + (function(){ const sd = soldeAchat(a); if (clientPayeCoop(a)) return '';
         return (Number(a.poids_net_produit)>0 && (!sd || !sd.complet) ? '<button type="button" class="btn-ghost btn-compact" onclick="ouvrirPaiement(\''+a.id+'\')">'+(sd ? 'Ajouter un paiement' : 'Enregistrer le paiement')+'</button>' : '')
           + (sd ? '<button type="button" class="btn-ghost btn-compact" onclick="genererAttestation(\''+a.id+'\')">Attestation de paiement → à signer</button>' : ''); })()
     + (Number(a.poids_net_produit)>0 ? '<button type="button" class="btn-ghost btn-compact" onclick="ouvrirTicketPesee(\''+a.id+'\')" title="Renseigner les informations de la fiche de pesée de l\'usine, puis générer le ticket (modèle Word)">Ticket de pesée (Word)</button>' : '')
@@ -17286,8 +17299,8 @@ function ligneAchatHtml(a, montrerCoop, ouvert, avecNomPlateforme){
         // Une fois un paiement enregistre, la reception a l'usine est acquise : le bouton disparait
         // (la pesee reste consultable dans le detail de la ligne).
         if (!peseeVerrouillee(a) && etat.cle!=='paye') bt.push(reception);
-        if (Number(a.poids_net_produit)>0 && (!sd || !sd.complet)) bt.push('<button type="button" class="btn-ghost btn-compact" onclick="ouvrirPaiement(\''+a.id+'\')" title="'+(sd ? 'Ajouter un chèque : il reste '+fmtNum(sd.reste)+' FCFA à payer' : 'Enregistrer le chèque de paiement de cette livraison')+'">Paiement</button>');
-        if (sd) bt.push('<button type="button" class="btn-ghost btn-compact" onclick="genererAttestation(\''+a.id+'\')" title="Envoie à la coopérative, en demande à signer, l\'attestation de paiement de la campagne (tous ses chèques enregistrés)">Attestation → à signer</button>');
+        if (!clientPayeCoop(a) && Number(a.poids_net_produit)>0 && (!sd || !sd.complet)) bt.push('<button type="button" class="btn-ghost btn-compact" onclick="ouvrirPaiement(\''+a.id+'\')" title="'+(sd ? 'Ajouter un chèque : il reste '+fmtNum(sd.reste)+' FCFA à payer' : 'Enregistrer le chèque de paiement de cette livraison')+'">Paiement</button>');
+        if (sd && !clientPayeCoop(a)) bt.push('<button type="button" class="btn-ghost btn-compact" onclick="genererAttestation(\''+a.id+'\')" title="Envoie à la coopérative, en demande à signer, l\'attestation de paiement de la campagne (tous ses chèques enregistrés)">Attestation → à signer</button>');
         if (a.connaissement && !a.refoulee) bt.push('<button type="button" class="btn-danger-text btn-compact" onclick="supprimerConnaissement(\''+a.id+'\')" title="Retire ce connaissement et son achat pour pouvoir le reproduire — sans toucher aux producteurs ni à la demande (pour un camion refoulé, voir le détail)">Supprimer</button>');
         return '<div class="acts-ligne'+(bt.length>1 ? ' pile' : '')+'">'+(bt.length ? bt.join('') : (etat.cle==='paye' ? '<span class="vide">—</span>' : reception))+'</div>';
       })()+'</td></tr>'
