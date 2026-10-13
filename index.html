@@ -3474,7 +3474,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-13-042';
+const APP_VERSION = '2026-10-13-043';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -3954,8 +3954,15 @@ async function loadDemandes(){
   if (error){ showToast('Impossible de charger les demandes : '+error.message); return []; }
   return data || [];
 }
+// Historique des rejets : une trace est gardee a chaque rejet, meme quand la demande revient « en attente ».
+async function loadRejetsDemandes(){
+  if (!supabaseClient) return [];
+  const { data, error } = await supabaseClient.from('demandes_rejets').select('*').order('rejete_le', {ascending:false});
+  return error ? (state.rejetsDemandes||[]) : (data || []);
+}
 async function refreshDemandesTab(){
   state.demandesCoop = await loadDemandes();
+  state.rejetsDemandes = await loadRejetsDemandes();
   const ids = state.demandesCoop.map(d=>d.id);
   if (ids.length>0){
     const { data, error } = await supabaseClient.from('demande_fichiers').select('*').in('demande_id', ids);
@@ -7582,6 +7589,12 @@ async function rejeterDemandeAvecMotif(id, motif){
   const { error } = await supabaseClient.from('demandes').update({statut:'demandee', commentaire_ecorigine: motif}).eq('id', id);   // la demande revient « en attente » avec son motif : la cooperative corrige et renvoie
   if (error){ showToast('Échec : '+error.message); return { erreur: error.message }; }
   const demandeRejetee = (state.demandesCoop||[]).find(d=>d.id===id);
+  if (demandeRejetee){
+    // Trace du rejet (historique « Rejetées » + motif), conservee meme quand la demande repart en attente.
+    const trace = { demande_id:id, cooperative_id:demandeRejetee.cooperative_id, name:demandeRejetee.name, types:demandeRejetee.types||[], motif, rejete_le:new Date().toISOString(), rejete_par:(state.session&&state.session.user)?state.session.user.id:null };
+    const ins = await supabaseClient.from('demandes_rejets').insert(trace).select().single();
+    state.rejetsDemandes = [ ins.error ? trace : ins.data ].concat(state.rejetsDemandes||[]);
+  }
   if (demandeRejetee){ demandeRejetee.statut = 'demandee'; demandeRejetee.commentaire_ecorigine = motif; }
   const regen = await regenererDocumentDeBase(demandeRejetee);   // le meme modele est regenere pour la cooperative (le cycle se repete)
   if (regen.nom) showToast('Demande rejetée et remise en attente. Un nouveau document « '+regen.nom+' » a été généré pour la coopérative : elle verra le motif et pourra le télécharger puis le renvoyer.', 'success');
@@ -7731,6 +7744,23 @@ const STATUT_BADGE = { demandee:['warn','Requête'], en_validation:['info','En c
 function focusDemandeStatus(key){ state.demandesFocusStatus = key; render(); }
 function unfocusDemandeStatus(){ state.demandesFocusStatus = null; render(); }
 
+// « Rejetées » : historique des rejets avec le motif et la situation actuelle de la demande.
+function renderRejetsPanel(title, list){
+  let html = '<div class="panel"><div class="panel-head"><h2>'+title+' ('+list.length+')</h2><p class="hint">Trace de tous les rejets, avec le motif. La demande, elle, est revenue en attente chez la coopérative pour correction.</p></div>';
+  if (list.length===0) return html + '<div class="empty">Aucun rejet.</div></div>';
+  const SIT = { demandee:['warn','En attente de correction par la coopérative'], en_validation:['info','Corrigée et renvoyée — à valider'], acceptee:['ok','Acceptée'], rejetee:['danger','Rejetée (ancien circuit)'], annulee:['neutral','Annulée'] };
+  html += '<div class="row-demandes row-head"><div>Nom</div><div>Coopérative</div><div>Rejetée le</div><div>Situation actuelle</div><div>Motif</div><div></div></div>';
+  list.forEach(r=>{
+    const coop = coopById(r.cooperative_id);
+    const d = (state.demandesCoop||[]).find(x=>x.id===r.demande_id);
+    const [cl, lib] = d ? (SIT[d.statut]||['neutral', d.statut]) : ['neutral','Demande supprimée'];
+    html += '<div class="row-demandes"><div class="dem-nom">'+esc(r.name||(d&&d.name)||'—')+'</div><div>'+esc(coop?coop.nom:'—')+'</div>'
+      + '<div>'+(r.rejete_le?new Date(r.rejete_le).toLocaleDateString('fr-FR'):'—')+'</div>'
+      + '<div><span class="badge '+cl+'">'+lib+'</span></div>'
+      + '<div style="grid-column:span 2;">'+esc(r.motif||'—')+'</div></div>';
+  });
+  return html + '</div>';
+}
 function renderDemandeStatusPanel(title, list, mode){
   let html = '<div class="panel"><div class="panel-head"><h2>'+title+' ('+list.length+')</h2></div>';
   if (list.length===0){
@@ -7805,7 +7835,7 @@ function renderDemandesTab(){
   const pending = forType.filter(d=>d.statut==='demandee');
   const enValidation = forType.filter(d=>d.statut==='en_validation');
   const accepted = forType.filter(d=>d.statut==='acceptee');
-  const rejected = forType.filter(d=>d.statut==='rejetee');
+  const rejected = (state.rejetsDemandes||[]).filter(r=>(r.types||[]).includes(typeActif));
   const cancelled = forType.filter(d=>d.statut==='annulee');
 
   const GROUPS = [
@@ -7821,7 +7851,7 @@ function renderDemandesTab(){
 
   if (focusGroup){
     html += '<button class="btn-ghost" style="margin-bottom:10px;" onclick="unfocusDemandeStatus()">← Retour aux catégories</button>';
-    html += renderDemandeStatusPanel(focusGroup[0], focusGroup[1], focusGroup[2]);
+    html += focusGroup[2]==='rejetee' ? renderRejetsPanel(focusGroup[0], focusGroup[1]) : renderDemandeStatusPanel(focusGroup[0], focusGroup[1], focusGroup[2]);
   } else {
     html += '<div class="cards" style="grid-template-columns:repeat(5,1fr);">'
       + GROUPS.map(([title,list,key,alertable])=>
@@ -7915,6 +7945,7 @@ async function loadAll(silencieux){
     state.envoisCoop = envoisCoop;
     state.paiements = paiements;
     state.demandesCoop = demandesCoop;
+    state.rejetsDemandes = await loadRejetsDemandes();
     state.coopDatabaseFiles = coopDatabaseFilesResult.error ? [] : (coopDatabaseFilesResult.data || []);
     state.settings = settings;
     state.docVersions = (versionsResult && !versionsResult.error) ? (versionsResult.data || []) : [];
