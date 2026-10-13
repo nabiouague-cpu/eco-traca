@@ -75,8 +75,9 @@ class Client:
                     return rep.status, rep.read().decode('utf-8', 'replace'), rep.geturl()
             except urllib.error.HTTPError as e:
                 return e.code, e.read().decode('utf-8', 'replace'), url
-            except ssl.SSLError:
-                if essai == 0 and self.ctx is None:
+            except (ssl.SSLError, urllib.error.URLError) as e:
+                est_ssl = isinstance(e, ssl.SSLError) or isinstance(getattr(e, 'reason', None), ssl.SSLError) or 'CERTIFICATE_VERIFY_FAILED' in str(e)
+                if est_ssl and essai == 0 and self.ctx is None:
                     log('⚠ certificat TLS du SAIGIC non vérifiable : nouvel essai sans vérification')
                     self.ctx = ssl._create_unverified_context(); self.opener = self._opener(self.ctx)
                     continue
