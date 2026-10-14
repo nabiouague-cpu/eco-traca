@@ -3535,7 +3535,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-14-121';
+const APP_VERSION = '2026-10-14-122';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -6960,44 +6960,155 @@ function renderLivraisonsClients(campagneId){
 }
 function livrClientsBasculer(client){ state.livrClientsOuverts = state.livrClientsOuverts || {}; state.livrClientsOuverts[client] = !state.livrClientsOuverts[client]; render(); }
 
+// ---- Suivi achats par client : UN tableau, une ligne par client, les colonnes dans l'ordre de la chaine ----
+// Contrat -> Achete (net paye usine) -> Reste a acheter -> Camions en attente (decharges, pas encore peses)
+//   -> Usine (lots d'usinage) -> Agree (lots marques agree_le) -> Embarque (OT avec date d'embarquement ou clos)
+// Tout vient d'ORIGEN. Le fichier commercial importe (suivi_achats_clients) ne sert plus qu'a une colonne d'ecart.
+function pipeTonnes(kg){ if (kg==null || isNaN(kg)) return '—'; return (Math.round(kg/100)/10).toLocaleString('fr-FR',{maximumFractionDigits:1})+' T'; }
+function pipeClientsDonnees(campagneId){
+  const cle = n=>ccClefClient(n||'');
+  const groupes = new Map();
+  const G = nom=>{ const k = cle(nom); if (!groupes.has(k)) groupes.set(k, { k, client:String(nom).trim(), contrats:[], achats:[], attente:[], lots:[], ots:[], excel:[], programmes:new Map() }); return groupes.get(k); };
+  const P = (g, prog)=>{ const p = String(prog||'').trim(); if (!p) return null; if (!g.programmes.has(p)) g.programmes.set(p, { programme:p, achats:[], attente:[], lots:[], embarqueKg:0 }); return g.programmes.get(p); };
+  const dansCamp = x=>!campagneId || x.campagne_id===campagneId;
+  (state.contratsClients||[]).filter(c=>c.client && dansCamp(c) && c.statut!=='annule' && c.statut!=='annulé').forEach(c=>G(c.client).contrats.push(c));
+  const sansClient = [];
+  (state.achats||[]).filter(a=>!a.producteur_id && !a.refoulee && dansCamp(a)).forEach(a=>{
+    const c = achatClientEffectif(a); if (!c){ sansClient.push(a); return; }
+    const g = G(c), pese = Number(a.poids_net_produit)>0;
+    (pese ? g.achats : g.attente).push(a);
+    const p = P(g, a.programme); if (p) (pese ? p.achats : p.attente).push(a);
+  });
+  (state.lotsUsinage||[]).filter(l=>l.client && dansCamp(l)).forEach(l=>{ const g = G(l.client); g.lots.push(l); const p = P(g, l.programme); if (p) p.lots.push(l); });
+  const lotParId = new Map((state.lotsUsinage||[]).map(l=>[l.id, l]));
+  (state.lotsExport||[]).filter(o=>o.client && dansCamp(o)).forEach(o=>{
+    const g = G(o.client), compo = lotsExportCompo(o.id), kg = compo.reduce((s,x)=>s+(Number(x.poids_kg)||0),0);
+    const embarque = !!o.date_embarquement || o.statut==='clos';
+    g.ots.push({ ot:o, kg, embarque });
+    if (embarque) compo.forEach(x=>{ const l = lotParId.get(x.lot_usinage_id); const p = l ? P(g, l.programme) : null; if (p) p.embarqueKg += Number(x.poids_kg)||0; });
+  });
+  (state.suiviAchatsClients||[]).filter(l=>l.client && dansCamp(l)).forEach(l=>G(l.client).excel.push(l));
+  const kgNet = arr=>arr.reduce((s,a)=>s+(Number(a.poids_net_produit)||0),0);
+  const kgConn = arr=>arr.reduce((s,a)=>s+(Number(a.poids_net)||Number(a.quantite_kg)||0),0);
+  const lotsKg = arr=>arr.reduce((s,l)=>s+(Number(l.poids_sortie_kg)||0),0);
+  const lignes = Array.from(groupes.values()).map(g=>{
+    const contrat = g.contrats.reduce((s,c)=>s+(Number(c.volume_contractuel_kg)||0),0);
+    const achete = kgNet(g.achats), attenteKg = kgConn(g.attente), usine = lotsKg(g.lots), agree = lotsKg(g.lots.filter(l=>l.agree_le));
+    const embarque = g.ots.filter(o=>o.embarque).reduce((s,o)=>s+o.kg,0), prepare = g.ots.filter(o=>!o.embarque).reduce((s,o)=>s+o.kg,0);
+    const periodes = Array.from(new Set(g.contrats.map(c=>String(c.periode_embarquement||'').trim()).filter(Boolean)));
+    const exContrat = g.excel.reduce((s,l)=>s+(Number(l.volume_contrat_t)||0),0)*1000;
+    const exValide = g.excel.reduce((s,l)=>s+(Number(l.volume_valide_connaissement_t)||0),0)*1000;
+    const pct = contrat>0 ? Math.round(achete/contrat*100) : null;
+    let etat;
+    if (!contrat && !achete && !g.attente.length) etat = { c:'#888', t:'Rien à suivre' };
+    else if (!contrat) etat = { c:'#7a5200', t:'Sans contrat' };
+    else if (embarque>=contrat) etat = { c:'#1e8449', t:'Tout embarqué' };
+    else if (achete>=contrat) etat = { c:'#1f5fa8', t:'Acheté · à embarquer' };
+    else if (achete>0) etat = { c:'#d68910', t:'Achats en cours' };
+    else etat = { c:'#c0392b', t:'Pas démarré' };
+    return { g, contrat, achete, attenteN:g.attente.length, attenteKg, usine, agree, embarque, prepare, resteAcheter:Math.max(0,contrat-achete), resteEmbarquer:Math.max(0,contrat-embarque), periodes, pct, exContrat, exValide, etat };
+  }).sort((a,b)=>(b.contrat-a.contrat) || a.g.client.localeCompare(b.g.client,'fr'));
+  return { lignes, sansClient, kgSans:kgConn(sansClient)+kgNet(sansClient) };
+}
+function pipeBasculer(k){ state.pipeOuverts = state.pipeOuverts||{}; state.pipeOuverts[k] = !state.pipeOuverts[k]; render(); }
+async function lotMarquerAgree(id, agree){
+  const l = (state.lotsUsinage||[]).find(x=>x.id===id); if (!l) return;
+  const val = agree ? new Date().toISOString().slice(0,10) : null;
+  const { error } = await supabaseClient.from('lots_usinage').update({ agree_le: val }).eq('id', id);
+  if (error){ showToast('Enregistrement impossible : '+error.message); return; }
+  l.agree_le = val; render();
+}
+function pipeDetailHtml(L){
+  const g = L.g, col = s=>'<div><h4 style="margin:0 0 6px;font-size:12.5px;color:var(--ink-soft)">'+s+'</h4>';
+  const tbl = (th, rows, vide)=>rows.length ? '<table class="tbl-fiches" style="font-size:12px"><thead><tr>'+th.map(h=>'<th>'+h+'</th>').join('')+'</tr></thead><tbody>'+rows.join('')+'</tbody></table>' : '<div class="hint" style="margin:0">'+vide+'</div>';
+  let h = '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 22px;padding:4px 2px 6px;text-align:left;">';
+  h += col('Contrats ('+g.contrats.length+')') + tbl(['Référence','Période','Volume','Statut'],
+    g.contrats.map(c=>'<tr><td>'+esc(c.reference||'—')+'</td><td>'+esc(c.periode_embarquement||'—')+'</td><td class="num">'+pipeTonnes(Number(c.volume_contractuel_kg)||0)+'</td><td>'+esc(c.statut||'')+'</td></tr>'), 'Aucun contrat pour ce client.')+'</div>';
+  const conn = g.achats.slice().sort((x,y)=>String(y.date).localeCompare(String(x.date)));
+  const att = g.attente.slice().sort((x,y)=>String(y.date).localeCompare(String(x.date)));
+  h += col('Connaissements pesés ('+conn.length+')'+(att.length?' · en attente de pesée ('+att.length+')':'')) + tbl(['Date','N°','Coopérative','Net usine','Projet'],
+    conn.map(a=>'<tr><td>'+esc(dateFr(a.date)||'')+'</td><td>'+esc(a.connaissement||'(sans n°)')+'</td><td>'+esc((coopById(a.cooperative_id)||{}).nom||a.fournisseur_saigic||'')+'</td><td class="num">'+fmtKg(a.poids_net_produit)+'</td><td>'+esc(a.programme||'—')+'</td></tr>')
+    .concat(att.map(a=>'<tr style="color:#7a5200"><td>'+esc(dateFr(a.date)||'')+'</td><td>'+esc(a.connaissement||'(sans n°)')+'</td><td>'+esc((coopById(a.cooperative_id)||{}).nom||a.fournisseur_saigic||'')+'</td><td class="num">en attente · '+fmtKg(Number(a.poids_net)||Number(a.quantite_kg)||0)+'</td><td>'+esc(a.programme||'—')+'</td></tr>')), 'Aucun connaissement attribué à ce client.')+'</div>';
+  const lots = g.lots.slice().sort((x,y)=>String(x.numero).localeCompare(String(y.numero),'fr',{numeric:true}));
+  h += col('Lots d\'usinage ('+lots.length+')') + tbl(['N° lot','Site','Poids','Statut','Agréage'],
+    lots.map(l=>'<tr><td>'+esc(l.numero||'')+'</td><td>'+esc(l.site_code||l.site||'')+'</td><td class="num">'+fmtKg(l.poids_sortie_kg)+'</td><td>'+esc(l.statut||'')+'</td><td>'
+      + (l.agree_le ? '<span style="color:#1e8449;font-weight:600">Agréé le '+esc(dateFr(l.agree_le))+'</span> <button class="btn-ghost btn-compact" onclick="lotMarquerAgree(\''+escJs(l.id)+'\',false)" title="Annuler l\'agréage">✕</button>'
+                    : '<button class="btn-ghost btn-compact" onclick="lotMarquerAgree(\''+escJs(l.id)+'\',true)">Marquer agréé</button>')+'</td></tr>'), 'Aucun lot d\'usinage pour ce client.')+'</div>';
+  const ots = g.ots.slice().sort((x,y)=>String(y.ot.date_embarquement||'').localeCompare(String(x.ot.date_embarquement||'')));
+  h += col('Ordres de transit / embarquements ('+ots.length+')') + tbl(['N° OT','Navire','Embarqué le','BL','Tonnage','État'],
+    ots.map(o=>'<tr><td>'+esc(o.ot.numero||'')+'</td><td>'+esc(o.ot.navire||'—')+'</td><td>'+(o.ot.date_embarquement?esc(dateFr(o.ot.date_embarquement)):'—')+'</td><td>'+esc(o.ot.bl_numero||'—')+'</td><td class="num">'+pipeTonnes(o.kg)+'</td><td>'+(o.embarque?'<span style="color:#1e8449;font-weight:600">Embarqué</span>':'<span style="color:#7a5200">En préparation</span>')+'</td></tr>'), 'Aucun OT pour ce client — à renseigner avec le shipping.')+'</div>';
+  return h + '</div>';
+}
+function pipeExporterExcel(){
+  if (typeof XLSX === 'undefined'){ showToast('La bibliothèque Excel ne s\'est pas chargée.'); return; }
+  const campagneId = (state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : null;
+  const { lignes } = pipeClientsDonnees(campagneId);
+  const t = kg=>Math.round(kg/100)/10;
+  const aoa = [['Client','Période','Contrat (T)','Acheté net usine (T)','% acheté','Reste à acheter (T)','Camions en attente','Tonnage en attente (T)','Usiné (T)','Agréé (T)','Embarqué (T)','OT en préparation (T)','Reste à embarquer (T)','Fichier commercial contrat (T)','Fichier commercial validé (T)','État']];
+  lignes.forEach(L=>aoa.push([L.g.client, L.periodes.join(', '), t(L.contrat), t(L.achete), L.pct==null?'':L.pct, t(L.resteAcheter), L.attenteN, t(L.attenteKg), t(L.usine), t(L.agree), t(L.embarque), t(L.prepare), t(L.resteEmbarquer), L.exContrat?t(L.exContrat):'', L.exValide?t(L.exValide):'', L.etat.t]));
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'Suivi achats clients');
+  XLSX.writeFile(wb, 'suivi_achats_clients_'+(campagneId||'toutes_campagnes')+'.xlsx');
+}
 function renderAchatsClientsDashboard(){
   const campagneId = (state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : null;
-  const lignes = (state.suiviAchatsClients||[]).filter(l=>!campagneId || l.campagne_id===campagneId);
+  const { lignes, sansClient, kgSans } = pipeClientsDonnees(campagneId);
+  const T = lignes.reduce((t,L)=>({ contrat:t.contrat+L.contrat, achete:t.achete+L.achete, attenteN:t.attenteN+L.attenteN, attenteKg:t.attenteKg+L.attenteKg, usine:t.usine+L.usine, agree:t.agree+L.agree, embarque:t.embarque+L.embarque, prepare:t.prepare+L.prepare, resteAcheter:t.resteAcheter+L.resteAcheter, resteEmbarquer:t.resteEmbarquer+L.resteEmbarquer, exContrat:t.exContrat+L.exContrat, exValide:t.exValide+L.exValide }),
+    { contrat:0, achete:0, attenteN:0, attenteKg:0, usine:0, agree:0, embarque:0, prepare:0, resteAcheter:0, resteEmbarquer:0, exContrat:0, exValide:0 });
+  const pctDe = v=>T.contrat>0 ? Math.min(999, Math.round(v/T.contrat*100)) : null;
+  const avecExcel = lignes.some(L=>L.g.excel.length);
   let html = '<div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">'
-    + '<button class="btn" onclick="suiviAchatsChoisirFichier()">⭱ Importer le suivi achats (Excel)</button>'
+    + '<button class="btn" onclick="pipeExporterExcel()">⬇ Exporter le tableau (Excel)</button>'
+    + '<button class="btn-ghost" onclick="suiviAchatsChoisirFichier()" title="Le fichier du service commercial sert seulement de contrôle (colonne « Fichier commercial »).">⭱ Fichier commercial (contrôle)</button>'
     + '<input type="file" id="sa-import-excel" accept=".xlsx,.xls,.csv" style="display:none" onchange="suiviAchatsImporterExcel(this)">'
-    + '<span class="hint" style="margin:0">Volumes par client : contrat vs validé sur connaissement, livraison brousse, agréage, reste à acheter. Réimporter le fichier remplace entièrement les données de la campagne affichée.</span></div>';
-  html = renderLivraisonsClients(campagneId) + '<h3 style="margin:8px 0 10px;font-size:14px;color:var(--ink-soft)">Suivi achats importé (Excel)</h3>' + html;
-  if (!lignes.length) return html + '<div class="hint">Aucune donnée importée pour l\'instant'+(campagneId?' pour cette campagne':'')+'.</div>';
+    + '<span class="hint" style="margin:0">Une ligne par client, dans l\'ordre de la chaîne : contrat → acheté → usiné → agréé → embarqué. Tout est calculé depuis ORIGEN.</span></div>';
+  if (sansClient.length) html += '<div class="hint" style="margin:0 0 12px;padding:8px 10px;background:#FFF6E0;border-radius:8px;color:#7a5200"><b>'+fmtNum(sansClient.length)+' connaissement'+(sansClient.length>1?'s':'')+' sans client</b> ('+fmtKg(kgSans)+') — attribue-les depuis la liste des achats pour qu\'ils comptent dans ce tableau.</div>';
 
-  const somme = champ => lignes.reduce((s,l)=>s+(Number(l[champ])||0), 0);
-  const totalContrat = somme('volume_contrat_t'), totalValide = somme('volume_valide_connaissement_t'),
-    totalExport = somme('production_lots_exports_t'), totalAgreage = somme('presente_agreage_t'), totalReste = somme('reste_a_acheter_t');
-  const pctRealise = totalContrat>0 ? Math.round(totalValide/totalContrat*100) : 0;
-  const pctExport = totalContrat>0 ? Math.round(totalExport/totalContrat*100) : 0;
-
+  // Entonnoir : 5 tuiles dans l'ordre de la chaine
+  const tuile = (k, v, s, alerte)=>'<div class="ckpt-tuile'+(alerte?' alerte':'')+'"><div class="k">'+k+'</div><div class="v">'+pipeTonnes(v)+'</div><div class="s">'+s+'</div>'+(pctDe(v)!=null && k!=='Contracté' ? '<div class="ckpt-barre"><i style="width:'+Math.min(100,pctDe(v))+'%"></i></div>' : '')+'</div>';
   html += '<div class="ckpt sa-ckpt">'
-    + '<div class="ckpt-tuile"><div class="k">Volume contracté</div><div class="v" data-n="'+Math.round(totalContrat)+'">'+fmtNum(totalContrat)+' <small>tonnes</small></div><div class="s">Tous clients confondus</div></div>'
-    + '<div class="ckpt-tuile"><div class="k">Validé sur connaissement</div><div class="v" data-n="'+Math.round(totalValide)+'">'+fmtNum(totalValide)+' <small>tonnes</small></div><div class="s">'+pctRealise+' % du volume contracté</div><div class="ckpt-barre"><i style="width:'+Math.min(100,pctRealise)+'%;background:var(--ok)"></i></div></div>'
-    + '<div class="ckpt-tuile"><div class="k">Lots export produits</div><div class="v" data-n="'+Math.round(totalExport)+'">'+fmtNum(totalExport)+' <small>tonnes</small></div><div class="s">'+pctExport+' % du volume contracté</div><div class="ckpt-barre"><i style="width:'+Math.min(100,pctExport)+'%;background:var(--accent)"></i></div></div>'
-    + '<div class="ckpt-tuile"><div class="k">Présenté en agréage</div><div class="v" data-n="'+Math.round(totalAgreage)+'">'+fmtNum(totalAgreage)+' <small>tonnes</small></div><div class="s">En cours de validation</div></div>'
-    + '<div class="ckpt-tuile'+(totalReste>0?' alerte':'')+'"><div class="k">Reste à acheter</div><div class="v" data-n="'+Math.round(totalReste)+'">'+fmtNum(totalReste)+' <small>tonnes</small></div><div class="s">Pour honorer les contrats en cours</div></div>'
+    + tuile('Contracté', T.contrat, lignes.filter(L=>L.contrat>0).length+' client'+(lignes.filter(L=>L.contrat>0).length>1?'s':'')+' sous contrat')
+    + tuile('Acheté', T.achete, (pctDe(T.achete)!=null ? pctDe(T.achete)+' % du contracté · ' : '')+'reste '+pipeTonnes(T.resteAcheter), T.resteAcheter>0)
+    + tuile('Usiné', T.usine, (pctDe(T.usine)!=null ? pctDe(T.usine)+' % du contracté' : 'lots d\'usinage'))
+    + tuile('Agréé', T.agree, (pctDe(T.agree)!=null ? pctDe(T.agree)+' % du contracté' : 'lots marqués agréés'))
+    + tuile('Embarqué', T.embarque, (pctDe(T.embarque)!=null ? pctDe(T.embarque)+' % du contracté · ' : '')+(T.prepare>0 ? pipeTonnes(T.prepare)+' en préparation' : 'reste '+pipeTonnes(T.resteEmbarquer)))
     + '</div>';
 
-  // Ordre chronologique de campagne (OD = octobre-decembre, puis JM = janvier-mars qui suit), pas alphabetique
-  // (sinon "JM 2027" passerait avant "OD 2026" alors qu'OD est la periode la plus ancienne des deux).
-  const periodeCle = p=>{
-    const m = String(p||'').trim().match(/^(OD|JM)\s*(\d{4})?$/i);
-    if (!m) return 999999999;
-    const annee = Number(m[2])||0, mois = m[1].toUpperCase()==='OD' ? 10 : 1;
-    return annee*100+mois;
-  };
-  const periodes = Array.from(new Set(lignes.map(l=>l.periode||'—'))).sort((a,b)=>periodeCle(a)-periodeCle(b));
-  periodes.forEach(periode=>{
-    const lignesPeriode = lignes.filter(l=>(l.periode||'—')===periode).slice().sort((a,b)=>(Number(b.volume_contrat_t)||0)-(Number(a.volume_contrat_t)||0));
-    html += '<h3 style="margin:22px 0 10px;font-size:14px;color:var(--ink-soft)">'+esc(periode)+'</h3>'
-      + '<div class="sa-grille">'+lignesPeriode.map(suiviAchatsCarteClient).join('')+'</div>';
+  if (!lignes.length) return html + '<div class="hint" style="margin-top:14px">Aucun client pour cette campagne : crée un contrat client ou attribue des connaissements à un client.</div>';
+
+  const nbCol = 12 + (avecExcel?1:0);
+  html += '<div style="margin-top:16px;overflow:auto;"><table class="data-table pref-table" id="pipe-table"><thead><tr>'
+    + '<th>Client</th><th>Période</th><th class="num">Contrat</th><th class="num">Acheté<br>(net usine)</th><th class="num">%</th><th class="num">Reste<br>à acheter</th><th class="num">Camions<br>en attente</th><th class="num">Usiné<br>(lots)</th><th class="num">Agréé</th><th class="num">Embarqué</th><th class="num">Reste<br>à embarquer</th>'
+    + (avecExcel ? '<th class="num">Fichier<br>commercial</th>' : '') + '<th>État</th></tr></thead><tbody>';
+  lignes.forEach(L=>{
+    const ouv = !!(state.pipeOuverts && state.pipeOuverts[L.g.k]);
+    const badge = '<span style="display:inline-block;background:'+L.etat.c+';color:#fff;border-radius:12px;padding:2px 10px;font-size:11.5px;font-weight:600;white-space:nowrap">'+L.etat.t+'</span>';
+    const ecart = avecExcel ? (L.g.excel.length ? (function(){ const dC = L.exContrat-L.contrat, dV = L.exValide-L.achete; return '<div style="font-size:11.5px;line-height:1.3">contrat '+pipeTonnes(L.exContrat)+(Math.abs(dC)>=100?' <span style="color:var(--warn)">('+(dC>0?'+':'−')+pipeTonnes(Math.abs(dC))+')</span>':'')+'<br>validé '+pipeTonnes(L.exValide)+(Math.abs(dV)>=100?' <span style="color:var(--warn)">('+(dV>0?'+':'−')+pipeTonnes(Math.abs(dV))+')</span>':'')+'</div>'; })() : '—') : '';
+    html += '<tr class="pref-ligne'+(ouv?' ouvert':'')+'">'
+      + '<td style="cursor:pointer;" onclick="pipeBasculer(\''+escJs(L.g.k)+'\')" title="Afficher / masquer le détail"><span class="chev" style="margin-right:4px;">▸</span><b>'+esc(L.g.client)+'</b></td>'
+      + '<td>'+(L.periodes.length ? esc(L.periodes.join(', ')) : '—')+'</td>'
+      + '<td class="num">'+(L.contrat>0 ? pipeTonnes(L.contrat) : '—')+'</td>'
+      + '<td class="num" style="font-weight:700">'+pipeTonnes(L.achete)+'</td>'
+      + '<td class="num">'+(L.pct==null ? '—' : L.pct+' %')+'</td>'
+      + '<td class="num" style="'+(L.resteAcheter>0?'color:var(--warn);font-weight:700':'')+'">'+(L.contrat>0 ? pipeTonnes(L.resteAcheter) : '—')+'</td>'
+      + '<td class="num">'+(L.attenteN ? '<span style="color:#7a5200;font-weight:600">'+L.attenteN+'</span> · '+pipeTonnes(L.attenteKg) : '—')+'</td>'
+      + '<td class="num">'+(L.usine>0 ? pipeTonnes(L.usine)+'<div class="hint" style="margin:0;font-size:11px">'+L.g.lots.length+' lot'+(L.g.lots.length>1?'s':'')+'</div>' : '—')+'</td>'
+      + '<td class="num">'+(L.agree>0 ? pipeTonnes(L.agree) : '—')+'</td>'
+      + '<td class="num" style="font-weight:700;color:'+(L.embarque>0?'#1e8449':'inherit')+'">'+(L.embarque>0 ? pipeTonnes(L.embarque) : '—')+(L.prepare>0 ? '<div class="hint" style="margin:0;font-size:11px">+ '+pipeTonnes(L.prepare)+' en prép.</div>' : '')+'</td>'
+      + '<td class="num">'+(L.contrat>0 ? pipeTonnes(L.resteEmbarquer) : '—')+'</td>'
+      + (avecExcel ? '<td>'+ecart+'</td>' : '')
+      + '<td>'+badge+'</td></tr>';
+    // Sous-lignes : un projet (programme) = une sous-ligne sous le client
+    Array.from(L.g.programmes.values()).sort((a,b)=>a.programme.localeCompare(b.programme,'fr')).forEach(p=>{
+      const pa = p.achats.reduce((s,a)=>s+(Number(a.poids_net_produit)||0),0), pu = p.lots.reduce((s,l)=>s+(Number(l.poids_sortie_kg)||0),0), pg = p.lots.filter(l=>l.agree_le).reduce((s,l)=>s+(Number(l.poids_sortie_kg)||0),0);
+      html += '<tr class="pipe-sous" style="font-size:12px;color:var(--ink-soft);background:var(--surface-2)">'
+        + '<td style="padding-left:34px">→ '+esc(p.programme)+'</td><td></td><td></td><td class="num">'+pipeTonnes(pa)+'</td><td></td><td></td>'
+        + '<td class="num">'+(p.attente.length ? p.attente.length : '—')+'</td><td class="num">'+(pu>0?pipeTonnes(pu):'—')+'</td><td class="num">'+(pg>0?pipeTonnes(pg):'—')+'</td><td class="num">'+(p.embarqueKg>0?pipeTonnes(p.embarqueKg):'—')+'</td><td></td>'+(avecExcel?'<td></td>':'')+'<td></td></tr>';
+    });
+    if (ouv) html += '<tr class="pipe-detail"><td colspan="'+nbCol+'" style="background:#fff;border-bottom:2px solid var(--border);white-space:normal;text-align:left;padding:10px 14px 12px 34px">'+pipeDetailHtml(L)+'</td></tr>';
   });
+  html += '<tr style="font-weight:700;background:var(--surface-2)"><td colspan="2" style="text-align:left">Total</td><td class="num">'+pipeTonnes(T.contrat)+'</td><td class="num">'+pipeTonnes(T.achete)+'</td><td class="num">'+(pctDe(T.achete)!=null?pctDe(T.achete)+' %':'—')+'</td><td class="num">'+pipeTonnes(T.resteAcheter)+'</td><td class="num">'+(T.attenteN?T.attenteN+' · '+pipeTonnes(T.attenteKg):'—')+'</td><td class="num">'+pipeTonnes(T.usine)+'</td><td class="num">'+pipeTonnes(T.agree)+'</td><td class="num">'+pipeTonnes(T.embarque)+'</td><td class="num">'+pipeTonnes(T.resteEmbarquer)+'</td>'+(avecExcel?'<td class="num">'+pipeTonnes(T.exContrat)+' / '+pipeTonnes(T.exValide)+'</td>':'')+'<td></td></tr>'
+    + '</tbody></table></div>'
+    + '<p class="hint" style="margin-top:10px">Acheté = connaissements attribués au client, poids net payé à l\'usine. Camions en attente = connaissements déchargés mais pas encore pesés (tonnage du connaissement). Agréé = lots d\'usinage marqués agréés (bouton dans le détail). Embarqué = OT avec date d\'embarquement ou clos ; « en prép. » = OT sans date.'+(avecExcel?' Fichier commercial = dernier fichier du service commercial importé, pour contrôle ; l\'écart est signalé à partir de 0,1 T.':'')+'</p>';
   return html;
 }
 function contratClientOuvrir(id, clientPrefill){
