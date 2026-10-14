@@ -2034,6 +2034,7 @@ function certificationLogoHtml(certifications){
 }
 
 const ICON_COOPS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M2.5 20c0-3 2.5-5.5 5.5-5.5s5.5 2.5 5.5 5.5"/><path d="M14.5 15.2c2.3.4 4 2.3 4 4.8"/></svg>';
+const ICON_SACH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3h8l2 4v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V7z"/><path d="M6 7h12"/><path d="M10 12h4"/></svg>';
 const ICON_PREFI = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="2.6"/><path d="M6 9.5v.01M18 14.5v.01"/></svg>';
 const ICON_DASHBOARD = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10"/><path d="M12 20V4"/><path d="M20 20v-7"/></svg>';
 const ICON_CONFORMITE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h4"/></svg>';
@@ -3534,7 +3535,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-14-119';
+const APP_VERSION = '2026-10-14-120';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5131,7 +5132,7 @@ function ocAllerProducteur(id){
 // ---- Barre laterale v2 ----
 const SIDEBAR_GROUPES = [
   { titre:'Pilotage',       items:[ ['dashboard','ICON_DASHBOARD','Tableau de bord'], ['tracage','ICON_TRACAGE','Traçage de volume'] ] },
-  { titre:'Opérations',     items:[ ['cooperatives','ICON_COOPS','Coopératives'], ['demandes','ICON_DEMANDES','Demandes coopératives'], ['lots','ICON_LOTS','Lots & export'], ['prefinancements','ICON_PREFI','Préfinancements'] ] },
+  { titre:'Opérations',     items:[ ['cooperatives','ICON_COOPS','Coopératives'], ['demandes','ICON_DEMANDES','Demandes coopératives'], ['lots','ICON_LOTS','Lots & export'], ['prefinancements','ICON_PREFI','Préfinancements'], ['sacherie','ICON_SACH','Sacherie'] ] },
   { titre:'Conformité',     items:[ ['conformite','ICON_CONFORMITE','Conformité & documents'], ['basedonnees','ICON_BASEDONNEES','Base de données coop.'] ] },
   { titre:'Administration', items:[ ['acces','ICON_ACCES','Accès coopératives'], ['stockage','ICON_STOCKAGE','Stockage'], ['sauvegardes','ICON_SAUVEGARDES','Sauvegardes'] ] },
 ];
@@ -5140,7 +5141,7 @@ function ocSidebarHtml(dashActive, badges, opts){
   opts = opts || {};
   const groupes = opts.groupes || SIDEBAR_GROUPES, onclick = opts.onclick || 'setTab', sous = opts.sous || 'ORIGEN · traçabilité';
   const replie = ocSidebarReplie();
-  const icones = { ICON_DASHBOARD, ICON_TRACAGE, ICON_COOPS, ICON_DEMANDES, ICON_LOTS, ICON_PREFI, ICON_CONFORMITE, ICON_BASEDONNEES, ICON_ACCES, ICON_STOCKAGE, ICON_SAUVEGARDES,
+  const icones = { ICON_DASHBOARD, ICON_TRACAGE, ICON_COOPS, ICON_DEMANDES, ICON_LOTS, ICON_PREFI, ICON_SACH, ICON_CONFORMITE, ICON_BASEDONNEES, ICON_ACCES, ICON_STOCKAGE, ICON_SAUVEGARDES,
     ICON_OC_PORTAIL, ICON_OC_DONNEES, ICON_OC_INTERLOCUTEURS, ICON_OC_EXIGENCES, ICON_OC_CERTIFICAT, ICON_OC_PARTENAIRES, ICON_OC_NC, ICON_OC_DOCUMENTS, ICON_OC_AUDITS, ICON_OC_FORMATION, ICON_OC_CALENDRIER, ICON_OC_ASSISTANT };
   let html = '<nav class="sidebar'+(replie?' replie':'')+'">'
     + '<div class="sb-marque"><div class="logo-badge"><img src="data:image/png;base64,'+ECORIGINE_LOGO_B64+'" alt=""></div><div class="sb-marque-txt"><div class="brand-name">ECORIGINE</div><div class="sb-sous">'+esc(sous)+'</div></div></div>'
@@ -5624,6 +5625,112 @@ function prefLettres(n){
   return parts.join(' ').replace(/\s+/g,' ').trim();
 }
 function prefMontantEnLettres(n){ const t = prefLettres(n); const de = (Math.round(Number(n)||0)>0 && Math.round(Number(n))%1000000===0) ? ' de' : ''; return t.charAt(0).toUpperCase()+t.slice(1)+de+' francs CFA'; }
+
+// ================= SACHERIE & PALETTES =================
+// Param : 385 sacs export par lot de 25 T ; 40 sacs par palette. Stock par usine, commandes de sacs en jute.
+async function chargerSacherie(){
+  if (!supabaseClient) return;
+  const [p, s, c] = await Promise.all([
+    supabaseClient.from('sacherie_param').select('*').eq('id',1).maybeSingle(),
+    supabaseClient.from('sacherie_stock').select('*').order('ville').order('usine'),
+    supabaseClient.from('sacherie_commandes').select('*').order('id')
+  ]);
+  if (p.error || s.error || c.error) showToast('Impossible de charger la sacherie : '+((p.error||s.error||c.error).message));
+  state.sachParam = (p.data) || state.sachParam || { sacs_par_lot:385, tonnes_par_lot:25, sacs_par_palette:40 };
+  state.sachStock = s.error ? (state.sachStock||[]) : (s.data||[]);
+  state.sachCmd = c.error ? (state.sachCmd||[]) : (c.data||[]);
+  state.sachCharge = true;
+}
+async function sachMaj(table, id, champ, val, num){
+  let v = val;
+  if (num){ v = String(val).replace(/\s/g,'').replace(',','.'); v = v==='' ? null : Number(v); if (v!==null && !isFinite(v)){ showToast('Valeur invalide.'); render(); return; } }
+  const cle = table==='sacherie_param' ? 'id' : 'id';
+  const { error } = await supabaseClient.from(table).update({ [champ]: v }).eq(cle, id);
+  if (error){ showToast('Enregistrement impossible : '+error.message); return; }
+  if (table==='sacherie_param') state.sachParam[champ] = v;
+  else { const arr = table==='sacherie_stock' ? state.sachStock : state.sachCmd; const r = arr.find(x=>x.id===id); if (r) r[champ] = v; }
+  if (table==='sacherie_stock' && champ!=='note' && champ!=='usine' && champ!=='ville') { const r = state.sachStock.find(x=>x.id===id); if (r){ r.date_releve = new Date().toISOString().slice(0,10); supabaseClient.from('sacherie_stock').update({date_releve:r.date_releve}).eq('id',id).then(()=>{}); } }
+  render();
+}
+async function sachAjouterUsine(){
+  const nom = (window.prompt('Nom de l\'usine :')||'').trim(); if (!nom) return;
+  const ville = (window.prompt('Ville (Abidjan / San-Pédro) :')||'').trim();
+  const { error } = await supabaseClient.from('sacherie_stock').insert({ usine:nom, ville:ville||null });
+  if (error){ showToast('Ajout impossible : '+error.message); return; }
+  await chargerSacherie(); render();
+}
+async function sachAjouterCommande(){
+  const f = (window.prompt('Fournisseur (ex. FILTISAC) :')||'').trim(); if (!f) return;
+  const { error } = await supabaseClient.from('sacherie_commandes').insert({ fournisseur:f, prix_unitaire:1250, qte_commandee:0, qte_livree:0, montant_regle:0 });
+  if (error){ showToast('Ajout impossible : '+error.message); return; }
+  await chargerSacherie(); render();
+}
+function sachNb(v, d){ return (v===null||v===undefined||v==='') ? '—' : Number(v).toLocaleString('fr-FR',{maximumFractionDigits:d||0}); }
+function sachIn(table, id, champ, val, w){
+  return '<input type="text" inputmode="decimal" value="'+(val===null||val===undefined?'':esc(String(val)))+'" style="width:'+(w||90)+'px;text-align:center;" onchange="sachMaj(\''+table+'\','+id+',\''+champ+'\',this.value,true)">';
+}
+function sachTxt(table, id, champ, val, w){
+  return '<input type="text" value="'+esc(val||'')+'" style="width:'+(w||140)+'px;" onchange="sachMaj(\''+table+'\','+id+',\''+champ+'\',this.value,false)">';
+}
+function renderSacherieTab(){
+  if (!state.sachCharge){ chargerSacherie().then(()=>render()); return '<div class="panel"><div class="hint" style="padding:18px">Chargement de la sacherie…</div></div>'; }
+  const P = state.sachParam || { sacs_par_lot:385, tonnes_par_lot:25, sacs_par_palette:40 };
+  const spl = Number(P.sacs_par_lot)||385, tpl = Number(P.tonnes_par_lot)||25, spp = Number(P.sacs_par_palette)||40;
+  let html = '<div class="panel"><div class="panel-head"><h2>Sacherie export &amp; palettes</h2><p class="hint" style="margin:4px 0 0">Suivi des sacs neufs marque ÉCORIGINE et des palettes dans les usines, pour ne jamais être à court pendant l\'usinage.</p></div>'
+    + '<div style="display:flex;gap:18px;flex-wrap:wrap;padding:6px 18px 16px;align-items:end;">'
+    + '<label class="field" style="margin:0;">Sacs export par lot<br>'+sachIn('sacherie_param',1,'sacs_par_lot',spl,80)+'</label>'
+    + '<label class="field" style="margin:0;">Tonnes par lot<br>'+sachIn('sacherie_param',1,'tonnes_par_lot',tpl,80)+'</label>'
+    + '<label class="field" style="margin:0;">Sacs par palette<br>'+sachIn('sacherie_param',1,'sacs_par_palette',spp,80)+'</label>'
+    + '<div class="hint" style="margin:0;">1 lot = '+sachNb(tpl)+' T = '+sachNb(spl)+' sacs = '+sachNb(spl/spp,1)+' palettes</div></div></div>';
+
+  // ---- Stock par usine ----
+  const S = state.sachStock||[];
+  const lig = S.map(r=>{
+    const sacs = r.sacs_stock===null||r.sacs_stock===undefined ? null : Number(r.sacs_stock);
+    const pal = r.palettes_stock===null||r.palettes_stock===undefined ? null : Number(r.palettes_stock);
+    const bes = r.besoin_tonnes===null||r.besoin_tonnes===undefined ? null : Number(r.besoin_tonnes);
+    const lots = sacs===null ? null : Math.floor(sacs/spl);
+    const sacsReq = bes===null ? null : Math.ceil(bes/tpl*spl);
+    const palReq = sacsReq===null ? null : Math.ceil(sacsReq/spp);
+    const manqueSacs = (sacsReq!==null && sacs!==null) ? Math.max(0, sacsReq-sacs) : null;
+    const manquePal = (palReq!==null && pal!==null) ? Math.max(0, palReq-pal) : null;
+    let badge = '<span class="hint" style="margin:0">À renseigner</span>';
+    if (bes!==null && sacs!==null){
+      badge = (manqueSacs>0 || (manquePal||0)>0) ? '<span class="chip-danger" style="background:#c0392b;color:#fff;border-radius:12px;padding:2px 10px;font-size:12px;">Rupture à prévoir</span>'
+            : '<span style="background:#1e8449;color:#fff;border-radius:12px;padding:2px 10px;font-size:12px;">OK</span>';
+    }
+    return { r, sacs, pal, bes, lots, sacsReq, palReq, manqueSacs, manquePal, badge };
+  });
+  const tot = lig.reduce((t,l)=>({ sacs:t.sacs+(l.sacs||0), pal:t.pal+(l.pal||0), prev:t.prev+(Number(l.r.sacs_prevus)||0), lots:t.lots+(l.lots||0) }),{sacs:0,pal:0,prev:0,lots:0});
+  html += '<div class="panel"><div class="panel-head" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;"><div><h2>Stock par usine</h2><p class="hint" style="margin:4px 0 0">Saisis les sacs et palettes réellement disponibles, et les tonnes que l\'usine doit encore usiner.</p></div><button class="btn btn-primary" onclick="sachAjouterUsine()">+ Usine</button></div>'
+    + '<div style="padding:8px 18px 18px;overflow:auto;"><table class="data-table pref-table"><thead><tr><th>Usine</th><th>Ville</th><th class="num">Sacs prévus (point 06/10)</th><th class="num">Sacs en stock</th><th class="num">Palettes en stock</th><th class="num">Lots couverts</th><th class="num">Tonnes à usiner</th><th class="num">Sacs requis</th><th class="num">Palettes requises</th><th class="num">Manque sacs</th><th class="num">Manque palettes</th><th>État</th><th>Relevé</th></tr></thead><tbody>';
+  lig.forEach(l=>{
+    html += '<tr><td style="text-align:left"><b>'+esc(l.r.usine)+'</b></td><td>'+esc(l.r.ville||'')+'</td><td class="num">'+sachNb(l.r.sacs_prevus)+'</td>'
+      + '<td>'+sachIn('sacherie_stock',l.r.id,'sacs_stock',l.r.sacs_stock)+'</td><td>'+sachIn('sacherie_stock',l.r.id,'palettes_stock',l.r.palettes_stock,80)+'</td>'
+      + '<td class="num">'+sachNb(l.lots)+'</td><td>'+sachIn('sacherie_stock',l.r.id,'besoin_tonnes',l.r.besoin_tonnes,80)+'</td>'
+      + '<td class="num">'+sachNb(l.sacsReq)+'</td><td class="num">'+sachNb(l.palReq)+'</td>'
+      + '<td class="num" style="font-weight:700;color:'+(l.manqueSacs>0?'var(--danger)':'inherit')+'">'+sachNb(l.manqueSacs)+'</td>'
+      + '<td class="num" style="font-weight:700;color:'+(l.manquePal>0?'var(--danger)':'inherit')+'">'+sachNb(l.manquePal)+'</td>'
+      + '<td>'+l.badge+'</td><td class="hint">'+(l.r.date_releve?esc(l.r.date_releve.split('-').reverse().join('/')):'—')+'</td></tr>';
+  });
+  html += '<tr style="font-weight:700;background:var(--surface-2)"><td colspan="2" style="text-align:left">Total</td><td class="num">'+sachNb(tot.prev)+'</td><td class="num">'+sachNb(tot.sacs)+'</td><td class="num">'+sachNb(tot.pal)+'</td><td class="num">'+sachNb(tot.lots)+'</td><td colspan="7"></td></tr>'
+    + '</tbody></table><p class="hint" style="margin-top:10px">Lots couverts = sacs en stock ÷ '+sachNb(spl)+'. Sacs requis = tonnes à usiner ÷ '+sachNb(tpl)+' × '+sachNb(spl)+'. Palettes requises = sacs requis ÷ '+sachNb(spp)+'.</p></div></div>';
+
+  // ---- Commandes de sacs ----
+  const C = state.sachCmd||[];
+  const tc = C.reduce((t,c)=>{ const q=Number(c.qte_commandee)||0, l=Number(c.qte_livree)||0, pu=Number(c.prix_unitaire)||0, rg=Number(c.montant_regle)||0; return { q:t.q+q, l:t.l+l, m:t.m+q*pu, rg:t.rg+rg, solde:t.solde+(l*pu-rg) }; },{q:0,l:0,m:0,rg:0,solde:0});
+  html += '<div class="panel"><div class="panel-head" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;"><div><h2>Commandes de sacs en jute — campagne 2026/2027</h2></div><button class="btn btn-primary" onclick="sachAjouterCommande()">+ Commande</button></div>'
+    + '<div style="padding:8px 18px 18px;overflow:auto;"><table class="data-table pref-table"><thead><tr><th>Fournisseur</th><th>Référence</th><th>Lieu</th><th class="num">Prix unitaire (F)</th><th class="num">Commandés</th><th class="num">Livrés</th><th class="num">Restant à livrer</th><th class="num">Montant (F)</th><th class="num">Réglé (F)</th><th class="num">Solde dû sur livré (F)</th></tr></thead><tbody>';
+  C.forEach(c=>{
+    const q=Number(c.qte_commandee)||0, l=Number(c.qte_livree)||0, pu=Number(c.prix_unitaire)||0, rg=Number(c.montant_regle)||0;
+    html += '<tr><td style="text-align:left"><b>'+esc(c.fournisseur)+'</b></td><td>'+sachTxt('sacherie_commandes',c.id,'reference',c.reference,130)+'</td><td>'+sachTxt('sacherie_commandes',c.id,'lieu',c.lieu,90)+'</td>'
+      + '<td>'+sachIn('sacherie_commandes',c.id,'prix_unitaire',c.prix_unitaire,70)+'</td><td>'+sachIn('sacherie_commandes',c.id,'qte_commandee',c.qte_commandee)+'</td><td>'+sachIn('sacherie_commandes',c.id,'qte_livree',c.qte_livree)+'</td>'
+      + '<td class="num" style="font-weight:700">'+sachNb(Math.max(0,q-l))+'</td><td class="num">'+sachNb(q*pu)+'</td><td>'+sachIn('sacherie_commandes',c.id,'montant_regle',c.montant_regle,110)+'</td><td class="num">'+sachNb(l*pu-rg)+'</td></tr>';
+  });
+  html += '<tr style="font-weight:700;background:var(--surface-2)"><td colspan="4" style="text-align:left">Total</td><td class="num">'+sachNb(tc.q)+'</td><td class="num">'+sachNb(tc.l)+'</td><td class="num">'+sachNb(Math.max(0,tc.q-tc.l))+'</td><td class="num">'+sachNb(tc.m)+'</td><td class="num">'+sachNb(tc.rg)+'</td><td class="num">'+sachNb(tc.solde)+'</td></tr>'
+    + '</tbody></table></div></div>';
+  return html;
+}
 
 // ---- Onglet ----
 function renderPrefinancementsTab(){
@@ -18612,6 +18719,7 @@ function _renderBrut(){
     else if (state.tab==='tracage') html += renderTracageTab();
     else if (state.tab==='lots') html += renderLotsTab();
     else if (state.tab==='prefinancements') html += renderPrefinancementsTab();
+    else if (state.tab==='sacherie') html += renderSacherieTab();
     else if (state.tab==='demandes') html += renderDemandesTab();
     else html += renderDashboardTab();
   }
