@@ -3519,7 +3519,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-14-081';
+const APP_VERSION = '2026-10-14-082';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5588,6 +5588,8 @@ function renderPrefinancementsTab(){
     + '<div><h2>Préfinancements</h2><p class="hint" style="margin:4px 0 0">Avances versées aux coopératives fournisseurs, fiche de financement des achats et suivi des livraisons qui les remboursent. Les livraisons viennent automatiquement des achats d\'ORIGEN (poids net payé à l\'usine).</p></div>'
     + '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;"><label class="field" style="margin:0;min-width:160px;">Campagne<select onchange="prefSetCampagne(this.value)">'
     + prefCampagnes().map(c=>'<option value="'+esc(c.id)+'"'+(c.id===campId?' selected':'')+'>'+esc(c.nom)+'</option>').join('')+'</select></label>'
+    + '<input type="file" id="pref-import-input" accept=".xlsx,.xls" style="display:none" onchange="prefImporterExcel(this)">'
+    + '<button class="btn" onclick="document.getElementById(\'pref-import-input\').click()" title="Remplit les préfinancements à partir de la fiche de financement des achats (fichier Excel, une feuille par fiche).">📥 Importer une fiche Excel</button>'
     + '<button class="btn btn-primary" onclick="prefOuvrir()">+ Nouveau préfinancement</button></div></div>'
     + '<div class="cards" style="grid-template-columns:repeat(4,1fr);margin:6px 18px 4px;">'
     + '<div class="card"><div class="label">Total préfinancé</div><div class="value">'+prefFmt(T.A)+' <small>FCFA</small></div></div>'
@@ -5648,6 +5650,117 @@ function renderPrefCoopDetail(coopId, campId){
   return html;
 }
 
+// ---- Import d'une fiche de financement des achats (Excel) : une feuille = une fiche ----
+function prefNz(v){ return String(v==null?'':v).toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim(); }
+function prefCle(v){ return String(v==null?'':v).toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Z0-9]/g,''); }
+function prefIsoDe(v){
+  if (v instanceof Date && !isNaN(v)) return new Date(v.getTime()+12*3600e3).toISOString().slice(0,10);
+  const t = String(v||'').trim(); let m;
+  if ((m = t.match(/^(\d{4})-(\d{2})-(\d{2})/))) return m[1]+'-'+m[2]+'-'+m[3];
+  if ((m = t.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})/))) return m[3]+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0');
+  return '';
+}
+function prefNombre(v){ if (typeof v==='number') return v; const n = Number(String(v||'').replace(/[^\d,.-]/g,'').replace(',','.')); return isFinite(n)?n:0; }
+// Lit UNE feuille (tableau de lignes) en reperant les libelles : ne depend pas de la position exacte des cellules.
+function prefParserFeuille(aoa, nomFeuille){
+  const L = aoa.map(r=>(r||[]).map(c=>c)), N = L.map(r=>r.map(prefNz));
+  if (!N.some(r=>r.some(c=>c.indexOf('FICHE DE FINANCEMENT')>=0))) return null;
+  const apres = (i, j)=>{ for (let k=j+1;k<L[i].length;k++){ if (L[i][k]!=='' && L[i][k]!=null) return L[i][k]; } return ''; };
+  const trouver = (pred)=>{ for (let i=0;i<N.length;i++) for (let j=0;j<N[i].length;j++) if (pred(N[i][j])) return [i,j]; return null; };
+  const val = (pred)=>{ const t = trouver(pred); return t ? apres(t[0],t[1]) : ''; };
+  const f = { feuille: nomFeuille };
+  f.code = String(val(c=>c.indexOf('CODE')===0)||'').trim();
+  f.raison = String(val(c=>c.indexOf('RAISON SOCIALE')===0)||'').trim();
+  f.adresse = String(val(c=>c.indexOf('ADRESSE')===0)||'').trim();
+  f.typeCacao = String(val(c=>c.indexOf('TYPE DE CACAO')===0)||'').trim();
+  // N° et date de la fiche : sous l'en-tete « N° » / « Date »
+  const hn = trouver(c=>c==='N°'); if (hn){ const hd = N[hn[0]].indexOf('DATE'); const r = L[hn[0]+1]||[]; f.numero = String(r[hn[1]]||'').trim(); f.dateFiche = prefIsoDe(hd>=0 ? r[hd] : ''); }
+  // Clauses : la ligne d'avance dont le terme / mode de remboursement est renseigne
+  const hc = trouver(c=>c.indexOf('REPARTITION DU FINANCEMENT')===0);
+  f.type_avance = 'revolving'; f.terme = ''; f.mode_remboursement = '';
+  if (hc){
+    const cT = N[hc[0]].findIndex(c=>c.indexOf('TERME')===0), cM = N[hc[0]].findIndex(c=>c.indexOf('MODE DE REMBOURSEMENT')===0);
+    let trouve = false;
+    for (let i=hc[0]+1;i<=hc[0]+4 && i<L.length;i++){
+      const lib = N[i][hc[1]]||''; const cle = lib.indexOf('REVOLVING')>=0?'revolving' : (lib.indexOf('PONCTUELLE')>=0||lib.indexOf('MANDAT')>=0)?'ponctuelle' : lib.indexOf('AUTRE')>=0?'autre' : null;
+      if (!cle) continue;
+      const t = cT>=0 ? String(L[i][cT]||'').trim() : '', m = cM>=0 ? String(L[i][cM]||'').trim() : '';
+      if ((t||m) && !trouve){ f.type_avance = cle; f.terme = t; f.mode_remboursement = m; trouve = true; }
+    }
+  }
+  // Modalites de paiement : lignes entre « TYPE DE FINANCEMENT » et « TOTAL »
+  f.paiements = [];
+  const hp = trouver(c=>c.indexOf('TYPE DE FINANCEMENT')===0);
+  if (hp){
+    const cD = N[hp[0]].indexOf('DATE'), cMo = N[hp[0]].indexOf('MONTANT'), cLi = N[hp[0]].findIndex(c=>c.indexOf('LIBELLE')===0);
+    for (let i=hp[0]+1;i<L.length;i++){
+      if ((N[i][hp[1]]||'')==='TOTAL') break;
+      const montant = prefNombre(cMo>=0?L[i][cMo]:0); if (!(montant>0)) { if (N[i].every(c=>c==='')) break; continue; }
+      f.paiements.push({ type: String(L[i][hp[1]]||'').trim(), date: prefIsoDe(cD>=0?L[i][cD]:''), montant, libelle: String(cLi>=0?L[i][cLi]:'').trim() });
+    }
+  }
+  // Recapitulatif : banque, cheque / virement
+  f.reglements = [];
+  const hb = trouver(c=>c==='BANQUE');
+  if (hb){
+    const cC = N[hb[0]].findIndex(c=>c.indexOf('CHEQUE')===0), cMo = N[hb[0]].indexOf('MONTANT');
+    for (let i=hb[0]+1;i<L.length;i++){
+      if ((N[i][hb[1]]||'')==='TOTAL') break;
+      const banque = String(L[i][hb[1]]||'').trim(), mode = String(cC>=0?L[i][cC]:'').trim(); if (!banque && !mode) { if (N[i].every(c=>c==='')) break; continue; }
+      const virement = /VIREMENT/i.test(mode) && !/CHEQUE\s*N/i.test(mode);
+      const ref = (mode.match(/N°?\s*([A-Za-z0-9-]+)\s*$/i)||[])[1] || '';
+      f.reglements.push({ banque, virement, reference: ref, montant: prefNombre(cMo>=0?L[i][cMo]:0) });
+    }
+  }
+  f.montant = f.paiements.reduce((t,p)=>t+p.montant,0);
+  return f.montant>0 ? f : null;
+}
+async function prefImporterExcel(input){
+  const fichier = input.files && input.files[0]; input.value = '';
+  if (!fichier) return;
+  let wb; try{ wb = XLSX.read(await fichier.arrayBuffer(), { type:'array', cellDates:true }); }catch(e){ showToast('Fichier Excel illisible : '+e.message); return; }
+  const fiches = [];
+  wb.SheetNames.forEach(n=>{ try{ const f = prefParserFeuille(XLSX.utils.sheet_to_json(wb.Sheets[n], { header:1, defval:'', raw:true }), n); if (f) fiches.push(f); }catch(e){} });
+  if (!fiches.length){ showToast("Aucune fiche de financement trouvée dans ce fichier (une feuille « FICHE DE FINANCEMENT DES ACHATS » par coopérative est attendue)."); return; }
+  const campId = prefCampagneActive();
+  const coops = state.cooperatives||[];
+  fiches.forEach(f=>{
+    const c = coops.find(x=>f.code && prefCle(x.ccc_num)===prefCle(f.code)) || coops.find(x=>f.raison && (prefCle(x.nom)===prefCle(f.raison) || prefCle(x.nom_complet)===prefCle(f.raison)));
+    f.coopId = c ? c.id : '';
+    const ex = c ? (state.prefinancements||[]).find(p=>p.cooperative_id===c.id && p.campagne_id===campId && f.numero && p.numero===f.numero) : null;
+    f.existantId = ex ? ex.id : '';
+    f.retenue = !!f.coopId && !ex;
+  });
+  state.modal = { type:'prefImport', payload:{ fiches, campId, fichier: fichier.name } };
+  render();
+}
+function prefImportBascule(i, v){ state.modal.payload.fiches[i].retenue = !!v; const b = document.getElementById('pi-nb'); if (b) b.textContent = state.modal.payload.fiches.filter(f=>f.retenue&&f.coopId).length; }
+function prefImportCoop(i, id){
+  const f = state.modal.payload.fiches[i]; f.coopId = id;
+  const ex = id ? (state.prefinancements||[]).find(p=>p.cooperative_id===id && p.campagne_id===state.modal.payload.campId && f.numero && p.numero===f.numero) : null;
+  f.existantId = ex ? ex.id : ''; f.retenue = !!id; render();
+}
+async function prefImportConfirmer(){
+  const pl = state.modal.payload; const retenues = pl.fiches.filter(f=>f.retenue && f.coopId);
+  if (!retenues.length){ showToast('Coche au moins une fiche rattachée à une coopérative.'); return; }
+  const lignes = retenues.map((f,k)=>{
+    const coop = coopById(f.coopId) || {};
+    const numero = f.numero || ('FN/'+prefCodeCoop(coop)+'/'+prefCodeCampagne(pl.campId));
+    const rg = f.reglements||[], virement = rg.length && rg.every(r=>r.virement);
+    return { id: f.existantId || ('pf_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)+k), cooperative_id:f.coopId, campagne_id:pl.campId, numero,
+      date_financement: (f.paiements[0]&&f.paiements[0].date) || f.dateFiche || aujourdhuiIso(), montant: Math.round(f.montant),
+      type_avance: f.type_avance, terme: f.terme||'', mode_remboursement: f.mode_remboursement||'',
+      banque: rg.map(r=>r.banque).filter(Boolean).join(' / '), mode_reglement: virement?'virement':'cheque', reference: rg.map(r=>r.reference).filter(Boolean).join(' / '),
+      beneficiaire: Array.from(new Set(f.paiements.map(p=>p.libelle).filter(Boolean))).join(' / ') };
+  });
+  const { error } = await supabaseClient.from('prefinancements').upsert(lignes);
+  if (error){ showToast('Échec de l\'import : '+error.message); return; }
+  const ids = new Set(lignes.map(l=>l.id));
+  state.prefinancements = (state.prefinancements||[]).filter(p=>!ids.has(p.id)).concat(lignes).sort((a,b)=>String(a.date_financement).localeCompare(String(b.date_financement)));
+  state.prefCampagne = pl.campId; closeModal();
+  showToast(lignes.length+' préfinancement'+(lignes.length>1?'s importés':' importé')+'.', 'success');
+}
+
 // ---- Saisie d'une avance ----
 function prefOuvrir(coopId, id){
   const p = id ? (state.prefinancements||[]).find(x=>x.id===id) : null;
@@ -5674,6 +5787,21 @@ function prefModalsHtml(){
       + '<label class="field">Bénéficiaire (libellé)<input type="text" name="pf_benef" value="'+esc(pl.beneficiaire||'')+'" placeholder="Nom de la personne qui reçoit le chèque"></label>'
       + '<label class="field">N° de fiche (automatique si vide)<input type="text" name="pf_numero" value="'+esc(pl.numero||'')+'"></label>'
       + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="prefEnregistrer()">Enregistrer</button></div></div></div>';
+  }
+  if (m.type==='prefImport'){
+    const pl = m.payload;
+    const coops = (state.cooperatives||[]).slice().sort((a,b)=>String(a.nom).localeCompare(String(b.nom),'fr',{sensitivity:'base'}));
+    const nbOk = pl.fiches.filter(f=>f.retenue&&f.coopId).length;
+    return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal wide"><h3>Importer des préfinancements</h3>'
+      + '<p class="hint">Fichier : '+esc(pl.fichier)+' — '+pl.fiches.length+' fiche'+(pl.fiches.length>1?'s':'')+' trouvée'+(pl.fiches.length>1?'s':'')+'. Vérifie la coopérative de chacune, puis importe.</p>'
+      + '<div id="modal-fields" style="max-height:60vh;overflow:auto;">'
+      + pl.fiches.map((f,i)=>'<div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:10px;">'
+          + '<label style="display:flex;gap:8px;align-items:center;font-weight:600;"><input type="checkbox" style="width:16px;flex:none;margin:0;" '+(f.retenue&&f.coopId?'checked':'')+(f.coopId?'':' disabled')+' onchange="prefImportBascule('+i+',this.checked)">'+esc(f.raison||f.feuille)+' <span class="hint" style="font-weight:400;">· '+esc(f.numero||'sans n°')+'</span></label>'
+          + '<div class="hint" style="margin:4px 0 6px 24px;">Code '+esc(f.code||'—')+' · '+prefFmtDate(((f.paiements[0]&&f.paiements[0].date)||f.dateFiche))+' · <b>'+prefFmt(f.montant)+' FCFA</b> · '+esc(PREF_TYPES[f.type_avance]||'')+' · '+esc((f.reglements||[]).map(r=>r.banque+(r.reference?' n°'+r.reference:'')).join(', ')||'règlement non renseigné')+' · bénéficiaire : '+esc(Array.from(new Set(f.paiements.map(p=>p.libelle).filter(Boolean))).join(' / ')||'—')+'</div>'
+          + '<label class="field" style="margin:0 0 0 24px;">Coopérative<select onchange="prefImportCoop('+i+',this.value)"><option value="">— à choisir —</option>'+coops.map(c=>'<option value="'+esc(c.id)+'"'+(c.id===f.coopId?' selected':'')+'>'+esc(c.nom)+(c.ccc_num?' ('+esc(c.ccc_num)+')':'')+'</option>').join('')+'</select></label>'
+          + (f.existantId ? '<div class="hint" style="margin:4px 0 0 24px;color:var(--warn);">Cette fiche existe déjà : cocher pour la remplacer par celle du fichier.</div>' : (f.coopId?'':'<div class="hint" style="margin:4px 0 0 24px;color:var(--warn);">Coopérative non reconnue : choisis-la pour importer cette fiche.</div>'))
+          + '</div>').join('')
+      + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="prefImportConfirmer()">Importer (<span id="pi-nb">'+nbOk+'</span>)</button></div></div></div>';
   }
   if (m.type==='prefInfos'){
     const pl = m.payload;
