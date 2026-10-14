@@ -3531,7 +3531,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-14-110';
+const APP_VERSION = '2026-10-14-111';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5557,7 +5557,7 @@ function prefSituation(coopId, campagneId){
   const premiere = prefs.map(p=>p.date_financement).filter(Boolean).sort()[0] || null;
   const derniere = liv.length ? liv[liv.length-1].date : null;
   const auj = aujourdhuiIso();
-  return { prefs, liv, A, Q, V, remb, resteDu:Math.max(0,A-remb), solde:A-V, premiere, derniere,
+  return { prefs, liv, A, Q, V, remb, marge: Math.max(0, Math.round(Q*PREF_PRIX_REF - A)), valeurRef: Math.round(Q*PREF_PRIX_REF), resteDu:Math.max(0,A-remb), solde:A-V, premiere, derniere,
     ratio: Q>0 ? A/Q : null, rotation: A>0 ? (Q*PREF_PRIX_REF)/A : null,
     joursFonds: premiere ? prefJours(premiere, auj) : null,
     joursDerniereLivraison: derniere ? prefJours(derniere, auj) : null,
@@ -5577,7 +5577,7 @@ function prefObservation(s){
   if (r>=1){
     if (jd!==null && jd>21) return { niv:'warn', titre:'À examiner', txt:'Bonne rotation ('+R(r)+') mais aucune livraison depuis '+jd+' j.' };
     if (partReste>0.2) return { niv:'warn', titre:'À examiner', txt:'Rotation '+R(r)+' mais '+prefFmt(reste)+' F restent à rembourser : régulariser avant de refinancer.' };
-    return { niv:'ok', titre:'Refinancement recommandé', txt:'A livré '+R(r)+' fois le préfinancement, active'+(jd!==null?' (dernière livraison il y a '+jd+' j)':'')+(reste>0?', reste '+prefFmt(reste)+' F à rembourser':', remboursé')+'.' };
+    return { niv:'ok', titre:'Refinancement recommandé', txt:'Marge '+prefFmt(s.marge)+' F · a livré '+R(r)+' fois le préfinancement, active'+(jd!==null?' (dernière livraison il y a '+jd+' j)':'')+(reste>0?', reste '+prefFmt(reste)+' F à rembourser':', remboursé')+'.' };
   }
   if (r>=0.5) return { niv:'warn', titre:'Financement partiel', txt:'Rotation '+R(r)+' : attendre de nouvelles livraisons ou financer un montant réduit.' };
   if (jd!==null && jd>30) return { niv:'danger', titre:'Ne pas refinancer', txt:'Rotation faible ('+R(r)+') et aucune livraison depuis '+jd+' j.' };
@@ -5695,7 +5695,7 @@ function renderPrefCoopDetail(coopId, campId){
     + '<div class="card'+(s.solde>0?' alert':'')+'"><div class="label">Exposition (B)</div><div class="value">'+prefFmt(s.solde)+'</div></div>'
     + '<div class="card"><div class="label">Rotation</div><div class="value">'+(s.rotation===null?'—':prefFmt(s.rotation,2))+'</div></div>'
 
-    + '</div><p class="hint" style="margin-top:10px">Remboursé sur les paiements : <b>'+prefFmt(s.remb)+'</b> FCFA · Reste à rembourser : <b>'+prefFmt(s.resteDu)+'</b> FCFA</p>'
+    + '</div><div style="margin-top:12px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2);"><b>Marge de nouveau financement : '+prefFmt(s.marge)+' FCFA</b> <span class="hint" style="margin-left:6px;">= livraisons valorisées à '+prefFmt(PREF_PRIX_REF)+' F/kg ('+prefFmt(s.Q)+' kg → '+prefFmt(s.valeurRef)+' F) − préfinancé ('+prefFmt(s.A)+' F)'+(s.marge===0?' · rien à ajouter pour l\'instant':'')+'</span></div><p class="hint" style="margin-top:10px">Remboursé sur les paiements : <b>'+prefFmt(s.remb)+'</b> FCFA · Reste à rembourser : <b>'+prefFmt(s.resteDu)+'</b> FCFA</p>'
     + (function(){ const o = prefObservation(s); return o ? '<div style="margin-top:12px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2);"><b>Observation :</b> '+prefObsBadge(o)+' <span style="margin-left:6px;">'+esc(o.txt)+'</span></div>' : ''; })()
     + (s.incomplet ? '<p class="hint">Certaines livraisons n\'ont pas encore de montant net : renseigne le prix d\'entrée usine de la campagne et le TKM du connaissement.</p>' : '')
     + '</div></div>';
