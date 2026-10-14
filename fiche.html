@@ -44,6 +44,12 @@ button:disabled{opacity:.6}.msg{padding:12px 14px;border-radius:8px;margin:0 0 1
 <label>Email *<input name="email1" type="email" required></label>
 <label>Second email<input name="email2" type="email"></label>
 </fieldset>
+<fieldset><legend>Documents (facultatifs)</legend>
+<div class="hint" style="margin:0 0 4px">PDF ou photo, 10 Mo maximum chacun. Ils permettent à ECORIGINE de vérifier que votre coopérative est autorisée à commercialiser le cacao.</div>
+<label id="d_cert">Certificat de certification<input type="file" id="f_cert" accept=".pdf,.jpg,.jpeg,.png,image/*"></label>
+<label>Registre de commerce (RCCM)<input type="file" id="f_rccm" accept=".pdf,.jpg,.jpeg,.png,image/*"></label>
+<label>Attestation d'agrément du Conseil Café-Cacao<input type="file" id="f_agr" accept=".pdf,.jpg,.jpeg,.png,image/*"></label>
+</fieldset>
 <input class="hid" name="site" tabindex="-1" autocomplete="off">
 <button id="b">Envoyer ma fiche</button>
 </form>
@@ -52,15 +58,28 @@ const FN='https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/fiche-cooperativ
 const T=new URLSearchParams(location.search).get('t')||'';
 const etat=document.getElementById('etat'),f=document.getElementById('f');
 function msg(t,c){etat.innerHTML='<div class="msg '+c+'"></div>';etat.firstChild.textContent=t}
-function maj(){document.getElementById('cert').style.display=document.getElementById('statut').value==='Certifiée'?'':'none'}
+function maj(){const c=document.getElementById('statut').value==='Certifiée';document.getElementById('cert').style.display=c?'':'none';document.getElementById('d_cert').style.display=c?'':'none'}
 (async()=>{try{const r=await fetch(FN+'?t='+encodeURIComponent(T));const j=await r.json();
  if(!j.ok){msg(j.error||'Lien invalide.','err');return}
  f.style.display='';maj()}catch(e){msg('Connexion impossible. Réessayez dans un instant.','err')}})();
-async function envoyer(ev){ev.preventDefault();const b=document.getElementById('b');b.disabled=true;b.textContent='Envoi…';
+function fichiersChoisis(){
+ const l=[['Certificat','f_cert'],["Registre de commerce",'f_rccm'],["Attestation d'agrément",'f_agr']];
+ return l.map(([doc,id])=>{const i=document.getElementById(id);const fl=i&&i.files&&i.files[0];return fl&&(id!=='f_cert'||document.getElementById('statut').value==='Certifiée')?{doc,file:fl}:null}).filter(Boolean)}
+async function envoyer(ev){ev.preventDefault();const b=document.getElementById('b');
+ const fich=fichiersChoisis();
+ for(const x of fich){if(x.file.size>10*1024*1024){msg('Le fichier « '+x.doc+' » dépasse 10 Mo.','err');window.scrollTo(0,0);return false}}
+ b.disabled=true;b.textContent='Envoi…';
  const fd=new FormData(f);const fiche={};fd.forEach((v,k)=>{if(k!=='site')fiche[k]=v});
- try{const r=await fetch(FN,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({t:T,site:fd.get('site'),fiche})});const j=await r.json();
-  if(j.ok){f.style.display='none';msg("Merci, votre fiche a bien été transmise à ECORIGINE. Vous recevrez votre contrat prochainement.",'ok')}
-  else{msg(j.error||'Erreur.','err');b.disabled=false;b.textContent='Envoyer ma fiche';window.scrollTo(0,0)}
+ try{const r=await fetch(FN,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({t:T,site:fd.get('site'),fiche,docs:fich.map(x=>({doc:x.doc,nom:x.file.name,taille:x.file.size}))})});const j=await r.json();
+  if(!j.ok){msg(j.error||'Erreur.','err');b.disabled=false;b.textContent='Envoyer ma fiche';window.scrollTo(0,0);return false}
+  let echecs=0;const deposes=[];
+  for(const u of (j.uploads||[])){const x=fich.find(y=>y.doc===u.doc);if(!x)continue;
+   try{b.textContent='Envoi de « '+u.doc+' »…';const body=new FormData();body.append('cacheControl','3600');body.append('',x.file);
+    const ru=await fetch(u.signedUrl,{method:'PUT',body});if(ru.ok)deposes.push({doc:u.doc,path:u.path,nom:x.file.name});else echecs++}catch(e){echecs++}}
+  if(deposes.length){try{await fetch(FN,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({t:T,etape:'confirmer',cooperative_id:j.cooperative_id,fichiers:deposes})})}catch(e){echecs++}}
+  if(fich.length>(j.uploads||[]).length)echecs++;
+  f.style.display='none';
+  msg(echecs?"Votre fiche a bien été transmise à ECORIGINE, mais certains documents n'ont pas pu être envoyés : vous pourrez les envoyer directement à ECORIGINE par email.":"Merci, votre fiche a bien été transmise à ECORIGINE. Vous recevrez votre contrat prochainement.",echecs?'err':'ok');window.scrollTo(0,0)
  }catch(e){msg('Connexion impossible. Réessayez dans un instant.','err');b.disabled=false;b.textContent='Envoyer ma fiche'}
  return false}
 </script></div></body></html>
