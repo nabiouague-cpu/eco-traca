@@ -2979,6 +2979,30 @@ function ocCoopAppliquerContact(c){
   if (tel) tel.value = c.contact_telephone||'';
   if (email) email.value = c.contact_email||'';
 }
+// ---- Lien de fiche : une cooperative sans portail remplit elle-meme ses informations (page fiche.html) ----
+function ouvrirLienFiche(){ state.modal = {type:'lienFiche', payload:{client:'ACT', lien:''}}; render(); }
+function lienFicheClientMaj(v){ state.modal.payload.client = v; state.modal.payload.lien = ''; }
+async function lienFicheGenerer(){
+  const pl = state.modal.payload;
+  const client = String(fv('lien_client')||'').trim();
+  if (!client){ showToast('Indique le client (ex : ACT).'); return; }
+  const a = new Uint8Array(24); crypto.getRandomValues(a);
+  const token = Array.from(a).map(x=>x.toString(16).padStart(2,'0')).join('');
+  const { error } = await supabaseClient.from('fiche_liens').insert({ token, client, libelle: 'Lien fiche '+client });
+  if (error){ showToast('Échec de création du lien : '+error.message); return; }
+  pl.client = client;
+  pl.lien = location.href.replace(/[^\/]*([?#].*)?$/, '') + 'fiche.html?t=' + token;
+  render();
+}
+function lienFicheMessage(pl){
+  return "Bonjour,\n\nPour établir votre contrat d'approvisionnement "+pl.client+" avec ECORIGINE, merci de remplir votre fiche coopérative via ce lien (5 minutes, aucun compte à créer) :\n"+pl.lien+"\n\nAprès validation, nous vous enverrons votre contrat et le code de conduite ECORIGINE à signer.\n\nCordialement,\nECORIGINE";
+}
+function lienFicheCopier(quoi){
+  const pl = state.modal.payload;
+  const texte = quoi==='lien' ? pl.lien : lienFicheMessage(pl);
+  navigator.clipboard.writeText(texte).then(()=>showToast((quoi==='lien'?'Lien copié':'Message copié')+' — colle-le dans WhatsApp ou ton email.', 'success'))
+    .catch(()=>showToast('Copie impossible : sélectionne le lien et copie-le (Ctrl+C).'));
+}
 function ouvrirAjoutCooperative(){
   state.modal = {type:'ajoutCooperative', payload:{}};
   // La liste des clients connus (et leur contact enregistré) vient des données "Lots & export" --
@@ -3496,7 +3520,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-14-075';
+const APP_VERSION = '2026-10-14-076';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -16241,6 +16265,7 @@ function renderCooperativesTab(){
   if (state.cooperatives.length>0){
     html += ocRechercheCoopHtml('coops');
     html += '<div class="controls">'
+      + '<button class="btn" onclick="ouvrirLienFiche()" title="Pour une coopérative sans portail : elle remplit sa fiche via un lien, elle est créée dans ORIGEN et son contrat peut être généré.">🔗 Lien de fiche (sans portail)</button>'
       + '<button class="btn btn-primary" onclick="ouvrirAjoutCooperative()">+ Ajouter une coopérative</button>'
       + '<button class="btn btn-primary" onclick="ouvrirEnvoiMessage()">✉ Envoyer un message</button>'
       + '<button class="btn btn-primary" onclick="ouvrirEnvoiDocuments()">📎 Envoyer des documents</button>'
@@ -18760,6 +18785,20 @@ function _renderBrut(){
       + (pl.fichiers.length>0 ? '<div style="margin-top:8px;">' + pl.fichiers.map((f,i)=>'<div class="achat-item"><span>📎 '+esc(f.name)+'</span><button type="button" class="btn-danger-text" onclick="retirerFichierEnvoi('+i+')">Retirer</button></div>').join('') + '</div>' : '')
       + '</div>'
       + '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Annuler</button><button type="button" class="btn btn-primary" onclick="envoyerDocumentsCoop()">Envoyer</button></div>'
+      + '</div></div>';
+  }
+
+  if (state.modal && state.modal.type==='lienFiche'){
+    const pl = state.modal.payload;
+    html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
+      + '<h3>Lien de fiche pour une coopérative sans portail</h3>'
+      + '<div class="hint" style="margin-bottom:12px;">La coopérative remplit elle-même ses informations (identité, RCCM, représentant légal, certification). Elle est alors créée dans ORIGEN — sans portail ni compte — et tu peux générer son contrat. Le lien reste valable 90 jours et peut servir à plusieurs coopératives du même client.</div>'
+      + '<div id="modal-fields"><label class="field">Client<input type="text" name="lien_client" value="'+esc(pl.client||'')+'" oninput="lienFicheClientMaj(this.value)"></label></div>'
+      + (pl.lien
+          ? '<div class="field"><label>Lien à envoyer</label><input type="text" readonly value="'+esc(pl.lien)+'" onclick="this.select()"></div>'
+            + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;"><button type="button" class="btn" onclick="lienFicheCopier(\'lien\')">Copier le lien</button><button type="button" class="btn btn-primary" onclick="lienFicheCopier(\'message\')">Copier le message complet</button></div>'
+          : '')
+      + '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Fermer</button>'+(pl.lien?'':'<button type="button" class="btn btn-primary" onclick="lienFicheGenerer()">Créer le lien</button>')+'</div>'
       + '</div></div>';
   }
 
