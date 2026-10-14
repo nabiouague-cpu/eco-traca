@@ -3535,7 +3535,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-14-094';
+const APP_VERSION = '2026-10-14-095';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5520,6 +5520,18 @@ function prefCampagneActive(){
 }
 function prefSetCampagne(id){ state.prefCampagne = id; state.prefCoopOuverte = null; render(); }
 function prefInfoCoop(coopId){ return (state.prefCoopInfos||[]).find(i=>i.cooperative_id===coopId) || {}; }
+// Port de livraison : deduit automatiquement de l'usine de dechargement de la derniere livraison de la cooperative (ville du site d'usinage), sinon valeur saisie.
+function prefPortAuto(coopId, campagneId){
+  const achats = (state.achats||[]).filter(a=>a.cooperative_id===coopId && (!campagneId || a.campagne_id===campagneId) && a.usine_dechargement)
+    .sort((x,y)=>String(y.date||'').localeCompare(String(x.date||'')));
+  for (const a of achats){
+    const u = String(a.usine_dechargement).toUpperCase();
+    const site = (state.sitesUsinage||[]).find(x=>x.code && u.indexOf(String(x.code).toUpperCase())===0) || (state.sitesUsinage||[]).find(x=>x.nom && u.indexOf(String(x.nom).toUpperCase())>=0);
+    if (site && site.ville) return site.ville;
+  }
+  return '';
+}
+function prefPort(coopId, campagneId){ return prefPortAuto(coopId, campagneId) || prefInfoCoop(coopId).port_livraison || ''; }
 function prefTypeCacao(coop){ const c = String((coop&&coop.certifications)||''); return /rainforest/i.test(c) ? 'RA' : /fairtrade/i.test(c) ? 'FAIRTRADE' : /ars/i.test(c) ? 'ARS 1000' : 'CONVENTIONNEL'; }
 function prefJours(iso1, iso2){ if (!iso1 || !iso2) return null; return Math.round((new Date(iso2+'T00:00:00') - new Date(iso1+'T00:00:00'))/86400000); }
 // Livraisons d'une cooperative pour une campagne : achats avec poids net paye a l'usine, montant net (formule du paiement d'ORIGEN).
@@ -5530,7 +5542,7 @@ function prefLivraisons(coopId, campagneId){
       const net = fige!==null ? fige : (m && m.montant!==null ? m.montant : null);
       return { id:a.id, date:a.date, connaissement:a.connaissement||'', poids:poidsBaseForPrime(a),
         prixUnit: m ? (m.prixEntreeUsine + m.tkm) : null, commissionKg: m ? m.commission : (Number(a.commission)||0), commission: m ? Math.round(m.commission*m.poids) : 0,
-        bic: m ? m.retenueBic : 0, net, incomplet: net===null };
+        bic: m ? m.retenueBic : 0, net, remb: Number(a.pref_remb_montant)||0, incomplet: net===null };
     })
     .sort((x,y)=>String(x.date||'').localeCompare(String(y.date||'')));
   let prec = null;
@@ -5543,10 +5555,11 @@ function prefSituation(coopId, campagneId){
   const A = prefs.reduce((t,p)=>t+(Number(p.montant)||0),0);
   const Q = liv.reduce((t,l)=>t+l.poids,0);
   const V = liv.reduce((t,l)=>t+(l.net||0),0);
+  const remb = liv.reduce((t,l)=>t+(l.remb||0),0);
   const premiere = prefs.map(p=>p.date_financement).filter(Boolean).sort()[0] || null;
   const derniere = liv.length ? liv[liv.length-1].date : null;
   const auj = aujourdhuiIso();
-  return { prefs, liv, A, Q, V, solde:A-V, premiere, derniere,
+  return { prefs, liv, A, Q, V, remb, resteDu:Math.max(0,A-remb), solde:A-V, premiere, derniere,
     ratio: Q>0 ? A/Q : null, rotation: A>0 ? V/A : null,
     joursFonds: premiere ? prefJours(premiere, auj) : null,
     joursDerniereLivraison: derniere ? prefJours(derniere, auj) : null,
@@ -5627,7 +5640,7 @@ function renderPrefinancementsTab(){
       + '<td class="num" style="font-weight:700;color:'+(l.s.solde>0?'var(--danger)':'var(--ok,#1F6E5C)')+'">'+prefFmt(l.s.solde)+'</td>'
       + '<td class="num">'+(l.s.joursDerniereLivraison===null?'—':l.s.joursDerniereLivraison)+'</td>'
       + '<td class="num">'+(l.s.rotation===null?'—':prefFmt(l.s.rotation,2))+'</td>'
-      + '<td>'+esc(l.info.fournisseur_principal||'—')+'</td><td>'+esc(l.info.port_livraison||'—')+'</td>'
+      + '<td>'+esc(l.info.fournisseur_principal||'—')+'</td><td>'+esc(prefPort(l.id, campId)||'—')+'</td>'
       + '<td>'+(l.info.commission_kg!=null && l.info.commission_kg!=='' ? prefFmt(l.info.commission_kg,2)+' F/kg' : '—')+'</td>'
       + '<td>'+(al?'<span class="badge danger" title="'+esc(al)+'">'+esc(al)+'</span>':'')+(l.info.commentaire?'<div class="hint">'+esc(l.info.commentaire)+'</div>':'')+'</td></tr>';
   });
@@ -5642,7 +5655,7 @@ function renderPrefCoopDetail(coopId, campId){
   const coop = coopById(coopId); if (!coop) return '';
   const s = prefSituation(coopId, campId), info = prefInfoCoop(coopId);
   let html = '<div class="panel" id="pref-detail"><div class="panel-head" style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">'
-    + '<div><h2>'+esc(coop.nom)+'</h2><p class="hint" style="margin:4px 0 0">Fournisseur principal : <b>'+esc(info.fournisseur_principal||'—')+'</b> · Port : <b>'+esc(info.port_livraison||'—')+'</b> · Commission : <b>'+(info.commission_kg!=null&&info.commission_kg!==''?prefFmt(info.commission_kg,2)+' F/kg':'—')+'</b></p></div>'
+    + '<div><h2>'+esc(coop.nom)+'</h2><p class="hint" style="margin:4px 0 0">Fournisseur principal : <b>'+esc(info.fournisseur_principal||'—')+'</b> · Port : <b>'+esc(prefPort(coopId, campId)||'—')+'</b> · Commission : <b>'+(info.commission_kg!=null&&info.commission_kg!==''?prefFmt(info.commission_kg,2)+' F/kg':'—')+'</b></p></div>'
     + '<div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn" onclick="prefOuvrirInfos(\''+escJs(coopId)+'\')">Modifier le suivi</button><button class="btn btn-primary" onclick="prefOuvrir(\''+escJs(coopId)+'\')">+ Avance</button><button class="btn-ghost" onclick="prefFermerCoop()">Fermer</button></div></div>'
     + '<div style="padding:0 18px 18px;overflow:auto;">'
     + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin:8px 0;"><h3 style="margin:0">Avances versées</h3>'+(s.prefs.length>1?'<button class="btn-danger-text" onclick="prefToutSupprimer(\''+escJs(coopId)+'\',\''+escJs(campId)+'\')">Tout supprimer ('+s.prefs.length+')</button>':'')+'</div>'
@@ -5653,15 +5666,17 @@ function renderPrefCoopDetail(coopId, campId){
       + '<tr style="font-weight:700"><td colspan="3">Total préfinancé</td><td class="num">'+prefFmt(s.A)+'</td><td colspan="3"></td></tr></tbody></table>'
       : '<div class="hint">Aucune avance enregistrée.</div>')
     + '<h3 style="margin:18px 0 8px">Livraisons (depuis les achats ORIGEN)</h3>'
-    + (s.liv.length ? '<table class="data-table"><thead><tr><th>Date</th><th>Connaissement</th><th class="num">Qté nette (kg)</th><th class="num">Prix unit. + transport</th><th class="num">Commission</th><th class="num">Retenue BIC</th><th class="num">Montant net livré</th><th class="num">Jours depuis la précédente</th></tr></thead><tbody>'
-      + s.liv.map(l=>'<tr><td>'+prefFmtDate(l.date)+'</td><td>'+esc(l.connaissement)+'</td><td class="num">'+prefFmt(l.poids)+'</td><td class="num">'+prefFmt(l.prixUnit,2)+'</td><td class="num">'+prefFmt(l.commission)+'</td><td class="num">'+prefFmt(l.bic)+'</td><td class="num">'+(l.net===null?'<span class="badge warn" title="Prix d\'entrée usine ou TKM non renseigné">à calculer</span>':prefFmt(l.net))+'</td><td class="num">'+(l.joursDepuisPrecedente===null?'—':l.joursDepuisPrecedente)+'</td></tr>').join('')
-      + '<tr style="font-weight:700"><td colspan="2">Total</td><td class="num">'+prefFmt(s.Q)+'</td><td></td><td class="num">'+prefFmt(s.liv.reduce((t,l)=>t+l.commission,0))+'</td><td class="num">'+prefFmt(s.liv.reduce((t,l)=>t+l.bic,0))+'</td><td class="num">'+prefFmt(s.V)+'</td><td></td></tr></tbody></table>'
+    + (s.liv.length ? '<table class="data-table"><thead><tr><th>Date</th><th>Connaissement</th><th class="num">Qté nette (kg)</th><th class="num">Prix unit. + transport</th><th class="num">Commission</th><th class="num">Retenue BIC</th><th class="num">Montant net livré</th><th class="num">Remboursé au préfinancement</th><th class="num">Jours depuis la précédente</th></tr></thead><tbody>'
+      + s.liv.map(l=>'<tr><td>'+prefFmtDate(l.date)+'</td><td>'+esc(l.connaissement)+'</td><td class="num">'+prefFmt(l.poids)+'</td><td class="num">'+prefFmt(l.prixUnit,2)+'</td><td class="num">'+prefFmt(l.commission)+'</td><td class="num">'+prefFmt(l.bic)+'</td><td class="num">'+(l.net===null?'<span class="badge warn" title="Prix d\'entrée usine ou TKM non renseigné">à calculer</span>':prefFmt(l.net))+'</td><td class="num">'+(l.remb>0?prefFmt(l.remb):'—')+'</td><td class="num">'+(l.joursDepuisPrecedente===null?'—':l.joursDepuisPrecedente)+'</td></tr>').join('')
+      + '<tr style="font-weight:700"><td colspan="2">Total</td><td class="num">'+prefFmt(s.Q)+'</td><td></td><td class="num">'+prefFmt(s.liv.reduce((t,l)=>t+l.commission,0))+'</td><td class="num">'+prefFmt(s.liv.reduce((t,l)=>t+l.bic,0))+'</td><td class="num">'+prefFmt(s.V)+'</td><td class="num">'+prefFmt(s.remb)+'</td><td></td></tr></tbody></table>'
       : '<div class="hint">Aucune livraison pesée à l\'usine pour cette campagne.</div>')
-    + '<div class="cards" style="grid-template-columns:repeat(4,1fr);margin-top:14px;">'
+    + '<div class="cards" style="grid-template-columns:repeat(3,1fr);margin-top:14px;">'
     + '<div class="card"><div class="label">Préfinancé (A)</div><div class="value">'+prefFmt(s.A)+'</div></div>'
     + '<div class="card"><div class="label">Livré net</div><div class="value">'+prefFmt(s.V)+'</div></div>'
     + '<div class="card'+(s.solde>0?' alert':'')+'"><div class="label">Exposition (B)</div><div class="value">'+prefFmt(s.solde)+'</div></div>'
-    + '<div class="card"><div class="label">Rotation</div><div class="value">'+(s.rotation===null?'—':prefFmt(s.rotation,2))+'</div></div></div>'
+    + '<div class="card"><div class="label">Rotation</div><div class="value">'+(s.rotation===null?'—':prefFmt(s.rotation,2))+'</div></div>'
+    + '<div class="card"><div class="label">Remboursé (paiements)</div><div class="value">'+prefFmt(s.remb)+'</div></div>'
+    + '<div class="card'+(s.resteDu>0?' alert':'')+'"><div class="label">Reste à rembourser</div><div class="value">'+prefFmt(s.resteDu)+'</div></div></div>'
     + (s.incomplet ? '<p class="hint">Certaines livraisons n\'ont pas encore de montant net : renseigne le prix d\'entrée usine de la campagne et le TKM du connaissement.</p>' : '')
     + '</div></div>';
   return html;
@@ -16574,7 +16589,7 @@ function soldeAchat(a){
   const ps = paiementsDeAchat(a.id); if (!ps.length) return null;
   const fige = aPayerFige(a.id), m = calcMontantPaiement(a);
   const du = fige!==null ? fige : (m && m.montant!==null ? m.montant : 0);
-  const paye = ps.reduce((t,p)=>t+(Number(p.montant_paye)||0), 0);
+  const paye = ps.reduce((t,p)=>t+(Number(p.montant_paye)||0), 0) + (Number(a.pref_remb_montant)||0);
   return { du, paye, reste: Math.max(0, du-paye), complet: du>0 && paye>=du };
 }
 function aujourdhuiIso(){ return new Date().toISOString().slice(0,10); }
@@ -16602,6 +16617,33 @@ function majNotePaiement(){
   else if (ap>0 && pa>0 && deja+pa<ap){ n.textContent = 'Paiement partiel : il restera '+fmtNum(ap-deja-pa)+' FCFA à payer. Tu pourras ajouter un autre paiement (chèque) plus tard ; l\'attestation indiquera ce qui a été payé.'; n.style.display = 'block'; }
   else n.style.display = 'none';
 }
+// Remboursement du prefinancement au moment du paiement d'une livraison : tout le financement (dans la limite du montant a payer) ou une partie.
+function prefRembContexte(a){
+  if (!a || !a.cooperative_id) return null;
+  const prefs = (state.prefinancements||[]).filter(p=>p.cooperative_id===a.cooperative_id && (!a.campagne_id || p.campagne_id===a.campagne_id));
+  if (!prefs.length) return null;
+  const A = prefs.reduce((t,p)=>t+(Number(p.montant)||0),0);
+  const deja = (state.achats||[]).filter(x=>x.id!==a.id && x.cooperative_id===a.cooperative_id && (!a.campagne_id || x.campagne_id===a.campagne_id)).reduce((t,x)=>t+(Number(x.pref_remb_montant)||0),0);
+  return { A, reste: Math.max(0, A-deja) };
+}
+function majRembPaiement(manuel){
+  const box = document.getElementById('pa-remb'); if (!box) return;
+  const lire = (nom)=>Math.round(Number((document.querySelector('[name="'+nom+'"]')||{}).value)||0);
+  const reste = Number(box.getAttribute('data-reste'))||0, mode = (document.querySelector('[name="pa_remb_mode"]')||{}).value;
+  const champ = document.querySelector('[name="pa_remb_montant"]'), n = document.getElementById('pa-note');
+  const ap = lire('pa_montant_a_payer'), deja = Number(n && n.getAttribute('data-deja'))||0, dispo = Math.max(0, ap-deja);
+  if (!manuel){
+    if (mode==='aucun') champ.value = '';
+    else if (mode==='total') champ.value = Math.min(reste, dispo) || '';
+  }
+  champ.readOnly = (mode==='aucun' || mode==='total');
+  const r = lire('pa_remb_montant'), note = document.getElementById('pa-remb-note'); if (!note) return;
+  note.classList.remove('rouge');
+  if (r>reste){ note.textContent = 'Le remboursement dépasse le reste dû sur le préfinancement ('+fmtNum(reste)+' FCFA).'; note.classList.add('rouge'); note.style.display = 'block'; }
+  else if (ap>0 && r>dispo){ note.textContent = 'Le remboursement dépasse le montant restant à payer ('+fmtNum(dispo)+' FCFA).'; note.classList.add('rouge'); note.style.display = 'block'; }
+  else if (r>0){ note.textContent = 'Chèque à émettre : '+fmtNum(Math.max(0, dispo-r))+' FCFA (montant restant à payer '+fmtNum(dispo)+' − remboursement '+fmtNum(r)+'). Reste dû sur le préfinancement après : '+fmtNum(reste-r)+' FCFA.'; note.style.display = 'block'; }
+  else note.style.display = 'none';
+}
 async function enregistrerPaiementConnaissement(){
   const pl = state.modal && state.modal.payload; const a = pl && state.achats.find(x=>x.id===pl.achatId); if (!a) return;
   const tous = paiementsDeAchat(a.id), edit = pl.paiementId ? tous.find(p=>p.id===pl.paiementId) : null, autres = tous.filter(p=>!edit || p.id!==edit.id);
@@ -16610,17 +16652,27 @@ async function enregistrerPaiementConnaissement(){
   const date = fv('pa_date') || aujourdhuiIso(), banque = fv('pa_banque').trim(), libelle = fv('pa_libelle').trim(), cheque = fv('pa_cheque').trim();
   const refuse = (msg, champ)=>{ showToast(msg); const e = document.querySelector('[name="'+champ+'"]'); if (e){ e.classList.add('invalide'); e.focus(); } };
   if (!(aPayer>0)) return refuse('Indique le montant à payer.', 'pa_montant_a_payer');
-  if (!(paye>0)) return refuse('Indique le montant payé.', 'pa_montant_paye');
-  if (deja+paye>aPayer) return refuse('Le montant payé dépasse le montant restant à payer ('+fmtNum(Math.max(0,aPayer-deja))+' FCFA).', 'pa_montant_paye');
-  if (!banque) return refuse('Indique la banque.', 'pa_banque');
-  if (!libelle) return refuse('Indique le libellé du chèque.', 'pa_libelle');
-  if (!cheque) return refuse('Indique le numéro du chèque.', 'pa_cheque');
-  const ligne = { id: edit ? edit.id : 'pai_'+a.id+'_'+Date.now().toString(36), achat_id:a.id, date_paiement:date, montant_paye:paye, montant_a_payer:aPayer, banque, libelle_cheque:libelle, numero_cheque:cheque };
+  const ctxR = prefRembContexte(a);
+  let rMode = 'aucun', rMont = 0;
+  if (ctxR){ rMode = fv('pa_remb_mode') || 'aucun'; rMont = rMode==='aucun' ? 0 : Math.round(Number(fv('pa_remb_montant'))||0); }
+  if (rMont<0) return refuse('Montant de remboursement invalide.', 'pa_remb_montant');
+  if (rMode!=='aucun' && !(rMont>0)) return refuse('Indique le montant remboursé.', 'pa_remb_montant');
+  if (rMont>ctxR.reste && ctxR) return refuse('Le remboursement dépasse le reste dû sur le préfinancement ('+fmtNum(ctxR.reste)+' FCFA).', 'pa_remb_montant');
+  if (!(paye>0) && !(rMont>0)) return refuse('Indique le montant payé.', 'pa_montant_paye');
+  if (deja+paye+rMont>aPayer) return refuse('Le paiement et le remboursement dépassent le montant restant à payer ('+fmtNum(Math.max(0,aPayer-deja))+' FCFA).', 'pa_montant_paye');
+  if (false) return refuse('Le montant payé dépasse le montant restant à payer ('+fmtNum(Math.max(0,aPayer-deja))+' FCFA).', 'pa_montant_paye');
+  const sansCheque = !(paye>0);
+  if (!sansCheque){
+    if (!banque) return refuse('Indique la banque.', 'pa_banque');
+    if (!libelle) return refuse('Indique le libellé du chèque.', 'pa_libelle');
+    if (!cheque) return refuse('Indique le numéro du chèque.', 'pa_cheque');
+  }
+  const ligne = { id: edit ? edit.id : 'pai_'+a.id+'_'+Date.now().toString(36), achat_id:a.id, date_paiement:date, montant_paye:paye, montant_a_payer:aPayer, banque: sansCheque?'—':banque, libelle_cheque: sansCheque?'Remboursement préfinancement':libelle, numero_cheque: sansCheque?'—':cheque };
   const r1 = await supabaseClient.from('paiements').upsert(ligne);
   if (r1.error){ showToast('Échec de l\'enregistrement du paiement : '+r1.error.message); return; }
   const apres = autres.concat([ligne]).sort((x,y)=> String(x.date_paiement||'').localeCompare(String(y.date_paiement||'')) || String(x.id).localeCompare(String(y.id)));
   const dernier = apres[apres.length-1];
-  const r2 = await supabaseClient.from('achats').update({ numero_cheque:dernier.numero_cheque, banque:dernier.banque, libelle_cheque:dernier.libelle_cheque }).eq('id', a.id);
+  const r2 = await supabaseClient.from('achats').update({ numero_cheque:dernier.numero_cheque, banque:dernier.banque, libelle_cheque:dernier.libelle_cheque, pref_remb_mode: ctxR ? rMode : null, pref_remb_montant: ctxR ? (rMont||null) : null }).eq('id', a.id);
   if (r2.error){
     if (!edit) await supabaseClient.from('paiements').delete().eq('id', ligne.id);
     showToast('Échec de l\'enregistrement : '+r2.error.message); return;
@@ -16630,9 +16682,10 @@ async function enregistrerPaiementConnaissement(){
   if (autresLignes.length) await supabaseClient.from('paiements').update({ montant_a_payer:aPayer }).eq('achat_id', a.id);
   state.paiements = (state.paiements||[]).filter(p=>p.achat_id!==a.id).concat(autres.map(p=>Object.assign({}, p, { montant_a_payer:aPayer })), [ligne]);
   a.numero_cheque = dernier.numero_cheque; a.banque = dernier.banque; a.libelle_cheque = dernier.libelle_cheque;
+  if (ctxR){ a.pref_remb_mode = rMode; a.pref_remb_montant = rMont||null; }
   const sd = soldeAchat(a);
   closeModal();
-  showToast('Paiement enregistré : chèque n° '+cheque+(sd && !sd.complet ? ' · reste '+fmtNum(sd.reste)+' FCFA à payer.' : ' · livraison soldée.'), 'success');
+  showToast('Paiement enregistré : '+(sansCheque ? 'remboursement du préfinancement '+fmtNum(rMont)+' FCFA' : 'chèque n° '+cheque)+(rMont>0&&!sansCheque ? ' + remboursement '+fmtNum(rMont)+' FCFA' : '')+(sd && !sd.complet ? ' · reste '+fmtNum(sd.reste)+' FCFA à payer.' : ' · livraison soldée.'), 'success');
 }
 
 // ---- Attestation de paiement (Word) : une attestation par cooperative et par campagne, CUMULATIVE (une ligne par cheque) ----
@@ -18768,6 +18821,18 @@ function _renderBrut(){
         + '<label class="field">Montant payé par ce chèque (FCFA)<input type="number" step="1" min="0" name="pa_montant_paye" value="'+esc(payeDef)+'" oninput="majNotePaiement()"></label>'
         + '<span class="hint">Pour payer tout ce qui reste : <button type="button" class="lien-param" onclick="payerLeResteChamp()">Payer le reste</button></span>'
         + '<div class="pa-note" id="pa-note" data-deja="'+deja+'" style="display:none;"></div>'
+        + (function(){
+            const ctx = prefRembContexte(a); if (!ctx) return '';
+            const mode = a.pref_remb_mode || 'aucun', mt = Number(a.pref_remb_montant)||0;
+            return '<fieldset style="margin-top:12px;" id="pa-remb" data-reste="'+ctx.reste+'"><legend>Remboursement du préfinancement</legend>'
+              + '<span class="hint">Reste dû sur le préfinancement de cette coopérative : <b>'+fmtNum(ctx.reste)+' FCFA</b>. Le montant remboursé est retenu sur ce paiement (il n\'est pas payé par chèque).</span>'
+              + '<label class="field">Modalité<select name="pa_remb_mode" onchange="majRembPaiement()">'
+              + '<option value="aucun"'+(mode==='aucun'?' selected':'')+'>Aucun remboursement sur ce paiement</option>'
+              + '<option value="total"'+(mode==='total'?' selected':'')+'>Rembourser tout le financement (dans la limite du montant à payer)</option>'
+              + '<option value="partiel"'+(mode==='partiel'?' selected':'')+'>Rembourser une partie du financement</option></select></label>'
+              + '<label class="field">Montant remboursé (FCFA)<input type="number" step="1" min="0" name="pa_remb_montant" value="'+(mt||'')+'" oninput="majRembPaiement(true)"></label>'
+              + '<div class="pa-note" id="pa-remb-note" style="display:none;"></div></fieldset>';
+          })()
         + '<label class="field">Date du paiement (aujourd\'hui si laissée vide)<input type="date" name="pa_date" value="'+esc(edit && edit.date_paiement ? edit.date_paiement : '')+'"></label>'
         + '<label class="field">Banque<input type="text" name="pa_banque" list="pa-banques" value="'+esc(edit ? edit.banque||'' : '')+'" placeholder="ex : Ecobank"></label>'
         + '<datalist id="pa-banques">'+uniques('banque').map(b=>'<option value="'+esc(b)+'">').join('')+'</datalist>'
