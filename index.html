@@ -3496,7 +3496,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-14-072';
+const APP_VERSION = '2026-10-14-073';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7741,6 +7741,11 @@ function renderTracageDirect(tr){
   const pill = n => n<etape ? '<span class="badge ok">Fait</span>' : (n===etape ? '<span class="badge info">En cours</span>' : '<span class="badge neutral">En attente</span>');
   const libDate = iso => iso ? (dateFr(iso)||iso) : '—';
   const volConn = conn && conn.poidsNet ? Number(conn.poidsNet) : 0, ecart = volConn>0 ? Math.round(Number(tr.volumeKg)-volConn) : null;
+  // Deux poids différents : le poids du CONNAISSEMENT (déclaré au départ) et le poids NET PAYÉ, qui n'existe qu'à l'issue de la
+  // validation de la pesée à l'usine (c'est lui qui sert au ticket de pesée, au paiement et à la déclaration).
+  const netPaye = pese ? Number(achatConn.poids_net_produit) : 0;
+  const ecartPesee = (pese && volConn>0) ? Math.round(netPaye-volConn) : null, ecartTrace = pese ? Math.round(netPaye-Number(tr.volumeKg)) : null;
+  const sg = n => (n>0?'+':'')+fmtNum(n)+' kg';
   let html = '<div class="panel">'
     + '<div class="panel-head trc-entete"><div><h2>Traçage de volume — pour la coopérative elle-même</h2>'
     + '<p>Le volume est réparti entre les producteurs de la coopérative. La coopérative nous transmet elle-même son connaissement et son ticket de pesée : ORIGEN ne génère aucun de ces deux documents (la pesée validée à l\'usine est lue automatiquement sur le SAIGIC).</p></div>'
@@ -7752,11 +7757,11 @@ function renderTracageDirect(tr){
     + '<div><div class="k">Volume tracé</div><div class="v">'+fmtKg(tr.volumeKg)+'</div><div class="s">'+esc(String(tr.nbSacs))+' sacs · '+producteurs.length+' producteur(s)</div></div>'
     + '<div><div class="k">Période des achats</div><div class="v txt">'+esc(libDate(tr.dateDebut))+' → '+esc(libDate(tr.dateFin))+'</div><div class="s">dates réparties aléatoirement</div></div>'
     + '<div><div class="k">Connaissement</div><div class="v'+(conn?'':' txt')+'">'+(conn ? esc(conn.numero) : '<span class="vide">À rattacher</span>')+'</div><div class="s">'+(conn ? (volConn>0 ? fmtKg(volConn)+' sur le connaissement' : 'reçu de la coopérative') : 'étape 2')+'</div></div>'
-    + '<div><div class="k">Pesée à l\'usine</div><div class="v">'+(pese ? fmtKg(achatConn.poids_net_produit) : '<span class="vide">—</span>')+'</div><div class="s">'+(pese ? 'poids net payé' : 'en attente')+'</div></div></div>';
+    + '<div><div class="k">Poids net payé (pesée validée)</div><div class="v">'+(pese ? fmtKg(netPaye) : '<span class="vide">—</span>')+'</div><div class="s">'+(pese ? (ecartPesee!=null ? sg(ecartPesee)+' par rapport au connaissement' : 'pesée validée') : 'connu après validation de la pesée')+'</div></div></div>';
   html += '<div class="trc-progress">'
     + '<div class="pt '+cls(1)+'"><b>✓</b>Tracer le volume</div><div class="pl fait"></div>'
     + '<div class="pt '+cls(2)+'"><b>'+num(2)+'</b>Connaissement reçu</div><div class="pl'+(etape>2?' fait':'')+'"></div>'
-    + '<div class="pt '+cls(3)+'"><b>'+num(3)+'</b>Pesée à l\'usine</div></div>';
+    + '<div class="pt '+cls(3)+'"><b>'+num(3)+'</b>Pesée validée</div></div>';
   html += '<div class="trc-etapes">';
   html += '<div class="trc-etape fait"><div class="tete"><span class="num">✓</span><h3>Tracer le volume</h3></div>'
     + '<p class="desc">Répartition du volume entre les producteurs de la coopérative (plafond 70 % respecté), un achat par producteur, fiche de traçabilité Excel.</p>'
@@ -7766,15 +7771,22 @@ function renderTracageDirect(tr){
   html += '<div class="trc-etape '+cls(2)+'"><div class="tete"><span class="num">'+num(2)+'</span><h3>Connaissement de la coopérative</h3></div>'
     + '<p class="desc">Document transmis par la coopérative elle-même (ou lu sur le SAIGIC) : ORIGEN ne le génère pas. Les producteurs tracés sont rattachés à son numéro.</p>'
     + (conn ? '<div class="faits"><div class="lig"><span>N°</span><b>'+esc(conn.numero)+'</b></div>'
-        + (volConn>0 ? '<div class="lig"><span>Volume du connaissement</span><b>'+fmtKg(volConn)+'</b></div><div class="lig"><span>Écart avec le volume tracé</span><b>'+(ecart===0 ? 'aucun' : (ecart>0?'+':'')+fmtNum(ecart)+' kg')+'</b></div>' : '')
+        + (volConn>0 ? '<div class="lig"><span>Poids du connaissement (déclaré)</span><b>'+fmtKg(volConn)+'</b></div><div class="lig"><span>Écart avec le volume tracé</span><b>'+(ecart===0 ? 'aucun' : (ecart>0?'+':'')+fmtNum(ecart)+' kg')+'</b></div>' : '')
         + (conn.nombreSacs ? '<div class="lig"><span>Sacs</span><b>'+fmtNum(conn.nombreSacs)+'</b></div>' : '') + '<div class="lig"><span>Date</span><b>'+esc(libDate(conn.date))+'</b></div></div>'
       : (candidats.length ? '<div class="faits"><label class="field" style="margin:0">Connaissement reçu<select id="trc_conn_choix"><option value="">— choisir —</option>'+candidats.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.connaissement)+' · '+fmtKg(x.quantite_kg)+'</option>').join('')+'</select></label></div>'
           : '<div class="hint">Aucun connaissement de cette coopérative n\'est encore enregistré : il apparaît dès que le robot le lit sur le SAIGIC.</div>'))
     + '<div class="pied">'+pill(2)+(!conn && candidats.length ? ' <button class="btn btn-primary btn-compact" onclick="ocTracageRattacher()">Rattacher</button>' : '')+'</div></div>';
-  html += '<div class="trc-etape '+cls(3)+'"><div class="tete"><span class="num">'+num(3)+'</span><h3>Pesée à l\'usine</h3></div>'
-    + '<p class="desc">Le ticket de pesée vient de la coopérative ; le poids net payé est lu automatiquement sur le SAIGIC dès que la pesée est validée à l\'usine. Il ouvre ensuite la déclaration.</p>'
-    + (pese ? '<div class="faits"><div class="lig"><span>Poids net payé</span><b>'+fmtKg(achatConn.poids_net_produit)+'</b></div>'
-        + (Number(achatConn.nombre_sacs_accepte)>0 ? '<div class="lig"><span>Sacs acceptés</span><b>'+fmtNum(achatConn.nombre_sacs_accepte)+'</b></div>' : '') + '</div>' : '')
+  html += '<div class="trc-etape '+cls(3)+'"><div class="tete"><span class="num">'+num(3)+'</span><h3>Pesée validée à l\'usine</h3></div>'
+    + '<p class="desc">Le connaissement et la pesée sont deux étapes distinctes : le poids net payé n\'existe qu\'à l\'issue de la validation de la pesée à l\'usine. C\'est lui que reprend le ticket de pesée (fourni par la coopérative) et qui ouvre la déclaration. Il est lu automatiquement sur le SAIGIC.</p>'
+    + (pese ? '<div class="faits">'
+        + (volConn>0 ? '<div class="lig"><span>Poids du connaissement</span><b>'+fmtKg(volConn)+'</b></div>' : '')
+        + '<div class="lig"><span>Poids net payé (ticket)</span><b>'+fmtKg(netPaye)+'</b></div>'
+        + (ecartPesee!=null ? '<div class="lig"><span>Écart pesée − connaissement</span><b>'+(ecartPesee===0?'aucun':sg(ecartPesee)+' ('+(ecartPesee/volConn*100).toFixed(1).replace('.',',')+' %)')+'</b></div>' : '')
+        + '<div class="lig"><span>Écart pesée − volume tracé</span><b>'+(ecartTrace===0?'aucun':sg(ecartTrace))+'</b></div>'
+        + (Number(achatConn.nombre_sacs_accepte)>0 ? '<div class="lig"><span>Sacs acceptés</span><b>'+fmtNum(achatConn.nombre_sacs_accepte)+'</b></div>' : '')
+        + '</div>'
+        + (ecartTrace<0 ? '<div class="hint" style="margin-top:8px;color:var(--warn)">Le poids net payé est inférieur au volume tracé : la fiche de traçabilité dépasse ce qui a été réellement acheté.</div>' : '')
+      : '<div class="hint">En attente de la validation de la pesée à l\'usine : tant qu\'elle n\'est pas validée, il n\'y a pas de poids net payé.</div>')
     + '<div class="pied">'+pill(3)+'</div></div>';
   return html + '</div></div>';
 }
