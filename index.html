@@ -3535,7 +3535,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-14-122';
+const APP_VERSION = '2026-10-14-123';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -16687,6 +16687,151 @@ function ocAllerStockageCoop(coopId){
   ocSurlignerElement('stock-panel');
 }
 
+// ---- Lecture des certificats deposes dans le stockage : extraction de la date de fin de licence ----
+// Pour chaque cooperative certifiee (hors diligence externe) sans date de fin de licence : on liste ses documents
+// (documents-coop/<id>/documents), on garde ceux dont le nom contient "certificat" (PDF, image ou ZIP), on lit le texte
+// (pdf.js, sinon OCR Tesseract) et on cherche la date de fin de validite. Rien n'est enregistre sans validation :
+// chaque date proposee reste modifiable et se coche avant « Enregistrer ».
+const CERT_MOIS = { janvier:1,jan:1,janv:1,january:1,fevrier:2,fev:2,fevr:2,february:2,feb:2,mars:3,march:3,mar:3,avril:4,april:4,apr:4,avr:4,mai:5,may:5,juin:6,june:6,jun:6,juillet:7,july:7,jul:7,juil:7,aout:8,august:8,aug:8,septembre:9,september:9,sep:9,sept:9,octobre:10,october:10,oct:10,novembre:11,november:11,nov:11,decembre:12,december:12,dec:12 };
+function certTrouverDates(texte){
+  const t = String(texte||'').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ');
+  const out = [];
+  const ajoute = (j,m,a,idx,len)=>{ j=+j; m=+m; a=+a; if (a<100) a += 2000; if (m<1||m>12||j<1||j>31||a<2015||a>2040) return; out.push({ iso: a+'-'+String(m).padStart(2,'0')+'-'+String(j).padStart(2,'0'), idx, len }); };
+  let r;
+  const r1 = /(\d{1,2})\s*[\/.\-]\s*(\d{1,2})\s*[\/.\-]\s*(\d{4}|\d{2})(?!\d)/g;
+  while ((r = r1.exec(t))) ajoute(r[1], r[2], r[3], r.index, r[0].length);
+  const r2 = /(\d{4})\s*[\/.\-]\s*(\d{1,2})\s*[\/.\-]\s*(\d{1,2})(?!\d)/g;
+  while ((r = r2.exec(t))) ajoute(r[3], r[2], r[1], r.index, r[0].length);
+  const r3 = /(\d{1,2})(?:er|st|nd|rd|th)?\s+(?:of\s+)?([a-z]{3,9})\.?,?\s+(\d{4})/gi;
+  while ((r = r3.exec(t))){ const m = CERT_MOIS[r[2].toLowerCase()]; if (m) ajoute(r[1], m, r[3], r.index, r[0].length); }
+  const r4 = /([a-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})/gi;
+  while ((r = r4.exec(t))){ const m = CERT_MOIS[r[1].toLowerCase()]; if (m) ajoute(r[2], m, r[3], r.index, r[0].length); }
+  return { t, dates: out.sort((a,b)=>a.idx-b.idx) };
+}
+// Retourne { iso, contexte, fiable } : la date qui suit un mot-cle de fin de validite ; a defaut la plus tardive du document (non fiable).
+function certExtraireFinLicence(texte){
+  const { t, dates } = certTrouverDates(texte);
+  if (!dates.length) return null;
+  const cles = /(valid(?:e)? until|valid to|valid through|valable jusqu|valide jusqu|jusqu['’ ]?au|date d['’ ]?expiration|expiry(?: date)?|expiration(?: date)?|expires?(?: on)?|fin de validite|date de fin|echeance|licen[cs]e (?:end|expir)|validity (?:end|to)|until|to)\b/gi;
+  let k, meilleur = null;
+  while ((k = cles.exec(t))){
+    const fin = k.index + k[0].length;
+    const d = dates.find(x=>x.idx>=fin-1 && x.idx-fin<=70);
+    if (!d) continue;
+    const fort = !/^to$/i.test(k[0]);
+    // "from X to Y" : "to" n'est retenu que si une date precede juste avant
+    if (!fort && !dates.some(x=>x.idx<k.index && k.index-(x.idx+x.len)<=25)) continue;
+    const cand = { iso:d.iso, contexte:t.slice(Math.max(0,k.index-25), Math.min(t.length, d.idx+d.len+10)), fiable:true, force:fort?2:1 };
+    if (!meilleur || cand.force>meilleur.force || (cand.force===meilleur.force && cand.iso>meilleur.iso)) meilleur = cand;
+  }
+  // "du 12/10/2025 au 12/10/2026", "12.10.2025 - 12.10.2026" : deux dates cote a cote -> la seconde est la fin
+  for (let i=0; i<dates.length-1; i++){
+    const entre = t.slice(dates[i].idx+dates[i].len, dates[i+1].idx).trim();
+    if (entre.length<=8 && /^(?:[-–—~]|to|au|a|until|jusqu'?au)?$/i.test(entre) && dates[i+1].iso>dates[i].iso){
+      const cand = { iso:dates[i+1].iso, contexte:t.slice(Math.max(0,dates[i].idx-25), dates[i+1].idx+dates[i+1].len+10), fiable:true, force:1 };
+      if (!meilleur || cand.force>meilleur.force) meilleur = cand;
+    }
+  }
+  if (meilleur) return meilleur;
+  const derniere = dates.reduce((a,b)=>a.iso>=b.iso?a:b);
+  return { iso:derniere.iso, contexte:t.slice(Math.max(0,derniere.idx-40), derniere.idx+derniere.len+10), fiable:false };
+}
+async function certTexteDuFichier(blob, nom){
+  const n = String(nom||'').toLowerCase();
+  if (/\.pdf$/.test(n)){
+    let lignes = [];
+    try { lignes = await ocPdfExtraireLignesToutesPages(blob, 6); } catch(e){ lignes = []; }
+    let texte = lignes.join('\n');
+    if (texte.replace(/[^a-z0-9]/gi,'').length < 80 || !certTrouverDates(texte).dates.length){ try { const o = await ocOcrPdfScan(blob); if (o && o.length>texte.length) texte = o; } catch(e){} }
+    return texte;
+  }
+  if (/\.(jpe?g|png|webp|bmp)$/.test(n)){
+    const Tess = await chargerTesseractJs();
+    const w = await Tess.createWorker('fra', 1);
+    try { const { data } = await w.recognize(blob); return data.text; } finally { await w.terminate(); }
+  }
+  return '';
+}
+async function certLireFichier(blob, nom){
+  const n = String(nom||'').toLowerCase();
+  if (/\.zip$/.test(n)){
+    if (typeof JSZip==='undefined') throw new Error('JSZip indisponible');
+    const zip = await JSZip.loadAsync(blob);
+    const res = [];
+    for (const nomInterne of Object.keys(zip.files)){
+      if (zip.files[nomInterne].dir || !/\.(pdf|jpe?g|png)$/i.test(nomInterne)) continue;
+      const b = await zip.files[nomInterne].async('blob');
+      const r = certExtraireFinLicence(await certTexteDuFichier(b, nomInterne));
+      res.push({ fichier: nom+' › '+nomInterne.split('/').pop(), r });
+    }
+    return res;
+  }
+  return [{ fichier: nom, r: certExtraireFinLicence(await certTexteDuFichier(blob, nom)) }];
+}
+async function certLireTout(){
+  if (state.certLecture && state.certLecture.encours) return;
+  const cibles = (state.cooperatives||[]).filter(c=>c.statut==='Certifiée' && !c.diligence_externe && !c.date_fin_licence).sort((a,b)=>String(a.nom).localeCompare(String(b.nom),'fr'));
+  state.certLecture = { encours:true, lignes:[], total:cibles.length, fait:0, courant:'' };
+  render();
+  for (const c of cibles){
+    state.certLecture.courant = c.nom; render();
+    const ligne = { coopId:c.id, nom:c.nom, fichier:'', iso:'', contexte:'', fiable:false, cocher:false, message:'' };
+    try{
+      const { data: liste, error } = await supabaseClient.storage.from('documents-coop').list(c.id+'/documents', { limit:200 });
+      if (error) throw error;
+      const fichiers = (liste||[]).filter(f=>/certificat/i.test(f.name) && /\.(pdf|jpe?g|png|zip)$/i.test(f.name));
+      if (!fichiers.length){ ligne.message = 'Aucun certificat déposé dans le stockage.'; }
+      else {
+        let trouve = null;
+        for (const f of fichiers){
+          const { data: blob, error: e2 } = await supabaseClient.storage.from('documents-coop').download(c.id+'/documents/'+f.name);
+          if (e2){ ligne.message = 'Téléchargement impossible : '+e2.message; continue; }
+          for (const lu of await certLireFichier(blob, f.name)){
+            if (lu.r && (!trouve || (lu.r.fiable && !trouve.r.fiable) || (lu.r.fiable===trouve.r.fiable && lu.r.iso>trouve.r.iso))) trouve = lu;
+          }
+        }
+        if (trouve){ ligne.fichier = trouve.fichier; ligne.iso = trouve.r.iso; ligne.contexte = trouve.r.contexte; ligne.fiable = trouve.r.fiable; ligne.cocher = trouve.r.fiable; ligne.message=''; }
+        else if (!ligne.message) ligne.message = 'Certificat illisible (image trop floue ou sans date détectée) — à saisir à la main.';
+      }
+    } catch(e){ ligne.message = 'Erreur : '+(e.message||e); }
+    state.certLecture.lignes.push(ligne); state.certLecture.fait++; render();
+  }
+  state.certLecture.encours = false; state.certLecture.courant = ''; render();
+}
+function certMajLigne(i, champ, val){ const l = state.certLecture && state.certLecture.lignes[i]; if (!l) return; l[champ] = val; if (champ==='iso') l.cocher = !!val; render(); }
+async function certEnregistrer(){
+  const L = (state.certLecture && state.certLecture.lignes || []).filter(l=>l.cocher && /^\d{4}-\d{2}-\d{2}$/.test(l.iso));
+  if (!L.length){ showToast('Aucune date cochée.'); return; }
+  let ok = 0;
+  for (const l of L){
+    const { error } = await supabaseClient.from('cooperatives').update({ date_fin_licence: l.iso }).eq('id', l.coopId);
+    if (error){ showToast('Échec pour '+l.nom+' : '+error.message); continue; }
+    const c = coopById(l.coopId); if (c) c.date_fin_licence = l.iso;
+    l.fait = true; ok++;
+  }
+  state.certLecture.lignes = state.certLecture.lignes.filter(l=>!l.fait);
+  showToast(ok+' date(s) de fin de licence enregistrée(s).', 'success'); render();
+}
+function certFermer(){ state.certLecture = null; render(); }
+function renderCertLecture(){
+  const S = state.certLecture; if (!S) return '';
+  let h = '<div class="panel" style="margin-bottom:14px;"><div class="panel-head" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;"><div><h2>Lecture des certificats — dates de fin de licence</h2>'
+    + '<p class="hint" style="margin:4px 0 0">'+(S.encours ? 'Lecture en cours : '+esc(S.courant||'…')+' ('+S.fait+' / '+S.total+')' : S.lignes.length ? 'Vérifie chaque date (modifiable), coche celles à enregistrer.' : 'Terminé.')+'</p></div>'
+    + '<button class="btn-ghost btn-compact" onclick="certFermer()">Fermer</button></div>';
+  if (S.encours && !S.lignes.length) h += '<div class="hint" style="padding:12px 18px">Les certificats scannés peuvent prendre une minute chacun (reconnaissance de texte).</div>';
+  if (S.lignes.length){
+    h += '<div style="padding:6px 18px 14px;overflow:auto"><table class="data-table pref-table"><thead><tr><th></th><th style="text-align:left">Coopérative</th><th style="text-align:left">Certificat lu</th><th>Fin de licence</th><th style="text-align:left">Extrait du document</th></tr></thead><tbody>';
+    S.lignes.forEach((l,i)=>{
+      h += '<tr><td><input type="checkbox" '+(l.cocher?'checked ':'')+(l.iso?'':'disabled ')+'onchange="certMajLigne('+i+',\'cocher\',this.checked)"></td>'
+        + '<td style="text-align:left"><b>'+esc(l.nom)+'</b></td><td style="text-align:left;white-space:normal;max-width:260px;font-size:12px">'+esc(l.fichier||'—')+'</td>'
+        + '<td><input type="date" value="'+esc(l.iso)+'" onchange="certMajLigne('+i+',\'iso\',this.value)">'+(l.iso && !l.fiable ? '<div class="hint" style="margin:2px 0 0;color:var(--warn)">à vérifier</div>' : '')+'</td>'
+        + '<td style="text-align:left;white-space:normal;font-size:12px;color:var(--ink-soft)">'+(l.contexte ? '« …'+esc(l.contexte)+'… »' : esc(l.message||''))+'</td></tr>';
+    });
+    h += '</tbody></table><div style="margin-top:10px"><button class="btn btn-primary" onclick="certEnregistrer()">Enregistrer les dates cochées</button></div></div>';
+  }
+  return h + '</div>';
+}
+
 function basculerCompteReboursAwahus(){
   try { localStorage.setItem('cr_ouvert', localStorage.getItem('cr_ouvert')==='1' ? '0' : '1'); } catch(e){}
   render();
@@ -16726,6 +16871,7 @@ function renderCooperativesTab(){
     html += '<div class="controls">'
       + '<button class="btn" onclick="ouvrirLienFiche()" title="Pour une coopérative sans portail : elle remplit sa fiche via un lien, elle est créée dans ORIGEN et son contrat peut être généré.">🔗 Lien de fiche (sans portail)</button>'
       + '<button class="btn" onclick="basculerCompteReboursAwahus()">⏳ Compte à rebours</button>'
+      + '<button class="btn" onclick="certLireTout()" title="Lit les certificats déposés dans le stockage et en extrait la date de fin de licence des coopératives qui n\'en ont pas.">📄 Lire les certificats (dates)</button>'
       + '<button class="btn btn-primary" onclick="ouvrirAjoutCooperative()">+ Ajouter une coopérative</button>'
       + '<button class="btn btn-primary" onclick="ouvrirEnvoiMessage()">✉ Envoyer un message</button>'
       + '<button class="btn btn-primary" onclick="ouvrirEnvoiDocuments()">📎 Envoyer des documents</button>'
@@ -16733,6 +16879,7 @@ function renderCooperativesTab(){
       + '<button class="btn" onclick="ouvrirCompletionNomsComplets()">Compléter les noms complets</button>'
       + '<button class="btn" onclick="exporterFichesCooperatives()">⬇ Télécharger les fiches (Excel)</button>'
       + '</div>';
+    html += renderCertLecture();
     html += renderCompteReboursAwahus();
   }
 
