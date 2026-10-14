@@ -3519,7 +3519,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-14-082';
+const APP_VERSION = '2026-10-14-083';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5731,6 +5731,13 @@ async function prefImporterExcel(input){
     f.existantId = ex ? ex.id : '';
     f.retenue = !!f.coopId && !ex;
   });
+  // Meme fiche presente plusieurs fois dans le fichier (feuilles copiees) : seule la premiere est retenue.
+  const vues = new Set();
+  fiches.forEach(f=>{
+    if (!f.coopId) return;
+    const cle = f.coopId+'|'+(f.numero||'')+'|'+Math.round(f.montant)+'|'+((f.paiements[0]&&f.paiements[0].date)||f.dateFiche||'');
+    if (vues.has(cle)){ f.doublon = true; f.retenue = false; } else vues.add(cle);
+  });
   state.modal = { type:'prefImport', payload:{ fiches, campId, fichier: fichier.name } };
   render();
 }
@@ -5799,6 +5806,7 @@ function prefModalsHtml(){
           + '<label style="display:flex;gap:8px;align-items:center;font-weight:600;"><input type="checkbox" style="width:16px;flex:none;margin:0;" '+(f.retenue&&f.coopId?'checked':'')+(f.coopId?'':' disabled')+' onchange="prefImportBascule('+i+',this.checked)">'+esc(f.raison||f.feuille)+' <span class="hint" style="font-weight:400;">· '+esc(f.numero||'sans n°')+'</span></label>'
           + '<div class="hint" style="margin:4px 0 6px 24px;">Code '+esc(f.code||'—')+' · '+prefFmtDate(((f.paiements[0]&&f.paiements[0].date)||f.dateFiche))+' · <b>'+prefFmt(f.montant)+' FCFA</b> · '+esc(PREF_TYPES[f.type_avance]||'')+' · '+esc((f.reglements||[]).map(r=>r.banque+(r.reference?' n°'+r.reference:'')).join(', ')||'règlement non renseigné')+' · bénéficiaire : '+esc(Array.from(new Set(f.paiements.map(p=>p.libelle).filter(Boolean))).join(' / ')||'—')+'</div>'
           + '<label class="field" style="margin:0 0 0 24px;">Coopérative<select onchange="prefImportCoop('+i+',this.value)"><option value="">— à choisir —</option>'+coops.map(c=>'<option value="'+esc(c.id)+'"'+(c.id===f.coopId?' selected':'')+'>'+esc(c.nom)+(c.ccc_num?' ('+esc(c.ccc_num)+')':'')+'</option>').join('')+'</select></label>'
+          + (f.doublon ? '<div class="hint" style="margin:4px 0 0 24px;color:var(--warn);">Même fiche déjà présente plus haut dans le fichier : ignorée pour ne pas compter l\'avance deux fois.</div>' : '')
           + (f.existantId ? '<div class="hint" style="margin:4px 0 0 24px;color:var(--warn);">Cette fiche existe déjà : cocher pour la remplacer par celle du fichier.</div>' : (f.coopId?'':'<div class="hint" style="margin:4px 0 0 24px;color:var(--warn);">Coopérative non reconnue : choisis-la pour importer cette fiche.</div>'))
           + '</div>').join('')
       + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="prefImportConfirmer()">Importer (<span id="pi-nb">'+nbOk+'</span>)</button></div></div></div>';
