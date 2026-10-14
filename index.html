@@ -1426,16 +1426,13 @@
   .sidebar.replie .sb-sous{display:none;}
   .sidebar-nav{padding:0;gap:0;flex:1;}
   .sb-groupe{margin-bottom:10px;}
-  .sb-groupe-titre{font-size:10.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:rgba(255,255,255,.62);padding:9px 10px;display:flex;align-items:center;gap:8px;width:100%;background:none;border:0;border-radius:9px;cursor:pointer;font-family:inherit;text-align:left;}
-  .sb-groupe-titre:hover{background:rgba(255,255,255,.06);color:#fff;}
-  .sb-groupe-titre > span:first-child{flex:1;}
-  .sb-groupe-titre .sb-chev{width:14px;height:14px;transition:transform .18s var(--ease);flex:none;}
-  .sb-groupe.ouvert > .sb-groupe-titre{color:#fff;} .sb-groupe.ouvert > .sb-groupe-titre .sb-chev{transform:rotate(180deg);}
-  .sb-groupe-titre .sb-g-badge{position:static;margin:0;}
-  .sb-groupe:not(.ouvert) > .sb-groupe-items{display:none;}
-  .sb-groupe-items{padding-left:4px;}
-  .sidebar.replie .sb-groupe > .sb-groupe-items{display:block!important;padding-left:0;}
-  .sidebar.replie .sb-groupe-titre .sb-chev,.sidebar.replie .sb-groupe-titre .sb-g-badge{display:none;}
+  .sb-groupe-titre{font-size:10px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.38);padding:8px 10px 6px;}
+  .sous-onglets{display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin:0 0 16px;padding:6px;background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-sm);}
+  .sous-onglets .so-titre{font-size:10.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-soft);padding:0 12px 0 8px;border-right:1px solid var(--border);margin-right:4px;}
+  .so-onglet{display:inline-flex;align-items:center;gap:6px;border:0;background:none;font-family:inherit;font-size:13px;font-weight:500;color:var(--ink-soft);padding:8px 14px;border-radius:9px;cursor:pointer;transition:background .15s,color .15s;}
+  .so-onglet:hover{background:var(--surface-2);color:var(--ink);}
+  .so-onglet.actif{background:var(--teal);color:#fff;font-weight:600;}
+  .so-onglet .so-badge{position:static;margin:0;}
   .sidebar.replie .sb-groupe-titre{height:1px;padding:0;margin:8px 10px;background:rgba(255,255,255,.08);overflow:hidden;color:transparent;font-size:0;}
   .sidebar .sidebar-nav-item{flex-direction:row;justify-content:flex-start;gap:10px;padding:9px 10px;font-size:12.25px;letter-spacing:-.005em;text-align:left;border-radius:9px;margin:1px 0;}
   .sidebar .sidebar-nav-item span:last-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
@@ -3544,7 +3541,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-14-096';
+const APP_VERSION = '2026-10-14-097';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5016,7 +5013,14 @@ function renderStockageTab(){
 // =====================================================================================
 const SIDEBAR_CLE = 'origen_sidebar_repliee';
 function ocSidebarReplie(){ try{ return localStorage.getItem(SIDEBAR_CLE)==='1'; }catch(e){ return false; } }
-function ocBasculerGroupe(t){ state.sbGroupeOuvert = (state.sbGroupeOuvert===t) ? null : t; render(); }
+// Barre de sous-onglets du groupe actif (en haut de la page).
+function ocSousOngletsHtml(groupes, estActif, onclick, badges){
+  const g = groupes.find(x=>x.items.some(it=>estActif(it[0])));
+  if (!g || g.items.length<2) return '';
+  return '<div class="sous-onglets" role="tablist" aria-label="'+esc(g.titre)+'"><span class="so-titre">'+esc(g.titre)+'</span>'
+    + g.items.map(it=>{ const nb = (badges||{})[it[0]]||0; return '<button type="button" role="tab" class="so-onglet'+(estActif(it[0])?' actif':'')+'" aria-selected="'+(estActif(it[0])?'true':'false')+'" onclick="'+onclick+'(\''+escJs(it[0])+'\')">'+esc(it[2])+(nb>0?'<span class="nav-badge so-badge">'+nb+'</span>':'')+'</button>'; }).join('')
+    + '</div>';
+}
 function ocBasculerSidebar(){ try{ localStorage.setItem(SIDEBAR_CLE, ocSidebarReplie()?'0':'1'); }catch(e){} render(); }
 function ocFermerSurcouches(){ state.notifOuvert = false; state.menuUtilisateurOuvert = false; }
 function ocBasculerNotifs(){ const v = !state.notifOuvert; ocFermerSurcouches(); state.notifOuvert = v; render(); }
@@ -5156,20 +5160,16 @@ function ocSidebarHtml(dashActive, badges, opts){
   let html = '<nav class="sidebar'+(replie?' replie':'')+'">'
     + '<div class="sb-marque"><div class="logo-badge"><img src="data:image/png;base64,'+ECORIGINE_LOGO_B64+'" alt=""></div><div class="sb-marque-txt"><div class="brand-name">ECORIGINE</div><div class="sb-sous">'+esc(sous)+'</div></div></div>'
     + '<div class="sidebar-nav">';
-  // Groupes repliables (accordeon) : un seul groupe ouvert a la fois, celui de l'onglet actif s'ouvre tout seul.
+  // Un seul onglet par grand groupe : il ouvre le groupe sur son dernier sous-onglet consulte ; les sous-onglets sont en haut de la page.
   const estActif = (cle)=> opts.actif!=null ? (opts.actif===cle) : (!dashActive && state.tab===cle);
-  const gActif = groupes.find(g=>g.items.some(it=>estActif(it[0])));
-  const cleActif = gActif ? gActif.items.find(it=>estActif(it[0]))[0] : null;
-  if (cleActif !== state._sbDernierActif){ state._sbDernierActif = cleActif; if (gActif) state.sbGroupeOuvert = gActif.titre; }
+  state.sbDernierSous = state.sbDernierSous || {};
   groupes.forEach(g=>{
-    const ouvert = state.sbGroupeOuvert===g.titre, nbG = g.items.reduce((t,it)=>t+(badges[it[0]]||0),0);
-    html += '<div class="sb-groupe'+(ouvert?' ouvert':'')+'"><button type="button" class="sb-groupe-titre" aria-expanded="'+(ouvert?'true':'false')+'" onclick="ocBasculerGroupe(\''+escJs(g.titre)+'\')"><span>'+esc(g.titre)+'</span>'+(!ouvert&&nbG>0?'<span class="nav-badge sb-g-badge">'+nbG+'</span>':'')+'<svg class="sb-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button><div class="sb-groupe-items">'
-      + g.items.map(([cle, ic, lib])=>{
-          const actif = opts.actif!=null ? (opts.actif===cle) : (!dashActive && state.tab===cle);
-          const nb = badges[cle]||0;
-          return '<button class="sidebar-nav-item'+(actif?' active':'')+'" onclick="'+onclick+'(\''+cle+'\')" title="'+esc(lib)+'">'+(icones[ic]||'')+(nb>0?'<span class="nav-badge">'+nb+'</span>':'')+'<span>'+esc(lib)+'</span></button>';
-        }).join('')
-      + '</div></div>';
+    const it = g.items.find(x=>estActif(x[0]));
+    if (it) state.sbDernierSous[g.titre] = it[0];
+    const cible = state.sbDernierSous[g.titre] || g.items[0][0];
+    const actif = !!it, nb = g.items.reduce((t,x)=>t+(badges[x[0]]||0),0);
+    const ic = g.icone && icones[g.icone] ? icones[g.icone] : (icones[g.items[0][1]]||'');
+    html += '<button class="sidebar-nav-item'+(actif?' active':'')+'" onclick="'+onclick+'(\''+escJs(cible)+'\')" title="'+esc(g.titre+' : '+g.items.map(x=>x[2]).join(', '))+'">'+ic+(nb>0?'<span class="nav-badge">'+nb+'</span>':'')+'<span>'+esc(g.titre)+'</span></button>';
   });
   html += '</div>'
     + '<button type="button" class="sb-replier" onclick="ocBasculerSidebar()" title="'+(replie?'Déplier la barre latérale':'Replier la barre latérale')+'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="'+(replie?'M9 6l6 6-6 6':'M15 6l-6 6 6 6')+'"/></svg><span>'+(replie?'':'Replier')+'</span></button>'
@@ -9722,6 +9722,7 @@ function renderOricert(){
     + '<span class="hero-chip or">'+I.fait+' / '+I.total+' exigences</span>'
     + (certValide && ocRef()==='RA' ? '<span class="hero-chip">Certificat valide jusqu\'au '+esc(new Date(certValide.date_expiration+'T00:00:00').toLocaleDateString('fr-FR'))+'</span>' : '')
     + '</div></div>';
+  html += ocSousOngletsHtml(ocGroupesOricert(), cle=>tab===cle, 'setOricertTab', badges);
   html += '<div class="oc-wrap oc2-contenu">' + contenu + '</div>';
   html += '<footer class="pied-app"><span><b>ORICERT</b> · ECORIGINE SA</span><span><i class="pt ok"></i>Connecté · données synchronisées</span><span class="mono">v'+esc(APP_VERSION)+'</span></footer>';
   html += '</div></div>'; // fin .wrap / .main-area
@@ -18556,6 +18557,7 @@ function _renderBrut(){
     + (campActiveHdr ? '<span class="hero-chip or">'+esc(campActiveHdr.nom)+'</span>' : '<span class="hero-chip">Toutes campagnes</span>')
     + '</div></div>';
 
+  if (!state.coopDashboardId) html += ocSousOngletsHtml(SIDEBAR_GROUPES, cle=>(!dashActive && state.tab===cle), 'setTab', { demandes: nbDemandesRestantes, conformite: nbCoopsIncompletes });
   if (state.coopDashboardId){
     html += renderCoopDashboard();
   } else {
