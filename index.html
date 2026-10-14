@@ -3496,7 +3496,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-13-071';
+const APP_VERSION = '2026-10-14-072';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4980,6 +4980,8 @@ function ocNotifications(){
   const connaissements = (state.achats||[]).filter(a=>!a.producteur_id);
   const nDem = (state.demandesCoop||[]).filter(d=>d.statut==='acceptee').length;
   if (nDem) items.push({ ic:'📨', titre:'Demandes acceptées à traiter', detail:nDem+' demande(s) de coopératives validées à prendre en charge', nb:nDem, niveau:'info', action:"ocAllerOnglet('demandes')" });
+  const nATracer = saigicATracerListe().length;
+  if (nATracer) items.push({ ic:'📦', titre:'Volumes à tracer', detail:nATracer+' connaissement(s) vu(s) sur le SAIGIC, à tracer par toi', nb:nATracer, niveau:'warn', action:"ocAllerOnglet('tracage')" });
   const nFiches = (typeof fichesEnAttenteAchat==='function') ? fichesEnAttenteAchat().length : 0;
   if (nFiches) items.push({ ic:'📄', titre:'Fiches sans achat enregistré', detail:nFiches+' fiche(s) de traçabilité envoyée(s) sans achat correspondant', nb:nFiches, niveau:'warn', action:"ocAllerAchats('tous')" });
   const nPesee = connaissements.filter(a=>etatAchat(a).cle==='attente').length;
@@ -5171,7 +5173,7 @@ async function supprimerTracage(){
   const tr = ocTracageCourant();
   if (!tr) return;
   const producteurs = ocTracageAchatsProducteurs(tr);
-  const conn = tr.connaissement;
+  const conn = tr.mode==='direct' ? null : tr.connaissement;
   askConfirm(
     'Supprimer ce traçage de volume ?\n\n'
     + 'Cette action retire les '+producteurs.length+' achat(s) producteur(s) enregistrés ('+fmtKg(tr.volumeKg)+')'
@@ -7622,8 +7624,163 @@ function lotsModalsHtml(){
   return '';
 }
 
+// ---------- Traçage « pour la coopérative elle-même » (volume lu sur le SAIGIC, aucun document généré) ----------
+// Connaissements vus par le robot dont ECORIGINE doit tracer elle-même le volume (coopérative suivie en direct ou
+// encore inconnue). Le volume et les sacs viennent du connaissement lu sur le SAIGIC.
+function saigicCoopDeCode(v){
+  let c = v.cooperative_id ? coopById(v.cooperative_id) : null;
+  if (!c){
+    const code = String(v.code_connaissement||'').toUpperCase(); let len = 0;
+    (state.cooperatives||[]).forEach(x=>{ const ccc = String(x.ccc_num||'').trim().toUpperCase(); if (ccc && code.startsWith(ccc+'-') && ccc.length>len){ c = x; len = ccc.length; } });
+  }
+  return c || null;
+}
+function saigicATracerListe(){
+  return (state.saigicATracer||[]).filter(v=>{ const c = saigicCoopDeCode(v); return !(c && c.diligence_externe); });
+}
+function saigicDateIso(txt){
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})/.exec(String(txt||'')); return m ? m[3]+'-'+m[2]+'-'+m[1] : '';
+}
+function saigicATracerHtml(){
+  const liste = saigicATracerListe(); if (!liste.length) return '';
+  return '<div class="achats-note" style="margin:0 0 14px;background:#FFF6E0;border:1px solid #E0B000;color:#5c4300">'
+    + '<div style="font-weight:700;margin-bottom:6px">📦 '+liste.length+' volume'+(liste.length>1?'s':'')+' à tracer — connaissement'+(liste.length>1?'s':'')+' vu'+(liste.length>1?'s':'')+' sur le SAIGIC</div>'
+    + '<table class="tbl-fiches" style="background:#fff"><thead><tr><th>Connaissement</th><th>Coopérative</th><th class="num">Volume lu</th><th class="num">Sacs</th><th>Date</th><th></th></tr></thead><tbody>'
+    + liste.map(v=>{ const c = saigicCoopDeCode(v);
+        return '<tr><td><b>'+esc(v.code_connaissement)+'</b></td><td>'+(c ? esc(c.nom) : '<span class="badge warn">Inconnue</span> '+esc(v.fournisseur_saigic||''))+'</td>'
+          + '<td class="num">'+(Number(v.poids_net)>0 ? fmtKg(v.poids_net) : '—')+'</td><td class="num">'+(Number(v.nb_sacs)>0 ? fmtNum(v.nb_sacs) : '—')+'</td><td>'+esc(String(v.date_connaissement||'').slice(0,10))+'</td>'
+          + '<td style="white-space:nowrap"><button class="btn btn-primary btn-compact" onclick="saigicTracerVolume(\''+escJs(v.id)+'\')">Tracer ce volume</button> '
+          + '<button class="btn-ghost btn-compact" title="Retire cette alerte sans rien tracer" onclick="saigicIgnorerATracer(\''+escJs(v.id)+'\')">Ignorer</button></td></tr>'; }).join('')
+    + '</tbody></table></div>';
+}
+async function saigicIgnorerATracer(vuId){
+  const { error } = await supabaseClient.from('saigic_connaissements_vus').update({ trace_le: new Date().toISOString() }).eq('id', vuId);
+  if (error){ showToast('Échec : '+error.message); return; }
+  state.saigicATracer = (state.saigicATracer||[]).filter(x=>x.id!==vuId); render();
+}
+async function saigicTracerVolume(vuId){
+  const v = (state.saigicATracer||[]).find(x=>x.id===vuId); if (!v) return;
+  let coop = saigicCoopDeCode(v);
+  try{
+    if (!coop){
+      // Coopérative inconnue : fiche créée avec ce que donne le SAIGIC, à compléter ensuite.
+      const ccc = String(v.code_connaissement||'').split('-')[0].toUpperCase();
+      const nom = String(v.fournisseur_saigic||ccc).trim();
+      coop = { id:'coop_saigic_'+ccc, nom, nom_complet:nom, ccc_num:ccc, type:'cooperative', statut:'Non certifiée', certifications:'', fiche_a_completer:true, trace_par_ecorigine:true, verifiee:false };
+      const { error } = await supabaseClient.from('cooperatives').upsert(coop, { onConflict:'id' });
+      if (error) throw error;
+      state.cooperatives.push(coop);
+    } else if (!coop.trace_par_ecorigine){
+      const { error } = await supabaseClient.from('cooperatives').update({ trace_par_ecorigine:true }).eq('id', coop.id);
+      if (error) throw error;
+      coop.trace_par_ecorigine = true;
+    }
+    if (v.cooperative_id !== coop.id){
+      await supabaseClient.from('saigic_connaissements_vus').update({ cooperative_id: coop.id }).eq('id', v.id); v.cooperative_id = coop.id;
+    }
+  }catch(e){ showToast('Coopérative non préparée : '+(e.message||e)); return; }
+  const iso = saigicDateIso(v.date_connaissement);
+  const camp = (state.campagnes||[]).find(c=>c.date_debut && c.date_fin && String(c.date_debut)<=iso && iso<=String(c.date_fin));
+  const fin = iso || new Date().toISOString().slice(0,10);
+  const d0 = new Date(fin+'T00:00:00Z'); d0.setUTCDate(d0.getUTCDate()-10);
+  openModal('tracerVolumeDirecte', { mode:'direct', coopId:coop.id, campagneId: camp ? camp.id : ((state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : ''),
+    volume: Math.round(Number(v.poids_net)||0) || '', sacs: Math.round(Number(v.nb_sacs)||0) || '', dateDebut: d0.toISOString().slice(0,10), dateFin: fin, vuId: v.id, code: v.code_connaissement });
+}
+function ocTvChoisirMode(mode){
+  const pl = state.modal && state.modal.payload; if (!pl) return;
+  const val = id=>{ const el = document.getElementById(id); return el ? el.value : ''; };
+  Object.assign(pl, { mode, coopId:val('tv_coop')||pl.coopId, campagneId:val('tv_campagne')||pl.campagneId, volume:val('tv_volume'), sacs:val('tv_sacs'), nbprod:val('tv_nbprod'), dateDebut:val('tv_date_debut'), dateFin:val('tv_date_fin') });
+  render();
+}
+// Rattache les achats producteurs du traçage au connaissement réel de la coopérative (créé ici s'il n'existe pas encore :
+// le robot le complétera avec la pesée validée à l'usine).
+async function ocTracageLierConnaissementSaigic(tr, vu){
+  const numero = vu.code_connaissement, coop = coopById(tr.coopId), iso = saigicDateIso(vu.date_connaissement) || new Date().toISOString().slice(0,10);
+  let achat = state.achats.find(x=>x.cooperative_id===tr.coopId && x.connaissement===numero && !x.producteur_id);
+  if (!achat){
+    const cert = String(coop && coop.certifications || '').toUpperCase();
+    const mois = Number(iso.slice(5,7));
+    achat = { id:'a_saigic_'+numero, cooperative_id:tr.coopId, producteur_id:null, date:iso, quantite_kg:Math.round(Number(vu.poids_net)||0), poids_brut:0, nombre_sacs:Math.round(Number(vu.nb_sacs)||0),
+      connaissement:numero, type_cacao: cert.includes('RAINFOREST')||cert==='RA' ? 'RA' : (cert.includes('FAIRTRADE')||cert==='FT' ? 'FT' : ''), campagne_id:tr.campagneId||null,
+      periode: (mois>=9||mois<=2) ? 'principale' : 'intermediaire', fournisseur_saigic: vu.fournisseur_saigic||null, code_fourn:String(numero).split('-')[0], declare_par_coop:false, genere_auto:false };
+    const { error } = await supabaseClient.from('achats').upsert(achat, { onConflict:'id' });
+    if (error){ showToast("Volume tracé, mais connaissement non créé : "+error.message); return; }
+    state.achats.push(achat);
+  }
+  const lies = ocTracageAchatsProducteurs(tr);
+  if (lies.length){
+    const { error } = await supabaseClient.from('achats').update({ connaissement:numero }).in('id', lies.map(a=>a.id));
+    if (!error) lies.forEach(a=>{ a.connaissement = numero; });
+  }
+  tr.connaissement = { numero, achatId:achat.id, poidsNet:Number(vu.poids_net)||null, nombreSacs:Number(vu.nb_sacs)||null, date:iso, source:'saigic' };
+  tr.vuId = vu.id; ocTracageSauver(tr);
+  await supabaseClient.from('saigic_connaissements_vus').update({ trace_le:new Date().toISOString() }).eq('id', vu.id);
+  state.saigicATracer = (state.saigicATracer||[]).filter(x=>x.id!==vu.id);
+}
+async function ocTracageRattacher(){
+  const tr = ocTracageCourant(); if (!tr) return;
+  const id = (document.getElementById('trc_conn_choix')||{}).value; if (!id){ showToast('Choisis le connaissement reçu.'); return; }
+  const a = state.achats.find(x=>x.id===id); if (!a) return;
+  const lies = ocTracageAchatsProducteurs(tr);
+  if (lies.length){
+    const { error } = await supabaseClient.from('achats').update({ connaissement:a.connaissement }).in('id', lies.map(x=>x.id));
+    if (error){ showToast('Échec du rattachement : '+error.message); return; }
+    lies.forEach(x=>{ x.connaissement = a.connaissement; });
+  }
+  tr.connaissement = { numero:a.connaissement, achatId:a.id, poidsNet:Number(a.quantite_kg)||null, nombreSacs:Number(a.nombre_sacs)||null, date:a.date, source:'coop' };
+  ocTracageSauver(tr); showToast('Connaissement '+a.connaissement+' rattaché.', 'success'); render();
+}
+function renderTracageDirect(tr){
+  const coop = coopById(tr.coopId), camp = (state.campagnes||[]).find(c=>c.id===tr.campagneId), conn = tr.connaissement;
+  const producteurs = ocTracageAchatsProducteurs(tr);
+  const achatConn = conn ? state.achats.find(x=>x.cooperative_id===tr.coopId && x.connaissement===conn.numero && !x.producteur_id) : null;
+  const pese = !!(achatConn && Number(achatConn.poids_net_produit)>0);
+  const etape = !conn ? 2 : (pese ? 4 : 3);
+  const cls = n => n<etape ? 'fait' : (n===etape ? 'encours' : 'attente');
+  const num = n => n<etape ? '✓' : String(n);
+  const pill = n => n<etape ? '<span class="badge ok">Fait</span>' : (n===etape ? '<span class="badge info">En cours</span>' : '<span class="badge neutral">En attente</span>');
+  const libDate = iso => iso ? (dateFr(iso)||iso) : '—';
+  const volConn = conn && conn.poidsNet ? Number(conn.poidsNet) : 0, ecart = volConn>0 ? Math.round(Number(tr.volumeKg)-volConn) : null;
+  let html = '<div class="panel">'
+    + '<div class="panel-head trc-entete"><div><h2>Traçage de volume — pour la coopérative elle-même</h2>'
+    + '<p>Le volume est réparti entre les producteurs de la coopérative. La coopérative nous transmet elle-même son connaissement et son ticket de pesée : ORIGEN ne génère aucun de ces deux documents (la pesée validée à l\'usine est lue automatiquement sur le SAIGIC).</p></div>'
+    + '<div class="trc-actions"><button type="button" class="btn" onclick="ocTracageNouveau()">Nouveau traçage</button>'
+    + '<button type="button" class="btn-danger-text" onclick="supprimerTracage()" title="Retire les achats producteurs de ce traçage (le connaissement de la coopérative n\'est pas touché)">Supprimer ce traçage</button></div></div>'
+    + saigicATracerHtml();
+  html += '<div class="trc-resume">'
+    + '<div><div class="k">Coopérative</div><div class="v txt" title="'+esc(coop?coop.nom:'')+'">'+esc(coop?coop.nom:tr.coopId)+'</div><div class="s">'+esc(camp?camp.nom:'Campagne —')+'</div></div>'
+    + '<div><div class="k">Volume tracé</div><div class="v">'+fmtKg(tr.volumeKg)+'</div><div class="s">'+esc(String(tr.nbSacs))+' sacs · '+producteurs.length+' producteur(s)</div></div>'
+    + '<div><div class="k">Période des achats</div><div class="v txt">'+esc(libDate(tr.dateDebut))+' → '+esc(libDate(tr.dateFin))+'</div><div class="s">dates réparties aléatoirement</div></div>'
+    + '<div><div class="k">Connaissement</div><div class="v'+(conn?'':' txt')+'">'+(conn ? esc(conn.numero) : '<span class="vide">À rattacher</span>')+'</div><div class="s">'+(conn ? (volConn>0 ? fmtKg(volConn)+' sur le connaissement' : 'reçu de la coopérative') : 'étape 2')+'</div></div>'
+    + '<div><div class="k">Pesée à l\'usine</div><div class="v">'+(pese ? fmtKg(achatConn.poids_net_produit) : '<span class="vide">—</span>')+'</div><div class="s">'+(pese ? 'poids net payé' : 'en attente')+'</div></div></div>';
+  html += '<div class="trc-progress">'
+    + '<div class="pt '+cls(1)+'"><b>✓</b>Tracer le volume</div><div class="pl fait"></div>'
+    + '<div class="pt '+cls(2)+'"><b>'+num(2)+'</b>Connaissement reçu</div><div class="pl'+(etape>2?' fait':'')+'"></div>'
+    + '<div class="pt '+cls(3)+'"><b>'+num(3)+'</b>Pesée à l\'usine</div></div>';
+  html += '<div class="trc-etapes">';
+  html += '<div class="trc-etape fait"><div class="tete"><span class="num">✓</span><h3>Tracer le volume</h3></div>'
+    + '<p class="desc">Répartition du volume entre les producteurs de la coopérative (plafond 70 % respecté), un achat par producteur, fiche de traçabilité Excel.</p>'
+    + '<div class="faits"><div class="lig"><span>Producteurs</span><b>'+producteurs.length+'</b></div><div class="lig"><span>Volume</span><b>'+fmtKg(tr.volumeKg)+'</b></div><div class="lig"><span>Sacs</span><b>'+esc(String(tr.nbSacs))+'</b></div>'
+    + '<div class="lig"><span>Tracé le</span><b>'+esc(libDate((tr.creeLe||'').slice(0,10)))+'</b></div></div><div class="pied"><span class="badge ok">Fait</span></div></div>';
+  const candidats = conn ? [] : state.achats.filter(x=>x.cooperative_id===tr.coopId && !x.producteur_id && x.connaissement && !x.refoulee && !state.achats.some(p=>p.producteur_id && p.cooperative_id===tr.coopId && p.connaissement===x.connaissement));
+  html += '<div class="trc-etape '+cls(2)+'"><div class="tete"><span class="num">'+num(2)+'</span><h3>Connaissement de la coopérative</h3></div>'
+    + '<p class="desc">Document transmis par la coopérative elle-même (ou lu sur le SAIGIC) : ORIGEN ne le génère pas. Les producteurs tracés sont rattachés à son numéro.</p>'
+    + (conn ? '<div class="faits"><div class="lig"><span>N°</span><b>'+esc(conn.numero)+'</b></div>'
+        + (volConn>0 ? '<div class="lig"><span>Volume du connaissement</span><b>'+fmtKg(volConn)+'</b></div><div class="lig"><span>Écart avec le volume tracé</span><b>'+(ecart===0 ? 'aucun' : (ecart>0?'+':'')+fmtNum(ecart)+' kg')+'</b></div>' : '')
+        + (conn.nombreSacs ? '<div class="lig"><span>Sacs</span><b>'+fmtNum(conn.nombreSacs)+'</b></div>' : '') + '<div class="lig"><span>Date</span><b>'+esc(libDate(conn.date))+'</b></div></div>'
+      : (candidats.length ? '<div class="faits"><label class="field" style="margin:0">Connaissement reçu<select id="trc_conn_choix"><option value="">— choisir —</option>'+candidats.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.connaissement)+' · '+fmtKg(x.quantite_kg)+'</option>').join('')+'</select></label></div>'
+          : '<div class="hint">Aucun connaissement de cette coopérative n\'est encore enregistré : il apparaît dès que le robot le lit sur le SAIGIC.</div>'))
+    + '<div class="pied">'+pill(2)+(!conn && candidats.length ? ' <button class="btn btn-primary btn-compact" onclick="ocTracageRattacher()">Rattacher</button>' : '')+'</div></div>';
+  html += '<div class="trc-etape '+cls(3)+'"><div class="tete"><span class="num">'+num(3)+'</span><h3>Pesée à l\'usine</h3></div>'
+    + '<p class="desc">Le ticket de pesée vient de la coopérative ; le poids net payé est lu automatiquement sur le SAIGIC dès que la pesée est validée à l\'usine. Il ouvre ensuite la déclaration.</p>'
+    + (pese ? '<div class="faits"><div class="lig"><span>Poids net payé</span><b>'+fmtKg(achatConn.poids_net_produit)+'</b></div>'
+        + (Number(achatConn.nombre_sacs_accepte)>0 ? '<div class="lig"><span>Sacs acceptés</span><b>'+fmtNum(achatConn.nombre_sacs_accepte)+'</b></div>' : '') + '</div>' : '')
+    + '<div class="pied">'+pill(3)+'</div></div>';
+  return html + '</div></div>';
+}
 function renderTracageTab(){
   const tr = ocTracageCourant();
+  if (tr && tr.mode==='direct') return renderTracageDirect(tr);
   const coop = tr ? coopById(tr.coopId) : null;
   const camp = tr ? (state.campagnes||[]).find(c=>c.id===tr.campagneId) : null;
   const conn = tr ? tr.connaissement : null;
@@ -7642,7 +7799,8 @@ function renderTracageTab(){
     + '<div class="trc-actions">'
     + (tr ? '<button type="button" class="btn" onclick="ocTracageNouveau()" title="Oublie la chaîne en cours (rien n\'est supprimé en base) pour en commencer une nouvelle">Nouveau traçage</button>'
           + '<button type="button" class="btn-danger-text" onclick="supprimerTracage()" title="Retire les achats producteurs du traçage et le connaissement lié, pour tout reproduire">Supprimer ce traçage</button>' : '')
-    + '</div></div>';
+    + '</div></div>'
+    + saigicATracerHtml();
 
   if (!tr){
     html += '<div class="trc-progress">'
@@ -7651,7 +7809,7 @@ function renderTracageTab(){
       + '<div class="pt attente"><b>3</b>Ticket de pesée</div></div>';
     html += '<div class="trc-vide"><div class="cta"><div class="ico">📦</div><div style="flex:1;min-width:0;">'
       + '<h3>Aucun traçage en cours</h3><p>Commence par tracer un volume sur la coopérative finale certifiée : la répartition entre ses producteurs réels sera enregistrée et la fiche de traçabilité Excel téléchargée. Les deux étapes suivantes se débloqueront ensuite, pré-remplies.</p>'
-      + '</div>' + ocBoutonTracerVolume('') + '</div></div></div>';
+      + '</div>' + ocBoutonTracerVolume('') + ' <button class="btn" onclick="ocOuvrirTracerVolume(\'\', \'direct\')" title="La coopérative nous transmet elle-même son connaissement et son ticket de pesée : aucun document généré">Pour la coopérative elle-même</button></div></div></div>';
     return html;
   }
 
@@ -8602,6 +8760,8 @@ async function loadAll(silencieux){
     state.coopDatabaseFiles = coopDatabaseFilesResult.error ? [] : (coopDatabaseFilesResult.data || []);
     state.settings = settings;
     state.docVersions = (versionsResult && !versionsResult.error) ? (versionsResult.data || []) : [];
+    { const { data: av, error: avErr } = await supabaseClient.from('saigic_connaissements_vus').select('*').eq('a_tracer', true).is('trace_le', null).order('premiere_vue_le', { ascending:false });
+      state.saigicATracer = avErr ? (state.saigicATracer||[]) : (av || []); }
     { const { data: pp, error: ppErr } = await supabaseClient.from('parametres_paiement').select('*'); state.parametresPaiement = ppErr ? (state.parametresPaiement||[]) : (pp || []); }
 
     { const ids = state.demandesCoop.map(d=>d.id);
@@ -8937,9 +9097,9 @@ function ocTvMajInfo(){
 function ocBoutonGenererConnaissement(){
   return '<button class="btn btn-primary" onclick="ouvrirGenerationConnaissement()">📄 Générer un connaissement</button>';
 }
-function ocOuvrirTracerVolume(coopId){
+function ocOuvrirTracerVolume(coopId, mode){
   const camp = state.campagneFilter;
-  openModal('tracerVolumeDirecte', { coopId: (coopId && coopId!=='all') ? coopId : '', campagneId: (camp && camp!=='all') ? camp : '' });
+  openModal('tracerVolumeDirecte', { mode: mode||'transfert', coopId: (coopId && coopId!=='all') ? coopId : '', campagneId: (camp && camp!=='all') ? camp : '' });
 }
 
 let _ocTracerVolumeEnCours = false;
@@ -8994,8 +9154,15 @@ async function submitTracerVolumeDirecte(){
 
     // 3) ce tracage devient la chaine en cours de l'onglet Tracage de volume : l'etape suivante
     //    (connaissement de A transpose vers B) sera pre-remplie avec cette cooperative et ce volume.
-    ocTracageSauver({ coopId, campagneId, ficheGenerationId: genId_, volumeKg, nbSacs, dateDebut, dateFin,
-      achatIds: lignes.map(l=>l.id), creeLe: new Date().toISOString(), connaissement: null, ticketFait: false });
+    const trNouveau = { coopId, campagneId, ficheGenerationId: genId_, volumeKg, nbSacs, dateDebut, dateFin,
+      achatIds: lignes.map(l=>l.id), creeLe: new Date().toISOString(), connaissement: null, ticketFait: false };
+    if (pl.mode==='direct') trNouveau.mode = 'direct';
+    ocTracageSauver(trNouveau);
+    // Traçage lancé depuis un connaissement vu sur le SAIGIC : on le rattache tout de suite (aucun document généré).
+    if (pl.mode==='direct' && pl.vuId){
+      const vu = (state.saigicATracer||[]).find(x=>x.id===pl.vuId);
+      if (vu) await ocTracageLierConnaissementSaigic(trNouveau, vu);
+    }
     if (state.tab!=='tracage') state.tab = 'tracage';
 
     // 4) telechargement de la fiche
@@ -14122,6 +14289,7 @@ async function submitCooperative(){
     nom_complet: fv('nom_complet').trim(),
     code_court: fv('code_court').trim().toUpperCase() || null,
     diligence_externe, client,
+    trace_par_ecorigine: !!document.querySelector('#modal-fields [name="trace_par_ecorigine"]:checked'),
     statut: fv('statut'),
     certifications: fv('certifications').trim(),
     representant_legal_nom: fv('representant_legal_nom').trim(),
@@ -18159,6 +18327,9 @@ function _renderBrut(){
       + '<label class="field" style="display:flex;align-items:center;gap:8px;flex-direction:row;background:var(--info-bg,#eef4fb);border-radius:8px;padding:10px 12px;margin-bottom:14px;">'
       + '<input type="checkbox" name="diligence_externe" style="width:18px;height:18px;flex:none;margin:0;" '+(externe?'checked':'')+' onchange="ocCoopToggleDiligenceExterne(this.checked)"><span>Diligence EUDR assurée par le client final (pas par ECORIGINE)</span></label>'
       + '<div class="hint" style="margin:-8px 0 14px;">À cocher quand c\'est le client final qui gère lui-même toute la diligence raisonnée (producteurs, polygones, documents) et transmet seulement les connaissements à ECORIGINE pour l\'export. Seuls le nom, la ville, le client, son contact, le n° CCC et le statut restent alors utiles ; le reste du formulaire disparaît et cette coopérative n\'apparaît plus dans les rappels de documents manquants.</div>'
+      + '<label class="field" style="display:flex;align-items:center;gap:8px;flex-direction:row;background:#FFF6E0;border-radius:8px;padding:10px 12px;margin-bottom:6px;">'
+      + '<input type="checkbox" name="trace_par_ecorigine" style="width:18px;height:18px;flex:none;margin:0;" '+(c.trace_par_ecorigine?'checked':'')+'><span>Traçabilité gérée par ECORIGINE (je trace moi-même les volumes)</span></label>'
+      + '<div class="hint" style="margin:0 0 14px;">Quand le robot voit un connaissement de cette coopérative sur le SAIGIC, aucune demande de fiche ne lui est envoyée : tu reçois une alerte « volume à tracer » avec le volume déjà lu. La coopérative te transmet elle-même son connaissement et son ticket de pesée.</div>'
       + '<label class="field" id="coopClientBloc" style="display:'+(externe?'':'none')+'">Nom du client<select name="client_choix" onchange="ocCoopClientChoixChange(this.value)">'+ocAcClientOptions(clientConnu?c.client:'')+'</select></label>'
       + '<label class="field" id="coopClientNouveauBloc" style="display:'+(externe && !clientConnu && c.client?'':'none')+'">Nom du nouveau client<input type="text" name="client_nouveau" value="'+esc(!clientConnu?(c.client||''):'')+'"></label>'
       + '<fieldset><legend>Identité légale</legend>'
@@ -18674,7 +18845,13 @@ function _renderBrut(){
     const plTv = state.modal.payload || {};
     const coopsTv = state.cooperatives.slice().sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'}));
     html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
-      + '<h2>Tracer un volume — gestion directe</h2>'
+      + '<h2>Tracer un volume'+(plTv.mode==='direct' ? ' — pour la coopérative elle-même' : ' — gestion directe')+'</h2>'
+      + '<div style="display:flex;gap:8px;margin:0 0 10px;flex-wrap:wrap">'
+      +   '<button type="button" class="'+(plTv.mode==='direct'?'btn btn-primary':'btn-ghost')+' btn-compact" onclick="ocTvChoisirMode(\'direct\')">Pour la coopérative elle-même</button>'
+      +   '<button type="button" class="'+(plTv.mode==='direct'?'btn-ghost':'btn btn-primary')+' btn-compact" onclick="ocTvChoisirMode(\'transfert\')">Transfert d\'une coopérative A vers B</button></div>'
+      + '<p class="hint" style="margin:0 0 10px;">'+(plTv.mode==='direct'
+          ? 'La coopérative nous transmet elle-même son connaissement et son ticket de pesée : ORIGEN ne génère aucun de ces documents. Seules la répartition entre producteurs et la fiche de traçabilité sont produites.'
+          : 'Le volume est tracé sur la coopérative finale B ; le connaissement de A vers B et le ticket de pesée sont ensuite générés par ORIGEN.')+(plTv.code ? ' <b>Connaissement '+esc(plTv.code)+'</b> : volume et sacs lus sur le SAIGIC.' : '')+'</p>'
       + '<p class="hint" id="tv_info" style="margin:0 0 14px;">'+esc(ocTvTexteInfo(plTv.coopId, plTv.campagneId))+'</p>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 16px;">'
       + '<label class="field">Coopérative *<select id="tv_coop" onchange="ocTvMajInfo()"><option value="">Sélectionner…</option>'
@@ -18683,12 +18860,12 @@ function _renderBrut(){
       + '<label class="field">Campagne *<select id="tv_campagne" onchange="ocTvMajInfo()"><option value="">Sélectionner…</option>'
       +   state.campagnes.map(c=>'<option value="'+esc(c.id)+'"'+(plTv.campagneId===c.id?' selected':'')+'>'+esc(c.nom)+'</option>').join('')
       + '</select></label>'
-      + '<label class="field">Volume total (kg) *<input type="number" id="tv_volume" min="1" step="1"></label>'
-      + '<label class="field">Nombre de sacs *<input type="number" id="tv_sacs" min="1" step="1"></label>'
-      + '<label class="field">Nombre de producteurs *<input type="number" id="tv_nbprod" min="1" step="1"></label>'
+      + '<label class="field">Volume total (kg) *<input type="number" id="tv_volume" min="1" step="1" value="'+esc(plTv.volume||'')+'"></label>'
+      + '<label class="field">Nombre de sacs *<input type="number" id="tv_sacs" min="1" step="1" value="'+esc(plTv.sacs||'')+'"></label>'
+      + '<label class="field">Nombre de producteurs *<input type="number" id="tv_nbprod" min="1" step="1" value="'+esc(plTv.nbprod||'')+'"></label>'
       + '<div></div>'
-      + '<label class="field">Date de début *<input type="date" id="tv_date_debut"></label>'
-      + '<label class="field">Date de fin *<input type="date" id="tv_date_fin"></label>'
+      + '<label class="field">Date de début *<input type="date" id="tv_date_debut" value="'+esc(plTv.dateDebut||'')+'"></label>'
+      + '<label class="field">Date de fin *<input type="date" id="tv_date_fin" value="'+esc(plTv.dateFin||'')+'"></label>'
       + '</div>'
       + '<p class="hint" style="margin:6px 0 0;">Une date est tirée au hasard par producteur dans cet intervalle. Chaque producteur tiré reçoit un achat enregistré.</p>'
       + '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Annuler</button><button type="button" class="btn btn-primary" onclick="submitTracerVolumeDirecte()">Générer</button></div>'
