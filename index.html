@@ -3519,7 +3519,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-14-084';
+const APP_VERSION = '2026-10-14-085';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5628,7 +5628,7 @@ function renderPrefCoopDetail(coopId, campId){
     + '<div><h2>'+esc(coop.nom)+'</h2><p class="hint" style="margin:4px 0 0">Fournisseur principal : <b>'+esc(info.fournisseur_principal||'—')+'</b> · Port : <b>'+esc(info.port_livraison||'—')+'</b> · Commission : <b>'+(info.commission_kg!=null&&info.commission_kg!==''?prefFmt(info.commission_kg,2)+' F/kg':'—')+'</b></p></div>'
     + '<div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn" onclick="prefOuvrirInfos(\''+escJs(coopId)+'\')">Modifier le suivi</button><button class="btn btn-primary" onclick="prefOuvrir(\''+escJs(coopId)+'\')">+ Avance</button><button class="btn-ghost" onclick="prefFermerCoop()">Fermer</button></div></div>'
     + '<div style="padding:0 18px 18px;overflow:auto;">'
-    + '<h3 style="margin:8px 0">Avances versées</h3>'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin:8px 0;"><h3 style="margin:0">Avances versées</h3>'+(s.prefs.length>1?'<button class="btn-danger-text" onclick="prefToutSupprimer(\''+escJs(coopId)+'\',\''+escJs(campId)+'\')">Tout supprimer ('+s.prefs.length+')</button>':'')+'</div>'
     + (s.prefs.length ? '<table class="data-table"><thead><tr><th>Date</th><th>N° fiche</th><th>Type</th><th class="num">Montant</th><th>Règlement</th><th>Bénéficiaire</th><th></th></tr></thead><tbody>'
       + s.prefs.map(p=>'<tr><td>'+prefFmtDate(p.date_financement)+'</td><td>'+esc(p.numero||'')+'</td><td>'+esc(PREF_TYPES[p.type_avance]||p.type_avance||'')+'</td><td class="num">'+prefFmt(p.montant)+'</td>'
         + '<td>'+esc((p.banque||'—')+' · '+(p.mode_reglement==='virement'?'Virement':'Chèque')+(p.reference?' n°'+p.reference:''))+'</td><td>'+esc(p.beneficiaire||'—')+'</td>'
@@ -5858,6 +5858,20 @@ async function prefEnregistrer(){
   state.prefinancements = (state.prefinancements||[]).filter(p=>p.id!==ligne.id).concat([ligne]).sort((a,b)=>String(a.date_financement).localeCompare(String(b.date_financement)));
   state.prefCampagne = campId; state.prefCoopOuverte = coopId;
   closeModal(); showToast('Préfinancement enregistré.', 'success');
+}
+function prefToutSupprimer(coopId, campId){
+  const liste = prefSituation(coopId, campId).prefs || [];
+  if (!liste.length) return;
+  const total = liste.reduce((t,p)=>t+(Number(p.montant)||0),0);
+  askConfirm('Supprimer TOUTES les '+liste.length+' avances de cette coopérative pour la campagne (total '+prefFmt(total)+' FCFA) ? Cette action est définitive.', async ()=>{
+    const ids = liste.map(p=>p.id);
+    const { data, error } = await supabaseClient.from('prefinancements').delete().in('id', ids).select('id');
+    if (error){ showToast('Échec : '+error.message); return; }
+    const faits = new Set((data||[]).map(r=>r.id));
+    state.prefinancements = (state.prefinancements||[]).filter(x=>!faits.has(x.id));
+    showToast(faits.size+' préfinancement(s) supprimé(s).', faits.size===ids.length?'success':undefined);
+    render();
+  });
 }
 function prefSupprimer(id){
   const p = (state.prefinancements||[]).find(x=>x.id===id) || {};
