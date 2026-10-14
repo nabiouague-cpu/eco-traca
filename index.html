@@ -3535,7 +3535,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-14-123';
+const APP_VERSION = '2026-10-14-124';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -9252,6 +9252,7 @@ async function loadAll(silencieux){
   state.loading = false;
   render();
   if (!state.error && state.session) setTimeout(()=>{ rattraperFichesRecues().catch(()=>{}); }, 0);
+  if (!state.error && state.session) setTimeout(()=>{ try { certAuto(); } catch(e){} }, 2500);
 }
 
 async function actualiserDonnees(silencieux){
@@ -16768,18 +16769,34 @@ async function certLireFichier(blob, nom){
   }
   return [{ fichier: nom, r: certExtraireFinLicence(await certTexteDuFichier(blob, nom)) }];
 }
-async function certLireTout(){
+// Lecture AUTOMATIQUE : appelee a chaque chargement des donnees d'ORIGEN (voir loadAll). Pour chaque cooperative certifiee sans date,
+// elle lit le certificat depose (par la cooperative sur son portail, par la fiche, ou par ECORIGINE) et ecrit la date de fin de licence
+// quand elle est trouvee apres un mot-cle sans ambiguite. Les cas douteux (date devinee, certificat illisible) restent a valider dans le
+// panneau. Chaque fichier n'est lu qu'une fois : un nouveau depot relance la lecture.
+function certSignatures(){ try { return JSON.parse(localStorage.getItem('cert_lu_v1')||'{}'); } catch(e){ return {}; } }
+function certSauverSignature(coopId, sig){ try { const o = certSignatures(); o[coopId] = sig; localStorage.setItem('cert_lu_v1', JSON.stringify(o)); } catch(e){} }
+function certAuto(){
+  if (state.certAutoEnCours || !supabaseClient || !state.session || state.espaceChoisi==='oricert') return;
+  const manque = (state.cooperatives||[]).some(c=>c.statut==='Certifiée' && !c.diligence_externe && !c.date_fin_licence);
+  if (!manque) return;
+  state.certAutoEnCours = true;
+  certLireTout(true).catch(()=>{}).then(()=>{ state.certAutoEnCours = false; });
+}
+async function certLireTout(auto){
   if (state.certLecture && state.certLecture.encours) return;
   const cibles = (state.cooperatives||[]).filter(c=>c.statut==='Certifiée' && !c.diligence_externe && !c.date_fin_licence).sort((a,b)=>String(a.nom).localeCompare(String(b.nom),'fr'));
-  state.certLecture = { encours:true, lignes:[], total:cibles.length, fait:0, courant:'' };
-  render();
+  const lignes = [], appliquees = [];
+  if (!auto){ state.certLecture = { encours:true, lignes:[], total:cibles.length, fait:0, courant:'' }; render(); }
+  const memoire = certSignatures();
   for (const c of cibles){
-    state.certLecture.courant = c.nom; render();
+    if (!auto){ state.certLecture.courant = c.nom; render(); }
     const ligne = { coopId:c.id, nom:c.nom, fichier:'', iso:'', contexte:'', fiable:false, cocher:false, message:'' };
     try{
       const { data: liste, error } = await supabaseClient.storage.from('documents-coop').list(c.id+'/documents', { limit:200 });
       if (error) throw error;
       const fichiers = (liste||[]).filter(f=>/certificat/i.test(f.name) && /\.(pdf|jpe?g|png|zip)$/i.test(f.name));
+      const sig = fichiers.map(f=>f.name).sort().join('|');
+      if (auto && (!fichiers.length || memoire[c.id]===sig)) continue; // rien de nouveau a lire
       if (!fichiers.length){ ligne.message = 'Aucun certificat déposé dans le stockage.'; }
       else {
         let trouve = null;
@@ -16792,9 +16809,22 @@ async function certLireTout(){
         }
         if (trouve){ ligne.fichier = trouve.fichier; ligne.iso = trouve.r.iso; ligne.contexte = trouve.r.contexte; ligne.fiable = trouve.r.fiable; ligne.cocher = trouve.r.fiable; ligne.message=''; }
         else if (!ligne.message) ligne.message = 'Certificat illisible (image trop floue ou sans date détectée) — à saisir à la main.';
+        if (!ligne.message || trouve) certSauverSignature(c.id, sig);
+      }
+      if (auto && ligne.iso && ligne.fiable){
+        const { error: e3 } = await supabaseClient.from('cooperatives').update({ date_fin_licence: ligne.iso }).eq('id', c.id);
+        if (!e3){ c.date_fin_licence = ligne.iso; appliquees.push(c.nom+' → '+dateFr(ligne.iso)); continue; }
       }
     } catch(e){ ligne.message = 'Erreur : '+(e.message||e); }
-    state.certLecture.lignes.push(ligne); state.certLecture.fait++; render();
+    lignes.push(ligne);
+    if (!auto){ state.certLecture.lignes.push(ligne); state.certLecture.fait++; render(); }
+  }
+  if (auto){
+    if (appliquees.length) showToast('Date de fin de licence lue sur le certificat : '+appliquees.join(' · '), 'success');
+    if (lignes.length) state.certLecture = { encours:false, lignes, total:lignes.length, fait:lignes.length, courant:'' };
+    if (lignes.length) showToast(lignes.length+' certificat(s) à vérifier à la main (onglet Coopératives).');
+    if (appliquees.length || lignes.length) render();
+    return;
   }
   state.certLecture.encours = false; state.certLecture.courant = ''; render();
 }
