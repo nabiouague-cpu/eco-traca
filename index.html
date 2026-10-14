@@ -3519,7 +3519,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-14-083';
+const APP_VERSION = '2026-10-14-084';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5860,11 +5860,14 @@ async function prefEnregistrer(){
   closeModal(); showToast('Préfinancement enregistré.', 'success');
 }
 function prefSupprimer(id){
-  askConfirm('Supprimer ce préfinancement ?', async ()=>{
-    const { error } = await supabaseClient.from('prefinancements').delete().eq('id', id);
+  const p = (state.prefinancements||[]).find(x=>x.id===id) || {};
+  askConfirm('Supprimer le préfinancement '+(p.numero||'')+' de '+prefFmt(p.montant)+' FCFA ? Cette action est définitive.', async ()=>{
+    const { data, error } = await supabaseClient.from('prefinancements').delete().eq('id', id).select('id');
     if (error){ showToast('Échec : '+error.message); return; }
-    state.prefinancements = (state.prefinancements||[]).filter(p=>p.id!==id);
+    if (!data || !data.length){ showToast('Suppression refusée (droits insuffisants ou ligne déjà supprimée).'); return; }
+    state.prefinancements = (state.prefinancements||[]).filter(x=>x.id!==id);
     showToast('Préfinancement supprimé.', 'success');
+    render();
   });
 }
 
