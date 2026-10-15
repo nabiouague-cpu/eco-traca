@@ -3616,7 +3616,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-15-153';
+const APP_VERSION = '2026-10-15-154';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -16728,7 +16728,7 @@ async function chargerDefo(){
     const avant = {}; (state.defo||[]).forEach(x=>{ avant[x.id] = x.statut; });
     state.defo = data || []; state.defoIndispo = false;
     state.defo.forEach(x=>{ const a = avant[x.id]; if (!a || a===x.statut) return;
-      const lib = x.etape==='analyse' ? ['✅ Analyse terminée : ','L\'analyse de '] : x.etape==='nettoyage' ? ['✅ Nettoyage terminé : ','Le nettoyage de '] : x.etape==='base_finale' ? ['✅ Base finale prête : ','La base finale de '] : x.etape==='test_gee' ? ['✅ Test réussi : ','Le test '] : ['✅ GeoJSON prêt : ','La préparation de '];
+      const lib = x.etape==='analyse' ? ['✅ Analyse terminée : ','L\'analyse de '] : x.etape==='nettoyage' ? ['✅ Nettoyage terminé : ','Le nettoyage de '] : x.etape==='base_finale' ? ['✅ Base finale prête : ','La base finale de '] : ['✅ GeoJSON prêt : ','La préparation de '];
       if (x.statut==='terminee') showToast(lib[0]+(x.cooperative_nom||''), 'success');
       else if (x.statut==='erreur') showToast(lib[1]+(x.cooperative_nom||'')+' a échoué : voir le détail dans la liste.'); });
   } catch(e){ state.defo = state.defo || []; state.defoIndispo = true; }
@@ -16758,7 +16758,7 @@ function defoResumeHtml(x){
   const det = (r.fichiers||[]).map(f=>'<div>'+esc(f.fichier)+' : '+f.polygones+' polygone(s), '+f.lignes+' ligne(s), '+f.points+' point(s)</div>').join('');
   return '<div style="flex-basis:100%;font-size:12.5px"><div>'+l.join(' · ')+'</div>'+warn
     + '<details style="margin-top:2px"><summary class="hint" style="cursor:pointer;margin:0">Détail par fichier</summary><div class="hint" style="margin:2px 0 0">'+det+'</div></details>'
-    + '<div class="hint" style="margin:4px 0 0">Étape suivante : lance l\'analyse (étape 2, juste en dessous) : Whisp est lancé automatiquement par ORIGEN.</div></div>';
+    + '<div class="hint" style="margin:4px 0 0">Étape suivante : charge ce GeoJSON dans Whisp, puis lance l\'analyse (étape 2, juste en dessous) avec le CSV de Whisp et le registre.</div></div>';
 }
 function renderDefoVue(){
   if (!state.defoCharge && !state.defoChargeEnCours){ state.defoChargeEnCours = true; setTimeout(()=>{ chargerDefo(); }, 0); }
@@ -16789,8 +16789,8 @@ function renderDefoVue(){
   h += '</div>';
   // ----- Étape 2 : analyse, problèmes, actions -----
   h += '<div class="panel"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 18px 8px">'
-    + '<div><b>Étape 2 — Analyser et corriger</b><div class="hint" style="margin:2px 0 0">Choisis le GeoJSON préparé et dépose le registre de la coopérative : ORIGEN lance Whisp tout seul (Google Earth Engine), puis te montre les problèmes trouvés, ce qu\'il faut faire pour chacun, et un bouton pour le faire. Le travail se fait sur une copie : tes fichiers et la base ECORIGINE ne sont jamais modifiés.</div></div>'
-    + '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn-ghost" onclick="defoTesterGee()">🛰 Tester Earth Engine</button><button class="btn btn-primary" onclick="ouvrirDefoAnalyse()">🔎 Nouvelle analyse</button></div></div>' + defoTestHtml();
+    + '<div><b>Étape 2 — Analyser et corriger</b><div class="hint" style="margin:2px 0 0">Dépose le GeoJSON, le CSV de Whisp et le registre de la coopérative. ORIGEN te montre les problèmes trouvés, ce qu\'il faut faire pour chacun, et un bouton pour le faire. Le travail se fait sur une copie : tes fichiers et la base ECORIGINE ne sont jamais modifiés.</div></div>'
+    + '<button class="btn btn-primary" onclick="ouvrirDefoAnalyse()">🔎 Nouvelle analyse</button></div>';
   if (state.defoCharge && !state.defoIndispo){
     if (!analyses.length) h += '<div class="hint" style="padding:0 18px 14px">Aucune analyse pour le moment.</div>';
     else h += '<div style="padding:0 18px 14px;display:flex;flex-direction:column;gap:14px">' + analyses.map(defoAnalyseCarte).join('') + '</div>';
@@ -16808,8 +16808,7 @@ function defoModalAnalyseHtml(){
     + '<label class="field">Nom de la coopérative <span class="hint" style="margin:0">(tape le nom, ou choisis-en une déjà dans ORIGEN)</span><input type="text" name="da_coop" list="da-coops" placeholder="Ex. SCABB" autocomplete="off"><datalist id="da-coops">'+opts+'</datalist></label>'
     + '<label class="field">Polygones : GeoJSON préparé à l\'étape 1<select name="da_prep">'+po+'</select></label>'
     + '<label class="field">…ou GeoJSON déposé ici <span class="hint" style="margin:0">(.geojson, .json ou .zip)</span><input type="file" id="da-poly" accept=".geojson,.json,.zip"></label>'
-    + '<label style="display:flex;gap:8px;align-items:flex-start;margin:6px 0"><input type="checkbox" id="da-wauto" checked style="margin-top:3px"><span><b>Lancer Whisp automatiquement</b> <span class="hint" style="margin:0">(recommandé : ORIGEN interroge Google Earth Engine, compte quelques minutes de plus)</span></span></label>'
-    + '<label class="field">Secours : CSV Whisp déposé à la main <span class="hint" style="margin:0">(.csv — s\'il est fourni, Whisp automatique n\'est pas lancé)</span><input type="file" id="da-whisp" accept=".csv"></label>'
+    + '<label class="field">Rapport Whisp <span class="hint" style="margin:0">(.csv — sans lui, la déforestation n\'est pas évaluée)</span><input type="file" id="da-whisp" accept=".csv"></label>'
     + '<label class="field">Registre de la coopérative <span class="hint" style="margin:0">(GMR .xlsx)</span><input type="file" id="da-gmr" accept=".xlsx,.xlsm"></label>'
     + '<label style="display:flex;gap:8px;align-items:center;margin:6px 0"><input type="checkbox" id="da-hc"> Coopérative hors chaîne d\'approvisionnement <span class="hint" style="margin:0">(chevauchements avec la base ECORIGINE ignorés)</span></label>'
     + '<div id="defo-erreur" style="display:none;color:#c0392b;font-size:13px;margin:4px 0 8px"></div>'
@@ -17061,22 +17060,6 @@ async function defoLancerNettoyage(aid, actions){
   state.defo = [ins.data].concat(state.defo||[]); carteLancerRobot(); showToast('Nettoyage lancé.', 'success'); render();
 }
 function ouvrirDefoAnalyse(){ openModal('defoAnalyse', { nom:'' }); }
-function defoTestHtml(){
-  const t = (state.defo||[]).find(x=>x.etape==='test_gee'); if (!t) return '';
-  let c, m;
-  if (t.statut==='demandee'||t.statut==='en_cours'){ c = '#1f5fa8'; m = '⏳ Test Earth Engine en cours…'; }
-  else if (t.statut==='terminee'){ const r = t.resume||{}; c = '#2e7d32'; m = '✅ Earth Engine répond : Whisp a analysé le carré de test en '+(r.secondes!=null?r.secondes:'?')+' s. Compte : '+esc(r.compte||'')+' · projet : '+esc(r.projet||''); }
-  else { c = '#c0392b'; m = '❌ Test Earth Engine échoué : '+esc(t.erreur||'erreur inconnue'); }
-  return '<div style="padding:0 18px 10px;font-size:13px;color:'+c+'">'+m+'</div>';
-}
-async function defoTesterGee(){
-  if ((state.defo||[]).some(x=>x.etape==='test_gee'&&(x.statut==='demandee'||x.statut==='en_cours'))){ showToast('Un test est déjà en cours.'); return; }
-  try { await supabaseClient.from('analyses_defo').delete().eq('etape','test_gee'); } catch(e){}
-  const ins = await supabaseClient.from('analyses_defo').insert({ id:genId('ad'), cooperative_nom:'Earth Engine', etape:'test_gee', statut:'demandee', entrees:{},
-    demande_par:(state.session&&state.session.user&&state.session.user.email)||null }).select().single();
-  if (ins.error){ showToast('Test impossible : '+ins.error.message); return; }
-  state.defo = [ins.data].concat((state.defo||[]).filter(x=>x.etape!=='test_gee')); carteLancerRobot(); showToast('Test lancé.', 'success'); render();
-}
 async function defoAnalyseEnvoyer(){
   const nomCoop = (fv('da_coop')||'').trim(); if (!nomCoop){ defoErreurForm('Indique le nom de la coopérative.'); return; }
   const fp = (document.getElementById('da-poly')||{}).files&&document.getElementById('da-poly').files[0];
@@ -17095,7 +17078,6 @@ async function defoAnalyseEnvoyer(){
     if (fp){ entrees.polygones = await up(fp, 'polygones'); entrees.polygones.propre = true; }
     else { const f = (prep.fichiers||[]).find(x=>x.type==='geojson'); if (!f) throw new Error('Cette préparation n\'a pas de GeoJSON.'); entrees.polygones = { nom:f.nom, path:f.path, propre:false }; }
     if (fw) entrees.whisp = await up(fw, 'whisp');
-    else if ((document.getElementById('da-wauto')||{}).checked) entrees.whisp_auto = true;
     if (fg) entrees.gmr = await up(fg, 'registre');
     const ins = await supabaseClient.from('analyses_defo').insert({ id, cooperative_id:coop?coop.id:null, cooperative_nom:(coop?coop.nom:nomCoop), etape:'analyse', statut:'demandee', entrees,
       demande_par:(state.session&&state.session.user&&state.session.user.email)||null }).select().single();
