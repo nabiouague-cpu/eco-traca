@@ -3616,7 +3616,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-15-138';
+const APP_VERSION = '2026-10-15-139';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -16656,10 +16656,10 @@ function renderCartesTab(){
   else if (!liste.length) h += '<div class="hint" style="padding:0 18px 14px">Aucune carte demandée pour le moment.</div>';
   else h += '<div class="achat-list" style="padding:0 18px 14px">' + liste.map(x=>{
     const st = CARTE_STATUTS[x.statut] || [x.statut,'#7a8683'];
-    const c = coopById(x.cooperative_id);
+    const nomCarte = x.cooperative_nom || (coopById(x.cooperative_id)||{}).nom || x.cooperative_id || '—';
     const fich = (x.fichiers||[]).map(f=>'<a style="cursor:pointer;color:var(--accent);margin-right:10px" onclick="carteTelecharger(\''+escJs(f.path)+'\')">⬇ '+esc(/\.pdf$/i.test(f.nom)?'PDF':/\.png$/i.test(f.nom)?'Image PNG':/\.html$/i.test(f.nom)?'Retouche':f.nom)+'</a>').join('');
     return '<div class="achat-item" style="flex-wrap:wrap;gap:6px 12px"><span><span style="display:inline-block;background:'+st[1]+';color:#fff;border-radius:10px;padding:1px 9px;font-size:11.5px;font-weight:600">'+st[0]+'</span> '
-      + '<b style="margin-left:6px">'+esc(c?c.nom:x.cooperative_id)+'</b><span class="hint" style="margin:0 0 0 8px">'+esc(dateFr(String(x.created_at).slice(0,10)))+'</span></span>'
+      + '<b style="margin-left:6px">'+esc(nomCarte)+'</b><span class="hint" style="margin:0 0 0 8px">'+esc(dateFr(String(x.created_at).slice(0,10)))+'</span></span>'
       + '<span>'+fich+(x.statut==='erreur'&&x.erreur?'<span class="hint" style="color:#c0392b;margin:0">'+esc(x.erreur)+'</span>':'')
       + (x.statut==='demandee' ? ' <button class="btn-ghost btn-compact" onclick="carteAnnuler(\''+escJs(x.id)+'\')">Annuler</button>' : '')+'</span></div>';
   }).join('') + '</div>';
@@ -16667,20 +16667,24 @@ function renderCartesTab(){
 }
 function ouvrirCarteCoop(coopId){
   const c = coopId ? coopById(coopId) : null;
-  openModal('carteCoop', { coopId:c?c.id:'', titre:c?'CARTE DES EXPLOITATIONS DE LA COOPÉRATIVE '+String(c.nom||'').toUpperCase():'', code_ra:c?(c.identifiant_certification||''):'', date_maj:new Date().toISOString().slice(0,10) });
+  openModal('carteCoop', { coopId:c?c.id:'', nom:c?c.nom:'', titre:c?'CARTE DES EXPLOITATIONS DE LA COOPÉRATIVE '+String(c.nom||'').toUpperCase():'', code_ra:c?(c.identifiant_certification||''):'', date_maj:new Date().toISOString().slice(0,10) });
 }
-function carteChoisirCoop(id){
-  const c = coopById(id); if (!c) return;
+function carteCoopParNom(nom){
+  const n = String(nom||'').trim().toLowerCase(); if (!n) return null;
+  return state.cooperatives.find(c=>String(c.nom||'').trim().toLowerCase()===n || String(c.nom_complet||'').trim().toLowerCase()===n) || null;
+}
+function carteNomSaisi(valeur){
   const t = document.querySelector('#modal-fields [name=carte_titre]'), r = document.querySelector('#modal-fields [name=carte_code_ra]');
-  if (t) t.value = 'CARTE DES EXPLOITATIONS DE LA COOPÉRATIVE '+String(c.nom||'').toUpperCase();
-  if (r) r.value = c.identifiant_certification||'';
+  const nom = String(valeur||'').trim(), c = carteCoopParNom(nom);
+  if (t) t.value = nom ? 'CARTE DES EXPLOITATIONS DE LA COOPÉRATIVE '+nom.toUpperCase() : '';
+  if (r && c && c.identifiant_certification) r.value = c.identifiant_certification;
 }
 function carteModalsHtml(){
   const m = state.modal; if (!m || m.type!=='carteCoop') return '';
   const p = m.payload;
-  const opts = [...state.cooperatives].sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr')).map(c=>'<option value="'+esc(c.id)+'"'+(c.id===p.coopId?' selected':'')+'>'+esc(c.nom)+'</option>').join('');
+  const opts = [...state.cooperatives].sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr')).map(c=>'<option value="'+esc(c.nom)+'"></option>').join('');
   return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:520px"><h3>Nouvelle carte de localisation</h3><div id="modal-fields">'
-    + '<label class="field">Coopérative<select name="carte_coop" onchange="carteChoisirCoop(this.value)"><option value="">— Choisir —</option>'+opts+'</select></label>'
+    + '<label class="field">Nom de la coopérative <span class="hint" style="margin:0">(tape le nom, ou choisis-en une déjà dans ORIGEN)</span><input type="text" name="carte_coop" list="carte-coops" value="'+esc(p.nom||'')+'" placeholder="Ex. SCOOPA" autocomplete="off" oninput="carteNomSaisi(this.value)"><datalist id="carte-coops">'+opts+'</datalist></label>'
     + '<label class="field">Titre de la carte<input type="text" name="carte_titre" value="'+esc(p.titre)+'"></label>'
     + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><label class="field">Code RA<input type="text" name="carte_code_ra" value="'+esc(p.code_ra)+'" placeholder="RA_…"></label>'
     + '<label class="field">Date de mise à jour<input type="date" name="carte_date_maj" value="'+esc(p.date_maj)+'"></label></div>'
@@ -16691,7 +16695,8 @@ function carteModalsHtml(){
 }
 async function carteEnvoyer(){
   const pl = state.modal && state.modal.payload; if (!pl) return;
-  pl.coopId = fv('carte_coop'); if (!pl.coopId){ showToast('Choisis la coopérative.'); return; }
+  const nomCoop = (fv('carte_coop')||'').trim(); if (!nomCoop){ showToast('Indique le nom de la coopérative.'); return; }
+  const coopConnue = carteCoopParNom(nomCoop); pl.coopId = coopConnue ? coopConnue.id : '';
   const fp = (document.getElementById('carte-fichier-poly')||{}).files, fl = (document.getElementById('carte-fichier-loc')||{}).files;
   const poly = fp && fp[0], loc = fl && fl[0];
   if (!poly){ showToast('Ajoute le fichier des polygones (.zip du shapefile ou .geojson).'); return; }
@@ -16700,8 +16705,8 @@ async function carteEnvoyer(){
   if (!/\.(xlsx|xls)$/i.test(loc.name)){ showToast('Localités : envoie le fichier Excel (.xlsx).'); return; }
   const btn = document.getElementById('carte-envoyer'); if (btn){ btn.disabled = true; btn.textContent = 'Envoi…'; }
   const id = genId('cm'), nets = s=>String(s).normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^A-Za-z0-9._-]+/g,'_');
-  const base = 'cartes/'+pl.coopId+'/'+id+'/';
-  const ligne = { id, cooperative_id:pl.coopId, theme:'classique', titre:(fv('carte_titre')||'').trim()||null, code_ra:(fv('carte_code_ra')||'').trim()||null, date_maj:fv('carte_date_maj')||null,
+  const base = 'cartes/'+(pl.coopId||'libre')+'/'+id+'/';
+  const ligne = { id, cooperative_id:pl.coopId||null, cooperative_nom:(coopConnue?coopConnue.nom:nomCoop), theme:'classique', titre:(fv('carte_titre')||'').trim()||null, code_ra:(fv('carte_code_ra')||'').trim()||null, date_maj:fv('carte_date_maj')||null,
     polygones_path:base+'polygones_'+nets(poly.name), polygones_nom:poly.name, localites_path:base+'localites_'+nets(loc.name), localites_nom:loc.name,
     statut:'demandee', demande_par:(state.session&&state.session.user&&state.session.user.email)||null };
   try {
