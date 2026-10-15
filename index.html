@@ -3616,7 +3616,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-15-142';
+const APP_VERSION = '2026-10-15-143';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -16716,7 +16716,7 @@ async function carteEnvoyer(){
     r = await supabaseClient.storage.from('documents-coop').upload(ligne.localites_path, loc, { upsert:true }); if (r.error) throw r.error;
     const ins = await supabaseClient.from('cartes_coop').insert(ligne).select().single(); if (ins.error) throw ins.error;
     state.cartes = [ins.data].concat(state.cartes||[]); state.cartesIndispo = false;
-    closeModal(); showToast('Demande de carte enregistrée.', 'success');
+    closeModal(); carteLancerRobot(); showToast('Demande de carte enregistrée : la génération démarre.', 'success');
   } catch(e){
     if (btn){ btn.disabled = false; btn.textContent = 'Envoyer la demande'; }
     showToast('Demande non enregistrée : '+((e&&e.message)||e));
@@ -16772,8 +16772,10 @@ async function carteRegenerer(){
   if (!x.corrections){ showToast('Enregistre d\'abord tes corrections dans l\'éditeur.'); return; }
   const { error } = await supabaseClient.from('cartes_coop').update({ statut:'demandee', erreur:null, updated_at:new Date().toISOString() }).eq('id', x.id).eq('statut','terminee');
   if (error){ showToast('Demande impossible : '+error.message); return; }
-  x.statut = 'demandee'; carteFermerEditeur(); showToast('Carte finale demandée : elle sera prête dans quelques minutes.', 'success'); render();
+  x.statut = 'demandee'; carteLancerRobot(); carteFermerEditeur(); showToast('Carte finale demandée : elle sera prête dans quelques minutes.', 'success'); render();
 }
+// demarre tout de suite le robot de cartes (sinon il se declenche seul toutes les 4 h) ; sans effet si la fonction n'est pas configuree
+function carteLancerRobot(){ try { supabaseClient.functions.invoke('lancer-cartes').then(()=>{}, ()=>{}); } catch(e){} }
 async function carteTelecharger(path){
   const { data, error } = await supabaseClient.storage.from('documents-coop').createSignedUrl(path, 3600);
   if (error || !data){ showToast('Fichier introuvable.'); return; }
