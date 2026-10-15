@@ -3535,7 +3535,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-14-124';
+const APP_VERSION = '2026-10-15-125';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -16893,6 +16893,55 @@ function renderCompteReboursAwahus(){
   });
   return h + '</div></div>';
 }
+// ===== Onglet Cooperatives : bandeau de chiffres + a faire + filtres + liste (la carte complete reste dans le detail) =====
+function coopJoursLicence(c){ if (!c.date_fin_licence) return null; return Math.ceil((new Date(c.date_fin_licence+'T23:59:59')-new Date())/86400000); }
+function coopDocsEtat(c){
+  const docs = (state.docCheck||[]).filter(d=>d.cooperative_id===c.id && d.disponible);
+  const req = DOCS_REQUIS.filter(d=>!/si disponible/i.test(d)).filter(d=>d!=='Certificat' || c.statut==='Certifiée');
+  const ok = req.filter(r=>docs.some(d=>d.doc===r)).length;
+  return { ok, total:req.length, certificat: docs.some(d=>d.doc==='Certificat') };
+}
+function coopLigneDonnees(c){
+  const stats = coopStats(c.id);
+  const campId = (state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : null;
+  const conn = (state.achats||[]).filter(a=>!a.producteur_id && a.cooperative_id===c.id && !a.refoulee && (!campId || a.campagne_id===campId));
+  const livre = conn.reduce((s,a)=>s+(Number(a.poids_net_produit)||0),0);
+  const derniere = conn.reduce((m,a)=>String(a.date||'')>m ? String(a.date) : m, '');
+  const jours = coopJoursLicence(c);
+  const docs = coopDocsEtat(c);
+  const sansPortail = !!c.geree_sans_compte;
+  return { c, stats, livre, nbConn:conn.length, derniere, jours, docs, sansPortail,
+    aVerifier: !!(c.created_by && !c.verifiee), fiche: !!c.fiche_a_completer, awahus: !!c.trace_par_ecorigine, externe: !!c.diligence_externe };
+}
+const COOP_FILTRES = [
+  ['tous','Toutes', l=>true],
+  ['certifiees','Certifiées', l=>l.c.statut==='Certifiée'],
+  ['noncert','Non certifiées', l=>l.c.statut!=='Certifiée'],
+  ['awahus','AWAHUS (tracées par ECORIGINE)', l=>l.awahus],
+  ['externe','Diligence externe', l=>l.externe],
+  ['sansportail','Sans portail', l=>l.sansPortail],
+  ['licence30','Licence < 30 j', l=>l.jours!==null && l.jours<=30],
+  ['sansdate','Certifiée sans date de licence', l=>l.c.statut==='Certifiée' && !l.externe && l.jours===null],
+  ['docs','Documents incomplets', l=>!l.externe && l.docs.ok<l.docs.total],
+  ['averifier','À vérifier / fiche à compléter', l=>l.aVerifier || l.fiche],
+];
+function coopSetFiltre(k){ state.coopFiltre = (state.coopFiltre===k) ? 'tous' : k; render(); }
+function coopSetTri(k){ if (state.coopTri===k) state.coopTriDesc = !state.coopTriDesc; else { state.coopTri = k; state.coopTriDesc = false; } render(); }
+function coopBasculerLigne(id){ state.coopOuverts = state.coopOuverts||{}; state.coopOuverts[id] = !state.coopOuverts[id]; render(); }
+function coopLicenceHtml(l){
+  if (l.c.statut!=='Certifiée') return '<span class="hint" style="margin:0">—</span>';
+  if (l.jours===null) return l.externe ? '<span class="hint" style="margin:0">n/a</span>' : '<span style="color:#7a5200;font-weight:600">à renseigner</span>';
+  const col = l.jours<0 ? '#8b1a1a' : l.jours<=14 ? '#c0392b' : l.jours<=45 ? '#d68910' : '#1e8449';
+  const txt = l.jours<0 ? 'expirée ('+(-l.jours)+' j)' : l.jours===0 ? 'dernier jour' : l.jours+' j';
+  return '<span style="font-weight:700;color:'+col+'">'+txt+'</span><div class="hint" style="margin:0;font-size:11px">'+esc(dateFr(l.c.date_fin_licence))+'</div>';
+}
+function coopExporterListe(lignes){
+  if (typeof XLSX==='undefined'){ showToast('La bibliothèque Excel ne s\'est pas chargée.'); return; }
+  const aoa = [['Coopérative','Code CCC','Statut','Certification','Identifiant','Fin de licence','Jours restants','Volume certificat (kg)','Producteurs','Documents','Livré (kg)','Connaissements','Dernière livraison','Client','Portail','Diligence externe','Tracée par ECORIGINE','Ville']];
+  lignes.forEach(l=>aoa.push([l.c.nom, l.c.ccc_num||'', l.c.statut||'', l.c.certifications||'', l.c.identifiant_certification||'', l.c.date_fin_licence||'', l.jours===null?'':l.jours, Number(l.c.volume_certificat)||'', l.stats.count, l.externe?'':l.docs.ok+'/'+l.docs.total, l.livre, l.nbConn, l.derniere||'', l.c.client||'', l.sansPortail?'non':'oui', l.externe?'oui':'non', l.awahus?'oui':'non', l.c.ville||'']));
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'Coopératives');
+  XLSX.writeFile(wb, 'cooperatives_origen.xlsx');
+}
 function renderCooperativesTab(){
   let html = '';
   const nCertifieesTotal = state.cooperatives.filter(c=>c.statut!=='Non certifiée').length;
@@ -16900,7 +16949,6 @@ function renderCooperativesTab(){
     html += ocRechercheCoopHtml('coops');
     html += '<div class="controls">'
       + '<button class="btn" onclick="ouvrirLienFiche()" title="Pour une coopérative sans portail : elle remplit sa fiche via un lien, elle est créée dans ORIGEN et son contrat peut être généré.">🔗 Lien de fiche (sans portail)</button>'
-      + '<button class="btn" onclick="basculerCompteReboursAwahus()">⏳ Compte à rebours</button>'
       + '<button class="btn" onclick="certLireTout()" title="Lit les certificats déposés dans le stockage et en extrait la date de fin de licence des coopératives qui n\'en ont pas.">📄 Lire les certificats (dates)</button>'
       + '<button class="btn btn-primary" onclick="ouvrirAjoutCooperative()">+ Ajouter une coopérative</button>'
       + '<button class="btn btn-primary" onclick="ouvrirEnvoiMessage()">✉ Envoyer un message</button>'
@@ -16910,28 +16958,71 @@ function renderCooperativesTab(){
       + '<button class="btn" onclick="exporterFichesCooperatives()">⬇ Télécharger les fiches (Excel)</button>'
       + '</div>';
     html += renderCertLecture();
-    html += renderCompteReboursAwahus();
   }
-
   if (state.cooperatives.length===0){
     html += '<div class="panel"><div class="panel-head"><h2>Coopératives (0)</h2></div>'
       + '<div class="empty">Aucune coopérative enregistrée pour le moment.<br>Les coopératives créent elles-mêmes leur accès depuis le portail coopérative — tu peux aussi en ajouter une manuellement.<br><br><button class="btn btn-primary" onclick="ouvrirAjoutCooperative()">+ Ajouter une coopérative</button></div></div>';
-  } else {
-    const certifiees = state.cooperatives.filter(c=>c.statut!=='Non certifiée');
-    const nonCertifiees = state.cooperatives.filter(c=>c.statut==='Non certifiée');
-    if (state.coopFocusGroup==='cooperatives-certifiees'){
-      html += '<button class="btn-ghost" style="margin-bottom:10px;" onclick="unfocusCoopGroup()">← Retour aux deux colonnes</button>';
-      html += renderCoopGroup('cooperatives-certifiees', 'Coopératives certifiées', certifiees);
-    } else if (state.coopFocusGroup==='cooperatives-non-certifiees'){
-      html += '<button class="btn-ghost" style="margin-bottom:10px;" onclick="unfocusCoopGroup()">← Retour aux deux colonnes</button>';
-      html += renderCoopGroup('cooperatives-non-certifiees', 'Coopératives non certifiées', nonCertifiees);
-    } else {
-      html += '<div class="coop-columns">'
-        + renderCoopGroup('cooperatives-certifiees', 'Coopératives certifiées', certifiees)
-        + renderCoopGroup('cooperatives-non-certifiees', 'Coopératives non certifiées', nonCertifiees)
-        + '</div>';
-    }
+    return html;
   }
+  const toutes = state.cooperatives.map(coopLigneDonnees);
+  // ---- Bandeau de chiffres (cliquables = filtres) ----
+  const nb = k=>toutes.filter(COOP_FILTRES.find(f=>f[0]===k)[2]).length;
+  const volCert = toutes.filter(l=>l.c.statut==='Certifiée').reduce((s,l)=>s+(Number(l.c.volume_certificat)||0),0);
+  const livreTotal = toutes.reduce((s,l)=>s+l.livre,0);
+  const tuile = (k, v, s, alerte)=>'<div class="ckpt-tuile'+(alerte&&v>0?' alerte':'')+'" style="cursor:pointer'+(state.coopFiltre===k?';outline:2px solid var(--accent)':'')+'" onclick="coopSetFiltre(\''+k+'\')"><div class="k">'+s+'</div><div class="v">'+v+'</div></div>';
+  html += '<div class="ckpt" style="grid-template-columns:repeat(6,1fr);margin-bottom:14px">'
+    + tuile('tous', toutes.length, 'Coopératives')
+    + tuile('certifiees', nb('certifiees'), 'Certifiées')
+    + '<div class="ckpt-tuile"><div class="k">Volume des certificats</div><div class="v">'+pipeTonnes(volCert)+'</div><div class="s">livré : '+pipeTonnes(livreTotal)+'</div></div>'
+    + tuile('licence30', nb('licence30'), 'Licences < 30 j', true)
+    + tuile('docs', nb('docs'), 'Documents incomplets', true)
+    + tuile('sansportail', nb('sansportail'), 'Sans portail')
+    + '</div>';
+  // ---- À faire aujourd'hui ----
+  const todo = [];
+  toutes.filter(l=>l.jours!==null && l.jours<=30).sort((a,b)=>a.jours-b.jours).forEach(l=>todo.push({ c:l.jours<=14?'#c0392b':'#d68910', t:'<b>'+esc(l.c.nom)+'</b> : licence '+(l.jours<0?'expirée depuis '+(-l.jours)+' j':l.jours===0?'se termine aujourd\'hui':'dans '+l.jours+' j')+' ('+esc(dateFr(l.c.date_fin_licence))+')' }));
+  const sansDate = toutes.filter(COOP_FILTRES.find(f=>f[0]==='sansdate')[2]);
+  if (sansDate.length) todo.push({ c:'#7a5200', t:sansDate.length+' certifiée'+(sansDate.length>1?'s':'')+' sans date de fin de licence : '+esc(sansDate.map(l=>l.c.nom).join(', ')) });
+  const sansCert = toutes.filter(l=>l.c.statut==='Certifiée' && !l.externe && !l.docs.certificat);
+  if (sansCert.length) todo.push({ c:'#7a5200', t:sansCert.length+' certificat'+(sansCert.length>1?'s':'')+' non déposé'+(sansCert.length>1?'s':'')+' : '+esc(sansCert.map(l=>l.c.nom).join(', ')) });
+  const av = toutes.filter(l=>l.aVerifier||l.fiche);
+  if (av.length) todo.push({ c:'#1f5fa8', t:av.length+' fiche'+(av.length>1?'s':'')+' à vérifier ou compléter : '+esc(av.map(l=>l.c.nom).join(', ')) });
+  if (todo.length){
+    html += '<div class="panel" style="margin-bottom:14px"><div class="panel-head"><h2>À faire</h2></div><div style="padding:0 18px 12px">'
+      + todo.slice(0,6).map(x=>'<div style="display:flex;gap:8px;align-items:flex-start;padding:5px 0;border-bottom:1px solid var(--border);font-size:13px"><span style="flex:none;width:9px;height:9px;border-radius:50%;background:'+x.c+';margin-top:5px"></span><span>'+x.t+'</span></div>').join('')
+      + (todo.length>6 ? '<div class="hint" style="margin:6px 0 0">+ '+(todo.length-6)+' autre(s)</div>' : '')
+      + '</div></div>';
+  }
+  // ---- Filtres ----
+  const filtre = COOP_FILTRES.find(f=>f[0]===(state.coopFiltre||'tous')) || COOP_FILTRES[0];
+  html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">'
+    + COOP_FILTRES.map(f=>'<button class="btn-ghost btn-compact" style="'+(f[0]===filtre[0]?'background:var(--accent);color:#fff;border-color:var(--accent)':'')+'" onclick="coopSetFiltre(\''+f[0]+'\')">'+f[1]+' <span style="opacity:.7">'+nb(f[0])+'</span></button>').join('')
+    + '</div>';
+  // ---- Liste ----
+  const tri = state.coopTri || 'nom', desc = !!state.coopTriDesc;
+  const cles = { nom:l=>String(l.c.nom||'').toLowerCase(), statut:l=>l.c.statut||'', licence:l=>l.jours===null?1e9:l.jours, volume:l=>Number(l.c.volume_certificat)||0, prod:l=>l.stats.count, docs:l=>l.docs.total?l.docs.ok/l.docs.total:2, livre:l=>l.livre, derniere:l=>l.derniere||'', client:l=>String(l.c.client||'').toLowerCase() };
+  let lignes = toutes.filter(filtre[2]).sort((a,b)=>{ const x=cles[tri](a), y=cles[tri](b); const r = typeof x==='number' ? x-y : String(x).localeCompare(String(y),'fr'); return desc ? -r : r; });
+  const th = (k,l,num)=>'<th class="'+(num?'num':'')+'" style="cursor:pointer" onclick="coopSetTri(\''+k+'\')">'+l+(tri===k?(desc?' ▼':' ▲'):'')+'</th>';
+  html += '<div class="panel"><div class="panel-head" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><h2>'+esc(filtre[1])+' ('+lignes.length+')</h2><button class="btn-ghost btn-compact" onclick="coopExporterListe(window._coopLignesAffichees||[])">⬇ Exporter cette liste (Excel)</button></div>';
+  window._coopLignesAffichees = lignes;
+  html += '<div style="padding:0 18px 16px;overflow:auto"><table class="data-table pref-table"><thead><tr>'+th('nom','Coopérative')+th('statut','Certification')+th('licence','Fin de licence',1)+th('volume','Volume certificat',1)+th('prod','Producteurs',1)+th('docs','Documents',1)+th('livre','Livré (campagne)',1)+th('derniere','Dernière livraison')+th('client','Client')+'<th>Accès</th></tr></thead><tbody>';
+  lignes.forEach(l=>{
+    const c = l.c, ouv = !!(state.coopOuverts && state.coopOuverts[c.id]);
+    const cert = c.statut==='Certifiée' ? (c.certifications==='Rainforest Alliance'?'RA':c.certifications==='Fairtrade'?'FT':esc(c.certifications||'Certifiée')) : '<span class="hint" style="margin:0">non cert.</span>';
+    const badges = (l.awahus?' <span class="hint" style="margin:0">AWAHUS</span>':'')+(l.externe?' <span class="badge info" style="font-size:10px">dilig. ext.</span>':'')+(l.aVerifier?' <span class="badge warn" style="font-size:10px">à vérifier</span>':'')+(l.fiche?' <span class="badge warn" style="font-size:10px">fiche</span>':'');
+    html += '<tr class="pref-ligne'+(ouv?' ouvert':'')+'">'
+      + '<td style="cursor:pointer" onclick="coopBasculerLigne(\''+escJs(c.id)+'\')"><span class="chev" style="margin-right:4px">▸</span><b>'+esc(c.nom)+'</b>'+(c.ccc_num?' <span class="hint" style="margin:0;font-size:11px">'+esc(c.ccc_num)+'</span>':'')+badges+'</td>'
+      + '<td>'+cert+'</td><td class="num">'+coopLicenceHtml(l)+'</td>'
+      + '<td class="num">'+(c.statut==='Certifiée' && Number(c.volume_certificat)>0 ? fmtKg(Number(c.volume_certificat)) : '—')+'</td>'
+      + '<td class="num">'+(l.externe?'—':fmtNum(l.stats.count))+'</td>'
+      + '<td class="num">'+(l.externe?'—':'<span style="font-weight:600;color:'+(l.docs.ok>=l.docs.total?'#1e8449':'#d68910')+'">'+l.docs.ok+'/'+l.docs.total+'</span>')+'</td>'
+      + '<td class="num">'+(l.livre>0?fmtKg(l.livre)+'<div class="hint" style="margin:0;font-size:11px">'+l.nbConn+' conn.</div>':'—')+'</td>'
+      + '<td>'+(l.derniere?esc(dateFr(l.derniere)):'—')+'</td><td>'+esc(c.client||'—')+'</td>'
+      + '<td>'+(l.sansPortail?'<span class="hint" style="margin:0">sans portail</span>':'portail')+'</td></tr>';
+    if (ouv) html += '<tr><td colspan="10" style="background:#fff;border-bottom:2px solid var(--border);white-space:normal;text-align:left;padding:10px 14px 12px 30px"><div class="coop-card-list">'+renderCoopCard(c)+'</div></td></tr>';
+  });
+  html += '</tbody></table></div></div>';
+  html += renderCompteReboursAwahus();
   html += '<div class="footer-note">Données stockées de façon privée sur votre compte. <button onclick="resetAll()">Réinitialiser toutes les données</button></div>';
   return html;
 }
