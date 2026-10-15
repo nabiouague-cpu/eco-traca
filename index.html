@@ -3616,7 +3616,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-15-148';
+const APP_VERSION = '2026-10-15-149';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -16677,7 +16677,7 @@ function renderCartesTab(){
     + [['cartes','🗺 Cartes de localisation'],['deforestation','🌳 Analyse déforestation']].map(([k,l])=>'<button class="'+(vue===k?'btn btn-primary':'btn')+' btn-compact" onclick="state.cartesVue=\''+k+'\';render()">'+l+'</button>').join('')
     + '</div></div>';
   if (vue==='deforestation'){
-    return h + '<div class="panel"><div class="hint" style="padding:18px">L\'analyse de déforestation sera branchée ici, au même endroit que les cartes.</div></div>';
+    return h + renderDefoVue();
   }
   const liste = state.cartes || [];
   carteSuivi();
@@ -16718,6 +16718,124 @@ function carteNomSaisi(valeur){
   const nom = String(valeur||'').trim(), c = carteCoopParNom(nom);
   if (t) t.value = nom ? 'CARTE DES EXPLOITATIONS DE LA COOPÉRATIVE '+nom.toUpperCase() : '';
   if (r && c && c.identifiant_certification) r.value = c.identifiant_certification;
+}
+// ===== Analyse déforestation — étape 1 : préparer les polygones (KML / KMZ / GPX / GeoJSON / shapefile -> un seul GeoJSON pour Whisp) =====
+async function chargerDefo(){
+  state.defoCharge = true;
+  try {
+    const { data, error } = await supabaseClient.from('analyses_defo').select('*').order('created_at', { ascending:false });
+    if (error) throw error;
+    const avant = {}; (state.defo||[]).forEach(x=>{ avant[x.id] = x.statut; });
+    state.defo = data || []; state.defoIndispo = false;
+    state.defo.forEach(x=>{ const a = avant[x.id]; if (!a || a===x.statut) return;
+      if (x.statut==='terminee') showToast('✅ GeoJSON prêt : '+(x.cooperative_nom||''), 'success');
+      else if (x.statut==='erreur') showToast('La préparation de '+(x.cooperative_nom||'')+' a échoué : voir le détail dans la liste.'); });
+  } catch(e){ state.defo = state.defo || []; state.defoIndispo = true; }
+  render();
+}
+let defoTimer = null;
+function defoSuivi(){
+  const encours = (state.defo||[]).some(x=>x.statut==='demandee'||x.statut==='en_cours');
+  if (encours && state.tab==='cartes' && !defoTimer){
+    defoTimer = setInterval(()=>{
+      const reste = (state.defo||[]).some(x=>x.statut==='demandee'||x.statut==='en_cours');
+      if (state.tab!=='cartes' || state.cartesVue!=='deforestation' || !reste){ clearInterval(defoTimer); defoTimer = null; return; }
+      if (!state.modal) chargerDefo();
+    }, 10000);
+  }
+}
+function defoResumeHtml(x){
+  const r = x.resume; if (x.statut!=='terminee' || !r) return '';
+  const l = [];
+  l.push('<b>'+fmtNum(r.polygones)+' polygones</b> · '+fmtNum(r.surface_ha)+' ha');
+  if (r.lignes_converties) l.push(fmtNum(r.lignes_converties)+' ligne(s) convertie(s) en polygone');
+  if (r.points_retires) l.push(fmtNum(r.points_retires)+' point(s) retiré(s)');
+  if (r.invalides_reparees) l.push(fmtNum(r.invalides_reparees)+' géométrie(s) invalide(s) réparée(s)');
+  if (r.doublons_retires) l.push(fmtNum(r.doublons_retires)+' doublon(s) exact(s) retiré(s)');
+  if (r.vides_retires) l.push(fmtNum(r.vides_retires)+' élément(s) vide(s) retiré(s)');
+  const warn = r.lignes_non_fermees ? '<div style="color:#b36b00">⚠️ '+fmtNum(r.lignes_non_fermees)+' tracé(s) non fermé(s) (début et fin à plus de 50 m) : fermés automatiquement, à vérifier.</div>' : '';
+  const det = (r.fichiers||[]).map(f=>'<div>'+esc(f.fichier)+' : '+f.polygones+' polygone(s), '+f.lignes+' ligne(s), '+f.points+' point(s)</div>').join('');
+  return '<div style="flex-basis:100%;font-size:12.5px"><div>'+l.join(' · ')+'</div>'+warn
+    + '<details style="margin-top:2px"><summary class="hint" style="cursor:pointer;margin:0">Détail par fichier</summary><div class="hint" style="margin:2px 0 0">'+det+'</div></details>'
+    + '<div class="hint" style="margin:4px 0 0">Étape suivante : charge ce GeoJSON dans Whisp, puis reviens déposer le rapport Whisp (étape 2, à venir).</div></div>';
+}
+function renderDefoVue(){
+  if (!state.defoCharge && !state.defoChargeEnCours){ state.defoChargeEnCours = true; setTimeout(()=>{ chargerDefo(); }, 0); }
+  defoSuivi();
+  const liste = state.defo || [];
+  const nEnCours = liste.filter(x=>x.statut==='demandee'||x.statut==='en_cours').length;
+  let h = '';
+  if (nEnCours) h += '<div class="panel" style="border-left:4px solid #1f5fa8"><div style="padding:12px 18px"><b>⏳ '+nEnCours+' préparation'+(nEnCours>1?'s':'')+' en cours</b> <span class="hint" style="margin:0 0 0 6px">Quelques minutes. La liste se met à jour toute seule.</span></div></div>';
+  h += '<div class="panel"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 18px 8px">'
+    + '<div><b>Étape 1 — Préparer les polygones</b><div class="hint" style="margin:2px 0 0">Dépose les fichiers reçus d\'une coopérative (KML, KMZ, GPX, GeoJSON, shapefile .zip) : ORIGEN supprime les points, transforme les lignes en polygones, répare les géométries et fusionne le tout en un seul GeoJSON prêt pour Whisp.</div></div>'
+    + '<button class="btn btn-primary" onclick="ouvrirDefoPrep()">🌳 Nouvelle préparation</button></div>';
+  if (state.defoIndispo) h += '<div class="hint" style="padding:0 18px 14px;color:var(--warn)">Le suivi des analyses n\'est pas encore disponible sur cette base.</div>';
+  else if (!state.defoCharge) h += '<div class="hint" style="padding:0 18px 14px">Chargement…</div>';
+  else if (!liste.length) h += '<div class="hint" style="padding:0 18px 14px">Aucune préparation pour le moment.</div>';
+  else h += '<div class="achat-list" style="padding:0 18px 14px">' + liste.map(x=>{
+    const st = CARTE_STATUTS[x.statut] || [x.statut,'#7a8683'];
+    const fich = (x.fichiers||[]).filter(f=>f.path).map(f=>'<a style="cursor:pointer;color:var(--accent);margin-right:10px" onclick="carteTelecharger(\''+escJs(f.path)+'\')">⬇ '+esc(f.nom)+'</a>').join('');
+    return '<div class="achat-item" style="flex-wrap:wrap;gap:6px 12px"><span><span style="display:inline-block;background:'+st[1]+';color:#fff;border-radius:10px;padding:1px 9px;font-size:11.5px;font-weight:600">'+st[0]+'</span> '
+      + (x.statut==='demandee'||x.statut==='en_cours' ? '<span class="hint" style="margin:0 6px 0 8px">'+carteDepuis(x)+'</span>' : '')
+      + '<b style="margin-left:6px">'+esc(x.cooperative_nom||'—')+'</b><span class="hint" style="margin:0 0 0 8px">'+esc(dateFr(String(x.created_at).slice(0,10)))+' · '+((x.entrees||[]).length)+' fichier(s)</span></span>'
+      + '<span>'+fich+(x.statut==='erreur'&&x.erreur?'<span class="hint" style="color:#c0392b;margin:0">'+esc(x.erreur)+'</span>':'')
+      + (x.statut==='demandee' ? ' <button class="btn-ghost btn-compact" onclick="defoAnnuler(\''+escJs(x.id)+'\')">Annuler</button>' : '')
+      + (['annulee','terminee','erreur'].includes(x.statut) ? ' <button class="btn-ghost btn-compact" style="color:#c0392b" onclick="defoSupprimer(\''+escJs(x.id)+'\')">🗑 Supprimer</button>' : '')+'</span>'
+      + defoResumeHtml(x) + '</div>';
+  }).join('') + '</div>';
+  h += '</div>';
+  return h;
+}
+function ouvrirDefoPrep(){ openModal('defoPrep', { nom:'' }); }
+function defoErreurForm(msg){ const e = document.getElementById('defo-erreur'); if (e){ e.textContent = msg; e.style.display = 'block'; } else showToast(msg); }
+function defoModalsHtml(){
+  const m = state.modal; if (!m || m.type!=='defoPrep') return '';
+  const opts = [...state.cooperatives].sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr')).map(c=>'<option value="'+esc(c.nom)+'"></option>').join('');
+  return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:520px"><h3>Préparer les polygones</h3><div id="modal-fields">'
+    + '<label class="field">Nom de la coopérative <span class="hint" style="margin:0">(tape le nom, ou choisis-en une déjà dans ORIGEN)</span><input type="text" name="defo_coop" list="defo-coops" placeholder="Ex. SOCAET" autocomplete="off"><datalist id="defo-coops">'+opts+'</datalist></label>'
+    + '<label class="field">Fichiers de la coopérative <span class="hint" style="margin:0">(KML, KMZ, GPX, GeoJSON, ou shapefile en .zip — plusieurs possibles)</span><input type="file" id="defo-fichiers" multiple accept=".kml,.kmz,.gpx,.geojson,.json,.zip"></label>'
+    + '<div id="defo-erreur" style="display:none;color:#c0392b;font-size:13px;margin:4px 0 8px"></div>'
+    + '<p class="hint">Les points sont supprimés, les lignes deviennent des polygones, les doublons exacts sont retirés. Tes fichiers originaux ne sont pas modifiés.</p>'
+    + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" id="defo-envoyer" onclick="defoEnvoyer()">Lancer la préparation</button></div></div></div>';
+}
+async function defoEnvoyer(){
+  const nomCoop = (fv('defo_coop')||'').trim(); if (!nomCoop){ defoErreurForm('Indique le nom de la coopérative.'); return; }
+  const fl = Array.from((document.getElementById('defo-fichiers')||{}).files||[]); if (!fl.length){ defoErreurForm('Ajoute au moins un fichier.'); return; }
+  const mauv = fl.filter(f=>!/\.(kml|kmz|gpx|geojson|json|zip)$/i.test(f.name)); if (mauv.length){ defoErreurForm('Format non pris en charge : '+mauv.map(f=>f.name).join(', ')); return; }
+  const btn = document.getElementById('defo-envoyer'); if (btn){ btn.disabled = true; btn.textContent = 'Envoi…'; }
+  const id = genId('ad'), nets = s=>String(s).normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^A-Za-z0-9._-]+/g,'_');
+  const coop = carteCoopParNom(nomCoop);
+  try {
+    const entrees = [];
+    for (let k=0; k<fl.length; k++){
+      const path = 'defo/'+id+'/entrees/'+String(k).padStart(2,'0')+'_'+nets(fl[k].name);
+      const r = await supabaseClient.storage.from('documents-coop').upload(path, fl[k], { upsert:true }); if (r.error) throw r.error;
+      entrees.push({ nom:fl[k].name, path });
+    }
+    const ins = await supabaseClient.from('analyses_defo').insert({ id, cooperative_id:coop?coop.id:null, cooperative_nom:(coop?coop.nom:nomCoop), etape:'preparation', statut:'demandee', entrees,
+      demande_par:(state.session&&state.session.user&&state.session.user.email)||null }).select().single();
+    if (ins.error) throw ins.error;
+    state.defo = [ins.data].concat(state.defo||[]); state.defoIndispo = false;
+    closeModal(); carteLancerRobot(); showToast('Préparation lancée.', 'success');
+  } catch(e){
+    if (btn){ btn.disabled = false; btn.textContent = 'Lancer la préparation'; }
+    defoErreurForm('Envoi impossible : '+((e&&e.message)||e));
+  }
+}
+function defoAnnuler(id){ askConfirm('Annuler cette préparation ?', ()=>defoAnnulerOk(id)); }
+async function defoAnnulerOk(id){
+  const { error } = await supabaseClient.from('analyses_defo').update({ statut:'annulee', updated_at:new Date().toISOString() }).eq('id', id).eq('statut','demandee');
+  if (error){ showToast('Annulation impossible : '+error.message); return; }
+  const x = (state.defo||[]).find(z=>z.id===id); if (x) x.statut = 'annulee'; render();
+}
+function defoSupprimer(id){ askConfirm('Supprimer définitivement cette préparation (GeoJSON et fichiers envoyés) ? Cette action est irréversible.', ()=>defoSupprimerOk(id)); }
+async function defoSupprimerOk(id){
+  const x = (state.defo||[]).find(z=>z.id===id); if (!x || !['annulee','terminee','erreur'].includes(x.statut)) return;
+  const { error } = await supabaseClient.from('analyses_defo').delete().eq('id', id).in('statut',['annulee','terminee','erreur']);
+  if (error){ showToast('Suppression impossible : '+error.message); return; }
+  const chemins = (x.entrees||[]).map(e=>e.path).concat((x.fichiers||[]).map(f=>f.path)).filter(Boolean);
+  if (chemins.length){ try { await supabaseClient.storage.from('documents-coop').remove(chemins); } catch(e){} }
+  state.defo = state.defo.filter(z=>z.id!==id); showToast('Préparation supprimée.', 'success'); render();
 }
 function carteModalsHtml(){
   const m = state.modal; if (!m || m.type!=='carteCoop') return '';
@@ -19795,6 +19913,7 @@ function _renderBrut(){
   html += saigicModalsHtml();
   html += achatProjetModalsHtml();
   html += carteModalsHtml();
+  html += defoModalsHtml();
   html += lotsModalsHtml();   // lots d'usinage / lots d'export / conteneurs
   if (state.modal && state.modal.type==='cooperative'){
     const c = state.modal.payload || {};
