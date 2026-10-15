@@ -3615,7 +3615,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-15-135';
+const APP_VERSION = '2026-10-15-136';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -16612,6 +16612,7 @@ function renderCoopCard(c){
       + (c.statut==='Certifiée' ? '<div><span>Date de fin de licence :</span> '+esc(c.date_fin_licence||'—')+'</div>' : '')
       + (c.statut==='Certifiée' ? '<div><span>Volume certificat :</span> '+(c.volume_certificat?fmtKg(c.volume_certificat):'—')+'</div>' : '')
       + '</div>'
+      + carteBlocHtml(c)
       + '<div class="hint" style="margin-bottom:8px;">Producteurs de cette coopérative</div>'
       + '<div class="achat-list">'
       + (list.length===0 ? '<div class="achat-item"><span class="hint">Aucun producteur importé pour le moment.</span></div>' :
@@ -16620,6 +16621,95 @@ function renderCoopCard(c){
   }
   html += '</div>';
   return html;
+}
+
+// ===== Cartes de localisation des cooperatives : demande depuis ORIGEN =====
+// ORIGEN enregistre la demande (fichiers + parametres) dans la table cartes_coop ; le serveur de cartes (VPS) la traite
+// et y remet le PDF, le PNG et l'editeur. Tant que le serveur n'est pas branche, la demande reste "en attente".
+const CARTE_STATUTS = { demandee:['En attente','#7a5200'], en_cours:['En cours','#1f5fa8'], terminee:['Terminée','#1e8449'], erreur:['Erreur','#c0392b'], annulee:['Annulée','#7a8683'] };
+const CARTE_THEMES = { les_deux:'Les deux versions', classique:'Classique (style ArcMap)', pro:'Pro (moderne)' };
+async function chargerCartes(){
+  state.cartesCharge = true;
+  try {
+    const { data, error } = await supabaseClient.from('cartes_coop').select('*').order('created_at', { ascending:false });
+    if (error) throw error;
+    state.cartes = data || []; state.cartesIndispo = false;
+  } catch(e){ state.cartes = state.cartes || []; state.cartesIndispo = true; }
+  render();
+}
+function carteBlocHtml(c){
+  if (!state.cartesCharge && !state.cartesChargeEnCours){ state.cartesChargeEnCours = true; setTimeout(()=>{ chargerCartes(); }, 0); }
+  const liste = (state.cartes||[]).filter(x=>x.cooperative_id===c.id);
+  let h = '<div style="margin:6px 0 16px;padding-top:12px;border-top:1px solid var(--border)">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px"><div class="hint" style="margin:0">Carte de localisation</div>'
+    + '<button class="btn btn-compact" onclick="ouvrirCarteCoop(\''+escJs(c.id)+'\')">🗺 Générer la carte</button></div>';
+  if (state.cartesIndispo) h += '<div class="hint" style="color:var(--warn)">Le suivi des cartes n\'est pas encore disponible sur cette base.</div>';
+  else if (!liste.length) h += '<div class="hint">Aucune carte demandée pour cette coopérative.</div>';
+  else h += '<div class="achat-list">' + liste.slice(0,5).map(x=>{
+    const st = CARTE_STATUTS[x.statut] || [x.statut,'#7a8683'];
+    const fich = (x.fichiers||[]).map(f=>'<a style="cursor:pointer;color:var(--accent);margin-right:10px" onclick="carteTelecharger(\''+escJs(f.path)+'\')">⬇ '+esc(f.nom||'fichier')+'</a>').join('');
+    return '<div class="achat-item" style="flex-wrap:wrap;gap:6px 12px"><span><span style="display:inline-block;background:'+st[1]+';color:#fff;border-radius:10px;padding:1px 9px;font-size:11.5px;font-weight:600">'+st[0]+'</span> '
+      + '<span class="hint" style="margin:0 0 0 6px">'+esc(dateFr(String(x.created_at).slice(0,10)))+' · '+esc(CARTE_THEMES[x.theme]||x.theme)+'</span></span>'
+      + '<span>'+fich+(x.statut==='erreur'&&x.erreur?'<span class="hint" style="color:#c0392b;margin:0">'+esc(x.erreur)+'</span>':'')
+      + (x.statut==='demandee' ? ' <button class="btn-ghost btn-compact" onclick="carteAnnuler(\''+escJs(x.id)+'\')">Annuler</button>' : '')+'</span></div>';
+  }).join('') + '</div>';
+  return h + '</div>';
+}
+function ouvrirCarteCoop(coopId){
+  const c = coopById(coopId); if (!c) return;
+  openModal('carteCoop', { coopId, titre:'CARTE DES EXPLOITATIONS DE LA COOPÉRATIVE '+String(c.nom||'').toUpperCase(), code_ra:c.identifiant_certification||'', date_maj:new Date().toISOString().slice(0,10) });
+}
+function carteModalsHtml(){
+  const m = state.modal; if (!m || m.type!=='carteCoop') return '';
+  const p = m.payload, c = coopById(p.coopId); if (!c) return '';
+  return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:520px"><h3>Générer la carte — '+esc(c.nom)+'</h3><div id="modal-fields">'
+    + '<label class="field">Version<select name="carte_theme"><option value="les_deux">'+CARTE_THEMES.les_deux+'</option><option value="classique">'+CARTE_THEMES.classique+'</option><option value="pro">'+CARTE_THEMES.pro+'</option></select></label>'
+    + '<label class="field">Titre de la carte<input type="text" name="carte_titre" value="'+esc(p.titre)+'"></label>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><label class="field">Code RA<input type="text" name="carte_code_ra" value="'+esc(p.code_ra)+'" placeholder="RA_…"></label>'
+    + '<label class="field">Date de mise à jour<input type="date" name="carte_date_maj" value="'+esc(p.date_maj)+'"></label></div>'
+    + '<label class="field">Polygones des parcelles <span class="hint" style="margin:0">(.zip du shapefile, ou .geojson)</span><input type="file" id="carte-fichier-poly" accept=".zip,.geojson,.json"></label>'
+    + '<label class="field">Localités de la coopérative <span class="hint" style="margin:0">(modèle Excel rempli)</span><input type="file" id="carte-fichier-loc" accept=".xlsx,.xls"></label>'
+    + '<p class="hint">Le zip du shapefile doit contenir les fichiers .shp, .shx, .dbf et .prj. La carte apparaît dans la fiche de la coopérative quand elle est prête.</p>'
+    + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" id="carte-envoyer" onclick="carteEnvoyer()">Envoyer la demande</button></div></div></div>';
+}
+async function carteEnvoyer(){
+  const pl = state.modal && state.modal.payload; if (!pl) return;
+  const fp = (document.getElementById('carte-fichier-poly')||{}).files, fl = (document.getElementById('carte-fichier-loc')||{}).files;
+  const poly = fp && fp[0], loc = fl && fl[0];
+  if (!poly){ showToast('Ajoute le fichier des polygones (.zip du shapefile ou .geojson).'); return; }
+  if (!loc){ showToast('Ajoute le fichier Excel des localités.'); return; }
+  if (!/\.(zip|geojson|json)$/i.test(poly.name)){ showToast('Polygones : envoie un .zip (shapefile) ou un .geojson.'); return; }
+  if (!/\.(xlsx|xls)$/i.test(loc.name)){ showToast('Localités : envoie le fichier Excel (.xlsx).'); return; }
+  const btn = document.getElementById('carte-envoyer'); if (btn){ btn.disabled = true; btn.textContent = 'Envoi…'; }
+  const id = genId('cm'), nets = s=>String(s).normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^A-Za-z0-9._-]+/g,'_');
+  const base = 'cartes/'+pl.coopId+'/'+id+'/';
+  const ligne = { id, cooperative_id:pl.coopId, theme:fv('carte_theme')||'les_deux', titre:(fv('carte_titre')||'').trim()||null, code_ra:(fv('carte_code_ra')||'').trim()||null, date_maj:fv('carte_date_maj')||null,
+    polygones_path:base+'polygones_'+nets(poly.name), polygones_nom:poly.name, localites_path:base+'localites_'+nets(loc.name), localites_nom:loc.name,
+    statut:'demandee', demande_par:(state.session&&state.session.user&&state.session.user.email)||null };
+  try {
+    let r = await supabaseClient.storage.from('documents-coop').upload(ligne.polygones_path, poly, { upsert:true }); if (r.error) throw r.error;
+    r = await supabaseClient.storage.from('documents-coop').upload(ligne.localites_path, loc, { upsert:true }); if (r.error) throw r.error;
+    const ins = await supabaseClient.from('cartes_coop').insert(ligne).select().single(); if (ins.error) throw ins.error;
+    state.cartes = [ins.data].concat(state.cartes||[]); state.cartesIndispo = false;
+    state.expandedCoop.add(pl.coopId); closeModal(); showToast('Demande de carte enregistrée.', 'success');
+  } catch(e){
+    if (btn){ btn.disabled = false; btn.textContent = 'Envoyer la demande'; }
+    showToast('Demande non enregistrée : '+((e&&e.message)||e));
+  }
+}
+function carteAnnuler(id){
+  askConfirm('Annuler cette demande de carte ?', ()=>carteAnnulerOk(id));
+}
+async function carteAnnulerOk(id){
+  const { error } = await supabaseClient.from('cartes_coop').update({ statut:'annulee', updated_at:new Date().toISOString() }).eq('id', id).eq('statut','demandee');
+  if (error){ showToast('Annulation impossible : '+error.message); return; }
+  const x = (state.cartes||[]).find(z=>z.id===id); if (x) x.statut = 'annulee';
+  render();
+}
+async function carteTelecharger(path){
+  const { data, error } = await supabaseClient.storage.from('documents-coop').createSignedUrl(path, 3600);
+  if (error || !data){ showToast('Fichier introuvable.'); return; }
+  window.open(data.signedUrl, '_blank');
 }
 
 function toggleCoopGroupSection(key){
@@ -19569,6 +19659,7 @@ function _renderBrut(){
   html += prefModalsHtml();
   html += saigicModalsHtml();
   html += achatProjetModalsHtml();
+  html += carteModalsHtml();
   html += lotsModalsHtml();   // lots d'usinage / lots d'export / conteneurs
   if (state.modal && state.modal.type==='cooperative'){
     const c = state.modal.payload || {};
