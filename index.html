@@ -3616,7 +3616,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-15-145';
+const APP_VERSION = '2026-10-15-147';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -16627,6 +16627,7 @@ function renderCoopCard(c){
 // ORIGEN enregistre la demande (fichiers + parametres) dans la table cartes_coop ; le serveur de cartes (VPS) la traite
 // et y remet le PDF, le PNG et l'editeur. Tant que le serveur n'est pas branche, la demande reste "en attente".
 const CARTE_STATUTS = { demandee:['En attente','#7a5200'], en_cours:['En cours','#1f5fa8'], terminee:['Terminée','#1e8449'], erreur:['Erreur','#c0392b'], annulee:['Annulée','#7a8683'] };
+const CARTE_AUTEUR_DEFAUT = ['GNAGNE AGNES VIANNEY','Ingénieur Pédologue et développement Durable','N. RCCM CI-GRDBSM-2020-A-4098','Tél : 07 59 36 14'];
 const CARTE_THEMES = { les_deux:'Les deux versions', classique:'Classique (style ArcMap)', pro:'Pro (moderne)' };
 async function chargerCartes(){
   state.cartesCharge = true;
@@ -16655,6 +16656,13 @@ function carteSuivi(){
       if (!state.modal) chargerCartes();
     }, 10000);
   }
+}
+function carteControleHtml(x){
+  const c = Array.isArray(x.controle) ? x.controle : []; if (x.statut!=='terminee' || !c.length) return '';
+  const nw = c.filter(l=>l.statut==='warn').length;
+  const ic = { ok:'✅', warn:'⚠️', visuel:'👁' };
+  return '<details style="flex-basis:100%;margin-top:2px"'+(nw?' open':'')+'><summary style="cursor:pointer;font-size:12.5px" class="hint">Contrôle de la carte : '+(nw ? '<b style="color:#c0392b">'+nw+' point(s) à regarder</b>' : '<b style="color:#1e8449">points automatiques OK</b>')+'</summary>'
+    + '<div style="padding:4px 0 2px;font-size:12.5px">'+c.map(l=>'<div>'+(ic[l.statut]||'•')+' <b>'+esc(l.libelle)+'</b> — <span class="hint" style="margin:0">'+esc(l.detail)+'</span></div>').join('')+'</div></details>';
 }
 function carteDepuis(x){
   const t = Date.parse(x.updated_at||x.created_at); if (!t) return '';
@@ -16692,7 +16700,8 @@ function renderCartesTab(){
       + '<b style="margin-left:6px">'+esc(nomCarte)+'</b><span class="hint" style="margin:0 0 0 8px">'+esc(dateFr(String(x.created_at).slice(0,10)))+'</span></span>'
       + '<span>'+fich+(x.statut==='erreur'&&x.erreur?'<span class="hint" style="color:#c0392b;margin:0">'+esc(x.erreur)+'</span>':'')
       + (x.statut==='demandee' ? ' <button class="btn-ghost btn-compact" onclick="carteAnnuler(\''+escJs(x.id)+'\')">Annuler</button>' : '')
-      + (x.statut==='annulee' ? ' <button class="btn-ghost btn-compact" style="color:#c0392b" onclick="carteSupprimer(\''+escJs(x.id)+'\')">🗑 Supprimer</button>' : '')+'</span></div>';
+      + (x.statut==='annulee' ? ' <button class="btn-ghost btn-compact" style="color:#c0392b" onclick="carteSupprimer(\''+escJs(x.id)+'\')">🗑 Supprimer</button>' : '')+'</span>'
+      + carteControleHtml(x) + '</div>';
   }).join('') + '</div>';
   return h + '</div>';
 }
@@ -16721,25 +16730,39 @@ function carteModalsHtml(){
     + '<label class="field">Date de mise à jour<input type="date" name="carte_date_maj" value="'+esc(p.date_maj)+'"></label></div>'
     + '<label class="field">Polygones des parcelles <span class="hint" style="margin:0">(.zip du shapefile, ou .geojson)</span><input type="file" id="carte-fichier-poly" accept=".zip,.geojson,.json"></label>'
     + '<label class="field">Localités de la coopérative <span class="hint" style="margin:0">(modèle Excel rempli)</span><input type="file" id="carte-fichier-loc" accept=".xlsx,.xls"></label>'
+    + '<details style="margin:2px 0 10px"'+(p.avance?' open':'')+' ontoggle="state.modal.payload.avance=this.open"><summary style="cursor:pointer;font-weight:600">Réglages avancés <span class="hint" style="margin:0 0 0 6px;font-weight:400">(facultatif — les règles de cartes sont déjà appliquées)</span></summary>'
+    + '<label class="field" style="margin-top:8px">Bloc auteur <span class="hint" style="margin:0">(4 lignes)</span><textarea name="carte_auteur" rows="4" style="width:100%">'+esc(CARTE_AUTEUR_DEFAUT.join('\n'))+'</textarea></label>'
+    + '<div class="field"><div style="margin-bottom:4px">Cadrage manuel <span class="hint" style="margin:0">(laisser vide = automatique, recommandé ; largeur minimale 0,6°)</span></div>'
+    + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px"><input type="text" inputmode="decimal" name="carte_e_minx" placeholder="X min (ouest)"><input type="text" inputmode="decimal" name="carte_e_miny" placeholder="Y min (sud)"><input type="text" inputmode="decimal" name="carte_e_maxx" placeholder="X max (est)"><input type="text" inputmode="decimal" name="carte_e_maxy" placeholder="Y max (nord)"></div></div></details>'
+    + '<div id="carte-erreur" style="display:none;color:#c0392b;font-size:13px;margin:4px 0 8px"></div>'
     + '<p class="hint">Le zip du shapefile doit contenir les fichiers .shp, .shx, .dbf et .prj. La carte apparaît dans la liste quand elle est prête.</p>'
     + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" id="carte-envoyer" onclick="carteEnvoyer()">Envoyer la demande</button></div></div></div>';
 }
+function carteErreurForm(msg){ const e = document.getElementById('carte-erreur'); if (e){ e.textContent = msg; e.style.display = 'block'; e.scrollIntoView({block:'nearest'}); } else showToast(msg); }
 async function carteEnvoyer(){
   const pl = state.modal && state.modal.payload; if (!pl) return;
-  const nomCoop = (fv('carte_coop')||'').trim(); if (!nomCoop){ showToast('Indique le nom de la coopérative.'); return; }
+  const nomCoop = (fv('carte_coop')||'').trim(); if (!nomCoop){ carteErreurForm('Indique le nom de la coopérative.'); return; }
   const coopConnue = carteCoopParNom(nomCoop); pl.coopId = coopConnue ? coopConnue.id : '';
   const fp = (document.getElementById('carte-fichier-poly')||{}).files, fl = (document.getElementById('carte-fichier-loc')||{}).files;
   const poly = fp && fp[0], loc = fl && fl[0];
-  if (!poly){ showToast('Ajoute le fichier des polygones (.zip du shapefile ou .geojson).'); return; }
-  if (!loc){ showToast('Ajoute le fichier Excel des localités.'); return; }
-  if (!/\.(zip|geojson|json)$/i.test(poly.name)){ showToast('Polygones : envoie un .zip (shapefile) ou un .geojson.'); return; }
-  if (!/\.(xlsx|xls)$/i.test(loc.name)){ showToast('Localités : envoie le fichier Excel (.xlsx).'); return; }
+  if (!poly){ carteErreurForm('Ajoute le fichier des polygones (.zip du shapefile ou .geojson).'); return; }
+  if (!loc){ carteErreurForm('Ajoute le fichier Excel des localités.'); return; }
+  if (!/\.(zip|geojson|json)$/i.test(poly.name)){ carteErreurForm('Polygones : envoie un .zip (shapefile) ou un .geojson.'); return; }
+  if (!/\.(xlsx|xls)$/i.test(loc.name)){ carteErreurForm('Localités : envoie le fichier Excel (.xlsx).'); return; }
+  const auteurL = (fv('carte_auteur')||'').split('\n').map(l=>l.trim()).filter(Boolean);
+  const ev = ['carte_e_minx','carte_e_miny','carte_e_maxx','carte_e_maxy'].map(n=>String(fv(n)||'').trim().replace(',','.'));
+  let emprise = null;
+  if (ev.some(v=>v!=='')){
+    emprise = ev.map(Number);
+    if (emprise.some(v=>!isFinite(v)) || ev.some(v=>v==='')){ carteErreurForm('Cadrage manuel : renseigne les 4 valeurs (en degrés décimaux), ou laisse les 4 vides.'); return; }
+    if (emprise[2]-emprise[0] < 0.6 || emprise[3] <= emprise[1]){ carteErreurForm('Cadrage manuel refusé : largeur minimale 0,6° et ordre X min, Y min, X max, Y max.'); return; }
+  }
   const btn = document.getElementById('carte-envoyer'); if (btn){ btn.disabled = true; btn.textContent = 'Envoi…'; }
   const id = genId('cm'), nets = s=>String(s).normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^A-Za-z0-9._-]+/g,'_');
   const base = 'cartes/'+(pl.coopId||'libre')+'/'+id+'/';
   const ligne = { id, cooperative_id:pl.coopId||null, cooperative_nom:(coopConnue?coopConnue.nom:nomCoop), theme:'classique', titre:(fv('carte_titre')||'').trim()||null, code_ra:(fv('carte_code_ra')||'').trim()||null, date_maj:fv('carte_date_maj')||null,
     polygones_path:base+'polygones_'+nets(poly.name), polygones_nom:poly.name, localites_path:base+'localites_'+nets(loc.name), localites_nom:loc.name,
-    statut:'demandee', demande_par:(state.session&&state.session.user&&state.session.user.email)||null };
+    options:{ auteur:auteurL, emprise }, statut:'demandee', demande_par:(state.session&&state.session.user&&state.session.user.email)||null };
   try {
     let r = await supabaseClient.storage.from('documents-coop').upload(ligne.polygones_path, poly, { upsert:true }); if (r.error) throw r.error;
     r = await supabaseClient.storage.from('documents-coop').upload(ligne.localites_path, loc, { upsert:true }); if (r.error) throw r.error;
@@ -16748,7 +16771,7 @@ async function carteEnvoyer(){
     closeModal(); carteLancerRobot(); showToast('Demande de carte enregistrée : la génération démarre.', 'success');
   } catch(e){
     if (btn){ btn.disabled = false; btn.textContent = 'Envoyer la demande'; }
-    showToast('Demande non enregistrée : '+((e&&e.message)||e));
+    carteErreurForm('Demande non enregistrée : '+((e&&e.message)||e));
   }
 }
 function carteAnnuler(id){
