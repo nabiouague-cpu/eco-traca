@@ -570,6 +570,13 @@
   .info-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 18px;font-size:12.5px;margin-bottom:14px;}
   .info-grid div span{color:var(--ink-soft);}
   .achat-list{border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--surface);}
+  .defo-sec{display:flex;gap:12px;align-items:flex-start;padding:9px 0;border-top:1px solid var(--border);}
+  .defo-lab{flex:0 0 78px;font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#7a8683;padding-top:6px;}
+  .defo-cont{display:flex;gap:8px;flex-wrap:wrap;align-items:center;flex:1;min-width:0;}
+  .defo-chip{display:inline-flex;gap:6px;align-items:center;padding:4px 11px;border:1px solid #cfd8d5;background:#f6f9f8;border-radius:999px;font-size:12.5px;color:var(--accent);cursor:pointer;text-decoration:none;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .defo-chip:hover{background:#e8f2ec;border-color:var(--accent);}
+  .defo-chip .defo-dl{font-size:11px;opacity:.7;}
+  .defo-etape{font-weight:700;margin-right:2px;}
   .achat-item{display:flex;justify-content:space-between;align-items:center;padding:9px 14px;font-size:13px;border-bottom:1px solid var(--border);gap:10px;flex-wrap:wrap;}
   .achat-item:last-child{border-bottom:none;}
   .achat-item .num{color:var(--ink);}
@@ -3616,7 +3623,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-15-157';
+const APP_VERSION = '2026-10-15-158';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -16758,7 +16765,7 @@ function defoResumeHtml(x){
   const det = (r.fichiers||[]).map(f=>'<div>'+esc(f.fichier)+' : '+f.polygones+' polygone(s), '+f.lignes+' ligne(s), '+f.points+' point(s)</div>').join('');
   return '<div style="flex-basis:100%;font-size:12.5px"><div>'+l.join(' · ')+'</div>'+warn
     + '<details style="margin-top:2px"><summary class="hint" style="cursor:pointer;margin:0">Détail par fichier</summary><div class="hint" style="margin:2px 0 0">'+det+'</div></details>'
-    + '<div class="hint" style="margin:4px 0 0">Étape suivante : clique sur « Ouvrir dans Whisp » (le GeoJSON se télécharge et Whisp s\'ouvre), télécharge le CSV de Whisp, puis dépose-le ci-dessous dans ce dossier.</div></div>';
+    + '<div class="hint" style="margin:4px 0 0">Ensuite : utilise les boutons de la ligne « Actions » ci-dessous, dans l\'ordre 1, 2, 3.</div></div>';
 }
 function renderDefoVue(){
   if (!state.defoCharge && !state.defoChargeEnCours){ state.defoChargeEnCours = true; setTimeout(()=>{ chargerDefo(); }, 0); }
@@ -16777,12 +16784,10 @@ function renderDefoVue(){
   else if (!liste.length) h += '<div class="hint" style="padding:0 18px 14px">Aucune préparation pour le moment.</div>';
   else h += '<div class="achat-list" style="padding:0 18px 14px">' + liste.map(x=>{
     const st = CARTE_STATUTS[x.statut] || [x.statut,'#7a8683'];
-    const fich = (x.fichiers||[]).filter(f=>f.path && f.type!=='whisp_csv').map(f=>'<a style="cursor:pointer;color:var(--accent);margin-right:10px" onclick="carteTelecharger(\''+escJs(f.path)+'\')">⬇ '+esc(f.nom)+'</a>'
-      + (f.type==='geojson' ? '<button class="btn-ghost btn-compact" style="margin-right:10px" onclick="defoOuvrirWhisp(\''+escJs(f.path)+'\',\''+escJs(f.nom)+'\')">🌐 Ouvrir dans Whisp</button>' : '')).join('');
     return '<div class="achat-item" style="flex-wrap:wrap;gap:6px 12px"><span><span style="display:inline-block;background:'+st[1]+';color:#fff;border-radius:10px;padding:1px 9px;font-size:11.5px;font-weight:600">'+st[0]+'</span> '
       + (x.statut==='demandee'||x.statut==='en_cours' ? '<span class="hint" style="margin:0 6px 0 8px">'+carteDepuis(x)+'</span>' : '')
       + '<b style="margin-left:6px">'+esc(x.cooperative_nom||'—')+'</b><span class="hint" style="margin:0 0 0 8px">'+esc(dateFr(String(x.created_at).slice(0,10)))+' · '+((x.entrees||[]).length)+' fichier(s)</span></span>'
-      + '<span>'+fich+(x.statut==='erreur'&&x.erreur?'<span class="hint" style="color:#c0392b;margin:0">'+esc(x.erreur)+'</span>':'')
+      + '<span>'+(x.statut==='erreur'&&x.erreur?'<span class="hint" style="color:#c0392b;margin:0">'+esc(x.erreur)+'</span>':'')
       + (x.statut==='demandee' ? ' <button class="btn-ghost btn-compact" onclick="defoAnnuler(\''+escJs(x.id)+'\')">Annuler</button>' : '')
       + (['annulee','terminee','erreur'].includes(x.statut) ? ' <button class="btn-ghost btn-compact" style="color:#c0392b" onclick="defoSupprimer(\''+escJs(x.id)+'\')">🗑 Supprimer</button>' : '')+'</span>'
       + defoResumeHtml(x) + defoDossierHtml(x) + '</div>';
@@ -16917,7 +16922,7 @@ function defoProblemesHtml(a, et){
 function defoAnalyseCarte(a){
   const st = CARTE_STATUTS[a.statut] || [a.statut,'#7a8683']; const aid = escJs(a.id);
   const actif = a.statut==='demandee'||a.statut==='en_cours';
-  const fich = (a.fichiers||[]).filter(f=>f.path).map(f=>'<a style="cursor:pointer;color:var(--accent);margin-right:10px" onclick="carteTelecharger(\''+escJs(f.path)+'\')">⬇ '+esc(f.nom)+'</a>').join('');
+  const fich = (a.fichiers||[]).filter(f=>f.path).map(defoChip).join('');
   let h = '<div style="border:1px solid var(--border);border-radius:10px;padding:12px 14px"><div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center"><span>'
     + '<span style="display:inline-block;background:'+st[1]+';color:#fff;border-radius:10px;padding:1px 9px;font-size:11.5px;font-weight:600">'+st[0]+'</span>'
     + (actif ? '<span class="hint" style="margin:0 6px 0 8px">'+carteDepuis(a)+'</span>' : '')
@@ -16931,14 +16936,14 @@ function defoAnalyseCarte(a){
     if (r.whisp_lignes!=null) l.push('Whisp : '+fmtNum(r.whisp_fiables+r.whisp_moyens)+' appariés, '+fmtNum(r.whisp_sans)+' sans résultat');
     if (r.reg_unites!=null) l.push('Registre : '+fmtNum(r.reg_unites)+' unités');
     h += '<div style="margin-top:6px;font-size:12.5px">'+l.join(' · ')+'</div>';
-    if (fich) h += '<div style="margin-top:4px;font-size:12.5px">Rapport d\'analyse : '+fich+'</div>';
+    if (fich) h += '<div style="margin-top:8px">'+defoSec('Fichiers', fich)+'</div>';
     let apres = '';
     if (n){
       const det = Object.keys(n.cumul_retires||{}).filter(k=>n.cumul_retires[k]).map(k=>fmtNum(n.cumul_retires[k])+' '+(DEFO_MOTIFS[k]||k)).join(', ');
-      const dl = (et.dernier.fichiers||[]).filter(f=>f.path).map(f=>'<a style="cursor:pointer;color:var(--accent);margin-right:10px" onclick="carteTelecharger(\''+escJs(f.path)+'\')">⬇ '+esc(f.nom)+'</a>').join('');
+      const dl = (et.dernier.fichiers||[]).filter(f=>f.path).map(defoChip).join('');
       apres += '<div style="margin-top:10px;padding:8px 10px;background:#eef6ef;border-radius:8px;font-size:12.5px"><b>Après nettoyage (copie) : '+fmtNum(n.restants)+' polygones · '+fmtNum(n.restants_ha)+' ha</b>'
         + (det ? '<div class="hint" style="margin:2px 0 0">Retirés : '+esc(det)+(n.producteurs_retires&&n.producteurs_retires.length?' · '+fmtNum(n.producteurs_retires.length)+' producteur(s) sans polygone à retirer du registre final':'')+'</div>' : '')
-        + '<div style="margin-top:4px">'+dl+'</div></div>';
+        + defoSec('Fichiers', dl) + '</div>';
     }
     if (et.enCours) h += '<div style="margin-top:6px;color:#1f5fa8;font-weight:600">⏳ Nettoyage en cours… <span class="hint" style="margin:0">'+carteDepuis(et.enCours)+'</span></div>';
     if (et.erreur) h += '<div style="margin-top:6px;color:#c0392b;font-size:12.5px">Le dernier nettoyage a échoué : '+esc(et.erreur.erreur||'erreur inconnue')+' <button class="btn-ghost btn-compact" onclick="defoFermerErreur(\''+escJs(et.erreur.id)+'\')">Fermer</button></div>';
@@ -16963,13 +16968,13 @@ function defoFinaleHtml(a){
   else h += '<button class="btn btn-primary btn-compact" '+(et.enCours?'disabled ':'')+'onclick="ouvrirDefoFinale(\''+aid+'\')">📦 Produire la base finale</button>';
   if (err) h += '<div style="margin-top:6px;color:#c0392b;font-size:12.5px">La dernière production a échoué : '+esc(err.erreur||'erreur inconnue')+' <button class="btn-ghost btn-compact" onclick="defoFermerErreur(\''+escJs(err.id)+'\')">Fermer</button></div>';
   if (ok && ok.resume){
-    const r = ok.resume, dl = (ok.fichiers||[]).filter(f=>f.path).map(f=>'<a style="cursor:pointer;color:var(--accent);margin-right:10px" onclick="carteTelecharger(\''+escJs(f.path)+'\')">⬇ '+esc(f.nom)+'</a>').join('');
+    const r = ok.resume, dl = (ok.fichiers||[]).filter(f=>f.path).map(defoChip).join('');
     h += '<div style="margin-top:8px;padding:8px 10px;background:#eef6ef;border-radius:8px;font-size:12.5px"><b>'+fmtNum(r.parcelles)+' parcelles · '+fmtNum(r.producteurs)+' producteurs · '+fmtNum(r.surface_ha)+' ha · '+fmtNum(Math.round(r.tonnage_kg/1000*10)/10)+' t estimées</b>'
       + '<div class="hint" style="margin:2px 0 0">NodeID '+esc(r.node_id||'')+' · '+(r.intervalle_impose?'intervalle imposé '+fmtNum(r.intervalle_impose[0])+'–'+fmtNum(r.intervalle_impose[1])+' kg/ha':'rendement moyen '+fmtNum(r.rendement_moy_kg_ha)+' kg/ha (de '+fmtNum(Math.round(r.rendement_min_parcelle))+' à '+fmtNum(Math.round(r.rendement_max_parcelle))+' selon la parcelle, cacao autour : '+fmtNum(r.densite_moy_pct)+' % en moyenne)')+' · '+(r.depuis_copie_nettoyee?'depuis la copie nettoyée':'depuis les polygones d\'origine')
       + (r.exclus?' · <span style="color:#b36b00">'+fmtNum(r.exclus)+' polygone(s) non repris (voir ci-dessous)</span>':'')+'</div>'
       + (r.controles && r.controles.geojson_egal_registre && r.controles.plotid_uniques && !r.controles.noms_manquants ? '<div class="hint" style="margin:2px 0 0;color:#1e8449">✔ GeoJSON et registre alignés, PlotID uniques, aucun nom manquant</div>' : '<div class="hint" style="margin:2px 0 0;color:#c0392b">⚠ Contrôle non conforme : voir le détail</div>')
       + (r.exclus_detail&&r.exclus_detail.length ? '<details><summary class="hint" style="cursor:pointer;margin:0">Polygones non repris</summary><div class="hint" style="margin:0">'+r.exclus_detail.map(x=>esc(x[0])+' : '+esc(x[1])).join('<br>')+'</div></details>' : '')
-      + '<div style="margin-top:4px">'+dl+'</div></div>';
+      + defoSec('Fichiers', dl) + '</div>';
   }
   return h + '</div>';
 }
@@ -17074,22 +17079,22 @@ async function defoLancerNettoyage(aid, actions){
   state.defo = [ins.data].concat(state.defo||[]); carteLancerRobot(); showToast('Nettoyage lancé.', 'success'); render();
 }
 function ouvrirDefoAnalyse(prepId){ openModal('defoAnalyse', { nom:'', prepId: prepId||null }); }
+function defoChip(f){ return '<a class="defo-chip" title="Télécharger '+esc(f.nom)+'" onclick="carteTelecharger(\''+escJs(f.path)+'\')">📄 '+esc(f.nom)+' <span class="defo-dl">⬇</span></a>'; }
+function defoSec(lab, contenu){ return '<div class="defo-sec"><span class="defo-lab">'+lab+'</span><div class="defo-cont">'+contenu+'</div></div>'; }
 function defoDossierHtml(x){
-  const fl = x.fichiers||[];
-  if (x.statut!=='terminee' || !fl.some(f=>f.type==='geojson')) return '';
+  const fl = x.fichiers||[], g = fl.find(f=>f.type==='geojson');
+  if (x.statut!=='terminee' || !g) return '';
   const w = fl.find(f=>f.type==='whisp_csv'), idj = escJs(x.id);
   const lie = (state.defo||[]).filter(z=>z.etape==='analyse' && z.entrees && z.entrees.prep_id===x.id);
   const actif = lie.some(z=>z.statut!=='erreur' && z.statut!=='annulee');
-  const ligne = (t, c)=>'<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><b style="min-width:170px">'+t+'</b>'+c+'</div>';
-  const depot = lbl=>'<label class="btn-ghost btn-compact" style="cursor:pointer">'+lbl+'<input type="file" accept=".csv" style="display:none" onchange="defoDeposerWhisp(\''+idj+'\',this)"></label>';
-  let h = '<div style="flex-basis:100%;border-top:1px dashed #cfd8d5;margin-top:6px;padding-top:8px;display:flex;flex-direction:column;gap:8px">';
-  h += ligne('② Rapport Whisp', w
-    ? '<span>✅ '+esc(w.nom)+'</span><a style="cursor:pointer;color:var(--accent)" onclick="carteTelecharger(\''+escJs(w.path)+'\')">⬇</a>'+(lie.length?'':depot('Remplacer'))
-    : depot('📥 Déposer le CSV de Whisp'));
-  h += ligne('③ Registre et analyse', actif
-    ? '<span class="hint" style="margin:0">analyse lancée, voir ci-dessous</span>'
-    : (w ? '<button class="btn btn-primary btn-compact" onclick="ouvrirDefoAnalyse(\''+idj+'\')">🔎 Ajouter le registre et lancer l\'analyse</button>' : '<span class="hint" style="margin:0">dépose d\'abord le CSV de Whisp</span>'));
-  h += lie.map(a=>'<div>'+defoAnalyseCarte(a)+'</div>').join('');
+  const prim = ok=>ok ? 'btn btn-primary btn-compact' : 'btn-ghost btn-compact';
+  const fichiers = defoChip(g) + (w ? defoChip(w) : '<span class="hint" style="margin:0">Le CSV de Whisp n\'est pas encore déposé.</span>');
+  const b1 = '<button class="btn-ghost btn-compact" onclick="defoOuvrirWhisp(\''+escJs(g.path)+'\',\''+escJs(g.nom)+'\')"><span class="defo-etape">1</span> 🌐 Ouvrir dans Whisp</button>';
+  const b2 = (w && lie.length) ? '' : '<label class="'+prim(!w)+'" style="cursor:pointer"><span class="defo-etape">2</span> 📥 '+(w?'Remplacer le CSV de Whisp':'Déposer le CSV de Whisp')+'<input type="file" accept=".csv" style="display:none" onchange="defoDeposerWhisp(\''+idj+'\',this)"></label>';
+  const b3 = actif ? '<span class="hint" style="margin:0">Analyse lancée : voir plus bas.</span>'
+    : '<button class="'+prim(!!w)+'" '+(w?'':'disabled ')+'onclick="ouvrirDefoAnalyse(\''+idj+'\')"><span class="defo-etape">3</span> 🔎 Ajouter le registre et lancer l\'analyse</button>';
+  let h = '<div style="flex-basis:100%;margin-top:8px">' + defoSec('Fichiers', fichiers) + defoSec('Actions', b1+b2+b3);
+  if (lie.length) h += '<div class="defo-sec"><span class="defo-lab">Analyse</span><div style="flex:1;min-width:0">'+lie.map(defoAnalyseCarte).join('<div style="height:10px"></div>')+'</div></div>';
   return h + '</div>';
 }
 async function defoDeposerWhisp(pid, input){
