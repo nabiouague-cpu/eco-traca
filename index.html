@@ -3544,7 +3544,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-15-127';
+const APP_VERSION = '2026-10-15-128';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -16918,16 +16918,13 @@ const AIDE_ECRANS = {
       ['Alertes','producteurs ou coopératives au-dessus du plafond : à traiter avec « Traiter toutes les alertes ».']],
     qui:'Durabilité & conformité (rapports CCC, alertes) · Finance (paiements) · Usines (pesées).',
     actions:['Importer un rapport CCC pour enregistrer les livraisons','Choisir la campagne et la période en haut','Exporter en Excel pour un partage'] },
-  cooperatives: { titre:'Coopératives', objectif:'Savoir, pour chaque coopérative, si on peut lui acheter du cacao certifié aujourd\'hui, et quoi faire sinon.',
+  cooperatives: { titre:'Coopératives', objectif:'Retrouver une coopérative, ouvrir sa fiche, lui envoyer messages et documents, générer ses contrats.',
     lecture:[
-      ['Verdict','Prête = les 7 étapes sont vertes. À surveiller = rien de bloquant mais quelque chose à compléter (licence < 30 j, polygones partiels…). Bloquée = au moins une étape rouge.'],
-      ['Les 7 pastilles','Fiche vérifiée · Documents · Certificat · Contrat signé · Code de conduite · Registre · Polygones. Vert / orange / rouge, gris = sans objet. Survole une pastille pour lire pourquoi.'],
-      ['Certificat utilisé','livré (net usine, campagne affichée) ÷ volume du certificat. Une coopérative ne peut pas livrer plus de certifié que son certificat : orange à 80 %, rouge à 100 %.'],
+      ['Deux colonnes','À gauche les coopératives certifiées, à droite les non certifiées. Clique sur le titre d\'une colonne pour la déplier ou l\'agrandir.'],
       ['Fin de licence','jours restants avant la fin de la licence annuelle. C\'est jusqu\'à cette date qu\'elle peut livrer, pas la date du certificat.'],
-      ['Dernier contact','dernière livraison, document, demande, fichier de données ou message reçu de la coopérative. Orange > 30 j, rouge > 60 j.'],
-      ['Blocages à lever','l\'étape qui bloque le plus de coopératives en premier : c\'est par là qu\'il faut commencer.']],
+      ['Compte à rebours','bouton ⏳ : liste des coopératives dont la licence ou le certificat arrive à expiration.']],
     qui:'Durabilité & conformité. Les coopératives alimentent elles-mêmes documents, registre et polygones depuis leur portail ; AWAHUS (sans portail) : tout passe par ECORIGINE.',
-    actions:['Clique sur la puce ▸ d\'une coopérative : chaque étape est expliquée avec le bouton qui débloque','Clique sur une étape de l\'entonnoir pour filtrer les coopératives bloquées à cette étape','« Lire les certificats » : relit les certificats déposés pour trouver les dates de fin de licence manquantes'] },
+    actions:['Utilise la recherche en haut pour trouver une coopérative','« Lire les certificats » : relit les certificats déposés pour trouver les dates de fin de licence manquantes','« Compte à rebours » : voir les licences qui expirent bientôt'] },
   prefinancements: { titre:'Préfinancements', objectif:'Suivre les avances versées aux coopératives et dire, chiffres à l\'appui, s\'il faut les refinancer ou non.',
     lecture:[
       ['Préfinancé (A)','total des avances versées à la coopérative sur la campagne.'],
@@ -17082,7 +17079,7 @@ function renderGuideTab(){
   });
   h += '</div></div>';
   const roles = [
-    ['Durabilité & conformité','Coopératives (verdict, parcours), Conformité & documents, Demandes, Base de données, Traçage de volume, chaîne de traçabilité, dossier RDUE.'],
+    ['Durabilité & conformité','Coopératives, Conformité & documents, Demandes, Base de données, Traçage de volume, chaîne de traçabilité, dossier RDUE.'],
     ['Commercial','Contrats clients, Suivi achats clients (attribution des connaissements aux clients), Préfinancements (avances, suivi, observation).'],
     ['Finance','Paiements des connaissements, remboursements des préfinancements, règlements des commandes de sacs.'],
     ['Shipping','Séries de numérotation, OT : numéro, navire, date d\'embarquement, BL. C\'est la date d\'embarquement qui fait avancer le suivi client.'],
@@ -17297,6 +17294,7 @@ function renderCooperativesTab(){
     html += ocRechercheCoopHtml('coops');
     html += '<div class="controls">'
       + '<button class="btn" onclick="ouvrirLienFiche()" title="Pour une coopérative sans portail : elle remplit sa fiche via un lien, elle est créée dans ORIGEN et son contrat peut être généré.">🔗 Lien de fiche (sans portail)</button>'
+      + '<button class="btn" onclick="basculerCompteReboursAwahus()">⏳ Compte à rebours</button>'
       + '<button class="btn" onclick="certLireTout()" title="Lit les certificats déposés dans le stockage et en extrait la date de fin de licence des coopératives qui n\'en ont pas.">📄 Lire les certificats (dates)</button>'
       + '<button class="btn btn-primary" onclick="ouvrirAjoutCooperative()">+ Ajouter une coopérative</button>'
       + '<button class="btn btn-primary" onclick="ouvrirEnvoiMessage()">✉ Envoyer un message</button>'
@@ -17306,103 +17304,28 @@ function renderCooperativesTab(){
       + '<button class="btn" onclick="exporterFichesCooperatives()">⬇ Télécharger les fiches (Excel)</button>'
       + '</div>';
     html += renderCertLecture();
+    html += renderCompteReboursAwahus();
   }
+
   if (state.cooperatives.length===0){
     html += '<div class="panel"><div class="panel-head"><h2>Coopératives (0)</h2></div>'
       + '<div class="empty">Aucune coopérative enregistrée pour le moment.<br>Les coopératives créent elles-mêmes leur accès depuis le portail coopérative — tu peux aussi en ajouter une manuellement.<br><br><button class="btn btn-primary" onclick="ouvrirAjoutCooperative()">+ Ajouter une coopérative</button></div></div>';
-    return html;
+  } else {
+    const certifiees = state.cooperatives.filter(c=>c.statut!=='Non certifiée');
+    const nonCertifiees = state.cooperatives.filter(c=>c.statut==='Non certifiée');
+    if (state.coopFocusGroup==='cooperatives-certifiees'){
+      html += '<button class="btn-ghost" style="margin-bottom:10px;" onclick="unfocusCoopGroup()">← Retour aux deux colonnes</button>';
+      html += renderCoopGroup('cooperatives-certifiees', 'Coopératives certifiées', certifiees);
+    } else if (state.coopFocusGroup==='cooperatives-non-certifiees'){
+      html += '<button class="btn-ghost" style="margin-bottom:10px;" onclick="unfocusCoopGroup()">← Retour aux deux colonnes</button>';
+      html += renderCoopGroup('cooperatives-non-certifiees', 'Coopératives non certifiées', nonCertifiees);
+    } else {
+      html += '<div class="coop-columns">'
+        + renderCoopGroup('cooperatives-certifiees', 'Coopératives certifiées', certifiees)
+        + renderCoopGroup('cooperatives-non-certifiees', 'Coopératives non certifiées', nonCertifiees)
+        + '</div>';
+    }
   }
-  const toutes = state.cooperatives.map(coopLigneDonnees);
-  const suivies = toutes.filter(l=>!l.externe);
-  html += lectureRapideCoops(toutes);
-  const nb = k=>toutes.filter(COOP_FILTRES.find(f=>f[0]===k)[2]).length;
-  const resteCertTotal = toutes.reduce((s,l)=>s+(l.resteCert||0),0);
-  const volCertTotal = toutes.reduce((s,l)=>s+(l.volCert||0),0);
-  const livreTotal = toutes.reduce((s,l)=>s+l.livre,0);
-  const camp = coopCampagneActive();
-  // ---- Tuiles ----
-  const tuile = (k, v, s, sous, alerte)=>'<div class="ckpt-tuile'+(alerte&&v>0?' alerte':'')+'" style="cursor:pointer'+(state.coopFiltre===k?';outline:2px solid var(--accent)':'')+'" onclick="coopSetFiltre(\''+k+'\')"><div class="k">'+s+'</div><div class="v">'+v+'</div>'+(sous?'<div class="s">'+sous+'</div>':'')+'</div>';
-  html += '<div class="ckpt" style="grid-template-columns:repeat(6,1fr);margin-bottom:14px">'
-    + tuile('tous', toutes.length, 'Coopératives', nb('certifiees')+' certifiées')
-    + tuile('pretes', nb('pretes'), 'Prêtes à livrer', 'sur '+suivies.length+' suivies')
-    + tuile('bloquees', nb('bloquees'), 'Bloquées', nb('surveiller')+' à surveiller', true)
-    + '<div class="ckpt-tuile'+(volCertTotal>0 && livreTotal/volCertTotal>=0.8?' alerte':'')+'"><div class="k">Reste certifié disponible</div><div class="v">'+pipeTonnes(resteCertTotal)+'</div><div class="s">'+(volCertTotal>0 ? Math.round(livreTotal/volCertTotal*100)+' % des certificats utilisés' : 'aucun volume de certificat')+(camp?' · '+esc(camp.nom):'')+'</div></div>'
-    + tuile('licence30', nb('licence30'), 'Licences < 30 j', '', true)
-    + tuile('silence', nb('silence'), 'Sans contact > 30 j', '', true)
-    + '</div>';
-  // ---- Parcours de conformite : entonnoir + blocages ----
-  const parEtape = COOP_ETAPES.map(([k,lab])=>{ const app = suivies.filter(l=>l.parcours.find(e=>e.k===k).etat!=='na'); return { k, lab, ok:app.filter(l=>l.parcours.find(e=>e.k===k).etat==='ok').length, warn:app.filter(l=>l.parcours.find(e=>e.k===k).etat==='warn').length, ko:app.filter(l=>l.parcours.find(e=>e.k===k).etat==='ko').length, n:app.length }; });
-  html += '<div class="panel" style="margin-bottom:14px"><div class="panel-head"><h2>Parcours de conformité</h2><p class="hint" style="margin:4px 0 0">Combien de coopératives ont franchi chaque étape'+(camp?' ('+esc(camp.nom)+')':'')+'. Clique sur une étape pour voir celles qui y sont bloquées.</p></div>'
-    + '<div style="display:grid;grid-template-columns:repeat(8,1fr);gap:8px;padding:4px 18px 14px">';
-  parEtape.forEach(p=>{
-    const pct = p.n>0 ? Math.round(p.ok/p.n*100) : 0, actif = state.coopFiltreEtape===p.k;
-    html += '<div onclick="coopSetFiltreEtape(\''+p.k+'\')" style="cursor:pointer;border:1.5px solid '+(actif?'var(--accent)':'var(--border)')+';border-radius:10px;padding:8px 10px;background:'+(actif?'#f3f8f6':'#fff')+'">'
-      + '<div style="font-size:11px;color:var(--ink-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+p.lab+'</div>'
-      + '<div style="font-size:20px;font-weight:800;line-height:1.2">'+p.ok+'<span style="font-size:12px;font-weight:500;color:var(--ink-soft)"> / '+p.n+'</span></div>'
-      + '<div style="height:6px;background:#eee;border-radius:3px;overflow:hidden;margin:4px 0 3px;display:flex"><i style="display:block;height:100%;width:'+pct+'%;background:#1e8449"></i><i style="display:block;height:100%;width:'+(p.n?Math.round(p.warn/p.n*100):0)+'%;background:#d68910"></i></div>'
-      + '<div style="font-size:11px;color:var(--ink-soft)">'+(p.ko?'<span style="color:#c0392b;font-weight:600">'+p.ko+' bloquée'+(p.ko>1?'s':'')+'</span>':'')+(p.ko&&p.warn?' · ':'')+(p.warn?'<span style="color:#d68910;font-weight:600">'+p.warn+' à compléter</span>':'')+(!p.ko&&!p.warn?'✓':'')+'</div></div>';
-  });
-  html += '</div>';
-  const blocages = parEtape.filter(p=>p.k!=='prete' && p.ko>0).sort((a,b)=>b.ko-a.ko);
-  if (blocages.length){
-    html += '<div style="padding:0 18px 14px"><div style="font-size:12.5px;font-weight:700;margin-bottom:4px">Blocages à lever, par ordre d\'impact</div>'
-      + blocages.map(p=>{ const noms = suivies.filter(l=>l.parcours.find(e=>e.k===p.k).etat==='ko').map(l=>l.c.nom); return '<div style="font-size:12.5px;padding:3px 0"><b style="color:#c0392b">'+p.ko+'</b> × '+p.lab.toLowerCase()+' : <span class="hint" style="margin:0">'+esc(noms.slice(0,6).join(', '))+(noms.length>6?' + '+(noms.length-6)+' autres':'')+'</span></div>'; }).join('')
-      + '</div>';
-  }
-  html += '</div>';
-  // ---- À faire ----
-  const todo = [];
-  toutes.filter(l=>l.pctCert!==null && l.pctCert>=80).sort((a,b)=>b.pctCert-a.pctCert).forEach(l=>todo.push({ c:l.pctCert>=100?'#c0392b':'#d68910', t:'<b>'+esc(l.c.nom)+'</b> : certificat utilisé à '+Math.round(l.pctCert)+' % — '+(l.pctCert>=100?'plafond dépassé, ne plus acheter en certifié':'reste '+pipeTonnes(l.resteCert)) }));
-  toutes.filter(l=>l.jours!==null && l.jours<=30).sort((a,b)=>a.jours-b.jours).forEach(l=>todo.push({ c:l.jours<=14?'#c0392b':'#d68910', t:'<b>'+esc(l.c.nom)+'</b> : licence '+(l.jours<0?'expirée depuis '+(-l.jours)+' j':l.jours===0?'se termine aujourd\'hui':'dans '+l.jours+' j')+' ('+esc(dateFr(l.c.date_fin_licence))+')' }));
-  const sansDate = toutes.filter(l=>l.c.statut==='Certifiée' && !l.externe && l.jours===null);
-  if (sansDate.length) todo.push({ c:'#7a5200', t:sansDate.length+' certifiée'+(sansDate.length>1?'s':'')+' sans date de fin de licence : '+esc(sansDate.map(l=>l.c.nom).join(', ')) });
-  const silence = toutes.filter(l=>!l.externe && l.dernier && l.dernier.jours>60);
-  if (silence.length) todo.push({ c:'#7a5200', t:silence.length+' coopérative'+(silence.length>1?'s':'')+' sans aucun contact depuis plus de 60 j : '+esc(silence.map(l=>l.c.nom).join(', ')) });
-  const av = toutes.filter(l=>l.aVerifier||l.fiche);
-  if (av.length) todo.push({ c:'#1f5fa8', t:av.length+' fiche'+(av.length>1?'s':'')+' à vérifier ou compléter : '+esc(av.map(l=>l.c.nom).join(', ')) });
-  if (todo.length){
-    html += '<div class="panel" style="margin-bottom:14px"><div class="panel-head"><h2>À faire</h2></div><div style="padding:0 18px 12px">'
-      + todo.slice(0,7).map(x=>'<div style="display:flex;gap:8px;align-items:flex-start;padding:5px 0;border-bottom:1px solid var(--border);font-size:13px"><span style="flex:none;width:9px;height:9px;border-radius:50%;background:'+x.c+';margin-top:5px"></span><span>'+x.t+'</span></div>').join('')
-      + (todo.length>7 ? '<div class="hint" style="margin:6px 0 0">+ '+(todo.length-7)+' autre(s)</div>' : '')
-      + '</div></div>';
-  }
-  // ---- Filtres ----
-  const filtre = COOP_FILTRES.find(f=>f[0]===(state.coopFiltre||'tous')) || COOP_FILTRES[0];
-  html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">'
-    + COOP_FILTRES.map(f=>'<button class="btn-ghost btn-compact" style="'+(f[0]===filtre[0] && !state.coopFiltreEtape?'background:var(--accent);color:#fff;border-color:var(--accent)':'')+'" onclick="coopSetFiltre(\''+f[0]+'\')">'+f[1]+' <span style="opacity:.7">'+nb(f[0])+'</span></button>').join('')
-    + '</div>';
-  // ---- Liste ----
-  const tri = state.coopTri || 'verdict', desc = !!state.coopTriDesc;
-  const ordreV = { ko:0, warn:1, ok:2, na:3 };
-  const cles = { nom:l=>String(l.c.nom||'').toLowerCase(), verdict:l=>(l.externe?3:ordreV[l.verdict.etat])*1000+(l.parcours.filter(e=>e.etat==='ko').length*10)+l.parcours.filter(e=>e.etat==='warn').length, licence:l=>l.jours===null?1e9:l.jours, cert:l=>l.pctCert===null?-1:l.pctCert, docs:l=>l.docs.total?l.docs.ok/l.docs.total:2, prod:l=>l.stats.count, livre:l=>l.livre, dernier:l=>l.dernier?l.dernier.jours:1e9, client:l=>String(l.c.client||'').toLowerCase() };
-  let lignes = toutes.filter(filtre[2]);
-  let titre = filtre[1];
-  if (state.coopFiltreEtape){ const et = COOP_ETAPES.find(x=>x[0]===state.coopFiltreEtape); lignes = toutes.filter(l=>{ const e = l.parcours.find(x=>x.k===state.coopFiltreEtape); return e && (e.etat==='ko' || e.etat==='warn'); }); titre = 'Bloquées ou à compléter : '+et[1].toLowerCase(); }
-  lignes = lignes.slice().sort((a,b)=>{ const x=cles[tri](a), y=cles[tri](b); const r = typeof x==='number' ? x-y : String(x).localeCompare(String(y),'fr'); return (desc ? -r : r) || String(a.c.nom).localeCompare(String(b.c.nom),'fr'); });
-  window._coopLignesAffichees = lignes;
-  const th = (k,l,num)=>'<th class="'+(num?'num':'')+'" style="cursor:pointer" onclick="coopSetTri(\''+k+'\')">'+l+(tri===k?(desc?' ▼':' ▲'):'')+'</th>';
-  html += '<div class="panel"><div class="panel-head" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><h2>'+esc(titre)+' ('+lignes.length+')</h2><div style="display:flex;gap:8px;align-items:center">'+(state.coopFiltreEtape?'<button class="btn-ghost btn-compact" onclick="coopSetFiltreEtape(null)">✕ Retirer le filtre</button>':'')+'<button class="btn-ghost btn-compact" onclick="coopExporterListe(window._coopLignesAffichees||[])">⬇ Exporter (Excel)</button></div></div>';
-  html += '<div style="padding:0 18px 16px;overflow:auto"><table class="data-table pref-table"><thead><tr>'+th('nom','Coopérative')+th('verdict','Verdict')+'<th>Parcours</th>'+th('licence','Fin de licence',1)+th('cert','Certificat utilisé',1)+th('docs','Documents',1)+th('prod','Producteurs',1)+th('livre','Livré',1)+th('dernier','Dernier contact')+th('client','Client')+'</tr></thead><tbody>';
-  lignes.forEach(l=>{
-    const c = l.c, ouv = !!(state.coopOuverts && state.coopOuverts[c.id]);
-    const certLab = c.statut==='Certifiée' ? (c.certifications==='Rainforest Alliance'?'RA':c.certifications==='Fairtrade'?'FT':esc(c.certifications||'cert.')) : 'conv.';
-    const badges = ' <span class="hint" style="margin:0;font-size:11px">'+certLab+'</span>'+(l.awahus?' <span class="hint" style="margin:0;font-size:11px">AWAHUS</span>':'')+(l.sansPortail?' <span class="hint" style="margin:0;font-size:11px">sans portail</span>':'');
-    html += '<tr class="pref-ligne'+(ouv?' ouvert':'')+'">'
-      + '<td style="cursor:pointer" onclick="coopBasculerLigne(\''+escJs(c.id)+'\')"><span class="chev" style="margin-right:4px">▸</span><b>'+esc(c.nom)+'</b>'+badges+'</td>'
-      + '<td>'+coopVerdictBadge(l.verdict, l.externe)+'</td><td>'+coopPastilles(l.parcours)+'</td>'
-      + '<td class="num">'+coopLicenceHtml(l)+'</td><td class="num">'+coopJaugeCert(l)+'</td>'
-      + '<td class="num">'+(l.externe?'—':'<span style="font-weight:600;color:'+(l.docs.ok>=l.docs.total?'#1e8449':'#d68910')+'">'+l.docs.ok+'/'+l.docs.total+'</span>')+'</td>'
-      + '<td class="num">'+(l.externe?'—':fmtNum(l.stats.count))+'</td>'
-      + '<td class="num">'+(l.livre>0?pipeTonnes(l.livre)+'<div class="hint" style="margin:0;font-size:11px">'+l.nbConn+' conn.</div>':'—')+'</td>'
-      + '<td>'+coopDernierHtml(l)+'</td><td>'+esc(c.client||'—')+'</td></tr>';
-    if (ouv) html += '<tr><td colspan="10" style="background:#fff;border-bottom:2px solid var(--border);white-space:normal;text-align:left;padding:12px 14px 12px 30px">'
-      + '<div style="font-size:13px;font-weight:700;margin-bottom:6px">'+coopVerdictBadge(l.verdict, l.externe)+' <span style="margin-left:6px">'+esc(l.verdict.txt)+'</span></div>'
-      + coopDetailParcoursHtml(l)
-      + '<div class="coop-card-list">'+renderCoopCard(c)+'</div></td></tr>';
-  });
-  html += '</tbody></table>'
-    + '<p class="hint" style="margin-top:10px">Verdict = les 7 étapes du parcours : rouge = bloquant, orange = à compléter ou à surveiller, gris = sans objet. Certificat utilisé = livré (net usine, campagne affichée) ÷ volume du certificat ; une coopérative ne peut pas livrer plus de certifié que son certificat. Dernier contact = livraison, document, demande, fichier de données ou message reçu de la coopérative.</p></div></div>';
-  html += renderCompteReboursAwahus();
   html += '<div class="footer-note">Données stockées de façon privée sur votre compte. <button onclick="resetAll()">Réinitialiser toutes les données</button></div>';
   return html;
 }
