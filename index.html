@@ -3616,7 +3616,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-15-155';
+const APP_VERSION = '2026-10-15-156';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -16758,26 +16758,26 @@ function defoResumeHtml(x){
   const det = (r.fichiers||[]).map(f=>'<div>'+esc(f.fichier)+' : '+f.polygones+' polygone(s), '+f.lignes+' ligne(s), '+f.points+' point(s)</div>').join('');
   return '<div style="flex-basis:100%;font-size:12.5px"><div>'+l.join(' · ')+'</div>'+warn
     + '<details style="margin-top:2px"><summary class="hint" style="cursor:pointer;margin:0">Détail par fichier</summary><div class="hint" style="margin:2px 0 0">'+det+'</div></details>'
-    + '<div class="hint" style="margin:4px 0 0">Étape suivante : clique sur « Ouvrir dans Whisp » (le GeoJSON se télécharge et Whisp s\'ouvre), télécharge le CSV de Whisp, puis lance l\'analyse (étape 2, juste en dessous) avec ce CSV et le registre.</div></div>';
+    + '<div class="hint" style="margin:4px 0 0">Étape suivante : clique sur « Ouvrir dans Whisp » (le GeoJSON se télécharge et Whisp s\'ouvre), télécharge le CSV de Whisp, puis dépose-le ci-dessous dans ce dossier.</div></div>';
 }
 function renderDefoVue(){
   if (!state.defoCharge && !state.defoChargeEnCours){ state.defoChargeEnCours = true; setTimeout(()=>{ chargerDefo(); }, 0); }
   defoSuivi();
   const tout = state.defo || [];
   const liste = tout.filter(x=>(x.etape||'preparation')==='preparation');
-  const analyses = tout.filter(x=>x.etape==='analyse');
+  const analyses = tout.filter(x=>x.etape==='analyse' && !(x.entrees && x.entrees.prep_id && tout.some(p=>p.id===x.entrees.prep_id)));
   const nEnCours = tout.filter(x=>x.statut==='demandee'||x.statut==='en_cours').length;
   let h = '';
   if (nEnCours) h += '<div class="panel" style="border-left:4px solid #1f5fa8"><div style="padding:12px 18px"><b>⏳ '+nEnCours+' tâche'+(nEnCours>1?'s':'')+' en cours</b> <span class="hint" style="margin:0 0 0 6px">Quelques minutes. La liste se met à jour toute seule.</span></div></div>';
   h += '<div class="panel"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 18px 8px">'
-    + '<div><b>Étape 1 — Préparer les polygones</b><div class="hint" style="margin:2px 0 0">Dépose les fichiers reçus d\'une coopérative (KML, KMZ, GPX, GeoJSON, shapefile .zip) : ORIGEN supprime les points, transforme les lignes en polygones, répare les géométries et fusionne le tout en un seul GeoJSON prêt pour Whisp.</div></div>'
+    + '<div><b>Étape 1 — Dossier de la coopérative</b><div class="hint" style="margin:2px 0 0">Dépose les fichiers reçus d\'une coopérative (KML, KMZ, GPX, GeoJSON, shapefile .zip) : ORIGEN supprime les points, transforme les lignes en polygones, répare les géométries et fusionne le tout en un seul GeoJSON prêt pour Whisp. Ensuite, dans le même dossier : tu déposes le CSV de Whisp, puis le registre, et l\'analyse se lance.</div></div>'
     + '<button class="btn btn-primary" onclick="ouvrirDefoPrep()">🌳 Nouvelle préparation</button></div>';
   if (state.defoIndispo) h += '<div class="hint" style="padding:0 18px 14px;color:var(--warn)">Le suivi des analyses n\'est pas encore disponible sur cette base.</div>';
   else if (!state.defoCharge) h += '<div class="hint" style="padding:0 18px 14px">Chargement…</div>';
   else if (!liste.length) h += '<div class="hint" style="padding:0 18px 14px">Aucune préparation pour le moment.</div>';
   else h += '<div class="achat-list" style="padding:0 18px 14px">' + liste.map(x=>{
     const st = CARTE_STATUTS[x.statut] || [x.statut,'#7a8683'];
-    const fich = (x.fichiers||[]).filter(f=>f.path).map(f=>'<a style="cursor:pointer;color:var(--accent);margin-right:10px" onclick="carteTelecharger(\''+escJs(f.path)+'\')">⬇ '+esc(f.nom)+'</a>'
+    const fich = (x.fichiers||[]).filter(f=>f.path && f.type!=='whisp_csv').map(f=>'<a style="cursor:pointer;color:var(--accent);margin-right:10px" onclick="carteTelecharger(\''+escJs(f.path)+'\')">⬇ '+esc(f.nom)+'</a>'
       + (f.type==='geojson' ? '<button class="btn-ghost btn-compact" style="margin-right:10px" onclick="defoOuvrirWhisp(\''+escJs(f.path)+'\',\''+escJs(f.nom)+'\')">🌐 Ouvrir dans Whisp</button>' : '')).join('');
     return '<div class="achat-item" style="flex-wrap:wrap;gap:6px 12px"><span><span style="display:inline-block;background:'+st[1]+';color:#fff;border-radius:10px;padding:1px 9px;font-size:11.5px;font-weight:600">'+st[0]+'</span> '
       + (x.statut==='demandee'||x.statut==='en_cours' ? '<span class="hint" style="margin:0 6px 0 8px">'+carteDepuis(x)+'</span>' : '')
@@ -16785,15 +16785,15 @@ function renderDefoVue(){
       + '<span>'+fich+(x.statut==='erreur'&&x.erreur?'<span class="hint" style="color:#c0392b;margin:0">'+esc(x.erreur)+'</span>':'')
       + (x.statut==='demandee' ? ' <button class="btn-ghost btn-compact" onclick="defoAnnuler(\''+escJs(x.id)+'\')">Annuler</button>' : '')
       + (['annulee','terminee','erreur'].includes(x.statut) ? ' <button class="btn-ghost btn-compact" style="color:#c0392b" onclick="defoSupprimer(\''+escJs(x.id)+'\')">🗑 Supprimer</button>' : '')+'</span>'
-      + defoResumeHtml(x) + '</div>';
+      + defoResumeHtml(x) + defoDossierHtml(x) + '</div>';
   }).join('') + '</div>';
   h += '</div>';
   // ----- Étape 2 : analyse, problèmes, actions -----
   h += '<div class="panel"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 18px 8px">'
-    + '<div><b>Étape 2 — Analyser et corriger</b><div class="hint" style="margin:2px 0 0">Dépose le GeoJSON, le CSV de Whisp et le registre de la coopérative. ORIGEN te montre les problèmes trouvés, ce qu\'il faut faire pour chacun, et un bouton pour le faire. Le travail se fait sur une copie : tes fichiers et la base ECORIGINE ne sont jamais modifiés.</div></div>'
-    + '<button class="btn btn-primary" onclick="ouvrirDefoAnalyse()">🔎 Nouvelle analyse</button></div>';
+    + '<div><b>Étape 2 — Analyser et corriger</b><div class="hint" style="margin:2px 0 0">Pour une coopérative préparée à l\'étape 1, l\'analyse se lance depuis son dossier : GeoJSON et Whisp y sont déjà, tu ajoutes seulement le registre. Ici : analyse à partir de fichiers déposés à la main. ORIGEN te montre les problèmes trouvés, ce qu\'il faut faire pour chacun, et un bouton pour le faire. Le travail se fait sur une copie : tes fichiers et la base ECORIGINE ne sont jamais modifiés.</div></div>'
+    + '<button class="btn btn-primary" onclick="ouvrirDefoAnalyse()">🔎 Analyse avec fichiers à la main</button></div>';
   if (state.defoCharge && !state.defoIndispo){
-    if (!analyses.length) h += '<div class="hint" style="padding:0 18px 14px">Aucune analyse pour le moment.</div>';
+    if (!analyses.length) h += '<div class="hint" style="padding:0 18px 14px">Aucune analyse à la main (celles des dossiers s\'affichent dans leur dossier, à l\'étape 1).</div>';
     else h += '<div style="padding:0 18px 14px;display:flex;flex-direction:column;gap:14px">' + analyses.map(defoAnalyseCarte).join('') + '</div>';
   }
   h += '</div>';
@@ -16802,6 +16802,7 @@ function renderDefoVue(){
 function ouvrirDefoPrep(){ openModal('defoPrep', { nom:'' }); }
 function defoErreurForm(msg){ const e = document.getElementById('defo-erreur'); if (e){ e.textContent = msg; e.style.display = 'block'; } else showToast(msg); }
 function defoModalAnalyseHtml(){
+  if (state.modal && state.modal.payload && state.modal.payload.prepId) return defoModalDossierHtml(state.modal.payload.prepId);
   const opts = [...state.cooperatives].sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr')).map(c=>'<option value="'+esc(c.nom)+'"></option>').join('');
   const preps = (state.defo||[]).filter(z=>(z.etape||'preparation')==='preparation' && z.statut==='terminee' && (z.fichiers||[]).some(f=>f.type==='geojson'));
   const po = '<option value="">— aucune (je dépose un GeoJSON) —</option>' + preps.map(z=>'<option value="'+esc(z.id)+'">'+esc((z.cooperative_nom||'—')+' · '+dateFr(String(z.created_at).slice(0,10))+' · '+(z.resume&&z.resume.polygones||'?')+' polygones')+'</option>').join('');
@@ -16860,6 +16861,7 @@ async function defoAnnulerOk(id){
 }
 function defoSupprimer(id){
   const x = (state.defo||[]).find(z=>z.id===id);
+  if (x && (x.etape||'preparation')==='preparation' && (state.defo||[]).some(z=>z.etape==='analyse' && z.entrees && z.entrees.prep_id===id)){ showToast('Supprime d\'abord l\'analyse de ce dossier.'); return; }
   askConfirm(x&&x.etape==='analyse' ? 'Supprimer définitivement cette analyse, ses nettoyages et tous leurs fichiers ? Cette action est irréversible.' : 'Supprimer définitivement cette préparation (GeoJSON et fichiers envoyés) ? Cette action est irréversible.', ()=>defoSupprimerOk(id));
 }
 function defoChemins(x){
@@ -16867,7 +16869,7 @@ function defoChemins(x){
   if (Array.isArray(e)) e.forEach(f=>{ if (f&&f.path) c.push(f.path); });
   else if (e && typeof e==='object'){
     if (e.polygones && e.polygones.path && e.polygones.propre) c.push(e.polygones.path);
-    ['whisp','gmr'].forEach(k=>{ if (e[k] && e[k].path) c.push(e[k].path); });
+    ['whisp','gmr'].forEach(k=>{ if (e[k] && e[k].path && e[k].propre!==false) c.push(e[k].path); });
   }
   (x.fichiers||[]).forEach(f=>{ if (f&&f.path) c.push(f.path); });
   return c;
@@ -17060,7 +17062,77 @@ async function defoLancerNettoyage(aid, actions){
   if (ins.error){ showToast('Lancement impossible : '+ins.error.message); return; }
   state.defo = [ins.data].concat(state.defo||[]); carteLancerRobot(); showToast('Nettoyage lancé.', 'success'); render();
 }
-function ouvrirDefoAnalyse(){ openModal('defoAnalyse', { nom:'' }); }
+function ouvrirDefoAnalyse(prepId){ openModal('defoAnalyse', { nom:'', prepId: prepId||null }); }
+function defoDossierHtml(x){
+  const fl = x.fichiers||[];
+  if (x.statut!=='terminee' || !fl.some(f=>f.type==='geojson')) return '';
+  const w = fl.find(f=>f.type==='whisp_csv'), idj = escJs(x.id);
+  const lie = (state.defo||[]).filter(z=>z.etape==='analyse' && z.entrees && z.entrees.prep_id===x.id);
+  const actif = lie.some(z=>z.statut!=='erreur' && z.statut!=='annulee');
+  const ligne = (t, c)=>'<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><b style="min-width:170px">'+t+'</b>'+c+'</div>';
+  const depot = lbl=>'<label class="btn-ghost btn-compact" style="cursor:pointer">'+lbl+'<input type="file" accept=".csv" style="display:none" onchange="defoDeposerWhisp(\''+idj+'\',this)"></label>';
+  let h = '<div style="flex-basis:100%;border-top:1px dashed #cfd8d5;margin-top:6px;padding-top:8px;display:flex;flex-direction:column;gap:8px">';
+  h += ligne('② Rapport Whisp', w
+    ? '<span>✅ '+esc(w.nom)+'</span><a style="cursor:pointer;color:var(--accent)" onclick="carteTelecharger(\''+escJs(w.path)+'\')">⬇</a>'+(lie.length?'':depot('Remplacer'))
+    : depot('📥 Déposer le CSV de Whisp'));
+  h += ligne('③ Registre et analyse', actif
+    ? '<span class="hint" style="margin:0">analyse lancée, voir ci-dessous</span>'
+    : (w ? '<button class="btn btn-primary btn-compact" onclick="ouvrirDefoAnalyse(\''+idj+'\')">🔎 Ajouter le registre et lancer l\'analyse</button>' : '<span class="hint" style="margin:0">dépose d\'abord le CSV de Whisp</span>'));
+  h += lie.map(a=>'<div>'+defoAnalyseCarte(a)+'</div>').join('');
+  return h + '</div>';
+}
+async function defoDeposerWhisp(pid, input){
+  const f = input && input.files && input.files[0]; if (input) input.value = ''; if (!f) return;
+  if (!/\.csv$/i.test(f.name)){ showToast('Fichier .csv attendu (rapport Whisp).'); return; }
+  const p = (state.defo||[]).find(z=>z.id===pid); if (!p) return;
+  const nets = t=>String(t).normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^A-Za-z0-9._-]+/g,'_');
+  const path = 'defo/'+pid+'/entrees/whisp_'+nets(f.name);
+  const up = await supabaseClient.storage.from('documents-coop').upload(path, f, { upsert:true });
+  if (up.error){ showToast('Envoi impossible : '+up.error.message); return; }
+  const ancien = (p.fichiers||[]).find(x=>x.type==='whisp_csv');
+  const nf = (p.fichiers||[]).filter(x=>x.type!=='whisp_csv').concat([{ nom:f.name, path, type:'whisp_csv', taille:f.size }]);
+  const r = await supabaseClient.from('analyses_defo').update({ fichiers:nf, updated_at:new Date().toISOString() }).eq('id', pid);
+  if (r && r.error){ showToast('Enregistrement impossible : '+r.error.message); return; }
+  p.fichiers = nf;
+  if (ancien && ancien.path!==path){ try { await supabaseClient.storage.from('documents-coop').remove([ancien.path]); } catch(e){} }
+  showToast('CSV de Whisp ajouté au dossier de '+(p.cooperative_nom||'la coopérative')+'.', 'success'); render();
+}
+function defoModalDossierHtml(pid){
+  const p = (state.defo||[]).find(z=>z.id===pid); if (!p) return '';
+  const g = (p.fichiers||[]).find(f=>f.type==='geojson'), w = (p.fichiers||[]).find(f=>f.type==='whisp_csv');
+  return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:520px"><h3>Analyse — '+esc(p.cooperative_nom||'')+'</h3><div id="modal-fields">'
+    + '<div class="hint" style="margin:0 0 10px">Déjà dans ce dossier : ✅ '+esc(g?g.nom:'GeoJSON')+' · ✅ '+esc(w?w.nom:'CSV de Whisp')+'</div>'
+    + '<label class="field">Registre de la coopérative <span class="hint" style="margin:0">(GMR .xlsx)</span><input type="file" id="da-gmr" accept=".xlsx,.xlsm"></label>'
+    + '<label style="display:flex;gap:8px;align-items:center;margin:6px 0"><input type="checkbox" id="da-hc"> Coopérative hors chaîne d\'approvisionnement <span class="hint" style="margin:0">(chevauchements avec la base ECORIGINE ignorés)</span></label>'
+    + '<div id="defo-erreur" style="display:none;color:#c0392b;font-size:13px;margin:4px 0 8px"></div>'
+    + '<p class="hint">Rien n\'est supprimé à cette étape : tu verras d\'abord la liste des problèmes.</p>'
+    + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" id="da-envoyer" onclick="defoAnalyseEnvoyer()">Lancer l\'analyse</button></div></div></div>';
+}
+async function defoAnalyseDossierEnvoyer(pid){
+  const p = (state.defo||[]).find(z=>z.id===pid); if (!p){ defoErreurForm('Dossier introuvable.'); return; }
+  const g = (p.fichiers||[]).find(f=>f.type==='geojson'), w = (p.fichiers||[]).find(f=>f.type==='whisp_csv');
+  if (!g || !w){ defoErreurForm('Il manque le GeoJSON ou le CSV de Whisp dans ce dossier.'); return; }
+  const el = document.getElementById('da-gmr'), fg = el && el.files && el.files[0];
+  if (!fg){ defoErreurForm('Dépose le registre de la coopérative (.xlsx).'); return; }
+  if (!/\.(xlsx|xlsm)$/i.test(fg.name)){ defoErreurForm('Registre : fichier .xlsx attendu.'); return; }
+  const btn = document.getElementById('da-envoyer'); if (btn){ btn.disabled = true; btn.textContent = 'Envoi…'; }
+  const id = genId('ad'), nets = t=>String(t).normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^A-Za-z0-9._-]+/g,'_');
+  const coop = carteCoopParNom(p.cooperative_nom||'');
+  try {
+    const path = 'defo/'+id+'/entrees/registre_'+nets(fg.name);
+    const r = await supabaseClient.storage.from('documents-coop').upload(path, fg, { upsert:true }); if (r.error) throw r.error;
+    const entrees = { prep_id:pid, hors_chaine:!!(document.getElementById('da-hc')||{}).checked,
+      polygones:{ nom:g.nom, path:g.path, propre:false }, whisp:{ nom:w.nom, path:w.path, propre:false }, gmr:{ nom:fg.name, path } };
+    const ins = await supabaseClient.from('analyses_defo').insert({ id, cooperative_id:(coop?coop.id:p.cooperative_id)||null, cooperative_nom:(coop?coop.nom:p.cooperative_nom), etape:'analyse', statut:'demandee', entrees,
+      demande_par:(state.session&&state.session.user&&state.session.user.email)||null }).select().single();
+    if (ins.error) throw ins.error;
+    state.defo = [ins.data].concat(state.defo||[]);
+    closeModal(); carteLancerRobot(); showToast('Analyse lancée.', 'success');
+  } catch(e){
+    if (btn){ btn.disabled = false; btn.textContent = 'Lancer l\'analyse'; }
+    defoErreurForm('Envoi impossible : '+((e&&e.message)||e));
+  }
+}
 async function defoOuvrirWhisp(path, nom){
   const w = window.open('https://whisp.openforis.org', '_blank');
   const { data, error } = await supabaseClient.storage.from('documents-coop').createSignedUrl(path, 3600, { download: nom || true });
@@ -17069,6 +17141,7 @@ async function defoOuvrirWhisp(path, nom){
   showToast('GeoJSON téléchargé. Dans Whisp : glisse-le dans la zone de dépôt, lance l\'analyse, puis télécharge le CSV.', 'success');
 }
 async function defoAnalyseEnvoyer(){
+  if (state.modal && state.modal.payload && state.modal.payload.prepId) return defoAnalyseDossierEnvoyer(state.modal.payload.prepId);
   const nomCoop = (fv('da_coop')||'').trim(); if (!nomCoop){ defoErreurForm('Indique le nom de la coopérative.'); return; }
   const fp = (document.getElementById('da-poly')||{}).files&&document.getElementById('da-poly').files[0];
   const prepId = fv('da_prep'); const prep = (state.defo||[]).find(z=>z.id===prepId);
