@@ -3616,7 +3616,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-15-147';
+const APP_VERSION = '2026-10-15-148';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -16700,7 +16700,7 @@ function renderCartesTab(){
       + '<b style="margin-left:6px">'+esc(nomCarte)+'</b><span class="hint" style="margin:0 0 0 8px">'+esc(dateFr(String(x.created_at).slice(0,10)))+'</span></span>'
       + '<span>'+fich+(x.statut==='erreur'&&x.erreur?'<span class="hint" style="color:#c0392b;margin:0">'+esc(x.erreur)+'</span>':'')
       + (x.statut==='demandee' ? ' <button class="btn-ghost btn-compact" onclick="carteAnnuler(\''+escJs(x.id)+'\')">Annuler</button>' : '')
-      + (x.statut==='annulee' ? ' <button class="btn-ghost btn-compact" style="color:#c0392b" onclick="carteSupprimer(\''+escJs(x.id)+'\')">🗑 Supprimer</button>' : '')+'</span>'
+      + (['annulee','terminee','erreur'].includes(x.statut) ? ' <button class="btn-ghost btn-compact" style="color:#c0392b" onclick="carteSupprimer(\''+escJs(x.id)+'\')">🗑 Supprimer</button>' : '')+'</span>'
       + carteControleHtml(x) + '</div>';
   }).join('') + '</div>';
   return h + '</div>';
@@ -16829,15 +16829,16 @@ async function carteRegenerer(){
 // demarre tout de suite le robot de cartes (sinon il se declenche seul toutes les 4 h) ; sans effet si la fonction n'est pas configuree
 function carteLancerRobot(){ try { supabaseClient.functions.invoke('lancer-cartes').then(()=>{}, ()=>{}); } catch(e){} }
 function carteSupprimer(id){
-  askConfirm('Supprimer définitivement cette demande annulée (et ses fichiers envoyés) ?', ()=>carteSupprimerOk(id));
+  const x = (state.cartes||[]).find(z=>z.id===id); const nb = x ? (x.fichiers||[]).filter(f=>f.path).length : 0;
+  askConfirm('Supprimer définitivement cette carte'+(nb?' (PDF, image, éditeur : '+nb+' fichier'+(nb>1?'s':'')+')':'')+' et les fichiers envoyés pour la générer ? Cette action est irréversible.', ()=>carteSupprimerOk(id));
 }
 async function carteSupprimerOk(id){
-  const x = (state.cartes||[]).find(z=>z.id===id); if (!x || x.statut!=='annulee') return;
-  const { error } = await supabaseClient.from('cartes_coop').delete().eq('id', id).eq('statut','annulee');
+  const x = (state.cartes||[]).find(z=>z.id===id); if (!x || !['annulee','terminee','erreur'].includes(x.statut)) return;
+  const { error } = await supabaseClient.from('cartes_coop').delete().eq('id', id).in('statut',['annulee','terminee','erreur']);
   if (error){ showToast('Suppression impossible : '+error.message); return; }
   const chemins = [x.polygones_path, x.localites_path].concat((x.fichiers||[]).map(f=>f.path)).filter(Boolean);
   if (chemins.length) { try { await supabaseClient.storage.from('documents-coop').remove(chemins); } catch(e){} }
-  state.cartes = state.cartes.filter(z=>z.id!==id); showToast('Demande supprimée.', 'success'); render();
+  state.cartes = state.cartes.filter(z=>z.id!==id); showToast('Carte supprimée.', 'success'); render();
 }
 async function carteTelecharger(path){
   const { data, error } = await supabaseClient.storage.from('documents-coop').createSignedUrl(path, 3600);
