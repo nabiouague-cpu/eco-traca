@@ -3616,7 +3616,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-15-151';
+const APP_VERSION = '2026-10-15-152';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -16951,7 +16951,7 @@ function defoFinaleHtml(a){
   if (ok && ok.resume){
     const r = ok.resume, dl = (ok.fichiers||[]).filter(f=>f.path).map(f=>'<a style="cursor:pointer;color:var(--accent);margin-right:10px" onclick="carteTelecharger(\''+escJs(f.path)+'\')">⬇ '+esc(f.nom)+'</a>').join('');
     h += '<div style="margin-top:8px;padding:8px 10px;background:#eef6ef;border-radius:8px;font-size:12.5px"><b>'+fmtNum(r.parcelles)+' parcelles · '+fmtNum(r.producteurs)+' producteurs · '+fmtNum(r.surface_ha)+' ha · '+fmtNum(Math.round(r.tonnage_kg/1000*10)/10)+' t estimées</b>'
-      + '<div class="hint" style="margin:2px 0 0">NodeID '+esc(r.node_id||'')+' · rendement tiré entre '+fmtNum(r.rendement_min)+' et '+fmtNum(r.rendement_max)+' kg/ha · '+(r.depuis_copie_nettoyee?'depuis la copie nettoyée':'depuis les polygones d\'origine')
+      + '<div class="hint" style="margin:2px 0 0">NodeID '+esc(r.node_id||'')+' · '+(r.intervalle_impose?'intervalle imposé '+fmtNum(r.intervalle_impose[0])+'–'+fmtNum(r.intervalle_impose[1])+' kg/ha':'rendement moyen '+fmtNum(r.rendement_moy_kg_ha)+' kg/ha (de '+fmtNum(Math.round(r.rendement_min_parcelle))+' à '+fmtNum(Math.round(r.rendement_max_parcelle))+' selon la parcelle, cacao autour : '+fmtNum(r.densite_moy_pct)+' % en moyenne)')+' · '+(r.depuis_copie_nettoyee?'depuis la copie nettoyée':'depuis les polygones d\'origine')
       + (r.exclus?' · <span style="color:#b36b00">'+fmtNum(r.exclus)+' polygone(s) non repris (voir ci-dessous)</span>':'')+'</div>'
       + (r.controles && r.controles.geojson_egal_registre && r.controles.plotid_uniques && !r.controles.noms_manquants ? '<div class="hint" style="margin:2px 0 0;color:#1e8449">✔ GeoJSON et registre alignés, PlotID uniques, aucun nom manquant</div>' : '<div class="hint" style="margin:2px 0 0;color:#c0392b">⚠ Contrôle non conforme : voir le détail</div>')
       + (r.exclus_detail&&r.exclus_detail.length ? '<details><summary class="hint" style="cursor:pointer;margin:0">Polygones non repris</summary><div class="hint" style="margin:0">'+r.exclus_detail.map(x=>esc(x[0])+' : '+esc(x[1])).join('<br>')+'</div></details>' : '')
@@ -16960,25 +16960,54 @@ function defoFinaleHtml(a){
   return h + '</div>';
 }
 function ouvrirDefoFinale(aid){ openModal('defoFinale', { aid }); }
+const DEFO_ECHELLE = { rayon_km:2, d_bas:5, d_haut:45, c_bas:480, c_haut:660, demi:88 };
+function defoRendementPour(d, E){ const t = Math.min(1, Math.max(0, (d-E.d_bas)/(E.d_haut-E.d_bas))), c = E.c_bas + (E.c_haut-E.c_bas)*t; return [c-E.demi, c, c+E.demi]; }
+function defoLireEchelle(){
+  const n = k=>parseFloat(String(fv(k)).replace(',','.'));
+  return { rayon_km:n('fin_rayon'), d_bas:n('fin_dbas'), d_haut:n('fin_dhaut'), c_bas:n('fin_cbas'), c_haut:n('fin_chaut'), demi:n('fin_demi') };
+}
+function defoMajApercu(){
+  const el = document.getElementById('fin-apercu'); if (!el) return;
+  const E = defoLireEchelle(); if ([E.d_bas,E.d_haut,E.c_bas,E.c_haut,E.demi].some(x=>!isFinite(x)) || E.d_haut<=E.d_bas){ el.textContent = '—'; return; }
+  el.innerHTML = [10,20,30,40,50].map(d=>{ const r = defoRendementPour(d,E); return '<b>'+d+' %</b> de cacao → '+Math.round(r[0])+' à '+Math.round(r[2])+' kg/ha'; }).join(' · ');
+}
 function defoModalFinaleHtml(){
   const a = (state.defo||[]).find(z=>z.id===state.modal.payload.aid); if (!a) return '';
-  const r = a.resume||{}, ab = String(a.cooperative_nom||'').toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,8);
-  return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:520px"><h3>Produire la base finale</h3><div id="modal-fields">'
+  const ab = String(a.cooperative_nom||'').toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,8), E = DEFO_ECHELLE;
+  const champ = (lib,nom,val,aide)=>'<label class="field" style="flex:1;min-width:120px">'+lib+'<input type="number" step="any" name="'+nom+'" value="'+val+'" oninput="defoMajApercu()">'+(aide?'<span class="hint" style="margin:0">'+aide+'</span>':'')+'</label>';
+  setTimeout(defoMajApercu, 0);
+  return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:600px;max-height:92vh;overflow:auto"><h3>Produire la base finale</h3><div id="modal-fields">'
     + '<label class="field">Abréviation pour le NodeID <span class="hint" style="margin:0">(donne CI-ECOG-…)</span><input type="text" name="fin_abrev" value="'+esc(ab)+'" autocomplete="off"></label>'
-    + '<div style="display:flex;gap:10px"><label class="field" style="flex:1">Rendement min (kg/ha)<input type="number" name="fin_min" value="'+esc(r.reg_rendement_min||'')+'"></label><label class="field" style="flex:1">Rendement max (kg/ha)<input type="number" name="fin_max" value="'+esc(r.reg_rendement_max||'')+'"></label></div>'
-    + '<p class="hint">'+(r.reg_rendement_min?'Intervalle proposé : les rendements déclarés dans le registre de cette coopérative ('+fmtNum(r.reg_rendement_min)+' à '+fmtNum(r.reg_rendement_max)+' kg/ha). C\'est une proposition : modifie-le si tu as l\'intervalle de la zone.':'Indique l\'intervalle de rendement propre à la zone de cette coopérative.')+' Le volume de chaque parcelle = surface × un rendement tiré au hasard dans cet intervalle.</p>'
+    + '<div style="padding:10px 12px;border:1px solid #e0b050;background:#fff8e6;border-radius:8px;margin:6px 0">'
+    + '<b>Rendement de chaque parcelle</b> <span style="background:#b36b00;color:#fff;border-radius:10px;padding:0 8px;font-size:11px;font-weight:600">proposition de départ — à valider</span>'
+    + '<div class="hint" style="margin:4px 0 8px">Chaque parcelle reçoit un rendement lié à sa position : ORIGEN mesure la part de cacao (carte d\'occupation des sols 2020 du BNETD, valeur 9) autour de son centre, puis lit le rendement sur l\'échelle ci-dessous entre deux repères. Le volume = surface × un rendement tiré au hasard dans l\'intervalle de la parcelle.</div>'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap">'+champ('Repère bas : cacao (%)','fin_dbas',E.d_bas)+champ('→ rendement moyen (kg/ha)','fin_cbas',E.c_bas)+'</div>'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap">'+champ('Repère haut : cacao (%)','fin_dhaut',E.d_haut)+champ('→ rendement moyen (kg/ha)','fin_chaut',E.c_haut)+'</div>'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap">'+champ('± largeur de l\'intervalle (kg/ha)','fin_demi',E.demi)+champ('Rayon autour du centre (km)','fin_rayon',E.rayon_km)+'</div>'
+    + '<div class="hint" style="margin:6px 0 0">Aperçu : <span id="fin-apercu"></span></div></div>'
+    + '<details style="margin:6px 0"><summary class="hint" style="cursor:pointer;margin:0">Ou imposer un intervalle unique à toute la coopérative (facultatif)</summary><div style="display:flex;gap:8px;margin-top:4px">'+champ('Min (kg/ha)','fin_imin','')+champ('Max (kg/ha)','fin_imax','')+'</div></details>'
+    + '<label style="display:flex;gap:8px;align-items:flex-start;margin:10px 0 4px"><input type="checkbox" id="fin-valide" style="margin-top:3px"> <span><b>Je valide cette échelle</b> <span class="hint" style="margin:0">(obligatoire : sans ta validation, rien n\'est produit)</span></span></label>'
     + '<div id="defo-erreur" style="display:none;color:#c0392b;font-size:13px;margin:4px 0 8px"></div>'
     + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" id="fin-envoyer" onclick="defoFinaleEnvoyer()">Produire</button></div></div></div>';
 }
 async function defoFinaleEnvoyer(){
   const aid = state.modal.payload.aid, a = (state.defo||[]).find(z=>z.id===aid); if (!a) return;
-  const ab = (fv('fin_abrev')||'').trim(), mn = parseFloat(fv('fin_min')), mx = parseFloat(fv('fin_max'));
-  if (!ab){ defoErreurForm('Indique l\'abréviation.'); return; }
-  if (!(mn>0) || !(mx>=mn)){ defoErreurForm('Indique un intervalle de rendement valide (min ≤ max, en kg/ha).'); return; }
+  const ab = (fv('fin_abrev')||'').trim(); if (!ab){ defoErreurForm('Indique l\'abréviation.'); return; }
+  const E = defoLireEchelle(), imin = parseFloat(fv('fin_imin')), imax = parseFloat(fv('fin_imax')), impose = isFinite(imin) && isFinite(imax);
+  if (isFinite(imin) !== isFinite(imax)){ defoErreurForm('Pour imposer un intervalle, remplis le min ET le max.'); return; }
+  if (impose && !(imin>0 && imax>=imin)){ defoErreurForm('Intervalle imposé invalide (min ≤ max, en kg/ha).'); return; }
+  if (!impose){
+    if ([E.d_bas,E.d_haut,E.c_bas,E.c_haut,E.demi,E.rayon_km].some(x=>!isFinite(x)||x<=0)){ defoErreurForm('Remplis toutes les valeurs de l\'échelle (nombres positifs).'); return; }
+    if (E.d_haut<=E.d_bas){ defoErreurForm('Le repère haut (% de cacao) doit être plus grand que le repère bas.'); return; }
+  }
+  if (!(document.getElementById('fin-valide')||{}).checked){ defoErreurForm('Coche « Je valide cette échelle » pour continuer.'); return; }
   const et = defoEtat(a); if (et.enCours){ defoErreurForm('Un nettoyage est en cours : attends sa fin.'); return; }
   const btn = document.getElementById('fin-envoyer'); if (btn){ btn.disabled = true; btn.textContent = 'Envoi…'; }
+  const entrees = { analyse_id:aid, source_id:et.dernier?et.dernier.id:null, abrev:ab, echelle_validee:true };
+  if (impose) entrees.intervalle_impose = [imin, imax];
+  else entrees.echelle = { rayon_m:E.rayon_km*1000, d_bas:E.d_bas/100, d_haut:E.d_haut/100, c_bas:E.c_bas, c_haut:E.c_haut, demi_largeur:E.demi };
   const ins = await supabaseClient.from('analyses_defo').insert({ id:genId('ad'), cooperative_id:a.cooperative_id||null, cooperative_nom:a.cooperative_nom, etape:'base_finale', statut:'demandee',
-    entrees:{ analyse_id:aid, source_id:et.dernier?et.dernier.id:null, abrev:ab, rendement_min:mn, rendement_max:mx }, demande_par:(state.session&&state.session.user&&state.session.user.email)||null }).select().single();
+    entrees, demande_par:(state.session&&state.session.user&&state.session.user.email)||null }).select().single();
   if (ins.error){ if (btn){ btn.disabled = false; btn.textContent = 'Produire'; } defoErreurForm('Lancement impossible : '+ins.error.message); return; }
   state.defo = [ins.data].concat(state.defo||[]); closeModal(); carteLancerRobot(); showToast('Production lancée.', 'success');
 }
