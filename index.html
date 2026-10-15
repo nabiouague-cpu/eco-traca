@@ -3616,7 +3616,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-15-150';
+const APP_VERSION = '2026-10-15-151';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -16728,7 +16728,7 @@ async function chargerDefo(){
     const avant = {}; (state.defo||[]).forEach(x=>{ avant[x.id] = x.statut; });
     state.defo = data || []; state.defoIndispo = false;
     state.defo.forEach(x=>{ const a = avant[x.id]; if (!a || a===x.statut) return;
-      const lib = x.etape==='analyse' ? ['✅ Analyse terminée : ','L\'analyse de '] : x.etape==='nettoyage' ? ['✅ Nettoyage terminé : ','Le nettoyage de '] : ['✅ GeoJSON prêt : ','La préparation de '];
+      const lib = x.etape==='analyse' ? ['✅ Analyse terminée : ','L\'analyse de '] : x.etape==='nettoyage' ? ['✅ Nettoyage terminé : ','Le nettoyage de '] : x.etape==='base_finale' ? ['✅ Base finale prête : ','La base finale de '] : ['✅ GeoJSON prêt : ','La préparation de '];
       if (x.statut==='terminee') showToast(lib[0]+(x.cooperative_nom||''), 'success');
       else if (x.statut==='erreur') showToast(lib[1]+(x.cooperative_nom||'')+' a échoué : voir le détail dans la liste.'); });
   } catch(e){ state.defo = state.defo || []; state.defoIndispo = true; }
@@ -16817,6 +16817,7 @@ function defoModalAnalyseHtml(){
 }
 function defoModalsHtml(){
   const m = state.modal; if (m && m.type==='defoAnalyse') return defoModalAnalyseHtml();
+  if (m && m.type==='defoFinale') return defoModalFinaleHtml();
   if (!m || m.type!=='defoPrep') return '';
   const opts = [...state.cooperatives].sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr')).map(c=>'<option value="'+esc(c.nom)+'"></option>').join('');
   return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:520px"><h3>Préparer les polygones</h3><div id="modal-fields">'
@@ -16929,9 +16930,57 @@ function defoAnalyseCarte(a){
     if (et.enCours) h += '<div style="margin-top:6px;color:#1f5fa8;font-weight:600">⏳ Nettoyage en cours… <span class="hint" style="margin:0">'+carteDepuis(et.enCours)+'</span></div>';
     if (et.erreur) h += '<div style="margin-top:6px;color:#c0392b;font-size:12.5px">Le dernier nettoyage a échoué : '+esc(et.erreur.erreur||'erreur inconnue')+' <button class="btn-ghost btn-compact" onclick="defoFermerErreur(\''+escJs(et.erreur.id)+'\')">Fermer</button></div>';
     h += '<div style="margin-top:8px">'+defoProblemesHtml(a, et)+'</div>';
+    h += defoFinaleHtml(a);
     h += defoProposerHtml(a);
   }
   return h + '</div>';
+}
+
+// ----- Étape 3 : base finale (GeoJSON + registre vert) -----
+function defoFinaleHtml(a){
+  const aid = escJs(a.id), et = defoEtat(a);
+  const fins = (state.defo||[]).filter(z=>z.etape==='base_finale' && z.entrees && z.entrees.analyse_id===a.id).sort((p,q)=>String(q.created_at).localeCompare(String(p.created_at)));
+  const enCours = fins.find(z=>z.statut==='demandee'||z.statut==='en_cours'), ok = fins.find(z=>z.statut==='terminee'), err = fins[0] && fins[0].statut==='erreur' ? fins[0] : null;
+  const aGmr = !!(a.entrees && a.entrees.gmr);
+  let h = '<div style="margin-top:12px;padding:10px 12px;border:1px dashed var(--border);border-radius:8px"><b>Étape 3 — Base finale</b>'
+    + '<div class="hint" style="margin:2px 0 6px">Produit <b>Geolocalisation_'+esc(a.cooperative_nom||'')+'.geojson</b> et <b>Registre_'+esc(a.cooperative_nom||'')+'.xlsx</b> (modèle vert) à partir de '+(et.dernier?'la copie nettoyée la plus récente ('+fmtNum(et.dernier.resume.restants)+' polygones)':'<b>tes polygones d\'origine (aucun nettoyage fait)</b>')+'. Surface et coordonnées viennent des polygones. La base ECORIGINE n\'est pas touchée.</div>';
+  if (!aGmr) h += '<div class="hint" style="color:#b36b00;margin:0">Il faut le registre GMR dans l\'analyse pour produire la base finale.</div>';
+  else if (enCours) h += '<div style="color:#1f5fa8;font-weight:600">⏳ Production en cours… <span class="hint" style="margin:0">'+carteDepuis(enCours)+'</span></div>';
+  else h += '<button class="btn btn-primary btn-compact" '+(et.enCours?'disabled ':'')+'onclick="ouvrirDefoFinale(\''+aid+'\')">📦 Produire la base finale</button>';
+  if (err) h += '<div style="margin-top:6px;color:#c0392b;font-size:12.5px">La dernière production a échoué : '+esc(err.erreur||'erreur inconnue')+' <button class="btn-ghost btn-compact" onclick="defoFermerErreur(\''+escJs(err.id)+'\')">Fermer</button></div>';
+  if (ok && ok.resume){
+    const r = ok.resume, dl = (ok.fichiers||[]).filter(f=>f.path).map(f=>'<a style="cursor:pointer;color:var(--accent);margin-right:10px" onclick="carteTelecharger(\''+escJs(f.path)+'\')">⬇ '+esc(f.nom)+'</a>').join('');
+    h += '<div style="margin-top:8px;padding:8px 10px;background:#eef6ef;border-radius:8px;font-size:12.5px"><b>'+fmtNum(r.parcelles)+' parcelles · '+fmtNum(r.producteurs)+' producteurs · '+fmtNum(r.surface_ha)+' ha · '+fmtNum(Math.round(r.tonnage_kg/1000*10)/10)+' t estimées</b>'
+      + '<div class="hint" style="margin:2px 0 0">NodeID '+esc(r.node_id||'')+' · rendement tiré entre '+fmtNum(r.rendement_min)+' et '+fmtNum(r.rendement_max)+' kg/ha · '+(r.depuis_copie_nettoyee?'depuis la copie nettoyée':'depuis les polygones d\'origine')
+      + (r.exclus?' · <span style="color:#b36b00">'+fmtNum(r.exclus)+' polygone(s) non repris (voir ci-dessous)</span>':'')+'</div>'
+      + (r.controles && r.controles.geojson_egal_registre && r.controles.plotid_uniques && !r.controles.noms_manquants ? '<div class="hint" style="margin:2px 0 0;color:#1e8449">✔ GeoJSON et registre alignés, PlotID uniques, aucun nom manquant</div>' : '<div class="hint" style="margin:2px 0 0;color:#c0392b">⚠ Contrôle non conforme : voir le détail</div>')
+      + (r.exclus_detail&&r.exclus_detail.length ? '<details><summary class="hint" style="cursor:pointer;margin:0">Polygones non repris</summary><div class="hint" style="margin:0">'+r.exclus_detail.map(x=>esc(x[0])+' : '+esc(x[1])).join('<br>')+'</div></details>' : '')
+      + '<div style="margin-top:4px">'+dl+'</div></div>';
+  }
+  return h + '</div>';
+}
+function ouvrirDefoFinale(aid){ openModal('defoFinale', { aid }); }
+function defoModalFinaleHtml(){
+  const a = (state.defo||[]).find(z=>z.id===state.modal.payload.aid); if (!a) return '';
+  const r = a.resume||{}, ab = String(a.cooperative_nom||'').toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,8);
+  return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:520px"><h3>Produire la base finale</h3><div id="modal-fields">'
+    + '<label class="field">Abréviation pour le NodeID <span class="hint" style="margin:0">(donne CI-ECOG-…)</span><input type="text" name="fin_abrev" value="'+esc(ab)+'" autocomplete="off"></label>'
+    + '<div style="display:flex;gap:10px"><label class="field" style="flex:1">Rendement min (kg/ha)<input type="number" name="fin_min" value="'+esc(r.reg_rendement_min||'')+'"></label><label class="field" style="flex:1">Rendement max (kg/ha)<input type="number" name="fin_max" value="'+esc(r.reg_rendement_max||'')+'"></label></div>'
+    + '<p class="hint">'+(r.reg_rendement_min?'Intervalle proposé : les rendements déclarés dans le registre de cette coopérative ('+fmtNum(r.reg_rendement_min)+' à '+fmtNum(r.reg_rendement_max)+' kg/ha). C\'est une proposition : modifie-le si tu as l\'intervalle de la zone.':'Indique l\'intervalle de rendement propre à la zone de cette coopérative.')+' Le volume de chaque parcelle = surface × un rendement tiré au hasard dans cet intervalle.</p>'
+    + '<div id="defo-erreur" style="display:none;color:#c0392b;font-size:13px;margin:4px 0 8px"></div>'
+    + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" id="fin-envoyer" onclick="defoFinaleEnvoyer()">Produire</button></div></div></div>';
+}
+async function defoFinaleEnvoyer(){
+  const aid = state.modal.payload.aid, a = (state.defo||[]).find(z=>z.id===aid); if (!a) return;
+  const ab = (fv('fin_abrev')||'').trim(), mn = parseFloat(fv('fin_min')), mx = parseFloat(fv('fin_max'));
+  if (!ab){ defoErreurForm('Indique l\'abréviation.'); return; }
+  if (!(mn>0) || !(mx>=mn)){ defoErreurForm('Indique un intervalle de rendement valide (min ≤ max, en kg/ha).'); return; }
+  const et = defoEtat(a); if (et.enCours){ defoErreurForm('Un nettoyage est en cours : attends sa fin.'); return; }
+  const btn = document.getElementById('fin-envoyer'); if (btn){ btn.disabled = true; btn.textContent = 'Envoi…'; }
+  const ins = await supabaseClient.from('analyses_defo').insert({ id:genId('ad'), cooperative_id:a.cooperative_id||null, cooperative_nom:a.cooperative_nom, etape:'base_finale', statut:'demandee',
+    entrees:{ analyse_id:aid, source_id:et.dernier?et.dernier.id:null, abrev:ab, rendement_min:mn, rendement_max:mx }, demande_par:(state.session&&state.session.user&&state.session.user.email)||null }).select().single();
+  if (ins.error){ if (btn){ btn.disabled = false; btn.textContent = 'Produire'; } defoErreurForm('Lancement impossible : '+ins.error.message); return; }
+  state.defo = [ins.data].concat(state.defo||[]); closeModal(); carteLancerRobot(); showToast('Production lancée.', 'success');
 }
 function defoProposerHtml(a){
   const aid = escJs(a.id);
