@@ -3616,7 +3616,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-15-144';
+const APP_VERSION = '2026-10-15-145';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -16691,7 +16691,8 @@ function renderCartesTab(){
       + (x.statut==='demandee'||x.statut==='en_cours' ? '<span class="hint" style="margin:0 6px 0 8px">'+(x.statut==='en_cours'?'génération ':'attente ')+carteDepuis(x)+'</span>' : '')
       + '<b style="margin-left:6px">'+esc(nomCarte)+'</b><span class="hint" style="margin:0 0 0 8px">'+esc(dateFr(String(x.created_at).slice(0,10)))+'</span></span>'
       + '<span>'+fich+(x.statut==='erreur'&&x.erreur?'<span class="hint" style="color:#c0392b;margin:0">'+esc(x.erreur)+'</span>':'')
-      + (x.statut==='demandee' ? ' <button class="btn-ghost btn-compact" onclick="carteAnnuler(\''+escJs(x.id)+'\')">Annuler</button>' : '')+'</span></div>';
+      + (x.statut==='demandee' ? ' <button class="btn-ghost btn-compact" onclick="carteAnnuler(\''+escJs(x.id)+'\')">Annuler</button>' : '')
+      + (x.statut==='annulee' ? ' <button class="btn-ghost btn-compact" style="color:#c0392b" onclick="carteSupprimer(\''+escJs(x.id)+'\')">🗑 Supprimer</button>' : '')+'</span></div>';
   }).join('') + '</div>';
   return h + '</div>';
 }
@@ -16804,6 +16805,17 @@ async function carteRegenerer(){
 }
 // demarre tout de suite le robot de cartes (sinon il se declenche seul toutes les 4 h) ; sans effet si la fonction n'est pas configuree
 function carteLancerRobot(){ try { supabaseClient.functions.invoke('lancer-cartes').then(()=>{}, ()=>{}); } catch(e){} }
+function carteSupprimer(id){
+  askConfirm('Supprimer définitivement cette demande annulée (et ses fichiers envoyés) ?', ()=>carteSupprimerOk(id));
+}
+async function carteSupprimerOk(id){
+  const x = (state.cartes||[]).find(z=>z.id===id); if (!x || x.statut!=='annulee') return;
+  const { error } = await supabaseClient.from('cartes_coop').delete().eq('id', id).eq('statut','annulee');
+  if (error){ showToast('Suppression impossible : '+error.message); return; }
+  const chemins = [x.polygones_path, x.localites_path].concat((x.fichiers||[]).map(f=>f.path)).filter(Boolean);
+  if (chemins.length) { try { await supabaseClient.storage.from('documents-coop').remove(chemins); } catch(e){} }
+  state.cartes = state.cartes.filter(z=>z.id!==id); showToast('Demande supprimée.', 'success'); render();
+}
 async function carteTelecharger(path){
   const { data, error } = await supabaseClient.storage.from('documents-coop').createSignedUrl(path, 3600);
   if (error || !data){ showToast('Fichier introuvable.'); return; }
