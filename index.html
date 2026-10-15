@@ -3615,7 +3615,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-15-134';
+const APP_VERSION = '2026-10-15-135';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -6270,9 +6270,8 @@ function renderLotsSeries(){
   // Regroupe par campagne + client : un client est caractérisé par l'ensemble de ses séries (site, projet de durabilité).
   const parClient = new Map();
   (state.lotsSeries||[]).forEach(sr=>{
-    const prog0 = String(sr.programme||'').trim();
-    const cle = sr.campagne_id+'|'+ccClefClient(sr.client||'')+'|'+prog0.toLowerCase();
-    if (!parClient.has(cle)) parClient.set(cle, { campagne_id:sr.campagne_id, client:sr.client||'', programme:prog0, portees:new Map() });
+    const cle = sr.campagne_id+'|'+ccClefClient(sr.client||'');   // une seule carte par client (tous ses projets de durabilite dedans)
+    if (!parClient.has(cle)) parClient.set(cle, { campagne_id:sr.campagne_id, client:sr.client||'', portees:new Map() });
     const g = parClient.get(cle);
     const pk = (sr.site_code||'')+'|'+(sr.programme||'');
     if (!g.portees.has(pk)) g.portees.set(pk, { site_code:sr.site_code||'', programme:sr.programme||'', series:[] });
@@ -6280,7 +6279,7 @@ function renderLotsSeries(){
   });
   const liste = Array.from(parClient.values()).sort((a,b)=>
     String(lotsCampagneNom(b.campagne_id)||'').localeCompare(String(lotsCampagneNom(a.campagne_id)||''))
-    || ccClefClient(a.client||'').localeCompare(ccClefClient(b.client||''), 'fr') || a.programme.localeCompare(b.programme,'fr'));
+    || ccClefClient(a.client||'').localeCompare(ccClefClient(b.client||''), 'fr'));
   let html = '<div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">'
     + '<button class="btn btn-primary" onclick="lotsSerieGrilleOuvrir()">+ Nouvelle série</button>'
     + '<span class="hint" style="margin:0 8px;padding-left:4px">Une série = un client, un type de cacao et un numéro de départ. Pour un usinier partenaire (AWAHUS, SITAPA) ou un projet de durabilité (Ferrero, Mars, Mondelez…), ajoute une série de plus au même client : ses lots restent comptés pour ce client.</span></div>';
@@ -6288,13 +6287,13 @@ function renderLotsSeries(){
   if (!(state.lotsSeriesOuverts instanceof Set)) state.lotsSeriesOuverts = new Set();
   html += '<div class="series-accordeon">';
   liste.forEach(g=>{
-    const cle = g.campagne_id+'|'+ccClefClient(g.client)+'|'+g.programme.toLowerCase();
+    const cle = g.campagne_id+'|'+ccClefClient(g.client);
     const ouvert = state.lotsSeriesOuverts.has(cle);
     const portees = Array.from(g.portees.values()).sort((x,y)=>(x.site_code||x.programme?1:0)-(y.site_code||y.programme?1:0) || String(x.programme).localeCompare(String(y.programme),'fr') || String(x.site_code).localeCompare(String(y.site_code)));
     const toutes = portees.reduce((acc,pt)=>acc.concat(pt.series),[]);
     const nbLots = toutes.reduce((sum,sr)=>sum+(state.lotsUsinage||[]).filter(l=>l.serie_id===sr.id).length, 0);
     const types = Array.from(new Set(toutes.map(sr=>sr.type_cacao)));
-    const progs = [];
+    const progs = Array.from(new Set(portees.map(pt=>pt.programme).filter(Boolean)));
     const sites = Array.from(new Set(portees.map(pt=>pt.site_code).filter(Boolean)));
     const debuts = toutes.map(sr=>Number(sr.numero_debut)).sort((x,y)=>x-y);
     const resume = [types.map(lotsLibelleTypeCacao).join(', '), toutes.length+' série'+(toutes.length>1?'s':'')+(debuts.length?' (n° '+debuts.join(', ')+')':''),
@@ -6303,7 +6302,7 @@ function renderLotsSeries(){
       + '<div class="serie-client-tete" onclick="lotsSeriesBasculer(\''+escJs(cle)+'\')">'
       + '<span class="chev">'+(ouvert?'▾':'▸')+'</span>'
       + ccAvatarHtml(g.client||'?', 38)
-      + '<div class="serie-client-nom"><b>'+(g.client?esc(g.client):'— générique —')+(g.programme?' → '+esc(g.programme):'')+'</b><small>'+esc(lotsCampagneNom(g.campagne_id)||'')+'</small></div>'
+      + '<div class="serie-client-nom"><b>'+(g.client?esc(g.client):'— générique —')+'</b><small>'+esc(lotsCampagneNom(g.campagne_id)||'')+'</small></div>'
       + '<div class="serie-client-resume">'+resume.map(r=>'<span>'+esc(r)+'</span>').join('')+'</div>'
       + '</div>';
     if (ouvert){
@@ -6318,7 +6317,7 @@ function renderLotsSeries(){
         html += '<tr><td>'+portee+'</td><td>'+site+'</td><td>'+typesHtml+'</td><td>'+serieHtml+'</td><td>'+utilises+'</td>'
           + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="lotsSerieGrilleOuvrir(\''+esc(g.campagne_id)+'\',\''+esc(g.client)+'\',\''+esc(pt.site_code)+'\',\''+esc(pt.programme)+'\',\'modifier\')">Modifier</button></td></tr>';
       });
-      html += '</tbody></table><div style="padding:6px 12px 10px"><button class="btn-ghost btn-compact" onclick="lotsSerieGrilleOuvrir(\''+esc(g.campagne_id)+'\',\''+esc(g.client)+'\',\'\',\''+esc(g.programme)+'\',\'ajouter\')">+ Ajouter une série à ce client</button></div>';
+      html += '</tbody></table><div style="padding:6px 12px 10px"><button class="btn-ghost btn-compact" onclick="lotsSerieGrilleOuvrir(\''+esc(g.campagne_id)+'\',\''+esc(g.client)+'\',\'\',\'\',\'ajouter\')">+ Ajouter une série à ce client</button></div>';
     }
     html += '</div>';
   });
