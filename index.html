@@ -3615,7 +3615,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-15-133';
+const APP_VERSION = '2026-10-15-134';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5761,7 +5761,7 @@ function renderSacherieTab(){
     + '<label class="field" style="margin:0;">Sacs export par lot<br>'+sachIn('sacherie_param',1,'sacs_par_lot',spl,80)+'</label>'
     + '<label class="field" style="margin:0;">Tonnes par lot<br>'+sachIn('sacherie_param',1,'tonnes_par_lot',tpl,80)+'</label>'
     + '<label class="field" style="margin:0;">Sacs par palette<br>'+sachIn('sacherie_param',1,'sacs_par_palette',spp,80)+'</label>'
-    + '<div class="hint" style="margin:0;">1 lot = '+sachNb(tpl)+' T = '+sachNb(spl)+' sacs = '+sachNb(spl/spp,1)+' palettes</div></div></div>';
+    + '<div class="hint" style="margin:0;">1 lot = '+sachNb(tpl)+' T = '+sachNb(spl)+' sacs = '+sachNb(Math.ceil(spl/spp))+' palettes <span style="opacity:.75">(la dernière n\'est pas pleine)</span></div></div></div>';
 
   // ---- Stock par usine ----
   const S = state.sachStock||[];
@@ -5771,7 +5771,7 @@ function renderSacherieTab(){
     const bes = r.besoin_tonnes===null||r.besoin_tonnes===undefined ? null : Number(r.besoin_tonnes);
     const lots = sacs===null ? null : Math.floor(sacs/spl);
     const sacsReq = bes===null ? null : Math.ceil(bes/tpl*spl);
-    const palReq = sacsReq===null ? null : Math.ceil(sacsReq/spp);
+    const palReq = bes===null ? null : Math.ceil(bes/tpl)*Math.ceil(spl/spp);   // 10 palettes par lot, meme si la derniere n'est pas pleine
     const manqueSacs = (sacsReq!==null && sacs!==null) ? Math.max(0, sacsReq-sacs) : null;
     const manquePal = (palReq!==null && pal!==null) ? Math.max(0, palReq-pal) : null;
     let badge = '<span class="hint" style="margin:0">À renseigner</span>';
@@ -5794,7 +5794,7 @@ function renderSacherieTab(){
       + '<td>'+l.badge+'</td><td class="hint">'+(l.r.date_releve?esc(l.r.date_releve.split('-').reverse().join('/')):'—')+'</td></tr>';
   });
   html += '<tr style="font-weight:700;background:var(--surface-2)"><td colspan="2" style="text-align:left">Total</td><td class="num">'+sachNb(tot.prev)+'</td><td class="num">'+sachNb(tot.sacs)+'</td><td class="num">'+sachNb(tot.pal)+'</td><td class="num">'+sachNb(tot.lots)+'</td><td colspan="7"></td></tr>'
-    + '</tbody></table><p class="hint" style="margin-top:10px">Lots couverts = sacs en stock ÷ '+sachNb(spl)+'. Sacs requis = tonnes à usiner ÷ '+sachNb(tpl)+' × '+sachNb(spl)+'. Palettes requises = sacs requis ÷ '+sachNb(spp)+'.</p></div></div>';
+    + '</tbody></table><p class="hint" style="margin-top:10px">Lots couverts = sacs en stock ÷ '+sachNb(spl)+'. Sacs requis = tonnes à usiner ÷ '+sachNb(tpl)+' × '+sachNb(spl)+'. Palettes requises = nombre de lots × '+sachNb(Math.ceil(spl/spp))+' palettes (la dernière palette de chaque lot compte en entier).</p></div></div>';
 
   // ---- Commandes de sacs ----
   const C = state.sachCmd||[];
@@ -17008,7 +17008,7 @@ const AIDE_ECRANS = {
   sacherie: { titre:'Sacherie & palettes', objectif:'Ne jamais être à court de sacs export ni de palettes dans une usine pendant l\'usinage.',
     lecture:[
       ['Règle','1 lot = 25 T = 385 sacs export ; 1 palette = 40 sacs. Les trois chiffres se modifient en haut si la règle change.'],
-      ['Sacs requis','tonnes à usiner ÷ 25 × 385. Palettes requises = sacs requis ÷ 40.'],
+      ['Sacs requis','tonnes à usiner ÷ 25 × 385. Palettes requises = nombre de lots × 10 (la dernière palette de chaque lot compte en entier).'],
       ['Lots couverts','sacs en stock ÷ 385 : combien de lots l\'usine peut ensacher avec ce qu\'elle a.'],
       ['Manque','sacs (ou palettes) requis − en stock. « Rupture à prévoir » dès qu\'il manque quelque chose.'],
       ['Commandes','ce qui a été commandé aux fournisseurs de jute, livré, réglé, et le solde dû sur ce qui est livré.']],
@@ -17132,7 +17132,7 @@ function renderGuideTab(){
     ['Livraison','Connaissement CCC : camion, poids connaissement, lieu de départ','Tableau de bord › Achats · Traçage de volume','Coopérative (déclare) · Durabilité (trace)'],
     ['Usine','Pesée : poids net payé, refoulés ; site de déchargement = port','Tableau de bord › Achats','Usines'],
     ['Paiement','Prix, prime, cheque ; remboursement du préfinancement (total / partiel)','Tableau de bord › Paiements · Préfinancements','Finance · Commercial'],
-    ['Lot d\'usinage','25 T = 385 sacs export = 9,6 palettes, numéroté par série, agréé','Lots & export › Lots d\'usinage · Sacherie','Usines · Shipping'],
+    ['Lot d\'usinage','25 T = 385 sacs export = 10 palettes, numéroté par série, agréé','Lots & export › Lots d\'usinage · Sacherie','Usines · Shipping'],
     ['OT / embarquement','Numéro OT, navire, date d\'embarquement, BL','Lots & export › OT','Shipping'],
     ['Client','Contrat (volume, période OD/JM), suivi contrat → acheté → usiné → agréé → embarqué','Lots & export › Contrats clients · Suivi achats clients','Commercial'],
   ];
@@ -17160,7 +17160,7 @@ function renderGuideTab(){
     ['Une coopérative livre jusqu\'à la fin de sa licence annuelle','pas jusqu\'à la date du certificat. Et jamais plus que le volume de son certificat.'],
     ['Plafond producteur','70 % du potentiel en période principale, 100 % en cumul sur l\'intermédiaire.'],
     ['Prix de référence préfinancements','1 315 F/kg pour tout le monde, pour comparer les coopératives entre elles.'],
-    ['Un lot = 25 T = 385 sacs export = 9,6 palettes','à vérifier avant chaque usinage dans Sacherie.'],
+    ['Un lot = 25 T = 385 sacs export = 10 palettes','à vérifier avant chaque usinage dans Sacherie.'],
     ['Un connaissement = un client','l\'attribution se fait ligne par ligne ; sans client, il ne compte dans aucun suivi.'],
   ];
   h += '<div class="panel"><div class="panel-head"><h2>Les règles à retenir</h2></div><div style="padding:0 18px 14px">'+regles.map(r=>'<div style="padding:7px 0;border-bottom:1px solid var(--border);font-size:13px"><b>'+esc(r[0])+'</b> — '+esc(r[1])+'</div>').join('')+'</div></div>';
