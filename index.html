@@ -323,11 +323,23 @@
   .achats-barre input[type=search]{font:inherit;font-size:13px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);min-width:300px;flex:0 1 380px;}
   .achats-filtres{display:flex;gap:6px;flex-wrap:wrap;}
   .achats-filtres .chip-coop{padding:6px 12px;font-size:12.5px;}
-  .conn-banniere{margin:0 0 14px;border:1px solid #2E8B57;background:#EAF7EF;color:#14452B;border-radius:10px;padding:12px 16px;}
-  .conn-banniere .cb-tete{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;font-weight:700;margin-bottom:8px;}
-  .conn-banniere table{width:100%;border-collapse:collapse;background:#fff;font-size:12.5px;}
-  .conn-banniere th,.conn-banniere td{padding:5px 8px;border-bottom:1px solid #D5EBDD;text-align:left;}
-  .conn-banniere .num{text-align:right;}
+  .conn-banniere{margin:0 0 14px;border:1px solid #2E8B57;background:#EAF7EF;color:#14452B;border-radius:10px;overflow:hidden;}
+  .conn-banniere .cb-tete{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:9px 14px;font-weight:700;cursor:pointer;user-select:none;}
+  .conn-banniere .cb-tete:hover{background:#DDF0E4;}
+  .conn-banniere .cb-droite{display:flex;align-items:center;gap:8px;}
+  .conn-banniere .cb-puce{width:26px;height:26px;border-radius:50%;border:1px solid #2E8B57;background:#fff;color:#14452B;display:inline-flex;align-items:center;justify-content:center;font-size:13px;transition:transform .2s;}
+  .conn-banniere .cb-puce.ouvert{transform:rotate(180deg);}
+  .conn-banniere .cb-corps{padding:0 14px 12px;}
+  .conn-banniere .cb-scroll{overflow-x:auto;border:1px solid #BFE0CB;border-radius:8px;background:#fff;}
+  .conn-banniere table{width:100%;border-collapse:collapse;font-size:12.5px;white-space:nowrap;}
+  .conn-banniere thead th{background:#F3FAF5;color:#14452B;font-weight:700;font-size:11.5px;text-transform:uppercase;letter-spacing:.03em;padding:7px 10px;text-align:left;border-bottom:1px solid #BFE0CB;}
+  .conn-banniere td{padding:7px 10px;border-bottom:1px solid #E3F1E8;text-align:left;vertical-align:middle;}
+  .conn-banniere tbody tr:last-child td{border-bottom:none;}
+  .conn-banniere tbody tr:hover td{background:#F8FCF9;}
+  .conn-banniere th.num,.conn-banniere td.num{text-align:right;font-variant-numeric:tabular-nums;}
+  .conn-banniere td.code{font-family:var(--mono,monospace);font-weight:700;}
+  .conn-banniere td.vide{color:#8aa394;}
+  .conn-banniere tfoot td{background:#F3FAF5;font-weight:700;border-top:1px solid #BFE0CB;}
   .conn-banniere .cb-plus{margin-top:6px;font-size:12px;}
   .achats-note{padding:9px 20px;font-size:12px;color:var(--ink-soft);border-bottom:1px solid var(--border);background:var(--surface);}
   .stock-dossier-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 18px;border-bottom:1px solid var(--border);background:var(--surface-2);}
@@ -3662,7 +3674,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-16-170';
+const APP_VERSION = '2026-10-16-171';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8266,23 +8278,34 @@ function connAller(achatId){
   if (achatId && (state.achats||[]).some(a=>a.id===achatId)){ ocAllerAchat(achatId); return; }
   state.coopDashboardId = null; state.tab = 'dashboard'; state.dashboardSousOnglet = 'achats'; state.achatsStatut = 'tous'; render();
 }
+function connBasculer(){
+  state.connOuvert = !state.connOuvert;
+  const c = document.getElementById('connCorps'), p = document.getElementById('connPuce');
+  if (c) c.style.display = state.connOuvert ? '' : 'none';
+  if (p) p.classList.toggle('ouvert', !!state.connOuvert);
+}
 function connBanniereHtml(){
   const liste = state.connNouveaux || []; if (!liste.length) return '';
-  const MAX = 8, vus = liste.slice(0, MAX);
+  const MAX = 15, vus = liste.slice(0, MAX), ouvert = !!state.connOuvert;
   const coopNom = v => { const c = (v.cooperative_id && typeof coopById==='function' ? coopById(v.cooperative_id) : null) || (typeof saigicCoopDeCode==='function' ? saigicCoopDeCode(v) : null); return c ? c.nom : (v.fournisseur_saigic || 'Coopérative inconnue'); };
+  const cel = x => x ? esc(x) : '<span class="vide">—</span>';
+  const totKg = liste.reduce((a,v)=>a+(Number(v.poids_net)||0),0), totSacs = liste.reduce((a,v)=>a+(Number(v.nb_sacs)||0),0);
+  const lignes = vus.map(v=>{ const a = (state.achats||[]).find(x=>x.id===v.achat_id) || {};
+    return '<tr><td class="code">'+esc(v.code_connaissement)+'</td><td>'+esc(coopNom(v))+'</td><td>'+esc(String(v.date_connaissement||'').slice(0,16))+'</td>'
+      + '<td class="num">'+(Number(v.poids_net)>0 ? fmtKg(v.poids_net) : '—')+'</td><td class="num">'+(Number(v.nb_sacs)>0 ? fmtNum(v.nb_sacs) : '—')+'</td>'
+      + '<td>'+cel(a.nom_transporteur)+'</td><td>'+cel(a.immat_vehicule)+'</td><td>'+cel(a.nom_chauffeur)+'</td><td>'+cel(a.usine_dechargement)+'</td>'
+      + '<td><button class="btn-ghost btn-compact" onclick="connAller(\''+escJs(v.achat_id||'')+'\')">Voir</button></td></tr>'; }).join('');
   return '<div class="conn-banniere">'
-    + '<div class="cb-tete"><span>🚛 '+liste.length+' nouveau'+(liste.length>1?'x':'')+' connaissement'+(liste.length>1?'s':'')+' mis en ligne sur le SAIGIC — déjà placé'+(liste.length>1?'s':'')+' dans le tableau de bord (en attente de pesée)</span>'
-    + '<button class="btn btn-primary btn-compact" onclick="connMarquerVus()">J\'ai vu</button></div>'
-    + '<table><thead><tr><th>Connaissement</th><th>Coopérative</th><th>Date</th><th class="num">Poids net</th><th class="num">Sacs</th><th>Transporteur / camion</th><th></th></tr></thead><tbody>'
-    + vus.map(v=>{ const a = (state.achats||[]).find(x=>x.id===v.achat_id);
-        const tr = a ? [a.nom_transporteur, a.immat_vehicule].filter(Boolean).join(' · ') : '';
-        return '<tr><td><b>'+esc(v.code_connaissement)+'</b></td><td>'+esc(coopNom(v))+'</td><td>'+esc(String(v.date_connaissement||'').slice(0,10))+'</td>'
-          + '<td class="num">'+(Number(v.poids_net)>0 ? fmtKg(v.poids_net) : '—')+'</td><td class="num">'+(Number(v.nb_sacs)>0 ? fmtNum(v.nb_sacs) : '—')+'</td>'
-          + '<td>'+(tr ? esc(tr) : '—')+'</td>'
-          + '<td><button class="btn-ghost btn-compact" onclick="connAller(\''+escJs(v.achat_id||'')+'\')">Voir</button></td></tr>'; }).join('')
-    + '</tbody></table>'
+    + '<div class="cb-tete" role="button" tabindex="0" title="Cliquer pour afficher ou masquer le détail" onclick="connBasculer()" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();connBasculer();}">'
+    + '<span>🚛 '+liste.length+' nouveau'+(liste.length>1?'x':'')+' connaissement'+(liste.length>1?'s':'')+' sur le SAIGIC'+(liste.length===1 ? ' — '+esc(liste[0].code_connaissement) : '')+'</span>'
+    + '<span class="cb-droite"><button class="btn btn-primary btn-compact" onclick="event.stopPropagation();connMarquerVus()">J\'ai vu</button><span class="cb-puce'+(ouvert?' ouvert':'')+'" id="connPuce">▾</span></span></div>'
+    + '<div class="cb-corps" id="connCorps"'+(ouvert?'':' style="display:none"')+'>'
+    + '<div class="hint" style="margin:0 0 8px">Déjà placé'+(liste.length>1?'s':'')+' dans le tableau de bord (Achats), en attente de pesée.</div>'
+    + '<div class="cb-scroll"><table><thead><tr><th>Connaissement</th><th>Coopérative</th><th>Date</th><th class="num">Poids net</th><th class="num">Sacs</th><th>Transporteur</th><th>Camion</th><th>Chauffeur</th><th>Usine</th><th></th></tr></thead><tbody>'+lignes+'</tbody>'
+    + (liste.length>1 ? '<tfoot><tr><td colspan="3">Total ('+liste.length+')</td><td class="num">'+(totKg>0?fmtKg(totKg):'—')+'</td><td class="num">'+(totSacs>0?fmtNum(totSacs):'—')+'</td><td colspan="5"></td></tr></tfoot>' : '')
+    + '</table></div>'
     + (liste.length>MAX ? '<div class="cb-plus">+ '+(liste.length-MAX)+' autre'+(liste.length-MAX>1?'s':'')+' — voir le tableau de bord, onglet Achats.</div>' : '')
-    + '</div>';
+    + '</div></div>';
 }
 let connVeilleTimer = null;
 function connVeille(){
@@ -8335,7 +8358,7 @@ async function coopClasser(id, choix){
 }
 function coopClasserBanniereHtml(){
   const n = coopsAClasser().length; if (!n) return '';
-  return '<div class="conn-banniere" style="border-color:#2F6DB5;background:#EAF3FB;color:#14365C"><div class="cb-tete" style="margin:0"><span>🆕 '+n+' nouvelle'+(n>1?'s':'')+' coopérative'+(n>1?'s':'')+' à classer ('+coopsAClasser().slice(0,3).map(c=>esc(c.nom)).join(', ')+(n>3?'…':'')+')</span>'
+  return '<div class="conn-banniere" style="border-color:#2F6DB5;background:#EAF3FB;color:#14365C"><div class="cb-tete" style="margin:0;cursor:default"><span>🆕 '+n+' nouvelle'+(n>1?'s':'')+' coopérative'+(n>1?'s':'')+' à classer ('+coopsAClasser().slice(0,3).map(c=>esc(c.nom)).join(', ')+(n>3?'…':'')+')</span>'
     + '<button class="btn btn-primary btn-compact" onclick="state.coopDashboardId=null;state.tab=\'tracage\';render()">Classer</button></div></div>';
 }
 function saigicATracerHtml(){
