@@ -3677,7 +3677,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-16-184';
+const APP_VERSION = '2026-10-16-185';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -9819,10 +9819,11 @@ function ocProducteursEligibles(coopId, campagneId, periode){
 function ocAllouerVolume(eligibles, volumeTotalKg, nbDemande){
   const V = Math.round(Number(volumeTotalKg)||0);
   if (!(V>0)) return { error: 'Le volume doit être supérieur à 0 kg.' };
-  const pool = ocMelanger((eligibles||[]).map(e=>({ p: e.p, cap: Math.floor(e.remaining) }))).filter(e=>e.cap>=1);
+  // Règle des 3 livraisons : un producteur ne reçoit au plus que le tiers de sa marge sous le plafond de 70 %, pour pouvoir livrer au moins 3 fois avant de l'atteindre.
+  const pool = ocMelanger((eligibles||[]).map(e=>({ p: e.p, cap: Math.floor(e.remaining/3) }))).filter(e=>e.cap>=1);
   if (pool.length===0) return { error: "Aucun producteur de cette coopérative n'a de marge disponible sous le plafond." };
   const capTotal = pool.reduce((s,e)=>s+e.cap, 0);
-  if (V>capTotal) return { error: 'Volume trop élevé : la marge totale disponible sous le plafond est de '+fmtNum(capTotal)+' kg ('+pool.length+' producteur(s) éligible(s)).' };
+  if (V>capTotal) return { error: 'Volume trop élevé : avec la règle des 3 livraisons (un tiers de la marge de chaque producteur), la capacité est de '+fmtNum(capTotal)+' kg ('+pool.length+' producteur(s) éligible(s)).' };
 
   const n = Math.min(Math.max(1, Math.round(Number(nbDemande)||1)), pool.length, V);
   const sel = pool.slice(0, n);
@@ -9840,7 +9841,7 @@ function ocAllouerVolume(eligibles, volumeTotalKg, nbDemande){
   // Parts aleatoires (poids 0.5 a 1.5), plafonnees a la marge de chacun, l'exces est
   // redistribue sur les autres producteurs.
   const m = sel.length;
-  const w = sel.map(()=>0.5+Math.random());
+  const w = sel.map(e=>e.cap*(0.5+0.5*Math.random()));      // pourcentage aléatoire, proportionnel à ce que chacun peut livrer
   const alloc = new Array(m).fill(0);
   const fige = new Array(m).fill(false);
   for (let iter=0; iter<=m; iter++){
@@ -10033,13 +10034,40 @@ function ocBoutonTracerVolume(coopId){
 function ocTvTexteInfo(coopId, campagneId){
   if (!coopId || !campagneId || coopId==='all' || campagneId==='all') return 'Choisis la coopérative et la campagne.';
   const elig = ocProducteursEligibles(coopId, campagneId, 'principale');
-  const marge = elig.reduce((s,e)=>s+Math.floor(e.remaining), 0);
-  return fmtNum(elig.length)+' producteur(s) éligible(s), marge disponible : '+fmtKg(marge)+' (période principale, plafond 70 %).';
+  const marge = elig.reduce((s,e)=>s+Math.floor(e.remaining), 0), cap = elig.reduce((s,e)=>s+Math.floor(e.remaining/3), 0);
+  return fmtNum(elig.length)+' producteur(s) éligible(s), marge disponible : '+fmtKg(marge)+' (période principale, plafond 70 %). Chacun ne reçoit au plus que le tiers de sa marge, pour pouvoir livrer au moins 3 fois avant 70 % : capacité de ce volume '+fmtKg(cap)+'.';
+}
+// Calcul avant validation : combien de producteurs faut-il pour que chacun garde la possibilité de livrer au moins 3 fois ?
+function ocTvAnalyseProd(coopId, campagneId, V){
+  if (!coopId || !campagneId || coopId==='all' || campagneId==='all') return null;
+  const elig = ocProducteursEligibles(coopId, campagneId, 'principale').filter(e=>Math.floor(e.remaining/3)>=1);
+  if (!elig.length) return { aucun:true };
+  const caps = elig.map(e=>Math.floor(e.remaining/3)), capTot = caps.reduce((s,x)=>s+x,0), avgCap = capTot/caps.length;
+  const avgPot = elig.reduce((s,e)=>s+(potentiel(e.p)||0),0)/elig.length;
+  return { nElig:caps.length, capTot:capTot, avgCap:avgCap, avgPot:avgPot, besoin:Math.max(1, Math.ceil((Number(V)||0)/(avgCap*0.8))) };
+}
+function ocTvProdInfoHtml(coopId, campagneId, V, n){
+  const gris = t=>'<span class="hint" style="margin:0">'+t+'</span>';
+  if (!(V>0)) return gris('Indique le volume : je calcule le nombre de producteurs nécessaire.');
+  const an = ocTvAnalyseProd(coopId, campagneId, V); if (!an) return gris('Choisis la coopérative et la campagne.');
+  if (an.aucun) return '<span style="color:#c0392b">⚠ Aucun producteur éligible pour cette coopérative.</span>';
+  if (V>an.capTot) return '<span style="color:#c0392b">⚠ Volume trop élevé : même avec les '+fmtNum(an.nElig)+' producteurs éligibles, la capacité est de '+fmtKg(an.capTot)+' (un tiers de la marge de chacun).</span>';
+  const mini = Math.min(an.besoin, an.nElig), part = n>0 ? V/n : 0, pct = part && an.avgPot ? Math.round(1000*part/an.avgPot)/10 : null;
+  if (n>=mini && n>0) return '<span style="color:#1e8449">✔ Environ '+fmtKg(Math.round(part))+' par producteur'+(pct!=null?' (≈ '+pct+' % de son potentiel)':'')+' : chacun pourra encore livrer au moins 3 fois avant 70 %.</span>';
+  return '<span style="color:#b36b00">⚠ '+(n>0 ? 'Avec '+fmtNum(n)+' producteur(s), chacun devrait livrer environ '+fmtKg(Math.round(part))+(pct!=null?' (≈ '+pct+' % de son potentiel)':'')+' : trop pour livrer 3 fois avant 70 %. ' : '')+'Je propose <b>'+fmtNum(mini)+' producteurs</b>. </span>'
+    + '<button type="button" class="btn btn-primary btn-compact" onclick="ocTvUtiliserNb('+mini+')">Utiliser '+fmtNum(mini)+'</button>';
+}
+function ocTvUtiliserNb(n){
+  const el = document.getElementById('tv_nbprod'); if (el) el.value = n;
+  const pl = state.modal && state.modal.payload; if (pl) pl.nbprod = String(n);
+  ocTvMajInfo();
 }
 function ocTvMajInfo(){
   const el = document.getElementById('tv_info'); if (!el) return;
   const g = id => (document.getElementById(id)||{}).value || '';
   el.textContent = ocTvTexteInfo(g('tv_coop'), g('tv_campagne'));
+  const pe = document.getElementById('tv_prod_info');
+  if (pe) pe.innerHTML = ocTvProdInfoHtml(g('tv_coop'), g('tv_campagne'), Number(g('tv_volume')), Math.round(Number(g('tv_nbprod'))||0));
 }
 function ocBoutonGenererConnaissement(){
   return '<button class="btn btn-primary" onclick="ouvrirGenerationConnaissement()">📄 Générer un connaissement</button>';
@@ -10066,6 +10094,12 @@ async function submitTracerVolumeDirecte(){
   if (!Number.isInteger(nbProd) || nbProd<=0){ showToast('Le nombre de producteurs doit être un entier supérieur à 0.'); return; }
   if (!dateDebut || !dateFin){ showToast('Renseigne la date de début et la date de fin.'); return; }
   if (dateFin<dateDebut){ showToast('La date de fin doit être postérieure à la date de début.'); return; }
+  { const an = ocTvAnalyseProd(coopId, campagneId, volumeKg);   // règle des 3 livraisons : vérifiée avant toute écriture
+    if (an && !an.aucun){
+      if (volumeKg>an.capTot){ showToast('Volume trop élevé pour cette coopérative : capacité '+fmtKg(an.capTot)+' (règle des 3 livraisons).'); ocTvMajInfo(); return; }
+      const mini = Math.min(an.besoin, an.nElig);
+      if (nbProd<mini){ showToast('Trop peu de producteurs pour ce volume : il en faut au moins '+mini+' (clique sur « Utiliser '+mini+' »).'); ocTvMajInfo(); return; }
+    } }
 
   _ocTracerVolumeEnCours = true;
   try{
@@ -17502,8 +17536,9 @@ async function defoLancerNettoyage(aid, actions, retouches){
   return true;
 }
 // ===== Aperçu cartographique et éditeur de polygones (étape « Aperçu » du dossier) =====
-const AP_COUL = { zones_protegees:'#c0392b', prioritaires:'#7b241c', irreguliers:'#8e44ad', internes:'#e67e22', base_autres:'#2471a3', hors_registre:'#7f8c8d', doublons_code:'#b9770e', reparer:'#d4ac0d', sans_whisp:'#95a5a6' };
-const AP_VERT = '#27ae60';
+// Palette : vert = forêts classées, orange = zones cacaoyères, noir = autres coopératives de la base, bleu = tes polygones sans problème ; rouges, violets et marron = polygones à problème (une couleur par traitement).
+const AP_COUL = { zones_protegees:'#e53935', prioritaires:'#b71c1c', irreguliers:'#6d4c41', internes:'#d81b60', base_autres:'#8e24aa', hors_registre:'#00838f', doublons_code:'#5e35b1', reparer:'#fbc02d', sans_whisp:'#90a4ae' };
+const AP_VERT = '#1e88e5';
 const AP_NOMS = { reparer:'Contour à réparer', zones_protegees:'Sur une zone protégée', prioritaires:'Déforestation prioritaire', irreguliers:'Polygone irrégulier', internes:'Superposé à un autre polygone', base_autres:'Superposé à une autre coopérative', hors_registre:'Code hors registre', doublons_code:'Code en double', producteurs_sans_polygone:'Producteurs sans polygone', sans_whisp:'Sans résultat Whisp' };
 const AP_DECISION = ['sans_whisp'];
 let AP = null;
@@ -17607,7 +17642,7 @@ function defoApercuMonter(a, src, D){
   if (document.getElementById('ap-root')) document.getElementById('ap-root').remove();
   const m = AP_MEM[a.id] && AP_MEM[a.id].src===src.id ? AP_MEM[a.id] : null;
   AP = { aid:a.id, srcId:src.id, data:D, byId:new Map(), geo:new Map(), orig:new Map(), ha:new Map(), lay:new Map(), supp:new Set(), mod:new Set(), hist:[], selId:null, mode:null,
-         actions:new Set(), filtre:'tous', vis:{ coop:true, esp:true, base:true, cacao:true }, retire:new Map(), calc:null };
+         actions:new Set(), filtre:'tous', vis:{ coop:true, esp:true, base:true, cacao:true }, retire:new Map(), calc:null, ancien:Number((a.resume||{}).ancien_lot_retire)||0 };
   D.polys.forEach(p=>{ AP.byId.set(p.i, p); AP.geo.set(p.i, p.g); AP.ha.set(p.i, p.h); });
   AP.paires = D.paires.slice().sort((x,y)=>y[2]-x[2]);
   const presentes = new Set(); D.polys.forEach(p=>p.f.forEach(f=>presentes.add(f)));
@@ -17652,14 +17687,14 @@ function apCarte(){
   D.espaces.forEach(e=>{
     const brun = /parc|r[ée]serve|national/i.test(e.d||'');
     const l = L.GeoJSON.geometryToLayer({ type:'Feature', geometry:e.g }, { renderer:rEsp, pane:'p_esp' });
-    l.setStyle({ color:brun?'#6e3b12':'#5a4a1a', weight:1.6, fillColor:brun?'#a0642a':'#e6d6a3', fillOpacity:brun?0.5:0.45 });
+    l.setStyle({ color:brun?'#14532d':'#1b7a34', weight:1.6, fillColor:brun?'#1f7a3d':'#6fcf7f', fillOpacity:brun?0.55:0.5 });
     l.on('mouseover', ()=>info('<b>'+apEsc(e.n||'Espace protégé')+'</b> · '+apEsc(e.d||'')));
     l.on('mouseout', ()=>info(null));
     AP.lg.esp.addLayer(l);
   });
   // zones cacaoyères (cellules de 500 m)
   const rCac = cv('p_cacao'), h = 0.00226;
-  D.cacao.forEach(c=>{ AP.lg.cacao.addLayer(L.rectangle([[c[1]-h,c[0]-h],[c[1]+h,c[0]+h]], { renderer:rCac, pane:'p_cacao', interactive:false, stroke:false, fillColor:'#f28c28', fillOpacity:c[2]===2?0.7:0.4 })); });
+  D.cacao.forEach(c=>{ AP.lg.cacao.addLayer(L.rectangle([[c[1]-h,c[0]-h],[c[1]+h,c[0]+h]], { renderer:rCac, pane:'p_cacao', interactive:false, stroke:false, fillColor:'#f57c00', fillOpacity:c[2]===2?0.75:0.45 })); });
   // base ECORIGINE
   const rBase = cv('p_base');
   D.base.forEach(b=>{
@@ -17694,9 +17729,12 @@ function apCouleur(p){ for (const a of AP.data.ordre){ if (p.f.indexOf(a)>=0 && 
 function apStyle(p){
   const id = p.i, sel = AP.selId===id, mod = AP.mod.has(id);
   if (AP.supp.has(id)) return { color:'#c0392b', weight:1, dashArray:'2 5', fillColor:'#c0392b', fillOpacity:0.05, opacity:0.7 };
-  if (AP.retire.has(id) && !sel) return { color:'#555', weight:1.2, dashArray:'5 3', fillColor:'#888', fillOpacity:0.22, opacity:0.85 };
-  const c = apCouleur(p);
-  return { color: sel?'#00e5ff':(mod?'#e91e63':c), weight: sel?3.5:(mod?3:1.6), dashArray:null, fillColor:c, fillOpacity:sel?0.55:0.38, opacity:1 };
+  const r = AP.retire.get(id);
+  let c = AP_VERT, fo = 0.4, w = 1.6;
+  if (r){ c = AP_COUL[r] || '#c0392b'; fo = 0.6; w = 1.9; }                                   // case cochée : le polygone prend la couleur de son problème
+  else if (!sel && !mod && p.f.some(a=>AP_COUL[a] && a!=='sans_whisp' && !AP.actions.has(a)))   // case décochée : problème non traité, estompé
+    return { color:'#9aa5a1', weight:1, dashArray:'3 4', fillColor:'#c3cbc8', fillOpacity:0.15, opacity:0.75 };
+  return { color: sel?'#00e5ff':(mod?'#ffea00':c), weight: sel?3.5:(mod?3:w), dashArray:null, fillColor:c, fillOpacity:sel?0.65:fo, opacity:1 };
 }
 function apCalcul(){
   const D = AP.data, viv = new Set(); D.polys.forEach(p=>{ if (!AP.supp.has(p.i)) viv.add(p.i); });
@@ -17753,6 +17791,7 @@ function apPanneau(){
     return '<label class="ap-act"><input type="checkbox" '+(on?'checked ':'')+'onchange="apBasculeAction(\''+a+'\',this.checked)"><span><span class="ap-sq" style="background:'+col+'"></span><b>'+(AP_DECISION.indexOf(a)>=0?'(à décider) ':'')+apEsc(AP_NOMS[a]||a)+'</b><br><span class="hint" style="margin:0">'+det+'</span></span></label>';
   }).join('');
   let h = '';
+  if (AP.ancien) h += '<div class="ap-sec" style="background:#eef6ef;border-radius:8px;padding:8px 10px"><b>Ancien lot ignoré</b><div class="hint" style="margin:2px 0 0">'+fmtNum(AP.ancien)+' polygones de cette coopérative qui étaient déjà dans la base ORIGEN ne sont pas pris en compte. Les polygones noirs sont ceux d\'autres coopératives.</div></div>';
   if (D.reg && !D.reg.fiable) h += '<div class="ap-sec" style="background:#fff4dc;border:1px solid #e8c36a;border-radius:8px;padding:8px 10px"><b style="color:#7a5200">⚠ Les codes du registre ne correspondent pas aux polygones</b><div style="margin-top:4px">Seulement '+fmtNum(D.reg.trouves)+' polygone(s) sur '+fmtNum(D.reg.n)+' retrouvé(s) dans le registre. Les traitements « hors registre », « code en double » et « producteurs sans polygone » sont décochés : les cocher retirerait presque tout.<br><span class="hint" style="margin:0">Exemple de noms de polygones : '+apEsc((D.reg.ex_poly||[]).join(' ; '))+'<br>Exemple de codes du registre : '+apEsc((D.reg.ex_reg||[]).join(' ; '))+'</span></div></div>';
   h += '<div class="ap-sec"><h4>Après tous ces traitements</h4><div class="ap-big"><div><b>'+fmtNum(c.restants)+'</b>polygones restants<br><span class="hint" style="margin:0">sur '+fmtNum(c.avant)+' · '+fmtNum(c.avant-c.restants)+' retirés</span></div>'
     + '<div><b>'+fmtNum(Math.round(c.ha*10)/10)+'</b>ha restants<br><span class="hint" style="margin:0">sur '+fmtNum(Math.round(c.avantHa*10)/10)+' ha</span></div></div>'
@@ -17762,13 +17801,13 @@ function apPanneau(){
     + '<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap"><button class="ap-btn" onclick="apToutes(true)">Tout cocher</button><button class="ap-btn" onclick="apToutes(false)">Tout décocher</button></div></div>'
     + '<div class="ap-sec" id="ap-sel"></div>'
     + '<div class="ap-sec"><h4>Affichage</h4>'
-    + '<label class="ap-act"><input type="checkbox" '+(AP.vis.coop?'checked ':'')+'onchange="apCouche(\'coop\',this.checked)"><span>Mes polygones</span></label>'
-    + '<label class="ap-act"><input type="checkbox" '+(AP.vis.esp?'checked ':'')+'onchange="apCouche(\'esp\',this.checked)"><span><span class="ap-sq" style="background:#e6d6a3"></span>Forêts classées et espaces protégés <span class="ap-sq" style="background:#a0642a;margin-left:4px"></span>parcs et réserves</span></label>'
-    + '<label class="ap-act"><input type="checkbox" '+(AP.vis.base?'checked ':'')+'onchange="apCouche(\'base\',this.checked)"><span><span class="ap-sq" style="background:#222"></span>Base ECORIGINE ('+fmtNum(D.base.length)+(D.base_tronque?' + '+fmtNum(D.base_tronque)+' non affichés':'')+')</span></label>'
+    + '<label class="ap-act"><input type="checkbox" '+(AP.vis.coop?'checked ':'')+'onchange="apCouche(\'coop\',this.checked)"><span><span class="ap-sq" style="background:#1e88e5"></span>Mes polygones (bleu : sans problème)</span></label>'
+    + '<label class="ap-act"><input type="checkbox" '+(AP.vis.esp?'checked ':'')+'onchange="apCouche(\'esp\',this.checked)"><span><span class="ap-sq" style="background:#6fcf7f"></span>Forêts classées et espaces protégés <span class="ap-sq" style="background:#1f7a3d;margin-left:4px"></span>parcs et réserves</span></label>'
+    + '<label class="ap-act"><input type="checkbox" '+(AP.vis.base?'checked ':'')+'onchange="apCouche(\'base\',this.checked)"><span><span class="ap-sq" style="background:#222"></span>Autres coopératives de la base ECORIGINE ('+fmtNum(D.base.length)+(D.base_tronque?' + '+fmtNum(D.base_tronque)+' non affichés':'')+')</span></label>'
     + '<label class="ap-act"><input type="checkbox" '+(AP.vis.cacao?'checked ':'')+'onchange="apCouche(\'cacao\',this.checked)"><span><span class="ap-sq" style="background:#f28c28"></span>Zones cacaoyères (carte d\'occupation des sols 2020)'+(D.cacao_erreur?' <span style="color:#c0392b">indisponible</span>':'')+'</span></label>'
     + '<div style="margin-top:6px">Montrer : <select onchange="apFiltre(this.value)" style="font:inherit"><option value="tous"'+(AP.filtre==='tous'?' selected':'')+'>tous les polygones</option><option value="retires"'+(AP.filtre==='retires'?' selected':'')+'>seulement ceux qui seront retirés</option><option value="gardes"'+(AP.filtre==='gardes'?' selected':'')+'>seulement ceux qui restent</option></select></div>'
     + '<div style="margin-top:6px">Fond : <select onchange="apFond(this.value)" style="font:inherit"><option value="osm">Plan</option><option value="sat">Satellite</option></select></div>'
-    + '<div class="hint" style="margin:6px 0 0">Polygones : vert = sans problème ; gris pointillé = retiré par les traitements cochés ; rose = modifié à la main.</div></div>'
+    + '<div class="hint" style="margin:6px 0 0">Polygones : <b>bleu</b> = sans problème ; <b>couleur du traitement</b> (case cochée) = sera retiré ; <b>gris pâle</b> = problème pas traité (case décochée) ; <b>contour jaune</b> = modifié à la main. Cocher fait apparaître la couleur, décocher la fait disparaître.</div></div>'
     + '<div class="ap-sec"><h4>Rapport et application</h4><div style="display:flex;flex-direction:column;gap:6px">'
     + '<button class="ap-btn" onclick="apExcel()">📊 Télécharger le rapport Excel de cet aperçu</button>'
     + '<button class="ap-btn prim" onclick="apAppliquer()">✅ Appliquer : créer la copie nettoyée</button>'
@@ -21867,10 +21906,10 @@ function _renderBrut(){
       + '<label class="field">Campagne *<select id="tv_campagne" onchange="ocTvMajInfo()"><option value="">Sélectionner…</option>'
       +   state.campagnes.map(c=>'<option value="'+esc(c.id)+'"'+(plTv.campagneId===c.id?' selected':'')+'>'+esc(c.nom)+'</option>').join('')
       + '</select></label>'
-      + '<label class="field">Volume total (kg) *<input type="number" id="tv_volume" min="1" step="1" value="'+esc(plTv.volume||'')+'"></label>'
+      + '<label class="field">Volume total (kg) *<input type="number" id="tv_volume" min="1" step="1" oninput="ocTvMajInfo()" value="'+esc(plTv.volume||'')+'"></label>'
       + '<label class="field">Nombre de sacs *<input type="number" id="tv_sacs" min="1" step="1" value="'+esc(plTv.sacs||'')+'"></label>'
-      + '<label class="field">Nombre de producteurs *<input type="number" id="tv_nbprod" min="1" step="1" value="'+esc(plTv.nbprod||'')+'"></label>'
-      + '<div></div>'
+      + '<label class="field">Nombre de producteurs *<input type="number" id="tv_nbprod" min="1" step="1" oninput="ocTvMajInfo()" value="'+esc(plTv.nbprod||'')+'"></label>'
+      + '<div id="tv_prod_info" style="font-size:12.5px;align-self:center;margin:0 0 10px">'+ocTvProdInfoHtml(plTv.coopId, plTv.campagneId, Number(plTv.volume), Math.round(Number(plTv.nbprod)||0))+'</div>'
       + '<label class="field">Date de début *<input type="date" id="tv_date_debut" value="'+esc(plTv.dateDebut||'')+'"></label>'
       + '<label class="field">Date de fin *<input type="date" id="tv_date_fin" value="'+esc(plTv.dateFin||'')+'"></label>'
       + '</div>'
