@@ -3677,7 +3677,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-16-186';
+const APP_VERSION = '2026-10-16-187';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -10051,11 +10051,56 @@ function ocTvProdInfoHtml(coopId, campagneId, V, n){
   if (!(V>0)) return gris('Indique le volume : je calcule le nombre de producteurs nécessaire.');
   const an = ocTvAnalyseProd(coopId, campagneId, V); if (!an) return gris('Choisis la coopérative et la campagne.');
   if (an.aucun) return '<span style="color:#c0392b">⚠ Aucun producteur éligible pour cette coopérative.</span>';
-  if (V>an.capTot) return '<span style="color:#c0392b">⚠ Volume trop élevé : même avec les '+fmtNum(an.nElig)+' producteurs éligibles, la capacité est de '+fmtKg(an.capTot)+' (un tiers de la marge de chacun).</span>';
-  const mini = Math.min(an.besoin, an.nElig), part = n>0 ? V/n : 0, pct = part && an.avgPot ? Math.round(1000*part/an.avgPot)/10 : null;
-  if (n>=mini && n>0) return '<span style="color:#1e8449">✔ Environ '+fmtKg(Math.round(part))+' par producteur'+(pct!=null?' (≈ '+pct+' % de son potentiel)':'')+' : chacun pourra encore livrer au moins 3 fois avant 70 %.</span>';
-  return '<span style="color:#b36b00">⚠ '+(n>0 ? 'Avec '+fmtNum(n)+' producteur(s), chacun devrait livrer environ '+fmtKg(Math.round(part))+(pct!=null?' (≈ '+pct+' % de son potentiel)':'')+' : trop pour livrer 3 fois avant 70 %. ' : '')+'Je propose <b>'+fmtNum(mini)+' producteurs</b>. </span>'
+  if (V>an.capTot) return '<span style="color:#c0392b">⚠ Volume trop élevé : même avec les '+fmtNum(an.nElig)+' producteurs éligibles, chacun ne pourrait pas livrer 3 fois (capacité '+fmtKg(an.capTot)+').</span>';
+  const mini = Math.min(an.besoin, an.nElig);
+  if (n>=mini && n>0) return '<span style="color:#1e8449">✔ '+fmtNum(n)+' producteur(s) : le volume sera réparti selon la capacité de chacun (part aléatoire), et chacun pourra livrer au moins 3 fois avant 70 %. Clique sur « Tester » pour voir la répartition.</span>';
+  return '<span style="color:#b36b00">⚠ '+(n>0 ? fmtNum(n)+' producteur(s) ne suffisent pas pour que chacun puisse livrer au moins 3 fois avant 70 %. ' : '')+'Je propose <b>'+fmtNum(mini)+' producteurs</b>. </span>'
     + '<button type="button" class="btn btn-primary btn-compact" onclick="ocTvUtiliserNb('+mini+')">Utiliser '+fmtNum(mini)+'</button>';
+}
+var _tvTest = null;
+function ocTvCle(c,g,V,sacs,n,d1,d2){ return [c,g,V,sacs,n,d1,d2].join('|'); }
+function ocTvTester(){
+  const val = id=>{ const el = document.getElementById(id); return el ? el.value : ''; };
+  const pl = (state.modal && state.modal.payload) || {};
+  const coopId = val('tv_coop') || pl.coopId, campagneId = val('tv_campagne') || pl.campagneId;
+  const V = Math.round(Number(val('tv_volume'))), sacs = Number(val('tv_sacs')), nb = Number(val('tv_nbprod')), d1 = val('tv_date_debut'), d2 = val('tv_date_fin');
+  const out = document.getElementById('tv_test'); if (!out) return;
+  const err = t=>{ out.innerHTML = '<div class="hint" style="color:#c0392b;margin:8px 0">'+esc(t)+'</div>'; };
+  if (!coopId) return err('Sélectionne la coopérative.');
+  if (!campagneId) return err('Sélectionne la campagne.');
+  if (!(V>0)) return err('Indique un volume (kg) supérieur à 0.');
+  if (!Number.isInteger(sacs) || sacs<=0) return err('Le nombre de sacs doit être un entier supérieur à 0.');
+  if (!Number.isInteger(nb) || nb<=0) return err('Le nombre de producteurs doit être un entier supérieur à 0.');
+  if (!d1 || !d2) return err('Renseigne la date de début et la date de fin.');
+  if (d2<d1) return err('La date de fin doit être postérieure à la date de début.');
+  const an = ocTvAnalyseProd(coopId, campagneId, V);
+  if (an && !an.aucun && nb<Math.min(an.besoin, an.nElig)) return err('Trop peu de producteurs pour que chacun puisse livrer 3 fois : il en faut au moins '+Math.min(an.besoin, an.nElig)+'.');
+  const res = ocAllouerVolume(ocProducteursEligibles(coopId, campagneId, 'principale'), V, nb);
+  if (res.error) return err(res.error);
+  const sacsArr = ocRepartirSacs(res.allocations, sacs);
+  const datesArr = res.allocations.map(()=>ocDateAleatoireDansIntervalle(d1, d2));
+  _tvTest = { cle: ocTvCle(coopId, campagneId, V, sacs, nb, d1, d2), res: res, sacsArr: sacsArr, datesArr: datesArr };
+  const lignes = res.allocations.map((a,i)=>{
+    const rem = effectiveCeiling(a.p, campagneId, 'principale') - cumulAchats(a.p.farm_id, campagneId, 'principale', coopId);
+    const pot = potentiel(a.p) || 0, fois = a.kg>0 ? Math.floor(rem/a.kg) : 0;
+    return { a:a, i:i, pot:pot, fois:fois, pct: pot ? Math.round(1000*a.kg/pot)/10 : null };
+  }).sort((x,y)=>datesArr[x.i]<datesArr[y.i]?-1:1);
+  const totKg = res.allocations.reduce((t,a)=>t+a.kg,0), totSacs = sacsArr.reduce((t,x)=>t+x,0);
+  const minFois = Math.min.apply(null, lignes.map(l=>l.fois));
+  const ok = (c,t)=>'<div style="color:'+(c?'#1e8449':'#c0392b')+'">'+(c?'✔ ':'✖ ')+t+'</div>';
+  const coopFiche = coopById(coopId);
+  out.innerHTML = '<div style="border:1px solid #cfd8d3;border-radius:10px;padding:10px 12px;margin:10px 0;background:#fafcfb">'
+    + '<div style="font-weight:600;margin-bottom:4px">Aperçu de la fiche (rien n\'est enregistré)</div>'
+    + '<div class="hint" style="margin:0 0 6px">'+esc(coopFiche ? (coopFiche.nom_complet||coopFiche.nom) : '')+' · du '+esc(dateFr(d1))+' au '+esc(dateFr(d2))+'</div>'
+    + '<div style="overflow-x:auto"><table class="data-table" style="font-size:12.5px;width:100%"><thead><tr><th>Producteur</th><th>Date</th><th style="text-align:right">Sacs</th><th style="text-align:right">Volume (kg)</th><th style="text-align:right">% du potentiel</th><th style="text-align:right">Livraisons possibles avant 70 %</th></tr></thead><tbody>'
+    + lignes.map(l=>'<tr><td>'+esc(l.a.p.nom||'')+' <span class="hint" style="margin:0">'+esc(l.a.p.code||l.a.p.farm_id||'')+'</span></td><td>'+esc(dateFr(datesArr[l.i]))+'</td><td style="text-align:right">'+fmtNum(sacsArr[l.i])+'</td><td style="text-align:right">'+fmtNum(l.a.kg)+'</td><td style="text-align:right">'+(l.pct==null?'—':l.pct+' %')+'</td><td style="text-align:right">'+fmtNum(l.fois)+'</td></tr>').join('')
+    + '<tr style="font-weight:600"><td>Total ('+res.allocations.length+' producteurs)</td><td></td><td style="text-align:right">'+fmtNum(totSacs)+'</td><td style="text-align:right">'+fmtNum(totKg)+'</td><td></td><td></td></tr></tbody></table></div>'
+    + '<div style="margin-top:8px;font-size:12.5px">'
+    + ok(totKg===V, 'Volume total : '+fmtNum(totKg)+' kg sur '+fmtNum(V)+' demandés')
+    + ok(totSacs===sacs, 'Sacs : '+fmtNum(totSacs)+' sur '+fmtNum(sacs)+' demandés')
+    + ok(minFois>=3, 'Chaque producteur peut livrer au moins 3 fois avant 70 % (minimum constaté : '+fmtNum(minFois)+')')
+    + ok(new Set(lignes.map(l=>l.a.p.farm_id)).size===lignes.length, 'Aucun producteur en double')
+    + '</div><div class="hint" style="margin:6px 0 0">Cet aperçu est celui qui sera généré si tu ne changes rien. Pour un autre tirage, clique à nouveau sur « Tester ».</div></div>';
 }
 function ocTvUtiliserNb(n){
   const el = document.getElementById('tv_nbprod'); if (el) el.value = n;
@@ -10104,10 +10149,12 @@ async function submitTracerVolumeDirecte(){
   _ocTracerVolumeEnCours = true;
   try{
     const eligibles = ocProducteursEligibles(coopId, campagneId, 'principale');
-    const resultat = ocAllouerVolume(eligibles, volumeKg, nbProd);
+    const dejaTeste = _tvTest && _tvTest.cle===ocTvCle(coopId, campagneId, volumeKg, nbSacs, nbProd, dateDebut, dateFin) ? _tvTest : null;   // le tirage testé est celui qui est généré
+    const resultat = dejaTeste ? dejaTeste.res : ocAllouerVolume(eligibles, volumeKg, nbProd);
     if (resultat.error){ showToast(resultat.error); return; }
-    const sacsArr = ocRepartirSacs(resultat.allocations, nbSacs);
-    const datesArr = resultat.allocations.map(()=>ocDateAleatoireDansIntervalle(dateDebut, dateFin));
+    const sacsArr = dejaTeste ? dejaTeste.sacsArr : ocRepartirSacs(resultat.allocations, nbSacs);
+    const datesArr = dejaTeste ? dejaTeste.datesArr : resultat.allocations.map(()=>ocDateAleatoireDansIntervalle(dateDebut, dateFin));
+    _tvTest = null;
 
     // 1) on construit d'abord la fiche : si elle echoue, rien n'est enregistre en base
     const coopSrc = pl.mode==='direct' ? coopId : (val('tv_orig_coop') || pl.origCoopId || '');
@@ -21914,7 +21961,8 @@ function _renderBrut(){
       + '<label class="field">Date de fin *<input type="date" id="tv_date_fin" value="'+esc(plTv.dateFin||'')+'"></label>'
       + '</div>'
       + '<p class="hint" style="margin:6px 0 0;">Une date est tirée au hasard par producteur dans cet intervalle. Chaque producteur tiré reçoit un achat enregistré.</p>'
-      + '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Annuler</button><button type="button" class="btn btn-primary" onclick="submitTracerVolumeDirecte()">Générer</button></div>'
+      + '<div id="tv_test"></div>'
+      + '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Annuler</button><button type="button" class="btn" onclick="ocTvTester()">🔍 Tester</button><button type="button" class="btn btn-primary" onclick="submitTracerVolumeDirecte()">Générer</button></div>'
       + '</div></div>';
   }
 
