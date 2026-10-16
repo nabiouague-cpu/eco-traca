@@ -3651,7 +3651,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-16-164';
+const APP_VERSION = '2026-10-16-165';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -16907,7 +16907,9 @@ async function defoSupprimerOk(id){
   const x = (state.defo||[]).find(z=>z.id===id); if (!x || !['annulee','terminee','erreur'].includes(x.statut)) return;
   const enfants = x.etape==='analyse' ? (state.defo||[]).filter(z=>z.entrees && !Array.isArray(z.entrees) && z.entrees.analyse_id===id) : [];
   if (enfants.some(z=>z.statut==='demandee'||z.statut==='en_cours')){ showToast('Un nettoyage est en cours sur cette analyse : attends qu\'il se termine.'); return; }
-  const ids = [id].concat(enfants.map(z=>z.id));
+  const whispLies = (x.etape||'preparation')==='preparation' ? (state.defo||[]).filter(z=>z.etape==='whisp' && z.entrees && z.entrees.prep_id===id) : [];
+  if (whispLies.some(z=>z.statut==='demandee'||z.statut==='en_cours')){ showToast('Whisp est en cours sur ce dossier : attends qu\'il se termine.'); return; }
+  const ids = [id].concat(enfants.map(z=>z.id)).concat(whispLies.map(z=>z.id));
   const { error } = await supabaseClient.from('analyses_defo').delete().in('id', ids);
   if (error){ showToast('Suppression impossible : '+error.message); return; }
   const chemins = [x].concat(enfants).reduce((acc,z)=>acc.concat(defoChemins(z)), []);
@@ -17122,11 +17124,13 @@ function defoFilHtml(x){
   const aOk = !!(a && a.statut==='terminee');
   const et = aOk ? defoEtat(a) : null;
   const fins = a ? (state.defo||[]).filter(z=>z.etape==='base_finale' && z.entrees && z.entrees.analyse_id===a.id).sort((p,q)=>String(q.created_at).localeCompare(String(p.created_at))) : [];
+  const wj = (state.defo||[]).filter(z=>z.etape==='whisp' && z.entrees && z.entrees.prep_id===x.id).sort((p,q)=>String(q.created_at).localeCompare(String(p.created_at)));
+  const wEnCours = wj.find(z=>z.statut==='demandee'||z.statut==='en_cours') || null, wErr = (!wEnCours && wj[0] && wj[0].statut==='erreur') ? wj[0] : null;
   const finTravail = fins.some(z=>z.statut==='demandee'||z.statut==='en_cours'), finOk = fins.some(z=>z.statut==='terminee'), finErr = !!(fins[0] && fins[0].statut==='erreur');
   // états : fait / a_faire / travail / attente / erreur
   const s = {};
   s[1] = 'fait';
-  s[2] = w ? 'fait' : 'a_faire';
+  s[2] = wEnCours ? 'travail' : (w ? 'fait' : (wErr ? 'erreur' : 'a_faire'));
   s[3] = !w ? 'attente' : !actif ? (a && a.statut==='erreur' ? 'erreur' : 'a_faire') : (aOk ? 'fait' : 'travail');
   s[4] = !aOk ? 'attente' : et.enCours ? 'travail' : et.erreur ? 'erreur' : (et.dernier || finOk) ? 'fait' : 'a_faire';
   s[5] = !aOk ? 'attente' : finTravail ? 'travail' : finErr ? 'erreur' : finOk ? 'fait' : (s[4]==='fait' ? 'a_faire' : 'attente');
@@ -17141,13 +17145,19 @@ function defoFilHtml(x){
 
   // 1 — préparation
   const c1 = defoResumeHtml(x) + '<div style="margin-top:4px">'+defoSec('Fichiers', defoChip(g))+'</div>';
-  // 2 — Whisp
-  const b1 = '<button class="'+prim(!w)+'" onclick="defoOuvrirWhisp(\''+escJs(g.path)+'\',\''+escJs(g.nom)+'\')">🌐 Ouvrir dans Whisp</button>';
-  const b2 = (w && lie.length) ? '' : '<label class="'+prim(false)+'" style="cursor:pointer">📥 '+(w?'Remplacer le CSV de Whisp':'Déposer le CSV de Whisp')+'<input type="file" accept=".csv" style="display:none" onchange="defoDeposerWhisp(\''+idj+'\',this)"></label>';
-  const c2 = defoSec('Fichiers', defoChip(g) + (w ? defoChip(w) : '<span class="hint" style="margin:0">Le CSV de Whisp n\'est pas encore déposé.</span>')) + defoSec('Actions', b1+b2);
+  // 2 — Whisp (API officielle, ou à la main sur le site)
+  const verrou = !!lie.length;   // une analyse existe déjà : le CSV ne se remplace plus
+  const bAuto = verrou ? '' : '<button class="'+prim(!w && !wEnCours)+'" '+(wEnCours?'disabled ':'')+'onclick="defoLancerWhisp(\''+idj+'\')">⚡ '+(w?'Relancer Whisp automatiquement':'Lancer Whisp automatiquement')+'</button>';
+  const b1 = '<button class="btn-ghost btn-compact" onclick="defoOuvrirWhisp(\''+escJs(g.path)+'\',\''+escJs(g.nom)+'\')">🌐 Ouvrir Whisp sur le site</button>';
+  const b2 = verrou ? '' : '<label class="btn-ghost btn-compact" style="cursor:pointer">📥 '+(w?'Remplacer le CSV à la main':'Déposer le CSV à la main')+'<input type="file" accept=".csv" style="display:none" onchange="defoDeposerWhisp(\''+idj+'\',this)"></label>';
+  let etatW = '';
+  if (wEnCours) etatW = '<div style="margin:6px 0;color:#1f5fa8;font-weight:600">⏳ Whisp analyse les polygones… <span class="hint" style="margin:0">'+carteDepuis(wEnCours)+' · quelques minutes, la page se met à jour toute seule</span></div>';
+  else if (wErr) etatW = '<div style="margin:6px 0;color:#c0392b;font-size:12.5px">L\'analyse automatique a échoué : '+esc(wErr.erreur||'erreur inconnue')+' <button class="btn-ghost btn-compact" onclick="defoFermerWhisp(\''+escJs(wErr.id)+'\')">Fermer</button></div>';
+  const c2 = etatW + defoSec('Fichiers', defoChip(g) + (w ? defoChip(w) + (w.source==='api' ? '<span class="hint" style="margin:0">produit par l\'API Whisp</span>' : '') : '<span class="hint" style="margin:0">Le CSV de Whisp n\'est pas encore là.</span>'))
+    + defoSec('Actions', bAuto+b1+b2);
   // 3 — registre + analyse
   let c3 = '';
-  if (!w) c3 = attend('Disponible quand le CSV de Whisp est déposé (étape 2).');
+  if (!w) c3 = attend('Disponible quand le CSV de Whisp est là (onglet Whisp).');
   else {
     if (a){ const P = defoAnalyseParties(a); c3 += P.entete + P.erreur + P.resume; }
     if (!actif) c3 += '<div style="margin-top:8px"><button class="btn btn-primary btn-compact" onclick="ouvrirDefoAnalyse(\''+idj+'\')">🔎 Ajouter le registre et lancer l\'analyse</button></div>';
@@ -17166,13 +17176,30 @@ function defoFilHtml(x){
   const onglets = '<div class="defo-tabs">' + [1,2,3,4,5].map(n=>'<button type="button" class="defo-tab '+cl(n)+(n===act?' on':'')+'" onclick="defoOnglet(\''+idj+'\','+n+',\''+sig+'\')"><span class="dt-n">'+nm(n)+'</span>'+noms[n-1]+'</button>').join('') + '</div>';
   const defs = {
     1: ['Préparation des polygones', 'Points supprimés, lignes transformées en polygones, géométries réparées, fichiers fusionnés en un GeoJSON.', c1],
-    2: ['Rapport Whisp', 'Whisp est un site externe : ORIGEN te donne le GeoJSON, tu le déposes sur Whisp, puis tu rapportes ici le CSV obtenu.', c2],
+    2: ['Rapport Whisp', 'ORIGEN envoie les polygones à Whisp (API officielle, gratuite) et récupère le CSV tout seul. Secours : le faire sur le site Whisp et déposer le CSV ici.', c2],
     3: ['Registre et analyse', 'Tu ajoutes le registre de la coopérative (GMR) : ORIGEN croise polygones, Whisp et registre, puis liste les problèmes.', c3],
     4: ['Nettoyage', 'Correction des problèmes dans l\'ordre standard, sur une copie : tes fichiers et la base ECORIGINE ne sont jamais modifiés.', c4],
     5: ['Base finale', '', c5] };
   return '<div style="flex-basis:100%;margin-top:8px">' + onglets + '<div class="defo-pane">' + carte(act, defs[act][0], defs[act][1], defs[act][2]) + '</div></div>';
 }
 function defoOnglet(id, n, sig){ (state.defoOnglet = state.defoOnglet || {})[id] = { n:n, sig:sig }; render(); }
+async function defoLancerWhisp(pid){
+  const p = (state.defo||[]).find(z=>z.id===pid); if (!p) return;
+  if ((state.defo||[]).some(z=>z.etape==='whisp' && z.entrees && z.entrees.prep_id===pid && (z.statut==='demandee'||z.statut==='en_cours'))){ showToast('Whisp est déjà en cours pour ce dossier.'); return; }
+  const w = (p.fichiers||[]).find(f=>f.type==='whisp_csv');
+  const lancer = async ()=>{
+    const ins = await supabaseClient.from('analyses_defo').insert({ id:genId('ad'), cooperative_id:p.cooperative_id||null, cooperative_nom:p.cooperative_nom, etape:'whisp', statut:'demandee',
+      entrees:{ prep_id:pid }, demande_par:(state.session&&state.session.user&&state.session.user.email)||null }).select().single();
+    if (ins.error){ showToast('Lancement impossible : '+ins.error.message); return; }
+    state.defo = [ins.data].concat(state.defo||[]); carteLancerRobot(); showToast('Whisp lancé : quelques minutes.', 'success'); render();
+  };
+  if (w) askConfirm('Relancer Whisp ? Le CSV actuel de ce dossier sera remplacé par le nouveau résultat.', lancer); else lancer();
+}
+async function defoFermerWhisp(id){
+  const { error } = await supabaseClient.from('analyses_defo').delete().eq('id', id).eq('etape','whisp').eq('statut','erreur');
+  if (error){ showToast('Impossible : '+error.message); return; }
+  state.defo = state.defo.filter(z=>z.id!==id); render();
+}
 async function defoDeposerWhisp(pid, input){
   const f = input && input.files && input.files[0]; if (input) input.value = ''; if (!f) return;
   if (!/\.csv$/i.test(f.name)){ showToast('Fichier .csv attendu (rapport Whisp).'); return; }
