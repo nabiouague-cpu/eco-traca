@@ -3677,7 +3677,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-16-177';
+const APP_VERSION = '2026-10-16-178';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5380,6 +5380,67 @@ async function supprimerTracage(){
   );
 }
 
+// ---- Annuler la dernière étape du traçage en cours (la plus récente seulement) ----
+function ocTracageDerniere(tr){
+  if (!tr) return null;
+  const direct = tr.mode==='direct', conn = tr.connaissement;
+  if (conn){
+    if (!direct && tr.ticketFait) return { cle:'ticket', lib:'le ticket de pesée', detail:"Le ticket redevient « à établir ». Les poids déjà reportés sur l'achat par ce ticket ne sont pas modifiés." };
+    if (direct) return { cle:'lien', lib:'le rattachement du connaissement '+conn.numero, detail:"Les producteurs tracés n'ont plus de connaissement ; le connaissement de la coopérative n'est pas touché et redevient proposé à rattacher." };
+    return { cle:'conn', lib:'le connaissement '+conn.numero, detail:"Le connaissement généré et son achat sont supprimés ; les producteurs tracés sont conservés, sans connaissement." };
+  }
+  return { cle:'trace', lib:'le traçage du volume ('+fmtKg(tr.volumeKg)+')', detail:"Les achats producteurs enregistrés et la fiche sont supprimés ; le connaissement d'origine redevient « à tracer »." };
+}
+function ocTracageBoutonAnnuler(tr){
+  const d = ocTracageDerniere(tr); if (!d) return '';
+  return '<button type="button" class="btn" onclick="ocTracageAnnulerDerniere()" title="Annule seulement la dernière étape : '+esc(d.lib)+'">↩ Annuler la dernière étape</button>';
+}
+function ocTracageAnnulerDerniere(){
+  const tr = ocTracageCourant(), d = ocTracageDerniere(tr); if (!d) return;
+  askConfirm('Annuler '+d.lib+' ?\n\n'+d.detail, ()=>ocTracageAnnulerDerniereOk());
+}
+async function ocTracageRestaurerVu(vuId){
+  if (!vuId) return;
+  try{
+    const { error } = await supabaseClient.from('saigic_connaissements_vus').update({ trace_le:null }).eq('id', vuId);
+    if (error) throw error;
+    const { data } = await supabaseClient.from('saigic_connaissements_vus').select('*').eq('id', vuId).maybeSingle();
+    if (data && data.a_tracer && !(state.saigicATracer||[]).some(x=>x.id===vuId)) state.saigicATracer = [data].concat(state.saigicATracer||[]);
+  }catch(e){ console.warn('Connaissement non remis « à tracer » :', e.message||e); }
+}
+async function ocTracageAnnulerDerniereOk(){
+  const tr = ocTracageCourant(), d = ocTracageDerniere(tr); if (!d) return;
+  try{
+    if (d.cle==='ticket'){
+      tr.ticketFait = false; ocTracageSauver(tr);
+    } else if (d.cle==='conn'){
+      const ac = state.achats.find(x=>x.cooperative_id===tr.coopId && x.connaissement===tr.connaissement.numero && !x.producteur_id);
+      if (ac) await ocSupprimerConnaissementInterne(tr.coopId, tr.connaissement.numero, ac.id);
+      else { tr.connaissement = null; tr.ticketFait = false; ocTracageSauver(tr); }
+    } else if (d.cle==='lien'){
+      const lies = ocTracageAchatsProducteurs(tr);
+      if (lies.length){
+        const { error } = await supabaseClient.from('achats').update({ connaissement:'' }).in('id', lies.map(a=>a.id));
+        if (error) throw error;
+        lies.forEach(a=>{ a.connaissement = ''; });
+      }
+      const vuId = tr.vuId; tr.connaissement = null; tr.ticketFait = false; tr.vuId = null; ocTracageSauver(tr);
+      await ocTracageRestaurerVu(vuId);
+    } else {
+      const producteurs = ocTracageAchatsProducteurs(tr), ids = producteurs.map(x=>x.id);
+      if (ids.length){
+        const { error } = await supabaseClient.from('achats').delete().in('id', ids);
+        if (error) throw error;
+        state.achats = state.achats.filter(x=>!ids.includes(x.id));
+      }
+      if (tr.ficheGenerationId) await supabaseClient.from('fiches_tracabilite_generees').delete().eq('id', tr.ficheGenerationId);
+      const vuOrigine = tr.origine && tr.origine.vuId;
+      ocTracageSauver(null);
+      await ocTracageRestaurerVu(vuOrigine);
+    }
+    showToast('Étape annulée : '+d.lib+'.', 'success'); render();
+  }catch(e){ showToast("Échec de l'annulation : "+(e.message||e)); }
+}
 // Onglet « Traçage de volume » : les trois étapes liées, avec l'état de la chaîne en cours.
 // ============================================================================
 // LOTS & EXPORT — la tracabilite prolongee au-dela de l'usine :
@@ -8583,7 +8644,7 @@ function renderTracageDirect(tr){
   let html = '<div class="panel">'
     + '<div class="panel-head trc-entete"><div><h2>Traçage de volume — pour la coopérative elle-même</h2>'
     + '<p>Le volume est réparti entre les producteurs de la coopérative. La coopérative nous transmet elle-même son connaissement et son ticket de pesée : ORIGEN ne génère aucun de ces deux documents (la pesée validée à l\'usine est lue automatiquement sur le SAIGIC).</p></div>'
-    + '<div class="trc-actions"><button type="button" class="btn" onclick="ocTracageNouveau()">Nouveau traçage</button>'
+    + '<div class="trc-actions">'+ocTracageBoutonAnnuler(tr)+'<button type="button" class="btn" onclick="ocTracageNouveau()">Nouveau traçage</button>'
     + '<button type="button" class="btn-danger-text" onclick="supprimerTracage()" title="Retire les achats producteurs de ce traçage (le connaissement de la coopérative n\'est pas touché)">Supprimer ce traçage</button></div></div>'
     + saigicATracerHtml();
   html += '<div class="trc-resume">'
@@ -8643,7 +8704,7 @@ function renderTracageTab(){
     + '<div class="panel-head trc-entete"><div><h2>Traçage de volume</h2>'
     + '<p>Un seul enchaînement, trois étapes liées : le volume est réparti entre les producteurs réels de la coopérative finale certifiée (B), le connaissement de la coopérative d\'origine (A) est importé et transposé vers B, puis le ticket de pesée est établi à partir de ce connaissement. Chaque étape pré-remplit la suivante et relie les données en base.</p></div>'
     + '<div class="trc-actions">'
-    + (tr ? '<button type="button" class="btn" onclick="ocTracageNouveau()" title="Oublie la chaîne en cours (rien n\'est supprimé en base) pour en commencer une nouvelle">Nouveau traçage</button>'
+    + (tr ? ocTracageBoutonAnnuler(tr)+'<button type="button" class="btn" onclick="ocTracageNouveau()" title="Oublie la chaîne en cours (rien n\'est supprimé en base) pour en commencer une nouvelle">Nouveau traçage</button>'
           + '<button type="button" class="btn-danger-text" onclick="supprimerTracage()" title="Retire les achats producteurs du traçage et le connaissement lié, pour tout reproduire">Supprimer ce traçage</button>' : '')
     + '</div></div>'
     + saigicATracerHtml();
@@ -17932,7 +17993,72 @@ function defoFilHtml(x){
     4: ['Aperçu et retouches', 'Regarde tes polygones sur la carte avec les forêts classées, la base ECORIGINE et les zones cacaoyères ; retouche-les et vois combien il en restera.', c4],
     5: ['Nettoyage', 'Correction des problèmes dans l\'ordre standard, sur une copie : tes fichiers et la base ECORIGINE ne sont jamais modifiés.', c5],
     6: ['Base finale', '', c6] };
-  return '<div style="flex-basis:100%;margin-top:8px">' + onglets + '<div class="defo-pane">' + carte(act, defs[act][0], defs[act][1], defs[act][2]) + '</div></div>';
+  return '<div style="flex-basis:100%;margin-top:8px">' + defoBoutonAnnulerHtml(x) + onglets + '<div class="defo-pane">' + carte(act, defs[act][0], defs[act][1], defs[act][2]) + '</div></div>';
+}
+// ---- Annuler la dernière étape d'un dossier (la plus avancée, la plus récente) : en attente → retirée ; terminée ou en erreur → supprimée ----
+function defoDerniereEtape(x){
+  const tout = state.defo||[], desc = (p,q)=>String(q.created_at).localeCompare(String(p.created_at));
+  const a = tout.filter(z=>z.etape==='analyse' && z.entrees && z.entrees.prep_id===x.id && z.statut!=='annulee').sort(desc)[0] || null;
+  if (a){
+    const suite = tout.filter(z=>['base_finale','nettoyage','apercu'].includes(z.etape) && z.entrees && z.entrees.analyse_id===a.id && z.statut!=='annulee').sort(desc)[0];
+    if (suite) return { kind:'suite', row:suite, lib: suite.etape==='base_finale' ? 'la base finale' : suite.etape==='nettoyage' ? 'le nettoyage' : "l'aperçu" };
+    return { kind:'analyse', row:a, lib:"l'analyse" };
+  }
+  const wj = tout.filter(z=>z.etape==='whisp' && z.entrees && z.entrees.prep_id===x.id).sort(desc);
+  const csv = (x.fichiers||[]).find(f=>f.type==='whisp_csv') || null;
+  if (wj.length || csv) return { kind:'whisp', rows:wj, csv:csv, lib:'le rapport Whisp' };
+  return null;
+}
+function defoBoutonAnnulerHtml(x){
+  const d = defoDerniereEtape(x); if (!d) return '';
+  const enCours = d.row ? (d.row.statut==='demandee'||d.row.statut==='en_cours') : (d.rows||[]).some(z=>z.statut==='demandee'||z.statut==='en_cours');
+  return '<div style="display:flex;justify-content:flex-end;margin:0 0 6px"><button type="button" class="btn-ghost btn-compact" onclick="defoAnnulerDerniere(\''+escJs(x.id)+'\')" title="Annule seulement la dernière étape : '+esc(d.lib)+'">↩ Annuler '+(enCours?"l'étape en cours":'la dernière étape')+' ('+esc(d.lib)+')</button></div>';
+}
+function defoAnnulerDerniere(pid){
+  const x = (state.defo||[]).find(z=>z.id===pid); if (!x) return;
+  const d = defoDerniereEtape(x); if (!d){ showToast('Rien à annuler.'); return; }
+  askConfirm('Annuler '+d.lib+' ?\n\nCette étape est retirée (avec ses fichiers) et le dossier revient à l\'étape précédente. Les étapes d\'avant ne sont pas touchées.', ()=>defoAnnulerDerniereOk(pid));
+}
+async function defoAnnulerDerniereOk(pid){
+  const x = (state.defo||[]).find(z=>z.id===pid); if (!x) return;
+  const d = defoDerniereEtape(x); if (!d) return;
+  const maintenant = new Date().toISOString();
+  const refus = 'Cette étape tourne déjà sur le serveur : elle ne peut plus être interrompue. Annule-la dès qu\'elle est terminée.';
+  const retirerEnAttente = async z=>{
+    if (z.statut==='en_cours') return false;
+    if (z.statut==='demandee'){
+      const r = await supabaseClient.from('analyses_defo').update({ statut:'annulee', updated_at:maintenant }).eq('id', z.id).eq('statut','demandee').select('id');
+      if (r.error) throw r.error;
+      if (!(r.data && r.data.length)) return false;
+      z.statut = 'annulee';
+    }
+    return true;
+  };
+  try{
+    if (d.kind==='whisp'){
+      for (const z of d.rows){ if (!(await retirerEnAttente(z))){ showToast(refus); chargerDefo(); return; } }
+      const ids = d.rows.map(z=>z.id);
+      if (ids.length){ const { error } = await supabaseClient.from('analyses_defo').delete().in('id', ids); if (error) throw error; }
+      if (d.csv){
+        const nf = (x.fichiers||[]).filter(f=>f.type!=='whisp_csv');
+        const r = await supabaseClient.from('analyses_defo').update({ fichiers:nf, updated_at:maintenant }).eq('id', x.id);
+        if (r && r.error) throw r.error;
+        x.fichiers = nf;
+        try { await supabaseClient.storage.from('documents-coop').remove([d.csv.path]); } catch(e){}
+      }
+      state.defo = state.defo.filter(z=>!ids.includes(z.id));
+    } else {
+      const z = d.row;
+      if (!(await retirerEnAttente(z))){ showToast(refus); chargerDefo(); return; }
+      if (d.kind==='analyse'){ await defoSupprimerOk(z.id); return; }
+      const { error } = await supabaseClient.from('analyses_defo').delete().eq('id', z.id);
+      if (error) throw error;
+      const chemins = defoChemins(z);
+      if (chemins.length){ try { await supabaseClient.storage.from('documents-coop').remove(chemins); } catch(e){} }
+      state.defo = state.defo.filter(y=>y.id!==z.id);
+    }
+    showToast('Étape annulée : '+d.lib+'.', 'success'); render();
+  }catch(e){ showToast("Annulation impossible : "+(e.message||e)); }
 }
 function defoReplier(id, n, btn){
   const cle = id+':'+n; state.defoReplie = state.defoReplie || {};
