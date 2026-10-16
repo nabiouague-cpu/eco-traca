@@ -3677,7 +3677,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-16-176';
+const APP_VERSION = '2026-10-16-177';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -9832,7 +9832,7 @@ function ocSerialExcel(dateIso){
 }
 // Construit la fiche de tracabilite (modele officiel) avec les lignes reellement remplies.
 // Dans l'Excel, Farmer ID = p.code (repli : farm_id) ; Farm ID = p.farm_id.
-async function ocConstruireFicheTracabiliteDirecte(allocations, sacsArr, datesArr, coopId, campagneId){
+async function ocConstruireFicheTracabiliteDirecte(allocations, sacsArr, datesArr, coopId, campagneId, entete){
   if (typeof JSZip === 'undefined') throw new Error("La bibliothèque de compression n'a pas pu se charger (connexion internet requise).");
   if (allocations.length>999) throw new Error('La fiche ne peut contenir que 999 lignes ('+allocations.length+' demandées).');
   const coop = coopById(coopId);
@@ -9906,7 +9906,35 @@ async function ocConstruireFicheTracabiliteDirecte(allocations, sacsArr, datesAr
     curseur = fin;
   }
   sheet1 = out + sheet1.slice(curseur);
+  // En-tête : informations de la coopérative (B) dont les producteurs figurent dans la fiche, et connaissement concerné.
+  const ent = entete || {};
+  const celluleTexte = (ref, style, txt)=> txt ? '<c r="'+ref+'" s="'+style+'" t="inlineStr"><is><t>'+escXmlTracabilite(txt)+'</t></is></c>' : '<c r="'+ref+'" s="'+style+'" t="n"></c>';
+  const posEnt = (ref, style, txt)=>{ const re = new RegExp('<c r="'+ref+'" s="'+style+'" t="n"></c>'); if (!re.test(sheet1)) throw new Error('Cellule '+ref+" introuvable dans le modèle Excel."); sheet1 = sheet1.replace(re, celluleTexte(ref, style, txt)); };
+  posEnt('I5','58', ent.fournisseur||nomCoop);
+  posEnt('I6','58', ent.ville||'');
+  posEnt('I7','58', ent.dateConnaissement||'');
+  posEnt('I8','44', ent.numero||'');
+  // Totaux : le modèle soustrait des « non conformes » calculés par des formules qui pointent des colonnes absentes (#REF!).
+  // Ici tous les producteurs sont conformes : on additionne simplement les lignes.
+  const totSacs = lignes.reduce((t,l)=>t+(Number(l.sacs)||0), 0), totKg = lignes.reduce((t,l)=>t+(Number(l.a.kg)||0), 0);
+  const remplacerCellule = (re, nouveau)=>{ if (!re.test(sheet1)) throw new Error('Cellule de total introuvable dans le modèle Excel.'); sheet1 = sheet1.replace(re, nouveau); };
+  remplacerCellule(/<c r="C11" s="77"><f>[\s\S]*?<\/c>/, '<c r="C11" s="77" t="n"></c>');
+  remplacerCellule(/<c r="H12" s="93"><f>[\s\S]*?<\/c>/, '<c r="H12" s="93"><f>SUM(H14:H1012)</f><v>'+totSacs+'</v></c>');
+  remplacerCellule(/<c r="I12" s="94"><f>[\s\S]*?<\/c>/, '<c r="I12" s="94"><f>SUM(I14:I1012)</f><v>'+totKg+'</v></c>');
+  sheet1 = sheet1.replace('<f>SUBTOTAL(109,DeliveryData[Bags])</f><v></v>', '<f>SUBTOTAL(109,DeliveryData[Bags])</f><v>'+totSacs+'</v>')
+                 .replace('<f>SUBTOTAL(109,DeliveryData[Quantity in kilos])</f><v></v>', '<f>SUBTOTAL(109,DeliveryData[Quantity in kilos])</f><v>'+totKg+'</v>');
   zip.file('xl/worksheets/sheet1.xml', sheet1);
+  // Feuille cachée PROCESS : ses formules « non conformes » visent des colonnes qui n'existent plus (#REF!) : valeurs neutres.
+  let sheet3 = await zip.file('xl/worksheets/sheet3.xml').async('string');
+  sheet3 = sheet3.replace(/<c r="M18"><f>[\s\S]*?<\/c>/, '<c r="M18" t="n"><v>0</v></c>')
+                 .replace(/<c r="M19"><f>[\s\S]*?<\/c>/, '<c r="M19" t="inlineStr"><is><t></t></is></c>')
+                 .replace(/<c r="M23" s="41"><f>[\s\S]*?<\/c>/, '<c r="M23" s="41" t="n"><v>0</v></c>')
+                 .replace(/<c r="M27" s="105"><f>[\s\S]*?<\/c>/, '<c r="M27" s="105" t="n"><v>0</v></c>');
+  zip.file('xl/worksheets/sheet3.xml', sheet3);
+  // Le titre de colonne du tableau doit être identique à la cellule d'en-tête renommée.
+  let table1 = await zip.file('xl/tables/table1.xml').async('string');
+  table1 = table1.split('name="Last Name "').join('name="Nom et Pr\u00e9noms"').split('CompliantFarmers[],3,FALSE').join('CompliantFarmers[],2,FALSE');
+  zip.file('xl/tables/table1.xml', table1);
 
   const blob = await zip.generateAsync({ type:'blob', mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', compression:'DEFLATE', compressionOptions:{ level:6 } });
   const slug = s=>stripAccents(s||'').replace(/[^a-z0-9]+/gi,'_').replace(/^_+|_+$/g,'');
@@ -9919,8 +9947,8 @@ function ocTelechargerBlob(blob, nomFichier){
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   setTimeout(()=>URL.revokeObjectURL(url), 1500);
 }
-async function ocGenererFicheTracabiliteDirecte(allocations, sacsArr, datesArr, coopId, campagneId){
-  const f = await ocConstruireFicheTracabiliteDirecte(allocations, sacsArr, datesArr, coopId, campagneId);
+async function ocGenererFicheTracabiliteDirecte(allocations, sacsArr, datesArr, coopId, campagneId, entete){
+  const f = await ocConstruireFicheTracabiliteDirecte(allocations, sacsArr, datesArr, coopId, campagneId, entete);
   ocTelechargerBlob(f.blob, f.nomFichier);
   return f;
 }
@@ -9977,8 +10005,13 @@ async function submitTracerVolumeDirecte(){
     const datesArr = resultat.allocations.map(()=>ocDateAleatoireDansIntervalle(dateDebut, dateFin));
 
     // 1) on construit d'abord la fiche : si elle echoue, rien n'est enregistre en base
+    const coopSrc = pl.mode==='direct' ? coopId : (val('tv_orig_coop') || pl.origCoopId || '');
+    const itSrc = ocTvItemParCle(coopSrc, val('tv_src') || pl.srcCle);
+    const coopFiche = coopById(coopId);
+    const entete = { fournisseur: coopFiche ? (coopFiche.nom_complet || coopFiche.nom || '') : '', ville: coopFiche ? (coopFiche.ville || coopFiche.siege_social || '') : '',
+      dateConnaissement: itSrc && itSrc.iso ? dateFr(itSrc.iso) : '', numero: itSrc ? itSrc.code : '' };
     let fiche;
-    try{ fiche = await ocConstruireFicheTracabiliteDirecte(resultat.allocations, sacsArr, datesArr, coopId, campagneId); }
+    try{ fiche = await ocConstruireFicheTracabiliteDirecte(resultat.allocations, sacsArr, datesArr, coopId, campagneId, entete); }
     catch(e){ showToast('Erreur lors de la génération de la fiche : '+e.message); return; }
 
     // 2) un vrai achat par producteur (producteur_id = farm_id) pour le suivi du plafond
@@ -10010,8 +10043,6 @@ async function submitTracerVolumeDirecte(){
     const trNouveau = { coopId, campagneId, ficheGenerationId: genId_, volumeKg, nbSacs, dateDebut, dateFin,
       achatIds: lignes.map(l=>l.id), creeLe: new Date().toISOString(), connaissement: null, ticketFait: false };
     if (pl.mode==='direct') trNouveau.mode = 'direct';
-    const coopSrc = pl.mode==='direct' ? coopId : (val('tv_orig_coop') || pl.origCoopId || '');
-    const itSrc = ocTvItemParCle(coopSrc, val('tv_src') || pl.srcCle);
     const origVu = pl.mode==='direct' ? null : (itSrc && itSrc.vu);
     if (pl.mode!=='direct' && itSrc) trNouveau.origine = { vuId: itSrc.vu ? itSrc.vu.id : null, code:itSrc.code, coopId: coopSrc || null };
     ocTracageSauver(trNouveau);
