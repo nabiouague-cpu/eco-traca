@@ -3662,7 +3662,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-16-169';
+const APP_VERSION = '2026-10-16-170';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8304,15 +8304,50 @@ function saigicATracerListe(){
 function saigicDateIso(txt){
   const m = /^(\d{2})\/(\d{2})\/(\d{4})/.exec(String(txt||'')); return m ? m[3]+'-'+m[2]+'-'+m[1] : '';
 }
+// ===== Nouvelles coopératives à classer (créées d'office quand un connaissement d'une coopérative inconnue est vu sur le SAIGIC) =====
+function coopsAClasser(){ return (state.cooperatives||[]).filter(c=>c.a_classer); }
+function coopsAClasserHtml(){
+  const l = coopsAClasser(); if (!l.length) return '';
+  const vol = c => (state.saigicATracer||[]).filter(v=>{ const k = saigicCoopDeCode(v); return k && k.id===c.id; });
+  return '<div class="achats-note" style="margin:0 0 14px;background:#EAF3FB;border:1px solid #2F6DB5;color:#14365C">'
+    + '<div style="font-weight:700;margin-bottom:2px">🆕 '+l.length+' nouvelle'+(l.length>1?'s':'')+' coopérative'+(l.length>1?'s':'')+' ajoutée'+(l.length>1?'s':'')+' automatiquement — à classer</div>'
+    + '<div class="hint" style="margin:0 0 8px">Créée d\'office à partir d\'un connaissement du SAIGIC. Dis où elle va : dans notre base, chez un de nos clients, ou son volume est tracé sur une autre coopérative.</div>'
+    + '<table class="tbl-fiches" style="background:#fff"><thead><tr><th>Coopérative</th><th>N° CCC</th><th class="num">Volume vu</th><th>Classer</th></tr></thead><tbody>'
+    + l.map(c=>{ const vs = vol(c), kg = vs.reduce((a,v)=>a+(Number(v.poids_net)||0),0);
+        return '<tr><td><b>'+esc(c.nom)+'</b></td><td>'+esc(c.ccc_num||'—')+'</td><td class="num">'+(kg>0 ? fmtKg(kg) : '—')+'</td>'
+          + '<td style="white-space:nowrap">'
+          + '<button class="btn btn-primary btn-compact" onclick="coopClasser(\''+escJs(c.id)+'\',\'base\')">Dans notre base</button> '
+          + '<button class="btn-ghost btn-compact" onclick="coopClasser(\''+escJs(c.id)+'\',\'client\')">Pour un client</button> '
+          + '<button class="btn-ghost btn-compact" onclick="coopClasser(\''+escJs(c.id)+'\',\'autre\')">Volume tracé sur une autre coopérative</button></td></tr>'; }).join('')
+    + '</tbody></table></div>';
+}
+async function coopClasser(id, choix){
+  const c = coopById(id); if (!c) return;
+  if (choix==='client'){   // la fiche s'ouvre avec « diligence assurée par le client » cochée : choisis le client puis enregistre
+    openModal('cooperative', Object.assign({}, c, { diligence_externe:true })); return;
+  }
+  const maj = choix==='autre' ? { trace_sur_autre_coop:true, a_classer:false } : { a_classer:false };
+  const { error } = await supabaseClient.from('cooperatives').update(maj).eq('id', id);
+  if (error){ showToast('Classement non enregistré : '+error.message); return; }
+  Object.assign(c, maj);
+  if (choix==='autre'){ showToast(c.nom+' : volume tracé sur une autre coopérative.', 'success'); render(); }
+  else { showToast(c.nom+' ajoutée à la base : complète sa fiche (code court, contacts…).', 'success'); openModal('cooperative', c); }
+}
+function coopClasserBanniereHtml(){
+  const n = coopsAClasser().length; if (!n) return '';
+  return '<div class="conn-banniere" style="border-color:#2F6DB5;background:#EAF3FB;color:#14365C"><div class="cb-tete" style="margin:0"><span>🆕 '+n+' nouvelle'+(n>1?'s':'')+' coopérative'+(n>1?'s':'')+' à classer ('+coopsAClasser().slice(0,3).map(c=>esc(c.nom)).join(', ')+(n>3?'…':'')+')</span>'
+    + '<button class="btn btn-primary btn-compact" onclick="state.coopDashboardId=null;state.tab=\'tracage\';render()">Classer</button></div></div>';
+}
 function saigicATracerHtml(){
-  const liste = saigicATracerListe(); if (!liste.length) return '';
-  return '<div class="achats-note" style="margin:0 0 14px;background:#FFF6E0;border:1px solid #E0B000;color:#5c4300">'
+  const cl = coopsAClasserHtml();
+  const liste = saigicATracerListe(); if (!liste.length) return cl;
+  return cl + '<div class="achats-note" style="margin:0 0 14px;background:#FFF6E0;border:1px solid #E0B000;color:#5c4300">'
     + '<div style="font-weight:700;margin-bottom:6px">📦 '+liste.length+' volume'+(liste.length>1?'s':'')+' à tracer — connaissement'+(liste.length>1?'s':'')+' vu'+(liste.length>1?'s':'')+' sur le SAIGIC</div>'
     + '<table class="tbl-fiches" style="background:#fff"><thead><tr><th>Connaissement</th><th>Coopérative</th><th class="num">Volume lu</th><th class="num">Sacs</th><th>Date</th><th></th></tr></thead><tbody>'
     + liste.map(v=>{ const c = saigicCoopDeCode(v);
         return '<tr><td><b>'+esc(v.code_connaissement)+'</b></td><td>'+(c ? esc(c.nom) : '<span class="badge warn">Inconnue</span> '+esc(v.fournisseur_saigic||''))+'</td>'
           + '<td class="num">'+(Number(v.poids_net)>0 ? fmtKg(v.poids_net) : '—')+'</td><td class="num">'+(Number(v.nb_sacs)>0 ? fmtNum(v.nb_sacs) : '—')+'</td><td>'+esc(String(v.date_connaissement||'').slice(0,10))+'</td>'
-          + '<td style="white-space:nowrap">'+(c && c.trace_sur_autre_coop
+          + '<td style="white-space:nowrap">'+(c && c.a_classer ? '<span class="badge warn">À classer ↑</span> ' : '')+(c && c.a_classer ? '' : c && c.trace_sur_autre_coop
               ? '<button class="btn btn-primary btn-compact" title="Coopérative d\'origine : le volume sera tracé sur une autre coopérative" onclick="saigicTracerSurAutre(\''+escJs(v.id)+'\')">Tracer sur une autre coopérative</button> '
               : '<button class="btn btn-primary btn-compact" onclick="saigicTracerVolume(\''+escJs(v.id)+'\')">Tracer ce volume</button> ')
           + '<button class="btn-ghost btn-compact" title="Retire cette alerte sans rien tracer" onclick="saigicIgnorerATracer(\''+escJs(v.id)+'\')">Ignorer</button></td></tr>'; }).join('')
@@ -8331,14 +8366,14 @@ async function saigicTracerVolume(vuId){
       // Coopérative inconnue : fiche créée avec ce que donne le SAIGIC, à compléter ensuite.
       const ccc = String(v.code_connaissement||'').split('-')[0].toUpperCase();
       const nom = String(v.fournisseur_saigic||ccc).trim();
-      coop = { id:'coop_saigic_'+ccc, nom, nom_complet:nom, ccc_num:ccc, type:'cooperative', statut:'Non certifiée', certifications:'', fiche_a_completer:true, trace_par_ecorigine:true, verifiee:false };
+      coop = { id:'coop_saigic_'+ccc, nom, nom_complet:nom, ccc_num:ccc, type:'cooperative', statut:'Non certifiée', certifications:'', fiche_a_completer:true, trace_par_ecorigine:true, verifiee:false, a_classer:false };
       const { error } = await supabaseClient.from('cooperatives').upsert(coop, { onConflict:'id' });
       if (error) throw error;
       state.cooperatives.push(coop);
     } else if (!coop.trace_par_ecorigine){
-      const { error } = await supabaseClient.from('cooperatives').update({ trace_par_ecorigine:true }).eq('id', coop.id);
+      const { error } = await supabaseClient.from('cooperatives').update({ trace_par_ecorigine:true, a_classer:false }).eq('id', coop.id);
       if (error) throw error;
-      coop.trace_par_ecorigine = true;
+      coop.trace_par_ecorigine = true; coop.a_classer = false;
     }
     if (v.cooperative_id !== coop.id){
       await supabaseClient.from('saigic_connaissements_vus').update({ cooperative_id: coop.id }).eq('id', v.id); v.cooperative_id = coop.id;
@@ -15035,6 +15070,7 @@ async function submitCooperative(){
   };
   if (data.statut === 'Non certifiée'){ data.certifications = ''; data.identifiant_certification = ''; data.date_fin_licence = null; data.volume_certificat = 0; }
   if (editId) data.fiche_a_completer = false;   // une fiche créée depuis le SAIGIC est considérée complétée dès qu'on l'enregistre
+  if (data.diligence_externe || data.trace_par_ecorigine || data.trace_sur_autre_coop) data.a_classer = false;   // coopérative classée (client, traçage direct ou volume tracé ailleurs)
   let coopId;
   if (editId){
     const existing = state.cooperatives.find(c=>c.id===editId);
@@ -20896,7 +20932,7 @@ function _renderBrut(){
     + ocRechercheHtml();
 
   html += '<div class="wrap">';
-  html += connBanniereHtml();
+  html += connBanniereHtml() + coopClasserBanniereHtml();
 
   if (window.self !== window.top){
     html += '<div class="error-banner" style="align-items:flex-start;background:#3D2115;color:#FBEEDA;border-color:#9A6512;">'
