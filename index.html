@@ -3677,7 +3677,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-16-173';
+const APP_VERSION = '2026-10-16-174';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8474,7 +8474,16 @@ function ocTvChoisirCoop(coopId){
     if (v) Object.assign(pl, ocTvPrefillOrigine(v), { vuId:v.id });
     else if (pl.vuId){ Object.assign(pl, { vuId:'', code:'', volume:'', sacs:'' }); }
     render();
-  } else ocTvMajInfo();
+  } else {
+    // Transfert A -> B : au choix de la coopérative finale B, le volume en attente d'une coopérative d'origine est proposé et le formulaire se remplit
+    // (le plus récent ; la liste « coopérative d'origine (A) » permet d'en choisir un autre).
+    const origines = (state.cooperatives||[]).filter(c=>c.trace_sur_autre_coop && c.id!==pl.coopId).map(c=>c.id);
+    const vus = (state.saigicATracer||[]).filter(v=>{ const k = saigicCoopDeCode(v); return k && origines.indexOf(k.id)>=0; })
+      .sort((a,b)=>String(saigicDateIso(b.date_connaissement)||'').localeCompare(String(saigicDateIso(a.date_connaissement)||'')));
+    const v = (pl.origineVu && vus.find(x=>x.id===pl.origineVu)) || vus[0];
+    if (v && !(pl.origineVu && vus.find(x=>x.id===pl.origineVu))) Object.assign(pl, ocTvPrefillOrigine(v), { origineVu:v.id });
+    render();
+  }
 }
 function ocTvChoisirConnaissement(vuId){
   const pl = state.modal && state.modal.payload; if (!pl) return;
