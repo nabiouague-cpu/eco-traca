@@ -586,6 +586,17 @@
   .defo-prog .pt.erreur b{background:#c0392b;border-color:#c0392b;color:#fff;}
   .defo-prog .pl{flex:1 1 auto;min-width:18px;height:3px;background:var(--border);border-radius:2px;margin:16px -6px 0;}
   .defo-prog .pl.fait{background:var(--ok);}
+  .defo-tabs{display:flex;gap:2px;border-bottom:2px solid var(--border);margin-top:12px;overflow-x:auto;}
+  .defo-tab{border:none;background:none;padding:10px 16px;font:inherit;font-weight:600;font-size:13.5px;color:var(--ink-soft);cursor:pointer;border-bottom:3px solid transparent;margin-bottom:-2px;white-space:nowrap;display:inline-flex;gap:8px;align-items:center;border-radius:8px 8px 0 0;}
+  .defo-tab:hover{background:var(--surface-2);}
+  .defo-tab.on{color:var(--accent);border-bottom-color:var(--accent);background:var(--accent-soft);}
+  .defo-tab .dt-n{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:var(--gray-bg);color:var(--ink-soft);font-family:var(--mono);font-size:11.5px;font-weight:700;}
+  .defo-tab.fait .dt-n{background:var(--ok);color:#fff;}
+  .defo-tab.encours .dt-n{background:var(--accent);color:#fff;}
+  .defo-tab.erreur .dt-n{background:#c0392b;color:#fff;}
+  .defo-tab.attente:not(.on){opacity:.6;}
+  .defo-pane{margin-top:0;}
+  .defo-pane .trc-etape{border-top-left-radius:0;border-top-right-radius:0;border-top:none;}
   .defo-fil{display:flex;flex-direction:column;gap:14px;margin-top:12px;}
   .defo-fil .trc-etape{padding:14px 16px 12px;}
   .defo-fil .trc-etape:not(:last-child)::after{content:'';position:absolute;left:29px;bottom:-15px;width:2px;height:14px;background:var(--border);}
@@ -3640,7 +3651,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-16-161';
+const APP_VERSION = '2026-10-16-163';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -16717,7 +16728,7 @@ function renderCartesTab(){
   else h += '<div class="achat-list" style="padding:0 18px 14px">' + liste.map(x=>{
     const st = CARTE_STATUTS[x.statut] || [x.statut,'#7a8683'];
     const nomCarte = x.cooperative_nom || (coopById(x.cooperative_id)||{}).nom || x.cooperative_id || '—';
-    const fich = (x.fichiers||[]).filter(f=>!/\.html$/i.test(f.nom)).map(f=>'<a style="cursor:pointer;color:var(--accent);margin-right:10px" onclick="carteTelecharger(\''+escJs(f.path)+'\')">⬇ '+esc(/\.pdf$/i.test(f.nom)?'PDF':/\.png$/i.test(f.nom)?'Image PNG':f.nom)+'</a>').join('')
+    const fich = (x.fichiers||[]).filter(f=>!/\.html$/i.test(f.nom)).map(f=>'<a style="cursor:pointer;color:var(--accent);margin-right:10px" onclick="carteTelecharger(\''+escJs(f.path)+'\')">⬇ '+esc(/\.pdf$/i.test(f.nom)?'PDF':/\.png$/i.test(f.nom)?'Image PNG':/_centroides\.xlsx$/i.test(f.nom)?'Rapport des centroïdes (Excel)':f.nom)+'</a>').join('')
       + ((x.fichiers||[]).some(f=>/\.html$/i.test(f.nom)) && x.statut==='terminee' ? '<button class="btn btn-compact" style="margin-right:6px" onclick="carteOuvrirEditeur(\''+escJs(x.id)+'\')">✏ Retoucher</button>' : '');
     return '<div class="achat-item" style="flex-wrap:wrap;gap:6px 12px"><span><span style="display:inline-block;background:'+st[1]+';color:#fff;border-radius:10px;padding:1px 9px;font-size:11.5px;font-weight:600">'+st[0]+'</span> '
       + (x.statut==='demandee'||x.statut==='en_cours' ? '<span class="hint" style="margin:0 6px 0 8px">'+(x.statut==='en_cours'?'génération ':'attente ')+carteDepuis(x)+'</span>' : '')
@@ -16794,7 +16805,7 @@ function renderDefoVue(){
   let h = '';
   if (nEnCours) h += '<div class="panel" style="border-left:4px solid #1f5fa8"><div style="padding:12px 18px"><b>⏳ '+nEnCours+' tâche'+(nEnCours>1?'s':'')+' en cours</b> <span class="hint" style="margin:0 0 0 6px">Quelques minutes. La liste se met à jour toute seule.</span></div></div>';
   h += '<div class="panel"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 18px 8px">'
-    + '<div><b>Dossiers des coopératives</b><div class="hint" style="margin:2px 0 0">Une coopérative = un dossier = un seul parcours : <b>Préparation → Whisp → Analyse → Nettoyage → Base finale</b>. Dépose ses fichiers (KML, KMZ, GPX, GeoJSON, shapefile .zip) et suis les étapes dans l\'ordre : chaque étape s\'ouvre quand la précédente est faite.</div></div>'
+    + '<div><b>Dossiers des coopératives</b><div class="hint" style="margin:2px 0 0">Une coopérative = un dossier = un seul parcours : <b>Préparation → Whisp → Analyse → Nettoyage → Base finale</b>. Dépose ses fichiers (KML, KMZ, GPX, GeoJSON, shapefile .zip), puis passe d\'un onglet à l\'autre : l\'onglet à faire s\'ouvre tout seul, les suivants attendent que le précédent soit terminé.</div></div>'
     + '<button class="btn btn-primary" onclick="ouvrirDefoPrep()">🌳 Nouvelle préparation</button></div>';
   if (state.defoIndispo) h += '<div class="hint" style="padding:0 18px 14px;color:var(--warn)">Le suivi des analyses n\'est pas encore disponible sur cette base.</div>';
   else if (!state.defoCharge) h += '<div class="hint" style="padding:0 18px 14px">Chargement…</div>';
@@ -17127,13 +17138,8 @@ function defoFilHtml(x){
   const nm = n => s[n]==='fait' ? '✓' : String(n);
   const pill = n => s[n]==='fait' ? '<span class="badge ok">Fait</span>' : s[n]==='travail' ? '<span class="badge info">⏳ En cours</span>' : s[n]==='a_faire' ? '<span class="badge info">À faire</span>' : s[n]==='erreur' ? '<span class="badge danger">Erreur</span>' : '<span class="badge neutral">En attente</span>';
   const noms = ['Préparation','Whisp','Analyse','Nettoyage','Base finale'];
-  let prog = '<div class="defo-prog">';
-  for (let n=1; n<=5; n++){ prog += '<div class="pt '+cl(n)+'"><b>'+nm(n)+'</b>'+noms[n-1]+'</div>' + (n<5 ? '<div class="pl'+(s[n]==='fait'?' fait':'')+'"></div>' : ''); }
-  prog += '</div>';
   const carte = (n, titre, desc, corps) => '<div class="trc-etape '+cl(n)+'"><div class="tete"><span class="num">'+nm(n)+'</span><h3>'+titre+'</h3>'+pill(n)+'</div>'
-    + (s[n]==='fait' && n<=3 ? '<details><summary class="hint" style="cursor:pointer;margin:0">Voir le détail et les fichiers</summary>' : '')
-    + (desc ? '<p class="desc">'+desc+'</p>' : '') + (corps||'')
-    + (s[n]==='fait' && n<=3 ? '</details>' : '') + '</div>';
+    + (desc ? '<p class="desc">'+desc+'</p>' : '') + (corps||'') + '</div>';
   const attend = t => '<div class="hint" style="margin:0">'+t+'</div>';
   const prim = ok=>ok ? 'btn btn-primary btn-compact' : 'btn-ghost btn-compact';
 
@@ -17157,14 +17163,20 @@ function defoFilHtml(x){
   else { const P = defoAnalyseParties(a); c4 = P.netInfo + P.problemes + P.apres + defoProposerHtml(a); }
   // 5 — base finale
   const c5 = aOk ? defoFinaleHtml(a, true) : attend('Disponible quand l\'analyse est terminée (étape 3).');
-  return '<div style="flex-basis:100%;margin-top:8px">' + prog + '<div class="defo-fil">'
-    + carte(1, 'Préparation des polygones', 'Points supprimés, lignes transformées en polygones, géométries réparées, fichiers fusionnés en un GeoJSON.', c1)
-    + carte(2, 'Rapport Whisp', 'Whisp est un site externe : ORIGEN te donne le GeoJSON, tu le déposes sur Whisp, puis tu rapportes ici le CSV obtenu.', c2)
-    + carte(3, 'Registre et analyse', 'Tu ajoutes le registre de la coopérative (GMR) : ORIGEN croise polygones, Whisp et registre, puis liste les problèmes.', c3)
-    + carte(4, 'Nettoyage', 'Correction des problèmes dans l\'ordre standard, sur une copie : tes fichiers et la base ECORIGINE ne sont jamais modifiés.', c4)
-    + carte(5, 'Base finale', '', c5)
-    + '</div></div>';
+  const sig = [1,2,3,4,5].map(n=>s[n]).join(',');
+  const choix = (state.defoOnglet||{})[x.id];
+  const defaut = [1,2,3,4,5].find(n=>s[n]!=='fait') || 5;
+  const act = (choix && choix.sig===sig && choix.n>=1 && choix.n<=5) ? choix.n : defaut;
+  const onglets = '<div class="defo-tabs">' + [1,2,3,4,5].map(n=>'<button type="button" class="defo-tab '+cl(n)+(n===act?' on':'')+'" onclick="defoOnglet(\''+idj+'\','+n+',\''+sig+'\')"><span class="dt-n">'+nm(n)+'</span>'+noms[n-1]+'</button>').join('') + '</div>';
+  const defs = {
+    1: ['Préparation des polygones', 'Points supprimés, lignes transformées en polygones, géométries réparées, fichiers fusionnés en un GeoJSON.', c1],
+    2: ['Rapport Whisp', 'Whisp est un site externe : ORIGEN te donne le GeoJSON, tu le déposes sur Whisp, puis tu rapportes ici le CSV obtenu.', c2],
+    3: ['Registre et analyse', 'Tu ajoutes le registre de la coopérative (GMR) : ORIGEN croise polygones, Whisp et registre, puis liste les problèmes.', c3],
+    4: ['Nettoyage', 'Correction des problèmes dans l\'ordre standard, sur une copie : tes fichiers et la base ECORIGINE ne sont jamais modifiés.', c4],
+    5: ['Base finale', '', c5] };
+  return '<div style="flex-basis:100%;margin-top:8px">' + onglets + '<div class="defo-pane">' + carte(act, defs[act][0], defs[act][1], defs[act][2]) + '</div></div>';
 }
+function defoOnglet(id, n, sig){ (state.defoOnglet = state.defoOnglet || {})[id] = { n:n, sig:sig }; render(); }
 async function defoDeposerWhisp(pid, input){
   const f = input && input.files && input.files[0]; if (input) input.value = ''; if (!f) return;
   if (!/\.csv$/i.test(f.name)){ showToast('Fichier .csv attendu (rapport Whisp).'); return; }
