@@ -301,6 +301,11 @@
   .trc-etape.fait .num{background:var(--ok);color:#fff;}
   .trc-etape.encours .num{background:var(--accent);color:#fff;}
   .trc-etape h3{margin:0;font-size:15px;line-height:1.25;}
+  .defo-pane .trc-etape .tete h3{flex:1;}
+  .trc-puce{flex:none;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;border:1px solid var(--border);background:var(--surface);color:var(--ink-soft);cursor:pointer;font-size:14px;line-height:1;padding:0;transition:transform .2s,background .15s;}
+  .trc-puce:hover{background:var(--surface-2);color:var(--accent);}
+  .trc-puce.ferme{transform:rotate(-90deg);}
+  .trc-corps{display:flex;flex-direction:column;gap:10px;min-width:0;}
   .trc-etape .desc{margin:0;font-size:13px;color:var(--ink-soft);line-height:1.45;}
   .trc-etape .faits{margin:2px 0 0;padding:10px 12px;border-radius:8px;background:var(--surface-2);border:1px solid var(--border);font-size:12.5px;line-height:1.5;}
   .trc-etape .faits b{font-family:var(--mono);font-weight:600;}
@@ -3657,7 +3662,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-16-167';
+const APP_VERSION = '2026-10-16-168';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -17663,8 +17668,10 @@ function defoFilHtml(x){
   const nm = n => s[n]==='fait' ? '✓' : String(n);
   const pill = n => s[n]==='fait' ? '<span class="badge ok">Fait</span>' : s[n]==='travail' ? '<span class="badge info">⏳ En cours</span>' : s[n]==='a_faire' ? '<span class="badge info">À faire</span>' : s[n]==='erreur' ? '<span class="badge danger">Erreur</span>' : '<span class="badge neutral">En attente</span>';
   const noms = ['Préparation','Whisp','Analyse','Aperçu','Nettoyage','Base finale'];
-  const carte = (n, titre, desc, corps) => '<div class="trc-etape '+cl(n)+'"><div class="tete"><span class="num">'+nm(n)+'</span><h3>'+titre+'</h3>'+pill(n)+'</div>'
-    + (desc ? '<p class="desc">'+desc+'</p>' : '') + (corps||'') + '</div>';
+  const carte = (n, titre, desc, corps) => { const ferme = !!(state.defoReplie||{})[x.id+':'+n];
+    return '<div class="trc-etape '+cl(n)+'"><div class="tete"><span class="num">'+nm(n)+'</span><h3>'+titre+'</h3>'+pill(n)
+      + '<button type="button" class="trc-puce'+(ferme?' ferme':'')+'" title="'+(ferme?'Ouvrir les détails':'Fermer les détails')+'" onclick="defoReplier(\''+idj+'\','+n+',this)">▾</button></div>'
+      + '<div class="trc-corps"'+(ferme?' style="display:none"':'')+'>' + (desc ? '<p class="desc">'+desc+'</p>' : '') + (corps||'') + '</div></div>'; };
   const attend = t => '<div class="hint" style="margin:0">'+t+'</div>';
   const prim = ok=>ok ? 'btn btn-primary btn-compact' : 'btn-ghost btn-compact';
 
@@ -17709,6 +17716,14 @@ function defoFilHtml(x){
     5: ['Nettoyage', 'Correction des problèmes dans l\'ordre standard, sur une copie : tes fichiers et la base ECORIGINE ne sont jamais modifiés.', c5],
     6: ['Base finale', '', c6] };
   return '<div style="flex-basis:100%;margin-top:8px">' + onglets + '<div class="defo-pane">' + carte(act, defs[act][0], defs[act][1], defs[act][2]) + '</div></div>';
+}
+function defoReplier(id, n, btn){
+  const cle = id+':'+n; state.defoReplie = state.defoReplie || {};
+  const ferme = !state.defoReplie[cle]; state.defoReplie[cle] = ferme;
+  const corps = btn && btn.closest('.trc-etape') ? btn.closest('.trc-etape').querySelector('.trc-corps') : null;
+  if (corps) corps.style.display = ferme ? 'none' : '';
+  if (btn){ btn.classList.toggle('ferme', ferme); btn.title = ferme ? 'Ouvrir les détails' : 'Fermer les détails'; }
+  if (!ferme && typeof AP!=='undefined' && AP && AP.map) setTimeout(()=>{ try{ AP.map.invalidateSize(); }catch(e){} }, 60);
 }
 function defoOnglet(id, n, sig){ (state.defoOnglet = state.defoOnglet || {})[id] = { n:n, sig:sig }; render(); }
 async function defoLancerWhisp(pid){
