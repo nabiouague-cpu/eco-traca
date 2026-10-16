@@ -3677,7 +3677,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-16-190';
+const APP_VERSION = '2026-10-16-191';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -17430,7 +17430,7 @@ function defoProblemesHtml(a, et){
 function defoAnalyseParties(a){
   const st = CARTE_STATUTS[a.statut] || [a.statut,'#7a8683']; const aid = escJs(a.id);
   const actif = a.statut==='demandee'||a.statut==='en_cours';
-  const fich = (a.fichiers||[]).filter(f=>f.path).map(defoChip).join('');
+  const fich = defoUtiles(a.fichiers).map(defoChip).join('');
   const P = { entete:'', erreur:'', resume:'', netInfo:'', problemes:'', apres:'', termine:false };
   P.entete = '<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center"><span>'
     + '<span style="display:inline-block;background:'+st[1]+';color:#fff;border-radius:10px;padding:1px 9px;font-size:11.5px;font-weight:600">'+st[0]+'</span>'
@@ -17448,7 +17448,7 @@ function defoAnalyseParties(a){
     P.resume = '<div style="margin-top:6px;font-size:12.5px">'+l.join(' · ')+'</div>' + (fich ? '<div style="margin-top:8px">'+defoSec('Fichiers', fich)+'</div>' : '');
     if (n){
       const det = Object.keys(n.cumul_retires||{}).filter(k=>n.cumul_retires[k]).map(k=>fmtNum(n.cumul_retires[k])+' '+(DEFO_MOTIFS[k]||k)).join(', ');
-      const dl = (et.dernier.fichiers||[]).filter(f=>f.path).map(defoChip).join('');
+      const dl = defoUtiles(et.dernier.fichiers).map(defoChip).join('');
       P.apres = '<div style="margin-top:10px;padding:8px 10px;background:#eef6ef;border-radius:8px;font-size:12.5px"><b>Après nettoyage (copie) : '+fmtNum(n.restants)+' polygones · '+fmtNum(n.restants_ha)+' ha</b>'
         + (det ? '<div class="hint" style="margin:2px 0 0">Retirés : '+esc(det)+(n.producteurs_retires&&n.producteurs_retires.length?' · '+fmtNum(n.producteurs_retires.length)+' producteur(s) sans polygone à retirer du registre final':'')+'</div>' : '')
         + defoSec('Fichiers', dl) + '</div>';
@@ -17479,7 +17479,7 @@ function defoFinaleHtml(a, nu){
   else h += '<button class="btn btn-primary btn-compact" '+(et.enCours?'disabled ':'')+'onclick="ouvrirDefoFinale(\''+aid+'\')">📦 Produire la base finale</button>';
   if (err) h += '<div style="margin-top:6px;color:#c0392b;font-size:12.5px">La dernière production a échoué : '+esc(err.erreur||'erreur inconnue')+' <button class="btn-ghost btn-compact" onclick="defoFermerErreur(\''+escJs(err.id)+'\')">Fermer</button></div>';
   if (ok && ok.resume){
-    const r = ok.resume, dl = (ok.fichiers||[]).filter(f=>f.path).map(defoChip).join('');
+    const r = ok.resume, dl = defoUtiles(ok.fichiers).map(defoChip).join('');
     h += '<div style="margin-top:8px;padding:8px 10px;background:#eef6ef;border-radius:8px;font-size:12.5px"><b>'+fmtNum(r.parcelles)+' parcelles · '+fmtNum(r.producteurs)+' producteurs · '+fmtNum(r.surface_ha)+' ha · '+fmtNum(Math.round(r.tonnage_kg/1000*10)/10)+' t estimées</b>'
       + '<div class="hint" style="margin:2px 0 0">NodeID '+esc(r.node_id||'')+' · '+(r.intervalle_impose?'intervalle imposé '+fmtNum(r.intervalle_impose[0])+'–'+fmtNum(r.intervalle_impose[1])+' kg/ha':'rendement moyen '+fmtNum(r.rendement_moy_kg_ha)+' kg/ha (de '+fmtNum(Math.round(r.rendement_min_parcelle))+' à '+fmtNum(Math.round(r.rendement_max_parcelle))+' selon la parcelle, cacao autour : '+fmtNum(r.densite_moy_pct)+' % en moyenne)')+' · '+(r.depuis_copie_nettoyee?'depuis la copie nettoyée':'depuis les polygones d\'origine')
       + (r.exclus?' · <span style="color:#b36b00">'+fmtNum(r.exclus)+' polygone(s) non repris (voir ci-dessous)</span>':'')+'</div>'
@@ -18033,6 +18033,8 @@ function apExcel(){
 }
 
 function ouvrirDefoAnalyse(prepId){ openModal('defoAnalyse', { nom:'', prepId: prepId||null }); }
+// Fichiers à télécharger : GeoJSON et Excel seulement (le CSV Whisp et l'aperçu JSON sont des fichiers de travail internes)
+function defoUtiles(fl){ return (fl||[]).filter(f=>f.path && f.type!=='whisp_csv' && f.type!=='apercu' && !/\.(csv|json)$/i.test(f.nom||'')); }
 function defoChip(f){ return '<a class="defo-chip" title="Télécharger '+esc(f.nom)+'" onclick="carteTelecharger(\''+escJs(f.path)+'\')">📄 '+esc(f.nom)+' <span class="defo-dl">⬇</span></a>'; }
 function defoSec(lab, contenu){ return '<div class="defo-sec"><span class="defo-lab">'+lab+'</span><div class="defo-cont">'+contenu+'</div></div>'; }
 function defoFilHtml(x){
@@ -18077,7 +18079,7 @@ function defoFilHtml(x){
   let etatW = '';
   if (wEnCours) etatW = '<div style="margin:6px 0;color:#1f5fa8;font-weight:600">⏳ Whisp analyse les polygones… <span class="hint" style="margin:0">'+carteDepuis(wEnCours)+' · quelques minutes, la page se met à jour toute seule</span></div>';
   else if (wErr) etatW = '<div style="margin:6px 0;color:#c0392b;font-size:12.5px">L\'analyse automatique a échoué : '+esc(wErr.erreur||'erreur inconnue')+' <button class="btn-ghost btn-compact" onclick="defoFermerWhisp(\''+escJs(wErr.id)+'\')">Fermer</button></div>';
-  const c2 = etatW + defoSec('Fichiers', defoChip(g) + (w ? defoChip(w) + (w.source==='api' ? '<span class="hint" style="margin:0">produit par l\'API Whisp</span>' : '') : '<span class="hint" style="margin:0">Le CSV de Whisp n\'est pas encore là.</span>'))
+  const c2 = etatW + defoSec('Fichiers', defoChip(g) + (w ? '<span class="badge ok">✓ Rapport Whisp reçu</span>' + (w.source==='api' ? ' <span class="hint" style="margin:0">produit par l\'API Whisp</span>' : '') : '<span class="hint" style="margin:0">Le CSV de Whisp n\'est pas encore là.</span>'))
     + defoSec('Actions', bAuto+b1+b2);
   // 3 — registre + analyse
   let c3 = '';
