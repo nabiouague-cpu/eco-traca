@@ -3662,7 +3662,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-16-168';
+const APP_VERSION = '2026-10-16-169';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8312,7 +8312,9 @@ function saigicATracerHtml(){
     + liste.map(v=>{ const c = saigicCoopDeCode(v);
         return '<tr><td><b>'+esc(v.code_connaissement)+'</b></td><td>'+(c ? esc(c.nom) : '<span class="badge warn">Inconnue</span> '+esc(v.fournisseur_saigic||''))+'</td>'
           + '<td class="num">'+(Number(v.poids_net)>0 ? fmtKg(v.poids_net) : '—')+'</td><td class="num">'+(Number(v.nb_sacs)>0 ? fmtNum(v.nb_sacs) : '—')+'</td><td>'+esc(String(v.date_connaissement||'').slice(0,10))+'</td>'
-          + '<td style="white-space:nowrap"><button class="btn btn-primary btn-compact" onclick="saigicTracerVolume(\''+escJs(v.id)+'\')">Tracer ce volume</button> '
+          + '<td style="white-space:nowrap">'+(c && c.trace_sur_autre_coop
+              ? '<button class="btn btn-primary btn-compact" title="Coopérative d\'origine : le volume sera tracé sur une autre coopérative" onclick="saigicTracerSurAutre(\''+escJs(v.id)+'\')">Tracer sur une autre coopérative</button> '
+              : '<button class="btn btn-primary btn-compact" onclick="saigicTracerVolume(\''+escJs(v.id)+'\')">Tracer ce volume</button> ')
           + '<button class="btn-ghost btn-compact" title="Retire cette alerte sans rien tracer" onclick="saigicIgnorerATracer(\''+escJs(v.id)+'\')">Ignorer</button></td></tr>'; }).join('')
     + '</tbody></table></div>';
 }
@@ -8349,10 +8351,44 @@ async function saigicTracerVolume(vuId){
   openModal('tracerVolumeDirecte', { mode:'direct', coopId:coop.id, campagneId: camp ? camp.id : ((state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : ''),
     volume: Math.round(Number(v.poids_net)||0) || '', sacs: Math.round(Number(v.nb_sacs)||0) || '', dateDebut: d0.toISOString().slice(0,10), dateFin: fin, vuId: v.id, code: v.code_connaissement });
 }
+// Coopérative d'origine A (volume tracé sur une autre coopérative B) : ouvre « Tracer un volume » en mode transfert, volume pré-rempli.
+function saigicTracerSurAutre(vuId){
+  const v = (state.saigicATracer||[]).find(x=>x.id===vuId); if (!v) return;
+  openModal('tracerVolumeDirecte', Object.assign({ mode:'transfert', coopId:'', origineVu:vuId }, ocTvPrefillOrigine(v)));
+}
+function ocTvPrefillOrigine(v){
+  const iso = saigicDateIso(v.date_connaissement);
+  const camp = (state.campagnes||[]).find(c=>c.date_debut && c.date_fin && String(c.date_debut)<=iso && iso<=String(c.date_fin));
+  const fin = iso || new Date().toISOString().slice(0,10);
+  const d0 = new Date(fin+'T00:00:00Z'); d0.setUTCDate(d0.getUTCDate()-10);
+  return { campagneId: camp ? camp.id : ((state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : ''),
+    volume: Math.round(Number(v.poids_net)||0) || '', sacs: Math.round(Number(v.nb_sacs)||0) || '', dateDebut: d0.toISOString().slice(0,10), dateFin: fin, code: v.code_connaissement };
+}
+// Liste déroulante : coopératives d'origine (marquées « volume tracé sur une autre coopérative ») et volumes en attente de traçage.
+function ocTvOriginesHtml(sel){
+  const coops = (state.cooperatives||[]).filter(c=>c.trace_sur_autre_coop).sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'}));
+  if (!coops.length) return '<p class="hint" style="margin:0 0 12px;">Aucune coopérative d\'origine n\'est enregistrée. Coche « Volume tracé sur une autre coopérative » dans la fiche de la coopérative concernée : ses volumes apparaîtront ici.</p>';
+  const groupes = coops.map(c=>{
+    const vus = (state.saigicATracer||[]).filter(v=>{ const k = saigicCoopDeCode(v); return k && k.id===c.id; });
+    return '<optgroup label="'+esc(c.nom)+'">' + (vus.length
+      ? vus.map(v=>'<option value="'+esc(v.id)+'"'+(sel===v.id?' selected':'')+'>'+esc(v.code_connaissement)+' · '+(Number(v.poids_net)>0 ? fmtKg(v.poids_net) : 'volume non lu')+(Number(v.nb_sacs)>0 ? ' · '+fmtNum(v.nb_sacs)+' sacs' : '')+' · '+esc(String(v.date_connaissement||'').slice(0,10))+'</option>').join('')
+      : '<option value="" disabled>Aucun volume en attente</option>') + '</optgroup>';
+  }).join('');
+  return '<label class="field" style="margin:0 0 12px;">Volume à tracer — coopérative d\'origine (A)<select id="tv_origine" onchange="ocTvChoisirOrigine(this.value)"><option value="">Saisie libre</option>'+groupes+'</select></label>';
+}
+function ocTvChoisirOrigine(vuId){
+  const pl = state.modal && state.modal.payload; if (!pl) return;
+  const val = id=>{ const el = document.getElementById(id); return el ? el.value : ''; };
+  Object.assign(pl, { coopId:val('tv_coop')||pl.coopId, campagneId:val('tv_campagne')||pl.campagneId, nbprod:val('tv_nbprod'), volume:val('tv_volume'), sacs:val('tv_sacs'), dateDebut:val('tv_date_debut'), dateFin:val('tv_date_fin') });
+  const v = vuId ? (state.saigicATracer||[]).find(x=>x.id===vuId) : null;
+  if (v){ Object.assign(pl, ocTvPrefillOrigine(v), { origineVu:vuId }); if (!pl.campagneId) pl.campagneId = ocTvPrefillOrigine(v).campagneId; }
+  else { pl.origineVu = ''; pl.code = ''; }
+  render();
+}
 function ocTvChoisirMode(mode){
   const pl = state.modal && state.modal.payload; if (!pl) return;
   const val = id=>{ const el = document.getElementById(id); return el ? el.value : ''; };
-  Object.assign(pl, { mode, coopId:val('tv_coop')||pl.coopId, campagneId:val('tv_campagne')||pl.campagneId, volume:val('tv_volume'), sacs:val('tv_sacs'), nbprod:val('tv_nbprod'), dateDebut:val('tv_date_debut'), dateFin:val('tv_date_fin') });
+  Object.assign(pl, { mode, origineVu: mode==='direct' ? '' : (val('tv_origine')||pl.origineVu||''), coopId:val('tv_coop')||pl.coopId, campagneId:val('tv_campagne')||pl.campagneId, volume:val('tv_volume'), sacs:val('tv_sacs'), nbprod:val('tv_nbprod'), dateDebut:val('tv_date_debut'), dateFin:val('tv_date_fin') });
   render();
 }
 // Rattache les achats producteurs du traçage au connaissement réel de la coopérative (créé ici s'il n'existe pas encore :
@@ -9834,7 +9870,14 @@ async function submitTracerVolumeDirecte(){
     const trNouveau = { coopId, campagneId, ficheGenerationId: genId_, volumeKg, nbSacs, dateDebut, dateFin,
       achatIds: lignes.map(l=>l.id), creeLe: new Date().toISOString(), connaissement: null, ticketFait: false };
     if (pl.mode==='direct') trNouveau.mode = 'direct';
+    const origVuId = pl.mode==='direct' ? '' : (val('tv_origine') || pl.origineVu || '');
+    const origVu = origVuId ? (state.saigicATracer||[]).find(x=>x.id===origVuId) : null;
+    if (origVu){ const kA = saigicCoopDeCode(origVu); trNouveau.origine = { vuId:origVu.id, code:origVu.code_connaissement, coopId: kA ? kA.id : null }; }
     ocTracageSauver(trNouveau);
+    if (origVu){
+      await supabaseClient.from('saigic_connaissements_vus').update({ trace_le:new Date().toISOString() }).eq('id', origVu.id);
+      state.saigicATracer = (state.saigicATracer||[]).filter(x=>x.id!==origVu.id);
+    }
     // Traçage lancé depuis un connaissement vu sur le SAIGIC : on le rattache tout de suite (aucun document généré).
     if (pl.mode==='direct' && pl.vuId){
       const vu = (state.saigicATracer||[]).find(x=>x.id===pl.vuId);
@@ -14967,6 +15010,7 @@ async function submitCooperative(){
     code_court: fv('code_court').trim().toUpperCase() || null,
     diligence_externe, client,
     trace_par_ecorigine: !!document.querySelector('#modal-fields [name="trace_par_ecorigine"]:checked'),
+    trace_sur_autre_coop: !!document.querySelector('#modal-fields [name="trace_sur_autre_coop"]:checked'),
     statut: fv('statut'),
     certifications: fv('certifications').trim(),
     representant_legal_nom: fv('representant_legal_nom').trim(),
@@ -20945,6 +20989,9 @@ function _renderBrut(){
       + '<label class="field" style="display:flex;align-items:center;gap:8px;flex-direction:row;background:#FFF6E0;border-radius:8px;padding:10px 12px;margin-bottom:6px;">'
       + '<input type="checkbox" name="trace_par_ecorigine" style="width:18px;height:18px;flex:none;margin:0;" '+(c.trace_par_ecorigine?'checked':'')+'><span>Traçabilité gérée par ECORIGINE (je trace moi-même les volumes)</span></label>'
       + '<div class="hint" style="margin:0 0 14px;">Quand le robot voit un connaissement de cette coopérative sur le SAIGIC, aucune demande de fiche ne lui est envoyée : tu reçois une alerte « volume à tracer » avec le volume déjà lu. La coopérative te transmet elle-même son connaissement et son ticket de pesée.</div>'
+      + '<label class="field" style="display:flex;align-items:center;gap:8px;flex-direction:row;background:#EAF3FB;border-radius:8px;padding:10px 12px;margin-bottom:6px;">'
+      + '<input type="checkbox" name="trace_sur_autre_coop" style="width:18px;height:18px;flex:none;margin:0;" '+(c.trace_sur_autre_coop?'checked':'')+'><span>Volume tracé sur une autre coopérative (coopérative d\'origine)</span></label>'
+      + '<div class="hint" style="margin:0 0 14px;">À cocher quand tu traces le volume de cette coopérative sur les producteurs d\'une autre coopérative. Aucune demande de fiche ne lui est envoyée quand le robot voit son connaissement : le volume apparaît dans « Volumes à tracer », et dans la liste déroulante de « Tracer un volume » (Transfert d\'une coopérative A vers B).</div>'
       + '<label class="field" id="coopClientBloc" style="display:'+(externe?'':'none')+'">Nom du client<select name="client_choix" onchange="ocCoopClientChoixChange(this.value)">'+ocAcClientOptions(clientConnu?c.client:'')+'</select></label>'
       + '<label class="field" id="coopClientNouveauBloc" style="display:'+(externe && !clientConnu && c.client?'':'none')+'">Nom du nouveau client<input type="text" name="client_nouveau" value="'+esc(!clientConnu?(c.client||''):'')+'"></label>'
       + '<fieldset><legend>Identité légale</legend>'
@@ -21493,9 +21540,10 @@ function _renderBrut(){
       + '<p class="hint" style="margin:0 0 10px;">'+(plTv.mode==='direct'
           ? 'La coopérative nous transmet elle-même son connaissement et son ticket de pesée : ORIGEN ne génère aucun de ces documents. Seules la répartition entre producteurs et la fiche de traçabilité sont produites.'
           : 'Le volume est tracé sur la coopérative finale B ; le connaissement de A vers B et le ticket de pesée sont ensuite générés par ORIGEN.')+(plTv.code ? ' <b>Connaissement '+esc(plTv.code)+'</b> : volume et sacs lus sur le SAIGIC.' : '')+'</p>'
+      + (plTv.mode==='direct' ? '' : ocTvOriginesHtml(plTv.origineVu))
       + '<p class="hint" id="tv_info" style="margin:0 0 14px;">'+esc(ocTvTexteInfo(plTv.coopId, plTv.campagneId))+'</p>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 16px;">'
-      + '<label class="field">Coopérative *<select id="tv_coop" onchange="ocTvMajInfo()"><option value="">Sélectionner…</option>'
+      + '<label class="field">'+(plTv.mode==='direct' ? 'Coopérative *' : 'Coopérative finale (B) *')+'<select id="tv_coop" onchange="ocTvMajInfo()"><option value="">Sélectionner…</option>'
       +   coopsTv.map(c=>'<option value="'+esc(c.id)+'"'+(plTv.coopId===c.id?' selected':'')+'>'+esc(c.nom)+'</option>').join('')
       + '</select></label>'
       + '<label class="field">Campagne *<select id="tv_campagne" onchange="ocTvMajInfo()"><option value="">Sélectionner…</option>'
