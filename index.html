@@ -3677,7 +3677,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-16-187';
+const APP_VERSION = '2026-10-16-188';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -9904,6 +9904,12 @@ function ocSerialExcel(dateIso){
 }
 // Construit la fiche de tracabilite (modele officiel) avec les lignes reellement remplies.
 // Dans l'Excel, Farmer ID = p.code (repli : farm_id) ; Farm ID = p.farm_id.
+// Nom du fichier de la fiche = code court de la coopérative + « _ » + numéro de connaissement (même règle que le nom des demandes de traçabilité, ex. DMD_…).
+function ocNomFicheTrac(coopId, numero){
+  const coop = coopById(coopId), num = String(numero||'').trim();
+  if (!coop || !coop.code_court || !num) return '';
+  return nomFicheDeDemande(coop.code_court+'_'+num.toUpperCase(), '.xlsx', 0);
+}
 async function ocConstruireFicheTracabiliteDirecte(allocations, sacsArr, datesArr, coopId, campagneId, entete){
   if (typeof JSZip === 'undefined') throw new Error("La bibliothèque de compression n'a pas pu se charger (connexion internet requise).");
   if (allocations.length>999) throw new Error('La fiche ne peut contenir que 999 lignes ('+allocations.length+' demandées).');
@@ -10010,7 +10016,7 @@ async function ocConstruireFicheTracabiliteDirecte(allocations, sacsArr, datesAr
 
   const blob = await zip.generateAsync({ type:'blob', mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', compression:'DEFLATE', compressionOptions:{ level:6 } });
   const slug = s=>stripAccents(s||'').replace(/[^a-z0-9]+/gi,'_').replace(/^_+|_+$/g,'');
-  const nomFichier = 'Fiche_tracabilite_'+(slug(nomCoop)||'cooperative')+'_'+(slug(camp?camp.nom:'')||'campagne')+'.xlsx';
+  const nomFichier = ocNomFicheTrac(coopId, entete && entete.numero) || ('Fiche_tracabilite_'+(slug(nomCoop)||'cooperative')+'_'+(slug(camp?camp.nom:'')||'campagne')+'.xlsx');
   return { blob: blob, nomFichier: nomFichier };
 }
 function ocTelechargerBlob(blob, nomFichier){
@@ -10089,9 +10095,13 @@ function ocTvTester(){
   const minFois = Math.min.apply(null, lignes.map(l=>l.fois));
   const ok = (c,t)=>'<div style="color:'+(c?'#1e8449':'#c0392b')+'">'+(c?'✔ ':'✖ ')+t+'</div>';
   const coopFiche = coopById(coopId);
+  const coopSrcT = pl.mode==='direct' ? coopId : (val('tv_orig_coop') || pl.origCoopId || '');
+  const itSrcT = ocTvItemParCle(coopSrcT, val('tv_src') || pl.srcCle);
+  const nomF = ocNomFicheTrac(coopId, itSrcT ? itSrcT.code : '');
   out.innerHTML = '<div style="border:1px solid #cfd8d3;border-radius:10px;padding:10px 12px;margin:10px 0;background:#fafcfb">'
     + '<div style="font-weight:600;margin-bottom:4px">Aperçu de la fiche (rien n\'est enregistré)</div>'
     + '<div class="hint" style="margin:0 0 6px">'+esc(coopFiche ? (coopFiche.nom_complet||coopFiche.nom) : '')+' · du '+esc(dateFr(d1))+' au '+esc(dateFr(d2))+'</div>'
+    + '<div style="margin:0 0 8px;font-size:12.5px">Nom du fichier : <b>'+(nomF ? esc(nomF) : 'Fiche_tracabilite_… (choisis le connaissement et renseigne le code court de la coopérative pour obtenir CODE_CONNAISSEMENT)')+'</b></div>'
     + '<div style="overflow-x:auto"><table class="data-table" style="font-size:12.5px;width:100%"><thead><tr><th>Producteur</th><th>Date</th><th style="text-align:right">Sacs</th><th style="text-align:right">Volume (kg)</th><th style="text-align:right">% du potentiel</th><th style="text-align:right">Livraisons possibles avant 70 %</th></tr></thead><tbody>'
     + lignes.map(l=>'<tr><td>'+esc(l.a.p.nom||'')+' <span class="hint" style="margin:0">'+esc(l.a.p.code||l.a.p.farm_id||'')+'</span></td><td>'+esc(dateFr(datesArr[l.i]))+'</td><td style="text-align:right">'+fmtNum(sacsArr[l.i])+'</td><td style="text-align:right">'+fmtNum(l.a.kg)+'</td><td style="text-align:right">'+(l.pct==null?'—':l.pct+' %')+'</td><td style="text-align:right">'+fmtNum(l.fois)+'</td></tr>').join('')
     + '<tr style="font-weight:600"><td>Total ('+res.allocations.length+' producteurs)</td><td></td><td style="text-align:right">'+fmtNum(totSacs)+'</td><td style="text-align:right">'+fmtNum(totKg)+'</td><td></td><td></td></tr></tbody></table></div>'
