@@ -3677,7 +3677,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-16-188';
+const APP_VERSION = '2026-10-16-189';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -9904,7 +9904,7 @@ function ocSerialExcel(dateIso){
 }
 // Construit la fiche de tracabilite (modele officiel) avec les lignes reellement remplies.
 // Dans l'Excel, Farmer ID = p.code (repli : farm_id) ; Farm ID = p.farm_id.
-// Nom du fichier de la fiche = code court de la coopérative + « _ » + numéro de connaissement (même règle que le nom des demandes de traçabilité, ex. DMD_…).
+// Nom du fichier de la fiche = code court de la coopérative du connaissement + « _ » + numéro du connaissement (ex. DMD_SC111353-2026-2-9).
 function ocNomFicheTrac(coopId, numero){
   const coop = coopById(coopId), num = String(numero||'').trim();
   if (!coop || !coop.code_court || !num) return '';
@@ -10016,7 +10016,7 @@ async function ocConstruireFicheTracabiliteDirecte(allocations, sacsArr, datesAr
 
   const blob = await zip.generateAsync({ type:'blob', mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', compression:'DEFLATE', compressionOptions:{ level:6 } });
   const slug = s=>stripAccents(s||'').replace(/[^a-z0-9]+/gi,'_').replace(/^_+|_+$/g,'');
-  const nomFichier = ocNomFicheTrac(coopId, entete && entete.numero) || ('Fiche_tracabilite_'+(slug(nomCoop)||'cooperative')+'_'+(slug(camp?camp.nom:'')||'campagne')+'.xlsx');
+  const nomFichier = ocNomFicheTrac((entete && entete.coopFichier) || coopId, entete && entete.numero) || ('Fiche_tracabilite_'+(slug(nomCoop)||'cooperative')+'_'+(slug(camp?camp.nom:'')||'campagne')+'.xlsx');
   return { blob: blob, nomFichier: nomFichier };
 }
 function ocTelechargerBlob(blob, nomFichier){
@@ -10097,7 +10097,7 @@ function ocTvTester(){
   const coopFiche = coopById(coopId);
   const coopSrcT = pl.mode==='direct' ? coopId : (val('tv_orig_coop') || pl.origCoopId || '');
   const itSrcT = ocTvItemParCle(coopSrcT, val('tv_src') || pl.srcCle);
-  const nomF = ocNomFicheTrac(coopId, itSrcT ? itSrcT.code : '');
+  const nomF = ocNomFicheTrac(coopSrcT || coopId, itSrcT ? itSrcT.code : '');
   out.innerHTML = '<div style="border:1px solid #cfd8d3;border-radius:10px;padding:10px 12px;margin:10px 0;background:#fafcfb">'
     + '<div style="font-weight:600;margin-bottom:4px">Aperçu de la fiche (rien n\'est enregistré)</div>'
     + '<div class="hint" style="margin:0 0 6px">'+esc(coopFiche ? (coopFiche.nom_complet||coopFiche.nom) : '')+' · du '+esc(dateFr(d1))+' au '+esc(dateFr(d2))+'</div>'
@@ -10172,7 +10172,7 @@ async function submitTracerVolumeDirecte(){
     const coopFiche = coopById(coopId);
     const sigleConn = itSrc ? String((itSrc.vu && itSrc.vu.fournisseur_saigic) || (itSrc.achat && itSrc.achat.fournisseur_saigic) || '').trim() : '';
     const entete = { fournisseur: sigleConn || (coopFiche ? (coopFiche.nom_complet || coopFiche.nom || '') : ''), ville: coopFiche ? (coopFiche.ville || coopFiche.siege_social || '') : '',
-      dateConnaissement: itSrc && itSrc.iso ? dateFr(itSrc.iso) : '', numero: itSrc ? itSrc.code : '' };
+      dateConnaissement: itSrc && itSrc.iso ? dateFr(itSrc.iso) : '', numero: itSrc ? itSrc.code : '', coopFichier: coopSrc || coopId };
     let fiche;
     try{ fiche = await ocConstruireFicheTracabiliteDirecte(resultat.allocations, sacsArr, datesArr, coopId, campagneId, entete); }
     catch(e){ showToast('Erreur lors de la génération de la fiche : '+e.message); return; }
