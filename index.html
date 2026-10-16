@@ -3651,7 +3651,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-16-165';
+const APP_VERSION = '2026-10-16-166';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -16805,7 +16805,7 @@ function renderDefoVue(){
   let h = '';
   if (nEnCours) h += '<div class="panel" style="border-left:4px solid #1f5fa8"><div style="padding:12px 18px"><b>⏳ '+nEnCours+' tâche'+(nEnCours>1?'s':'')+' en cours</b> <span class="hint" style="margin:0 0 0 6px">Quelques minutes. La liste se met à jour toute seule.</span></div></div>';
   h += '<div class="panel"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 18px 8px">'
-    + '<div><b>Dossiers des coopératives</b><div class="hint" style="margin:2px 0 0">Une coopérative = un dossier = un seul parcours : <b>Préparation → Whisp → Analyse → Nettoyage → Base finale</b>. Dépose ses fichiers (KML, KMZ, GPX, GeoJSON, shapefile .zip), puis passe d\'un onglet à l\'autre : l\'onglet à faire s\'ouvre tout seul, les suivants attendent que le précédent soit terminé.</div></div>'
+    + '<div><b>Dossiers des coopératives</b><div class="hint" style="margin:2px 0 0">Une coopérative = un dossier = un seul parcours : <b>Préparation → Whisp → Analyse → Aperçu → Nettoyage → Base finale</b>. Dépose ses fichiers (KML, KMZ, GPX, GeoJSON, shapefile .zip), puis passe d\'un onglet à l\'autre : l\'onglet à faire s\'ouvre tout seul, les suivants attendent que le précédent soit terminé.</div></div>'
     + '<button class="btn btn-primary" onclick="ouvrirDefoPrep()">🌳 Nouvelle préparation</button></div>';
   if (state.defoIndispo) h += '<div class="hint" style="padding:0 18px 14px;color:var(--warn)">Le suivi des analyses n\'est pas encore disponible sur cette base.</div>';
   else if (!state.defoCharge) h += '<div class="hint" style="padding:0 18px 14px">Chargement…</div>';
@@ -16917,7 +16917,7 @@ async function defoSupprimerOk(id){
   state.defo = state.defo.filter(z=>!ids.includes(z.id)); showToast('Supprimé.', 'success'); render();
 }
 // ----- Étape 2 : carte d'analyse, tableau des problèmes, actions -----
-const DEFO_MOTIFS = { reparer:'géométries réparées', zones_protegees:'zones protégées', prioritaires:'déforestation prioritaire', irreguliers:'irréguliers', internes:'superpositions internes', base_autres:'autres coopératives (base ECORIGINE)', hors_registre:'hors registre', doublons_code:'codes en double', producteurs_sans_polygone:'producteurs sans polygone', sans_whisp:'sans résultat Whisp' };
+const DEFO_MOTIFS = { reparer:'géométries réparées', zones_protegees:'zones protégées', prioritaires:'déforestation prioritaire', irreguliers:'irréguliers', internes:'superpositions internes', base_autres:'autres coopératives (base ECORIGINE)', hors_registre:'hors registre', doublons_code:'codes en double', producteurs_sans_polygone:'producteurs sans polygone', sans_whisp:'sans résultat Whisp', manuel:'supprimés à la main' };
 const DEFO_ORDRE = ['reparer','zones_protegees','prioritaires','irreguliers','internes','base_autres','hors_registre','doublons_code','producteurs_sans_polygone'];
 function defoEtat(a){
   const n = (state.defo||[]).filter(z=>z.etape==='nettoyage' && z.entrees && z.entrees.analyse_id===a.id).sort((p,q)=>String(q.created_at).localeCompare(String(p.created_at)));
@@ -17103,14 +17103,443 @@ function defoAppliquerTout(aid){
   const txt = codes.map(c=>{ const p = pb.find(z=>z.code===c); return '• '+p.titre+' ('+fmtNum(p.nb)+')'; }).join('\n');
   askConfirm('Appliquer dans l\'ordre standard :\n'+txt+'\n\nLe travail se fait sur une copie ; rien n\'est modifié dans tes fichiers ni dans la base ECORIGINE.', ()=>defoLancerNettoyage(aid, codes));
 }
-async function defoLancerNettoyage(aid, actions){
-  const a = (state.defo||[]).find(z=>z.id===aid); if (!a) return;
-  const et = defoEtat(a); if (et.enCours){ showToast('Un nettoyage est déjà en cours.'); return; }
+async function defoLancerNettoyage(aid, actions, retouches){
+  const a = (state.defo||[]).find(z=>z.id===aid); if (!a) return false;
+  const et = defoEtat(a); if (et.enCours){ showToast('Un nettoyage est déjà en cours.'); return false; }
+  const entrees = { analyse_id:aid, source_id:et.dernier?et.dernier.id:null, actions };
+  if (retouches && ((retouches.supprimes||[]).length || Object.keys(retouches.modifies||{}).length)) entrees.retouches = retouches;
   const ins = await supabaseClient.from('analyses_defo').insert({ id:genId('ad'), cooperative_id:a.cooperative_id||null, cooperative_nom:a.cooperative_nom, etape:'nettoyage', statut:'demandee',
-    entrees:{ analyse_id:aid, source_id:et.dernier?et.dernier.id:null, actions }, demande_par:(state.session&&state.session.user&&state.session.user.email)||null }).select().single();
-  if (ins.error){ showToast('Lancement impossible : '+ins.error.message); return; }
+    entrees:entrees, demande_par:(state.session&&state.session.user&&state.session.user.email)||null }).select().single();
+  if (ins.error){ showToast('Lancement impossible : '+ins.error.message); return false; }
   state.defo = [ins.data].concat(state.defo||[]); carteLancerRobot(); showToast('Nettoyage lancé.', 'success'); render();
+  return true;
 }
+// ===== Aperçu cartographique et éditeur de polygones (étape « Aperçu » du dossier) =====
+const AP_COUL = { zones_protegees:'#c0392b', prioritaires:'#7b241c', irreguliers:'#8e44ad', internes:'#e67e22', base_autres:'#2471a3', hors_registre:'#7f8c8d', doublons_code:'#b9770e', reparer:'#d4ac0d', sans_whisp:'#95a5a6' };
+const AP_VERT = '#27ae60';
+const AP_NOMS = { reparer:'Contour à réparer', zones_protegees:'Sur une zone protégée', prioritaires:'Déforestation prioritaire', irreguliers:'Polygone irrégulier', internes:'Superposé à un autre polygone', base_autres:'Superposé à une autre coopérative', hors_registre:'Code hors registre', doublons_code:'Code en double', producteurs_sans_polygone:'Producteurs sans polygone', sans_whisp:'Sans résultat Whisp' };
+const AP_DECISION = ['sans_whisp'];
+let AP = null;
+const AP_MEM = {};
+function apEsc(x){ return esc(String(x==null?'':x)); }
+function apAireHa(g){
+  const parts = g.type==='Polygon' ? [g.coordinates] : g.coordinates; let tot = 0;
+  parts.forEach(rings=>rings.forEach((r,k)=>{
+    if (r.length<4) return;
+    const lat0 = r[0][1], kx = 111320*Math.cos(lat0*Math.PI/180), ky = 110574; let a = 0;
+    for (let i=0;i<r.length-1;i++){ a += ((r[i][0]-r[0][0])*kx)*((r[i+1][1]-r[0][1])*ky) - ((r[i+1][0]-r[0][0])*kx)*((r[i][1]-r[0][1])*ky); }
+    a = Math.abs(a)/2; tot += k===0 ? a : -a;
+  }));
+  return tot/10000;
+}
+function defoApercuLignes(a, src){
+  return (state.defo||[]).filter(z=>z.etape==='apercu' && z.entrees && z.entrees.analyse_id===a.id && (z.entrees.source_id||null)===(src===a?null:src.id)).sort((p,q)=>String(q.created_at).localeCompare(String(p.created_at)));
+}
+function defoApercuFichier(a){
+  const et = defoEtat(a);
+  const src = et.dernier || a;                                   // l'aperçu suit la copie la plus récente
+  let f = (src.fichiers||[]).find(x=>x.type==='apercu'), simu = (src.resume||{}).apercu_simu||null;
+  if (!f){ const z = defoApercuLignes(a, src).find(q=>q.statut==='terminee' && (q.fichiers||[]).some(x=>x.type==='apercu')); if (z){ f = z.fichiers.find(x=>x.type==='apercu'); simu = (z.resume||{}).apercu_simu||null; } }
+  return f ? { f:f, src:src, simu:simu } : null;
+}
+async function defoApercuGenerer(aid){
+  const a = (state.defo||[]).find(z=>z.id===aid); if (!a) return;
+  const et = defoEtat(a), src = et.dernier || a;
+  const ins = await supabaseClient.from('analyses_defo').insert({ id:genId('ad'), cooperative_id:a.cooperative_id||null, cooperative_nom:a.cooperative_nom, etape:'apercu', statut:'demandee',
+    entrees:{ analyse_id:aid, source_id: src===a ? null : src.id }, demande_par:(state.session&&state.session.user&&state.session.user.email)||null }).select().single();
+  if (ins.error){ showToast('Lancement impossible : '+ins.error.message); return; }
+  state.defo = [ins.data].concat(state.defo||[]); carteLancerRobot(); showToast('Aperçu en préparation : une à deux minutes.', 'success'); render();
+}
+async function defoApercuFermerErreur(id){
+  const { error } = await supabaseClient.from('analyses_defo').delete().eq('id', id).eq('etape','apercu').eq('statut','erreur');
+  if (error){ showToast('Impossible : '+error.message); return; }
+  state.defo = state.defo.filter(z=>z.id!==id); render();
+}
+function defoApercuHtml(a){
+  const r = defoApercuFichier(a), aid = escJs(a.id), et = defoEtat(a);
+  if (!r){
+    const src = et.dernier || a, lig = defoApercuLignes(a, src), enc = lig.find(z=>z.statut==='demandee'||z.statut==='en_cours'), err = (!enc && lig[0] && lig[0].statut==='erreur') ? lig[0] : null;
+    let h0 = '<div style="font-size:13px;line-height:1.55;margin-bottom:8px">Cette analyse n\'a pas encore son aperçu (elle date d\'avant cette fonction, ou il n\'a pas pu être fait).</div>';
+    if (enc) h0 += '<div style="color:#1f5fa8;font-weight:600">⏳ Préparation de l\'aperçu… <span class="hint" style="margin:0">'+carteDepuis(enc)+' · la page se met à jour toute seule</span></div>';
+    else h0 += '<button class="btn btn-primary" onclick="defoApercuGenerer(\''+aid+'\')">🗺 Préparer l\'aperçu</button>';
+    if (err) h0 += '<div style="margin-top:8px;color:#c0392b;font-size:12.5px">La dernière préparation a échoué : '+esc(err.erreur||'erreur inconnue')+' <button class="btn-ghost btn-compact" onclick="defoApercuFermerErreur(\''+escJs(err.id)+'\')">Fermer</button></div>';
+    return h0;
+  }
+  const sm = r.simu;
+  let h = '<div style="font-size:13px;line-height:1.55;margin-bottom:8px">La carte montre tes polygones colorés par problème, les forêts classées et espaces protégés, la base ECORIGINE et les zones cacaoyères. Tu peux déplacer les sommets, déplacer un polygone, en supprimer, et voir tout de suite combien de polygones resteront.</div>';
+  if (sm) h += '<div style="padding:10px 12px;background:#eef6ef;border-radius:8px;font-size:13px;margin-bottom:10px"><b>Si tu appliques toutes les actions proposées : il resterait '+fmtNum(sm.restants)+' polygones sur '+fmtNum(sm.avant)+' ('+fmtNum(sm.restants_ha)+' ha sur '+fmtNum(sm.avant_ha)+' ha).</b>'
+    + '<div class="hint" style="margin:2px 0 0">Tu peux décocher des actions et retoucher des polygones dans l\'aperçu : le chiffre se met à jour.</div></div>';
+  h += '<button class="btn btn-primary" onclick="defoApercuOuvrir(\''+aid+'\')">🗺 Ouvrir l\'aperçu (carte et éditeur)</button>';
+  if (AP_MEM[a.id] && (AP_MEM[a.id].supp.length || Object.keys(AP_MEM[a.id].geo).length)) h += ' <span class="hint" style="margin:0 0 0 8px">retouches en attente : '+AP_MEM[a.id].supp.length+' supprimé(s), '+Object.keys(AP_MEM[a.id].geo).length+' modifié(s)</span>';
+  return h;
+}
+async function defoApercuOuvrir(aid){
+  const a = (state.defo||[]).find(z=>z.id===aid); if (!a) return;
+  const r = defoApercuFichier(a); if (!r){ showToast('Pas d\'aperçu pour ce dossier : relance l\'analyse.'); return; }
+  if (typeof L==='undefined'){ showToast('La carte n\'est pas chargée : vérifie la connexion.'); return; }
+  showToast('Chargement de l\'aperçu…');
+  try {
+    const { data, error } = await supabaseClient.storage.from('documents-coop').createSignedUrl(r.f.path, 3600);
+    if (error || !data) throw new Error('fichier introuvable');
+    const resp = await fetch(data.signedUrl); if (!resp.ok) throw new Error('téléchargement impossible ('+resp.status+')');
+    const D = await resp.json();
+    defoApercuMonter(a, r.src, D);
+  } catch(e){ showToast('Aperçu impossible : '+(e.message||e)); }
+}
+function apInjecterStyle(){
+  if (document.getElementById('ap-style')) return;
+  const st = document.createElement('style'); st.id = 'ap-style';
+  st.textContent = '#ap-root{position:fixed;inset:0;z-index:100;background:#fff;display:flex;flex-direction:column;font-size:13px}'
+   + '#ap-root .ap-top{display:flex;align-items:center;gap:12px;padding:8px 14px;border-bottom:1px solid var(--border);background:#fff;flex-wrap:wrap}'
+   + '#ap-root .ap-body{flex:1;min-height:0;display:flex}'
+   + '#ap-map{flex:1;min-width:0;position:relative;background:#dde5e1}'
+   + '#ap-root .ap-side{width:370px;max-width:46vw;overflow:auto;border-left:1px solid var(--border);padding:10px 12px 20px;background:#fbfcfb}'
+   + '#ap-root .ap-sec{margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--border)}'
+   + '#ap-root .ap-sec h4{margin:0 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-soft)}'
+   + '#ap-root .ap-big{display:flex;gap:8px}#ap-root .ap-big div{flex:1;background:#eef6ef;border-radius:8px;padding:8px 10px}#ap-root .ap-big b{display:block;font-size:22px;line-height:1.1}'
+   + '#ap-root .ap-act{display:flex;align-items:flex-start;gap:8px;padding:4px 0}#ap-root .ap-act input{margin-top:3px}'
+   + '#ap-root .ap-sq{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:6px;vertical-align:-1px;border:1px solid rgba(0,0,0,.25)}'
+   + '#ap-root .ap-btn{border:1px solid var(--border);background:#fff;border-radius:8px;padding:6px 10px;font:inherit;font-weight:600;cursor:pointer}#ap-root .ap-btn:hover{background:var(--surface-2)}#ap-root .ap-btn.on{background:var(--accent);color:#fff;border-color:var(--accent)}#ap-root .ap-btn[disabled]{opacity:.45;cursor:default}'
+   + '#ap-root .ap-btn.prim{background:var(--accent);color:#fff;border-color:var(--accent)}#ap-root .ap-btn.dng{color:#c0392b;border-color:#e6b0aa}'
+   + '#ap-info{position:absolute;left:10px;bottom:10px;z-index:500;background:rgba(255,255,255,.95);border:1px solid var(--border);border-radius:8px;padding:5px 10px;max-width:70%;pointer-events:none;display:none}'
+   + '#ap-root .ap-vtx{width:12px;height:12px;border-radius:50%;background:#fff;border:2px solid #00acc1;box-sizing:border-box}'
+   + '#ap-root .ap-mid{width:8px;height:8px;border-radius:50%;background:#00acc1;opacity:.55;box-sizing:border-box;border:1px solid #fff}'
+   + '#ap-root .ap-mv{width:30px;height:30px;border-radius:50%;background:#00acc1;color:#fff;font-size:18px;line-height:30px;text-align:center;border:2px solid #fff;box-shadow:0 1px 6px rgba(0,0,0,.4);cursor:move}'
+   + '#ap-dlg{position:absolute;inset:0;z-index:2000;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;padding:20px}#ap-dlg>div{background:#fff;border-radius:12px;padding:18px 20px;max-width:460px;box-shadow:0 8px 30px rgba(0,0,0,.3)}'
+   + '@media (max-width:820px){#ap-root .ap-body{flex-direction:column}#ap-root .ap-side{width:auto;max-width:none;height:46vh;border-left:none;border-top:1px solid var(--border)}}';
+  document.head.appendChild(st);
+}
+function defoApercuMonter(a, src, D){
+  apInjecterStyle();
+  if (document.getElementById('ap-root')) document.getElementById('ap-root').remove();
+  const m = AP_MEM[a.id] && AP_MEM[a.id].src===src.id ? AP_MEM[a.id] : null;
+  AP = { aid:a.id, srcId:src.id, data:D, byId:new Map(), geo:new Map(), orig:new Map(), ha:new Map(), lay:new Map(), supp:new Set(), mod:new Set(), hist:[], selId:null, mode:null,
+         actions:new Set(), filtre:'tous', vis:{ coop:true, esp:true, base:true, cacao:true }, retire:new Map(), calc:null };
+  D.polys.forEach(p=>{ AP.byId.set(p.i, p); AP.geo.set(p.i, p.g); AP.ha.set(p.i, p.h); });
+  AP.paires = D.paires.slice().sort((x,y)=>y[2]-x[2]);
+  const presentes = new Set(); D.polys.forEach(p=>p.f.forEach(f=>presentes.add(f)));
+  if (D.prod_sans!=null) presentes.add('producteurs_sans_polygone');
+  AP.presentes = D.ordre.filter(x=>presentes.has(x));
+  D.ordre.filter(x=>presentes.has(x) && AP_DECISION.indexOf(x)<0).forEach(x=>AP.actions.add(x));
+  if (m){
+    AP.actions = new Set(m.actions);
+    m.supp.forEach(i=>AP.supp.add(i));
+    Object.keys(m.geo).forEach(k=>{ const i = +k; if (!AP.byId.has(i)) return; AP.orig.set(i, JSON.stringify(AP.byId.get(i).g)); AP.geo.set(i, m.geo[k]); AP.mod.add(i); AP.ha.set(i, apAireHa(m.geo[k])); });
+  }
+  const root = document.createElement('div'); root.id = 'ap-root';
+  root.innerHTML = '<div class="ap-top"><b style="font-size:15px">Aperçu — '+apEsc(D.nom)+'</b><span id="ap-resume" class="hint" style="margin:0"></span><span style="flex:1"></span>'
+    + '<button class="ap-btn" id="ap-undo" onclick="apAnnuler()">↩ Annuler</button><button class="ap-btn" onclick="apFermer()">✕ Fermer</button></div>'
+    + '<div class="ap-body"><div id="ap-map"><div id="ap-info"></div></div><div class="ap-side" id="ap-side"></div></div>';
+  document.body.appendChild(root);
+  apCarte();
+  apRafraichir();
+  apAjuster();
+  setTimeout(()=>{ if (AP && AP.map){ AP.map.invalidateSize(); apAjuster(); } }, 120);
+}
+function apAjuster(){
+  const D = AP.data; let b = null;
+  D.polys.forEach(p=>{ const l = AP.lay.get(p.i); if (l){ const bb = l.getBounds(); b = b ? b.extend(bb) : L.latLngBounds(bb.getSouthWest(), bb.getNorthEast()); } });
+  if (!b) b = L.latLngBounds([[D.bbox[0],D.bbox[1]],[D.bbox[2],D.bbox[3]]]);
+  AP.map.fitBounds(b, { padding:[30,30] });
+}
+function apCarte(){
+  const D = AP.data, map = L.map('ap-map', { zoomControl:true, preferCanvas:true, maxZoom:19 });
+  AP.map = map;
+  const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution:'© OpenStreetMap', maxZoom:19 });
+  const sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { attribution:'Esri World Imagery', maxZoom:19 });
+  osm.addTo(map); AP.fonds = { osm:osm, sat:sat };
+  [['p_esp',410],['p_cacao',420],['p_base',430],['p_coop',440]].forEach(([n,z])=>{ map.createPane(n); map.getPane(n).style.zIndex = z; });
+  const cv = n => L.canvas({ pane:n, padding:0.4 });
+  const info = t=>{ const e = document.getElementById('ap-info'); if (!e) return; if (t){ e.innerHTML = t; e.style.display = 'block'; } else e.style.display = 'none'; };
+  AP.info = info;
+  // espaces protégés
+  AP.lg = { esp:L.layerGroup(), cacao:L.layerGroup(), base:L.layerGroup(), coop:L.layerGroup() };
+  const rEsp = cv('p_esp');
+  D.espaces.forEach(e=>{
+    const brun = /parc|r[ée]serve|national/i.test(e.d||'');
+    const l = L.GeoJSON.geometryToLayer({ type:'Feature', geometry:e.g }, { renderer:rEsp, pane:'p_esp' });
+    l.setStyle({ color:brun?'#6e3b12':'#5a4a1a', weight:1.6, fillColor:brun?'#a0642a':'#e6d6a3', fillOpacity:brun?0.5:0.45 });
+    l.on('mouseover', ()=>info('<b>'+apEsc(e.n||'Espace protégé')+'</b> · '+apEsc(e.d||'')));
+    l.on('mouseout', ()=>info(null));
+    AP.lg.esp.addLayer(l);
+  });
+  // zones cacaoyères (cellules de 500 m)
+  const rCac = cv('p_cacao'), h = 0.00226;
+  D.cacao.forEach(c=>{ AP.lg.cacao.addLayer(L.rectangle([[c[1]-h,c[0]-h],[c[1]+h,c[0]+h]], { renderer:rCac, pane:'p_cacao', interactive:false, stroke:false, fillColor:'#f28c28', fillOpacity:c[2]===2?0.7:0.4 })); });
+  // base ECORIGINE
+  const rBase = cv('p_base');
+  D.base.forEach(b=>{
+    const l = L.GeoJSON.geometryToLayer({ type:'Feature', geometry:b.g }, { renderer:rBase, pane:'p_base' });
+    l.setStyle(b.o ? { color:'#1f5fa8', weight:1.3, dashArray:'4 3', fillColor:'#1f5fa8', fillOpacity:0.15 } : { color:'#111', weight:1, fillColor:'#000', fillOpacity:0.28 });
+    l.on('mouseover', ()=>info('Base ECORIGINE · <b>'+apEsc(b.s)+'</b> · '+apEsc(b.p)+(b.o?' · ancien lot de cette coopérative':'')));
+    l.on('mouseout', ()=>info(null));
+    AP.lg.base.addLayer(l);
+  });
+  // polygones de la coopérative
+  const rCoop = cv('p_coop');
+  D.polys.forEach(p=>{
+    const l = L.GeoJSON.geometryToLayer({ type:'Feature', geometry:AP.geo.get(p.i) }, { renderer:rCoop, pane:'p_coop' });
+    l.on('click', e=>{ L.DomEvent.stopPropagation(e); apSelectionner(p.i); });
+    l.on('mouseover', ()=>info(apInfoPoly(p)));
+    l.on('mouseout', ()=>info(null));
+    AP.lay.set(p.i, l);
+  });
+  map.on('click', ()=>{ if (AP.selId!=null) apSelectionner(null); });
+  ['esp','cacao','base','coop'].forEach(k=>{ if (AP.vis[k]) AP.lg[k].addTo(map); });
+  AP.hg = L.layerGroup().addTo(map);
+  AP.icoV = L.divIcon({ className:'', html:'<div class="ap-vtx"></div>', iconSize:[12,12], iconAnchor:[6,6] });
+  AP.icoM = L.divIcon({ className:'', html:'<div class="ap-mid"></div>', iconSize:[8,8], iconAnchor:[4,4] });
+  AP.icoMv = L.divIcon({ className:'', html:'<div class="ap-mv">✥</div>', iconSize:[30,30], iconAnchor:[15,15] });
+}
+function apProblemes(p){ return p.f.filter(f=>AP_NOMS[f] && f!=='a_surveiller').map(f=>AP_NOMS[f]); }
+function apInfoPoly(p){
+  const pb = apProblemes(p), r = AP.retire.get(p.i);
+  return '<b>'+apEsc(p.n)+'</b> · '+fmtNum(Math.round(AP.ha.get(p.i)*100)/100)+' ha'+(pb.length?' · '+apEsc(pb.join(', ')):' · aucun problème')+(AP.supp.has(p.i)?' · <b style="color:#c0392b">supprimé</b>':r?' · <b style="color:#7a5200">sera retiré</b>':'');
+}
+function apCouleur(p){ for (const a of AP.data.ordre){ if (p.f.indexOf(a)>=0 && AP_COUL[a]) return AP_COUL[a]; } return AP_VERT; }
+function apStyle(p){
+  const id = p.i, sel = AP.selId===id, mod = AP.mod.has(id);
+  if (AP.supp.has(id)) return { color:'#c0392b', weight:1, dashArray:'2 5', fillColor:'#c0392b', fillOpacity:0.05, opacity:0.7 };
+  if (AP.retire.has(id) && !sel) return { color:'#555', weight:1.2, dashArray:'5 3', fillColor:'#888', fillOpacity:0.22, opacity:0.85 };
+  const c = apCouleur(p);
+  return { color: sel?'#00e5ff':(mod?'#e91e63':c), weight: sel?3.5:(mod?3:1.6), dashArray:null, fillColor:c, fillOpacity:sel?0.55:0.38, opacity:1 };
+}
+function apCalcul(){
+  const D = AP.data, viv = new Set(); D.polys.forEach(p=>{ if (!AP.supp.has(p.i)) viv.add(p.i); });
+  const retire = new Map(), par = {}, parHa = {};
+  const fige = id => AP.mod.has(id);                       // polygone retouché : ses problèmes seront recalculés par le robot, on le compte comme gardé
+  D.ordre.forEach(a=>{
+    if (!AP.actions.has(a) || a==='reparer' || a==='producteurs_sans_polygone') return;
+    let s = [];
+    if (a==='internes'){
+      const pris = new Set();
+      AP.paires.forEach(([i,j])=>{
+        if (!viv.has(i) || !viv.has(j) || pris.has(i) || pris.has(j) || fige(i) || fige(j)) return;
+        const pi = AP.byId.get(i), pj = AP.byId.get(j), ri = !!pi.k, rj = !!pj.k;
+        pris.add(ri!==rj ? (ri?i:j) : (AP.ha.get(i) < AP.ha.get(j) ? i : j));
+      });
+      s = Array.from(pris);
+    } else s = D.polys.filter(p=>viv.has(p.i) && !fige(p.i) && p.f.indexOf(a)>=0).map(p=>p.i);
+    s.forEach(i=>{ viv.delete(i); retire.set(i,a); });
+    par[a] = s.length; parHa[a] = s.reduce((t,i)=>t+AP.ha.get(i), 0);
+  });
+  let ha = 0; viv.forEach(i=>{ ha += AP.ha.get(i); });
+  let avantHa = 0; D.polys.forEach(p=>{ avantHa += AP.ha.get(p.i); });
+  let perdus = [];
+  if (D.prod) perdus = D.prod.filter(([f,ids])=>ids.every(k=>!viv.has(k))).map(x=>x[0]);
+  AP.retire = retire;
+  AP.calc = { restants:viv.size, ha:ha, avant:D.polys.length, avantHa:avantHa, par:par, parHa:parHa, viv:viv, perdus:perdus,
+              prodTotal: D.prod_sans!=null ? D.prod_sans + perdus.length : null, nSupp:AP.supp.size, nMod:AP.mod.size };
+}
+function apRafraichir(){
+  apCalcul(); apRestyler(); apPanneau();
+}
+function apRestyler(){
+  const D = AP.data, filt = AP.filtre;
+  D.polys.forEach(p=>{
+    const l = AP.lay.get(p.i); l.setStyle(apStyle(p));
+    const retire = AP.retire.has(p.i) || AP.supp.has(p.i);
+    const montrer = AP.vis.coop && (filt==='tous' || (filt==='retires' && retire) || (filt==='gardes' && !retire));
+    if (montrer){ if (!AP.lg.coop.hasLayer(l)) AP.lg.coop.addLayer(l); } else if (AP.lg.coop.hasLayer(l)) AP.lg.coop.removeLayer(l);
+  });
+  if (AP.selId!=null && AP.lay.get(AP.selId) && AP.lg.coop.hasLayer(AP.lay.get(AP.selId))) AP.lay.get(AP.selId).bringToFront();
+  const u = document.getElementById('ap-undo'); if (u) u.disabled = !AP.hist.length;
+  const r = document.getElementById('ap-resume'), c = AP.calc;
+  if (r) r.textContent = fmtNum(c.restants)+' polygones restants sur '+fmtNum(c.avant);
+}
+function apPanneau(){
+  const D = AP.data, c = AP.calc, side = document.getElementById('ap-side'); if (!side) return;
+  const nb = a => D.polys.filter(p=>p.f.indexOf(a)>=0).length;
+  const lignes = D.ordre.filter(a=>AP.presentes.indexOf(a)>=0).map((a,k)=>{
+    const on = AP.actions.has(a), col = AP_COUL[a] || '#bbb';
+    let det;
+    if (a==='producteurs_sans_polygone') det = D.prod ? (on ? fmtNum(c.prodTotal)+' producteur(s) à retirer du registre final' : fmtNum(D.prod_sans)+' sans polygone') : '';
+    else if (a==='reparer') det = fmtNum(nb(a))+' contour(s) corrigé(s), rien n\'est retiré';
+    else det = fmtNum(nb(a))+' concerné(s)'+(on ? ' · <b>'+fmtNum(c.par[a]||0)+' retiré(s)</b> ('+fmtNum(Math.round((c.parHa[a]||0)*10)/10)+' ha)' : '');
+    return '<label class="ap-act"><input type="checkbox" '+(on?'checked ':'')+'onchange="apBasculeAction(\''+a+'\',this.checked)"><span><span class="ap-sq" style="background:'+col+'"></span><b>'+(AP_DECISION.indexOf(a)>=0?'(à décider) ':'')+apEsc(AP_NOMS[a]||a)+'</b><br><span class="hint" style="margin:0">'+det+'</span></span></label>';
+  }).join('');
+  let h = '<div class="ap-sec"><h4>Après tous ces traitements</h4><div class="ap-big"><div><b>'+fmtNum(c.restants)+'</b>polygones restants<br><span class="hint" style="margin:0">sur '+fmtNum(c.avant)+' · '+fmtNum(c.avant-c.restants)+' retirés</span></div>'
+    + '<div><b>'+fmtNum(Math.round(c.ha*10)/10)+'</b>ha restants<br><span class="hint" style="margin:0">sur '+fmtNum(Math.round(c.avantHa*10)/10)+' ha</span></div></div>'
+    + (c.nSupp||c.nMod ? '<div class="hint" style="margin:6px 0 0">Retouches à la main : <b>'+c.nSupp+'</b> supprimé(s), <b>'+c.nMod+'</b> modifié(s).'+(c.nMod?' Les polygones modifiés sont comptés comme gardés : le robot recalcule leurs problèmes quand tu appliques.':'')+'</div>' : '')
+    + '</div>'
+    + '<div class="ap-sec"><h4>Traitements (ordre standard)</h4>'+lignes
+    + '<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap"><button class="ap-btn" onclick="apToutes(true)">Tout cocher</button><button class="ap-btn" onclick="apToutes(false)">Tout décocher</button></div></div>'
+    + '<div class="ap-sec" id="ap-sel"></div>'
+    + '<div class="ap-sec"><h4>Affichage</h4>'
+    + '<label class="ap-act"><input type="checkbox" '+(AP.vis.coop?'checked ':'')+'onchange="apCouche(\'coop\',this.checked)"><span>Mes polygones</span></label>'
+    + '<label class="ap-act"><input type="checkbox" '+(AP.vis.esp?'checked ':'')+'onchange="apCouche(\'esp\',this.checked)"><span><span class="ap-sq" style="background:#e6d6a3"></span>Forêts classées et espaces protégés <span class="ap-sq" style="background:#a0642a;margin-left:4px"></span>parcs et réserves</span></label>'
+    + '<label class="ap-act"><input type="checkbox" '+(AP.vis.base?'checked ':'')+'onchange="apCouche(\'base\',this.checked)"><span><span class="ap-sq" style="background:#222"></span>Base ECORIGINE ('+fmtNum(D.base.length)+(D.base_tronque?' + '+fmtNum(D.base_tronque)+' non affichés':'')+')</span></label>'
+    + '<label class="ap-act"><input type="checkbox" '+(AP.vis.cacao?'checked ':'')+'onchange="apCouche(\'cacao\',this.checked)"><span><span class="ap-sq" style="background:#f28c28"></span>Zones cacaoyères (carte d\'occupation des sols 2020)'+(D.cacao_erreur?' <span style="color:#c0392b">indisponible</span>':'')+'</span></label>'
+    + '<div style="margin-top:6px">Montrer : <select onchange="apFiltre(this.value)" style="font:inherit"><option value="tous"'+(AP.filtre==='tous'?' selected':'')+'>tous les polygones</option><option value="retires"'+(AP.filtre==='retires'?' selected':'')+'>seulement ceux qui seront retirés</option><option value="gardes"'+(AP.filtre==='gardes'?' selected':'')+'>seulement ceux qui restent</option></select></div>'
+    + '<div style="margin-top:6px">Fond : <select onchange="apFond(this.value)" style="font:inherit"><option value="osm">Plan</option><option value="sat">Satellite</option></select></div>'
+    + '<div class="hint" style="margin:6px 0 0">Polygones : vert = sans problème ; gris pointillé = retiré par les traitements cochés ; rose = modifié à la main.</div></div>'
+    + '<div class="ap-sec"><h4>Rapport et application</h4><div style="display:flex;flex-direction:column;gap:6px">'
+    + '<button class="ap-btn" onclick="apExcel()">📊 Télécharger le rapport Excel de cet aperçu</button>'
+    + '<button class="ap-btn prim" onclick="apAppliquer()">✅ Appliquer : créer la copie nettoyée</button>'
+    + '<div class="hint" style="margin:0">L\'application se fait sur une copie : tes fichiers et la base ECORIGINE ne sont jamais modifiés.</div></div></div>';
+  side.innerHTML = h; apPanneauSel();
+}
+function apPanneauSel(){
+  const e = document.getElementById('ap-sel'); if (!e) return;
+  const id = AP.selId;
+  if (id==null){ e.innerHTML = '<h4>Polygone sélectionné</h4><div class="hint" style="margin:0">Clique sur un polygone de la carte pour le regarder, déplacer ses sommets, le déplacer ou le supprimer.</div>'; return; }
+  const p = AP.byId.get(id), supp = AP.supp.has(id), r = AP.retire.get(id);
+  const det = [];
+  if (p.pa!=null) det.push('zone protégée : '+p.pa+' % du polygone');
+  if (p.bp!=null) det.push('autre coopérative : '+p.bp+' % du polygone');
+  if (p.c!=null) det.push('compacité '+p.c);
+  (p.ov||[]).forEach(o=>{ const q = AP.byId.get(o[0]); det.push('chevauche '+apEsc(q?q.n:'?')+' ('+o[1]+' %)'); });
+  const pb = apProblemes(p);
+  e.innerHTML = '<h4>Polygone sélectionné</h4><div><b style="font-size:14px">'+apEsc(p.n)+'</b> · '+fmtNum(Math.round(AP.ha.get(id)*100)/100)+' ha'+(AP.mod.has(id)?' · <span style="color:#e91e63;font-weight:700">modifié</span>':'')+'</div>'
+    + '<div style="margin:4px 0">'+(pb.length ? pb.map(x=>'<span style="display:inline-block;background:#fdecea;color:#c0392b;border-radius:10px;padding:1px 8px;margin:0 4px 3px 0;font-size:11.5px">'+apEsc(x)+'</span>').join('') : '<span style="color:#1e8449;font-weight:600">Aucun problème détecté</span>')+'</div>'
+    + (det.length ? '<div class="hint" style="margin:0 0 4px">'+det.join(' · ')+'</div>' : '')
+    + '<div style="margin:4px 0;font-weight:600;color:'+(supp?'#c0392b':r?'#7a5200':'#1e8449')+'">'+(supp?'Supprimé à la main':r?'Sera retiré : '+apEsc(AP_NOMS[r]||r):'Sera gardé')+'</div>'
+    + '<div style="display:flex;gap:6px;flex-wrap:wrap">'
+    + (supp ? '<button class="ap-btn" onclick="apRestaurer()">↩ Remettre ce polygone</button>'
+        : '<button class="ap-btn'+(AP.mode==='sommets'?' on':'')+'" onclick="apMode(\'sommets\')">✏️ Modifier les sommets</button><button class="ap-btn'+(AP.mode==='deplacer'?' on':'')+'" onclick="apMode(\'deplacer\')">✥ Déplacer</button><button class="ap-btn dng" onclick="apSupprimer()">🗑 Supprimer</button>'
+          + (AP.mod.has(id) ? '<button class="ap-btn" onclick="apRevenir()">Rétablir le contour d\'origine</button>' : ''))
+    + '</div>'
+    + (AP.mode==='sommets' && !supp ? '<div class="hint" style="margin:6px 0 0">Glisse un sommet (rond blanc). Clique un petit point bleu entre deux sommets pour en ajouter un. Clic droit sur un sommet pour l\'enlever.</div>' : '')
+    + (AP.mode==='deplacer' && !supp ? '<div class="hint" style="margin:6px 0 0">Glisse la poignée ✥ au centre du polygone.</div>' : '');
+}
+function apSelectionner(id){
+  AP.selId = id; AP.mode = null; AP.hg.clearLayers(); apRestyler(); apPanneauSel();
+  if (id!=null && AP.lay.get(id) && AP.lg.coop.hasLayer(AP.lay.get(id))) AP.lay.get(id).bringToFront();
+}
+function apSnap(id){ if (!AP.orig.has(id)) AP.orig.set(id, JSON.stringify(AP.byId.get(id).g)); return JSON.stringify(AP.geo.get(id)); }
+function apPousser(h){ AP.hist.push(h); if (AP.hist.length>200) AP.hist.shift(); }
+function apMarquer(id){
+  const g = AP.geo.get(id), diff = JSON.stringify(g)!==AP.orig.get(id);
+  if (diff) AP.mod.add(id); else AP.mod.delete(id);
+  AP.ha.set(id, apAireHa(g));
+}
+function apCoucheMaj(id){
+  const g = AP.geo.get(id), l = AP.lay.get(id);
+  l.setLatLngs(L.GeoJSON.coordsToLatLngs(g.coordinates, g.type==='Polygon' ? 1 : 2));
+}
+function apMode(mode){
+  if (AP.selId==null) return;
+  AP.mode = AP.mode===mode ? null : mode; apPoignees(); apPanneauSel();
+}
+function apPoignees(){
+  AP.hg.clearLayers(); const id = AP.selId; if (id==null || !AP.mode || AP.supp.has(id)) return;
+  const g = AP.geo.get(id), parts = g.type==='Polygon' ? [g.coordinates] : g.coordinates;
+  if (AP.mode==='sommets'){
+    parts.forEach(rings=>rings.forEach(ring=>{
+      for (let k=0;k<ring.length-1;k++){
+        const v = L.marker([ring[k][1], ring[k][0]], { draggable:true, icon:AP.icoV, zIndexOffset:1000, keyboard:false });
+        let snap = null;
+        v.on('dragstart', ()=>{ snap = apSnap(id); });
+        v.on('drag', e=>{ const ll = e.target.getLatLng(); ring[k] = [ll.lng, ll.lat]; if (k===0) ring[ring.length-1] = [ll.lng, ll.lat]; apCoucheMaj(id); });
+        v.on('dragend', ()=>{ apPousser({ t:'geo', id:id, avant:snap }); apMarquer(id); apRafraichir(); apPoignees(); });
+        v.on('contextmenu', e=>{
+          L.DomEvent.stopPropagation(e); if (ring.length-1 <= 3){ showToast('Un polygone garde au moins 3 sommets.'); return; }
+          const s0 = apSnap(id); ring.splice(k,1); if (k===0) ring[ring.length-1] = [ring[0][0], ring[0][1]];
+          apPousser({ t:'geo', id:id, avant:s0 }); apCoucheMaj(id); apMarquer(id); apRafraichir(); apPoignees();
+        });
+        AP.hg.addLayer(v);
+        const nx = ring[k+1], mid = L.marker([(ring[k][1]+nx[1])/2, (ring[k][0]+nx[0])/2], { icon:AP.icoM, zIndexOffset:900, keyboard:false });
+        mid.on('click', e=>{
+          L.DomEvent.stopPropagation(e); const s0 = apSnap(id), ll = mid.getLatLng();
+          ring.splice(k+1, 0, [ll.lng, ll.lat]); apPousser({ t:'geo', id:id, avant:s0 }); apCoucheMaj(id); apMarquer(id); apRafraichir(); apPoignees();
+        });
+        AP.hg.addLayer(mid);
+      }
+    }));
+  } else if (AP.mode==='deplacer'){
+    const b = AP.lay.get(id).getBounds(), c0 = b.getCenter();
+    const mv = L.marker(c0, { draggable:true, icon:AP.icoMv, zIndexOffset:1000, keyboard:false });
+    let base = null, snap = null;
+    mv.on('dragstart', ()=>{ snap = apSnap(id); base = JSON.parse(snap); });
+    mv.on('drag', e=>{
+      const ll = e.target.getLatLng(), dx = ll.lng - c0.lng, dy = ll.lat - c0.lat, cur = AP.geo.get(id);
+      const deplacer = (r,r0)=>r.forEach((pt,i)=>{ pt[0] = r0[i][0]+dx; pt[1] = r0[i][1]+dy; });
+      if (cur.type==='Polygon') cur.coordinates.forEach((r,i)=>deplacer(r, base.coordinates[i]));
+      else cur.coordinates.forEach((pl,pi)=>pl.forEach((r,i)=>deplacer(r, base.coordinates[pi][i])));
+      apCoucheMaj(id);
+    });
+    mv.on('dragend', ()=>{ apPousser({ t:'geo', id:id, avant:snap }); apMarquer(id); apRafraichir(); apPoignees(); });
+    AP.hg.addLayer(mv);
+  }
+}
+function apSupprimer(){
+  const id = AP.selId; if (id==null) return;
+  AP.supp.add(id); apPousser({ t:'sup', id:id }); AP.mode = null; AP.hg.clearLayers(); apRafraichir();
+}
+function apRestaurer(){
+  const id = AP.selId; if (id==null) return;
+  AP.supp.delete(id); AP.hist = AP.hist.filter(h=>!(h.t==='sup' && h.id===id)); AP.hg.clearLayers(); apRafraichir();
+}
+function apRevenir(){
+  const id = AP.selId; if (id==null || !AP.orig.has(id)) return;
+  const s0 = JSON.stringify(AP.geo.get(id)); apPousser({ t:'geo', id:id, avant:s0 });
+  AP.geo.set(id, JSON.parse(AP.orig.get(id))); apCoucheMaj(id); apMarquer(id); AP.mode = null; AP.hg.clearLayers(); apRafraichir();
+}
+function apAnnuler(){
+  const h = AP.hist.pop(); if (!h) return;
+  if (h.t==='sup') AP.supp.delete(h.id);
+  else { AP.geo.set(h.id, JSON.parse(h.avant)); apCoucheMaj(h.id); apMarquer(h.id); }
+  AP.hg.clearLayers(); AP.mode = null; apRafraichir();
+}
+function apBasculeAction(a, on){ if (on) AP.actions.add(a); else AP.actions.delete(a); apRafraichir(); }
+function apToutes(on){ AP.actions = new Set(on ? AP.data.ordre.filter(a=>AP.presentes.indexOf(a)>=0 && AP_DECISION.indexOf(a)<0) : []); apRafraichir(); }
+function apCouche(k, on){
+  AP.vis[k] = on;
+  if (k==='coop') apRestyler();
+  else if (on) AP.lg[k].addTo(AP.map); else AP.map.removeLayer(AP.lg[k]);
+}
+function apFiltre(v){ AP.filtre = v; apRestyler(); }
+function apFond(v){ Object.keys(AP.fonds).forEach(k=>{ if (k===v) AP.fonds[k].addTo(AP.map); else AP.map.removeLayer(AP.fonds[k]); }); }
+function apRetouches(){
+  const sup = Array.from(AP.supp), modifies = {};
+  AP.mod.forEach(id=>{ if (!AP.supp.has(id)) modifies[id] = JSON.parse(JSON.stringify(AP.geo.get(id), (k,v)=>typeof v==='number' ? Math.round(v*1e7)/1e7 : v)); });
+  return { supprimes:sup, modifies:modifies };
+}
+function apDialogue(html, boutons){
+  const d = document.createElement('div'); d.id = 'ap-dlg';
+  d.innerHTML = '<div>'+html+'<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">'+boutons.map((b,i)=>'<button class="ap-btn'+(b.prim?' prim':'')+'" data-i="'+i+'">'+apEsc(b.t)+'</button>').join('')+'</div></div>';
+  d.querySelectorAll('button').forEach(bt=>bt.onclick = ()=>{ d.remove(); const f = boutons[+bt.dataset.i].f; if (f) f(); });
+  document.getElementById('ap-root').appendChild(d);
+}
+function apAppliquer(){
+  const D = AP.data, c = AP.calc, actions = D.ordre.filter(a=>AP.actions.has(a)), ret = apRetouches();
+  if (!actions.length && !ret.supprimes.length && !Object.keys(ret.modifies).length){ showToast('Rien à appliquer : coche au moins un traitement ou retouche un polygone.'); return; }
+  const lib = actions.map(a=>'• '+apEsc(AP_NOMS[a]||a)).join('<br>');
+  apDialogue('<b>Créer la copie nettoyée ?</b><div style="margin:8px 0;font-size:13px">'+(lib||'Aucun traitement coché.')
+    + (ret.supprimes.length||Object.keys(ret.modifies).length ? '<br>• Retouches à la main : '+ret.supprimes.length+' supprimé(s), '+Object.keys(ret.modifies).length+' modifié(s)' : '')
+    + '</div><div class="hint" style="margin:0">Résultat attendu : environ <b>'+fmtNum(c.restants)+'</b> polygones. Le chiffre exact sera donné par le robot. Tes fichiers originaux et la base ECORIGINE ne sont pas modifiés.</div>',
+    [{ t:'Annuler' }, { t:'Créer la copie', prim:true, f:async ()=>{ const ok = await defoLancerNettoyage(AP.aid, actions, ret); if (ok){ delete AP_MEM[AP.aid]; apFermer(true); } } }]);
+}
+function apFermer(sansGarder){
+  if (AP && !sansGarder){
+    const geo = {}; AP.mod.forEach(id=>{ geo[id] = AP.geo.get(id); });
+    AP_MEM[AP.aid] = { src:AP.srcId, supp:Array.from(AP.supp), geo:geo, actions:Array.from(AP.actions) };
+  }
+  if (AP && AP.map) AP.map.remove();
+  const r = document.getElementById('ap-root'); if (r) r.remove();
+  AP = null; render();
+}
+function apExcel(){
+  const D = AP.data, c = AP.calc, ord = D.ordre.filter(a=>AP.actions.has(a));
+  const synth = [['Aperçu du nettoyage — '+D.nom], ['Date', new Date().toLocaleDateString('fr-FR')], [], ['Étape','Polygones','Surface (ha)']];
+  synth.push(['Polygones avant', c.avant, Math.round(c.avantHa*100)/100]);
+  if (AP.supp.size) synth.push(['Supprimés à la main', AP.supp.size, Math.round(Array.from(AP.supp).reduce((t,i)=>t+AP.ha.get(i),0)*100)/100]);
+  ord.forEach(a=>{ if (a==='reparer'){ synth.push(['Contours réparés (gardés)', D.polys.filter(p=>p.f.indexOf(a)>=0).length, '']); } else if (a!=='producteurs_sans_polygone') synth.push(['Retirés — '+(AP_NOMS[a]||a), c.par[a]||0, Math.round((c.parHa[a]||0)*100)/100]); });
+  synth.push(['Polygones restants', c.restants, Math.round(c.ha*100)/100]);
+  if (c.prodTotal!=null) synth.push(['Producteurs sans polygone après opérations (à retirer du registre final)', c.prodTotal, '']);
+  synth.push([], ['Polygones modifiés à la main', c.nMod, ''], ['Remarque', 'Les polygones modifiés sont comptés comme gardés ; le robot recalcule leurs problèmes à l\'application.', '']);
+  const lignes = [['Polygone','Surface (ha)','Problèmes','Décision','Modifié à la main']];
+  D.polys.forEach(p=>{
+    const r = AP.retire.get(p.i), dec = AP.supp.has(p.i) ? 'Supprimé à la main' : r ? 'Retiré — '+(AP_NOMS[r]||r) : 'Gardé';
+    lignes.push([p.n, Math.round(AP.ha.get(p.i)*1000)/1000, apProblemes(p).join(' ; '), dec, AP.mod.has(p.i)?'oui':'']);
+  });
+  const wb = XLSX.utils.book_new();
+  const ws1 = XLSX.utils.aoa_to_sheet(synth); ws1['!cols'] = [{wch:70},{wch:16},{wch:16}]; XLSX.utils.book_append_sheet(wb, ws1, 'Synthese');
+  const ws2 = XLSX.utils.aoa_to_sheet(lignes); ws2['!cols'] = [{wch:26},{wch:14},{wch:60},{wch:46},{wch:18}]; ws2['!autofilter'] = { ref:'A1:E'+lignes.length }; XLSX.utils.book_append_sheet(wb, ws2, 'Polygones');
+  if (c.perdus.length && AP.actions.has('producteurs_sans_polygone')){ const ws3 = XLSX.utils.aoa_to_sheet([['Exploitation (perd tous ses polygones)']].concat(c.perdus.map(x=>[x]))); ws3['!cols'] = [{wch:40}]; XLSX.utils.book_append_sheet(wb, ws3, 'Producteurs perdus'); }
+  XLSX.writeFile(wb, 'Apercu_'+String(D.nom||'coop').replace(/[^A-Za-z0-9_-]+/g,'_')+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
+}
+
 function ouvrirDefoAnalyse(prepId){ openModal('defoAnalyse', { nom:'', prepId: prepId||null }); }
 function defoChip(f){ return '<a class="defo-chip" title="Télécharger '+esc(f.nom)+'" onclick="carteTelecharger(\''+escJs(f.path)+'\')">📄 '+esc(f.nom)+' <span class="defo-dl">⬇</span></a>'; }
 function defoSec(lab, contenu){ return '<div class="defo-sec"><span class="defo-lab">'+lab+'</span><div class="defo-cont">'+contenu+'</div></div>'; }
@@ -17132,12 +17561,13 @@ function defoFilHtml(x){
   s[1] = 'fait';
   s[2] = wEnCours ? 'travail' : (w ? 'fait' : (wErr ? 'erreur' : 'a_faire'));
   s[3] = !w ? 'attente' : !actif ? (a && a.statut==='erreur' ? 'erreur' : 'a_faire') : (aOk ? 'fait' : 'travail');
-  s[4] = !aOk ? 'attente' : et.enCours ? 'travail' : et.erreur ? 'erreur' : (et.dernier || finOk) ? 'fait' : 'a_faire';
-  s[5] = !aOk ? 'attente' : finTravail ? 'travail' : finErr ? 'erreur' : finOk ? 'fait' : (s[4]==='fait' ? 'a_faire' : 'attente');
+  s[4] = !aOk ? 'attente' : (et.dernier || finOk) ? 'fait' : 'a_faire';
+  s[5] = !aOk ? 'attente' : et.enCours ? 'travail' : et.erreur ? 'erreur' : (et.dernier || finOk) ? 'fait' : 'a_faire';
+  s[6] = !aOk ? 'attente' : finTravail ? 'travail' : finErr ? 'erreur' : finOk ? 'fait' : (s[5]==='fait' ? 'a_faire' : 'attente');
   const cl = n => s[n]==='fait' ? 'fait' : (s[n]==='a_faire'||s[n]==='travail') ? 'encours' : s[n]==='erreur' ? 'erreur' : 'attente';
   const nm = n => s[n]==='fait' ? '✓' : String(n);
   const pill = n => s[n]==='fait' ? '<span class="badge ok">Fait</span>' : s[n]==='travail' ? '<span class="badge info">⏳ En cours</span>' : s[n]==='a_faire' ? '<span class="badge info">À faire</span>' : s[n]==='erreur' ? '<span class="badge danger">Erreur</span>' : '<span class="badge neutral">En attente</span>';
-  const noms = ['Préparation','Whisp','Analyse','Nettoyage','Base finale'];
+  const noms = ['Préparation','Whisp','Analyse','Aperçu','Nettoyage','Base finale'];
   const carte = (n, titre, desc, corps) => '<div class="trc-etape '+cl(n)+'"><div class="tete"><span class="num">'+nm(n)+'</span><h3>'+titre+'</h3>'+pill(n)+'</div>'
     + (desc ? '<p class="desc">'+desc+'</p>' : '') + (corps||'') + '</div>';
   const attend = t => '<div class="hint" style="margin:0">'+t+'</div>';
@@ -17163,23 +17593,26 @@ function defoFilHtml(x){
     if (!actif) c3 += '<div style="margin-top:8px"><button class="btn btn-primary btn-compact" onclick="ouvrirDefoAnalyse(\''+idj+'\')">🔎 Ajouter le registre et lancer l\'analyse</button></div>';
     lie.filter(z=>z!==a).forEach(z=>{ const Q = defoAnalyseParties(z); c3 += '<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border)">'+Q.entete+Q.erreur+'</div>'; });
   }
-  // 4 — nettoyage
-  let c4 = '';
-  if (!aOk) c4 = attend('Disponible quand l\'analyse est terminée (étape 3).');
-  else { const P = defoAnalyseParties(a); c4 = P.netInfo + P.problemes + P.apres + defoProposerHtml(a); }
-  // 5 — base finale
-  const c5 = aOk ? defoFinaleHtml(a, true) : attend('Disponible quand l\'analyse est terminée (étape 3).');
-  const sig = [1,2,3,4,5].map(n=>s[n]).join(',');
+  // 4 — aperçu
+  const c4 = !aOk ? attend('Disponible quand l\'analyse est terminée (étape 3).') : defoApercuHtml(a);
+  // 5 — nettoyage
+  let c5 = '';
+  if (!aOk) c5 = attend('Disponible quand l\'analyse est terminée (étape 3).');
+  else { const P = defoAnalyseParties(a); c5 = P.netInfo + P.problemes + P.apres + defoProposerHtml(a); }
+  // 6 — base finale
+  const c6 = aOk ? defoFinaleHtml(a, true) : attend('Disponible quand l\'analyse est terminée (étape 3).');
+  const sig = [1,2,3,4,5,6].map(n=>s[n]).join(',');
   const choix = (state.defoOnglet||{})[x.id];
-  const defaut = [1,2,3,4,5].find(n=>s[n]!=='fait') || 5;
-  const act = (choix && choix.sig===sig && choix.n>=1 && choix.n<=5) ? choix.n : defaut;
-  const onglets = '<div class="defo-tabs">' + [1,2,3,4,5].map(n=>'<button type="button" class="defo-tab '+cl(n)+(n===act?' on':'')+'" onclick="defoOnglet(\''+idj+'\','+n+',\''+sig+'\')"><span class="dt-n">'+nm(n)+'</span>'+noms[n-1]+'</button>').join('') + '</div>';
+  const defaut = [1,2,3,4,5,6].find(n=>s[n]!=='fait') || 6;
+  const act = (choix && choix.sig===sig && choix.n>=1 && choix.n<=6) ? choix.n : defaut;
+  const onglets = '<div class="defo-tabs">' + [1,2,3,4,5,6].map(n=>'<button type="button" class="defo-tab '+cl(n)+(n===act?' on':'')+'" onclick="defoOnglet(\''+idj+'\','+n+',\''+sig+'\')"><span class="dt-n">'+nm(n)+'</span>'+noms[n-1]+'</button>').join('') + '</div>';
   const defs = {
     1: ['Préparation des polygones', 'Points supprimés, lignes transformées en polygones, géométries réparées, fichiers fusionnés en un GeoJSON.', c1],
     2: ['Rapport Whisp', 'ORIGEN envoie les polygones à Whisp (API officielle, gratuite) et récupère le CSV tout seul. Secours : le faire sur le site Whisp et déposer le CSV ici.', c2],
     3: ['Registre et analyse', 'Tu ajoutes le registre de la coopérative (GMR) : ORIGEN croise polygones, Whisp et registre, puis liste les problèmes.', c3],
-    4: ['Nettoyage', 'Correction des problèmes dans l\'ordre standard, sur une copie : tes fichiers et la base ECORIGINE ne sont jamais modifiés.', c4],
-    5: ['Base finale', '', c5] };
+    4: ['Aperçu et retouches', 'Regarde tes polygones sur la carte avec les forêts classées, la base ECORIGINE et les zones cacaoyères ; retouche-les et vois combien il en restera.', c4],
+    5: ['Nettoyage', 'Correction des problèmes dans l\'ordre standard, sur une copie : tes fichiers et la base ECORIGINE ne sont jamais modifiés.', c5],
+    6: ['Base finale', '', c6] };
   return '<div style="flex-basis:100%;margin-top:8px">' + onglets + '<div class="defo-pane">' + carte(act, defs[act][0], defs[act][1], defs[act][2]) + '</div></div>';
 }
 function defoOnglet(id, n, sig){ (state.defoOnglet = state.defoOnglet || {})[id] = { n:n, sig:sig }; render(); }
