@@ -1,6 +1,6 @@
 #!/bin/bash
 # Relais SAIGIC -> ORIGEN (LECTURE SEULE du SAIGIC : aucune validation, aucune ecriture)
-# Usage : saigic_relais.sh [--configurer | --planifier | --arreter | --dry-run | --diag]
+# Usage : saigic_relais.sh [--configurer | --planifier [minutes, defaut 5] | --arreter | --dry-run | --diag]
 # v2 : en plus de la liste « Non valide », lit la liste de TOUS les statuts et l'envoie a reception-saigic-rattrapage
 #      (connaissements deja valides que le robot n'avait jamais vus). --diag : montre ce que renvoie le SAIGIC pour chaque statut (rien n'est envoye).
 DIR="${SAIGIC_DIR:-/root}"
@@ -39,8 +39,11 @@ case "$MODE" in
     exit 0 ;;
   --planifier)
     chmod +x "$SCRIPT"
-    ( crontab -l 2>/dev/null | grep -vF "$SCRIPT" ; echo "*/5 * * * * $SCRIPT >> /var/log/saigic_relais.log 2>&1" ) | crontab -
-    echo "Planification installee : un passage toutes les 5 minutes, 24h/24."
+    MIN="${2:-5}"
+    case "$MIN" in ''|*[!0-9]*) echo "Intervalle invalide : $MIN"; exit 2 ;; esac
+    if [ "$MIN" -lt 1 ] || [ "$MIN" -gt 30 ]; then echo "Intervalle hors limites (1 a 30 minutes) : $MIN"; exit 2; fi
+    ( crontab -l 2>/dev/null | grep -vF "$SCRIPT" ; echo "*/$MIN * * * * $SCRIPT >> /var/log/saigic_relais.log 2>&1" ) | crontab -
+    echo "Planification installee : un passage toutes les $MIN minutes, 24h/24."
     crontab -l | grep -F "$SCRIPT"
     exit 0 ;;
   --arreter)
