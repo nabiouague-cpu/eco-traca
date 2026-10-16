@@ -3677,7 +3677,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-16-172';
+const APP_VERSION = '2026-10-16-173';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8446,10 +8446,48 @@ function ocTvChoisirOrigine(vuId){
   else { pl.origineVu = ''; pl.code = ''; }
   render();
 }
+// « Pour la coopérative elle-même » : au choix de la coopérative, les données de son connaissement SAIGIC en attente de traçage
+// (volume, sacs, dates, campagne) se remplissent toutes seules ; plusieurs connaissements : liste déroulante.
+function ocTvVusDeCoop(coopId){
+  if (!coopId) return [];
+  return (state.saigicATracer||[]).filter(v=>{ const k = saigicCoopDeCode(v); return k && k.id===coopId; })
+    .sort((a,b)=>String(saigicDateIso(b.date_connaissement)||'').localeCompare(String(saigicDateIso(a.date_connaissement)||'')));
+}
+function ocTvConnaissementsHtml(pl){
+  if (!pl.coopId) return '<p class="hint" style="margin:0 0 12px;">Choisis la coopérative : les données de son connaissement SAIGIC (volume, sacs, dates, campagne) se remplissent automatiquement.</p>';
+  const vus = ocTvVusDeCoop(pl.coopId);
+  if (!vus.length) return '<p class="hint" style="margin:0 0 12px;">Aucun connaissement SAIGIC en attente de traçage pour cette coopérative : saisie libre.</p>';
+  return '<label class="field" style="margin:0 0 12px;">Connaissement SAIGIC à tracer<select id="tv_conn" onchange="ocTvChoisirConnaissement(this.value)">'
+    + vus.map(v=>'<option value="'+esc(v.id)+'"'+(pl.vuId===v.id?' selected':'')+'>'+esc(v.code_connaissement)+' · '+(Number(v.poids_net)>0 ? fmtKg(v.poids_net) : 'volume non lu')+(Number(v.nb_sacs)>0 ? ' · '+fmtNum(v.nb_sacs)+' sacs' : '')+' · '+esc(String(v.date_connaissement||'').slice(0,10))+'</option>').join('')
+    + '<option value=""'+(pl.vuId?'':' selected')+'>Saisie libre</option></select></label>';
+}
+function ocTvLireFormulaire(pl){
+  const val = id=>{ const el = document.getElementById(id); return el ? el.value : ''; };
+  Object.assign(pl, { campagneId:val('tv_campagne')||pl.campagneId, volume:val('tv_volume'), sacs:val('tv_sacs'), nbprod:val('tv_nbprod'), dateDebut:val('tv_date_debut'), dateFin:val('tv_date_fin') });
+}
+function ocTvChoisirCoop(coopId){
+  const pl = state.modal && state.modal.payload; if (!pl) return;
+  ocTvLireFormulaire(pl); pl.coopId = coopId || '';
+  if (pl.mode==='direct'){
+    const vus = ocTvVusDeCoop(pl.coopId);
+    const v = vus.find(x=>x.id===pl.vuId) || vus[0];
+    if (v) Object.assign(pl, ocTvPrefillOrigine(v), { vuId:v.id });
+    else if (pl.vuId){ Object.assign(pl, { vuId:'', code:'', volume:'', sacs:'' }); }
+    render();
+  } else ocTvMajInfo();
+}
+function ocTvChoisirConnaissement(vuId){
+  const pl = state.modal && state.modal.payload; if (!pl) return;
+  ocTvLireFormulaire(pl);
+  const v = vuId ? (state.saigicATracer||[]).find(x=>x.id===vuId) : null;
+  if (v) Object.assign(pl, ocTvPrefillOrigine(v), { vuId:v.id });
+  else Object.assign(pl, { vuId:'', code:'', volume:'', sacs:'' });
+  render();
+}
 function ocTvChoisirMode(mode){
   const pl = state.modal && state.modal.payload; if (!pl) return;
   const val = id=>{ const el = document.getElementById(id); return el ? el.value : ''; };
-  Object.assign(pl, { mode, origineVu: mode==='direct' ? '' : (val('tv_origine')||pl.origineVu||''), coopId:val('tv_coop')||pl.coopId, campagneId:val('tv_campagne')||pl.campagneId, volume:val('tv_volume'), sacs:val('tv_sacs'), nbprod:val('tv_nbprod'), dateDebut:val('tv_date_debut'), dateFin:val('tv_date_fin') });
+  Object.assign(pl, { mode, vuId: mode==='direct' ? pl.vuId : '', origineVu: mode==='direct' ? '' : (val('tv_origine')||pl.origineVu||''), coopId:val('tv_coop')||pl.coopId, campagneId:val('tv_campagne')||pl.campagneId, volume:val('tv_volume'), sacs:val('tv_sacs'), nbprod:val('tv_nbprod'), dateDebut:val('tv_date_debut'), dateFin:val('tv_date_fin') });
   render();
 }
 // Rattache les achats producteurs du traçage au connaissement réel de la coopérative (créé ici s'il n'existe pas encore :
@@ -21602,10 +21640,10 @@ function _renderBrut(){
       + '<p class="hint" style="margin:0 0 10px;">'+(plTv.mode==='direct'
           ? 'La coopérative nous transmet elle-même son connaissement et son ticket de pesée : ORIGEN ne génère aucun de ces documents. Seules la répartition entre producteurs et la fiche de traçabilité sont produites.'
           : 'Le volume est tracé sur la coopérative finale B ; le connaissement de A vers B et le ticket de pesée sont ensuite générés par ORIGEN.')+(plTv.code ? ' <b>Connaissement '+esc(plTv.code)+'</b> : volume et sacs lus sur le SAIGIC.' : '')+'</p>'
-      + (plTv.mode==='direct' ? '' : ocTvOriginesHtml(plTv.origineVu))
+      + (plTv.mode==='direct' ? ocTvConnaissementsHtml(plTv) : ocTvOriginesHtml(plTv.origineVu))
       + '<p class="hint" id="tv_info" style="margin:0 0 14px;">'+esc(ocTvTexteInfo(plTv.coopId, plTv.campagneId))+'</p>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 16px;">'
-      + '<label class="field">'+(plTv.mode==='direct' ? 'Coopérative *' : 'Coopérative finale (B) *')+'<select id="tv_coop" onchange="ocTvMajInfo()"><option value="">Sélectionner…</option>'
+      + '<label class="field">'+(plTv.mode==='direct' ? 'Coopérative *' : 'Coopérative finale (B) *')+'<select id="tv_coop" onchange="ocTvChoisirCoop(this.value)"><option value="">Sélectionner…</option>'
       +   coopsTv.map(c=>'<option value="'+esc(c.id)+'"'+(plTv.coopId===c.id?' selected':'')+'>'+esc(c.nom)+'</option>').join('')
       + '</select></label>'
       + '<label class="field">Campagne *<select id="tv_campagne" onchange="ocTvMajInfo()"><option value="">Sélectionner…</option>'
