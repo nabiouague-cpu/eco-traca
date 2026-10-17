@@ -3677,7 +3677,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-16-191';
+const APP_VERSION = '2026-10-17-192';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -17867,6 +17867,7 @@ function apPanneau(){
     + '<div class="hint" style="margin:6px 0 0">Polygones : <b>bleu</b> = sans problème ; <b>couleur du traitement</b> (case cochée) = sera retiré ; <b>gris pâle</b> = problème pas traité (case décochée) ; <b>contour jaune</b> = modifié à la main. Cocher fait apparaître la couleur, décocher la fait disparaître.</div></div>'
     + '<div class="ap-sec"><h4>Rapport et application</h4><div style="display:flex;flex-direction:column;gap:6px">'
     + '<button class="ap-btn" onclick="apExcel()">📊 Télécharger le rapport Excel de cet aperçu</button>'
+    + '<button class="ap-btn" onclick="apQgis()" title="Télécharge les polygones et un projet QGIS pour les retouches complexes">🗺 Ouvrir dans QGIS</button>'
     + '<button class="ap-btn prim" onclick="apAppliquer()">✅ Appliquer : créer la copie nettoyée</button>'
     + '<div class="hint" style="margin:0">L\'application se fait sur une copie : tes fichiers et la base ECORIGINE ne sont jamais modifiés.</div></div></div>';
   side.innerHTML = h; apPanneauSel();
@@ -18010,6 +18011,50 @@ function apFermer(sansGarder){
   if (AP && AP.map) AP.map.remove();
   const r = document.getElementById('ap-root'); if (r) r.remove();
   AP = null; render();
+}
+// Ouvrir les polygones de l'aperçu dans QGIS (déplacements en masse, retouches complexes) : on télécharge le GeoJSON + un projet QGIS qui le charge
+function apQgisProjet(fichier, nom, coop){
+  const x = t => String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const src = './'+fichier, idP = 'polygones_'+Date.now(), idS = 'satellite_'+Date.now();
+  const srs = '<spatialrefsys nativeFormat="Wkt"><authid>EPSG:4326</authid></spatialrefsys>';
+  const sym = '<renderer-v2 type="singleSymbol" symbollevels="0" enableorderby="0" forceraster="0"><symbols><symbol type="fill" name="0" alpha="1" clip_to_extent="1" force_rhr="0"><layer class="SimpleFill" enabled="1" locked="0" pass="0"><Option type="Map">'
+    + '<Option name="color" value="255,200,0,45" type="QString"/><Option name="style" value="solid" type="QString"/><Option name="outline_color" value="255,214,0,255" type="QString"/><Option name="outline_style" value="solid" type="QString"/><Option name="outline_width" value="0.5" type="QString"/><Option name="outline_width_unit" value="MM" type="QString"/>'
+    + '</Option></layer></symbol></symbols></renderer-v2>';
+  const sat = 'type=xyz&url=https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}&zmax=19&zmin=0';
+  return '<!DOCTYPE qgis PUBLIC \'http://mrcc.com/qgis.dtd\' \'SYSTEM\'>\n<qgis projectname="'+x(nom)+'" version="3.28.0">\n'
+    + '<projectCrs>'+srs+'</projectCrs>\n'
+    + '<layer-tree-group><customproperties/>'
+    + '<layer-tree-layer id="'+idP+'" name="'+x(coop)+' — polygones" source="'+x(src)+'" providerKey="ogr" checked="Qt::Checked" expanded="1"/>'
+    + '<layer-tree-layer id="'+idS+'" name="Satellite (Esri)" source="'+x(sat)+'" providerKey="wms" checked="Qt::Checked" expanded="0"/>'
+    + '</layer-tree-group>\n<projectlayers>\n'
+    + '<maplayer type="vector" geometry="Polygon" hasScaleBasedVisibilityFlag="0"><id>'+idP+'</id><datasource>'+x(src)+'</datasource><layername>'+x(coop)+' — polygones</layername><srs>'+srs+'</srs><provider encoding="UTF-8">ogr</provider>'+sym+'</maplayer>\n'
+    + '<maplayer type="raster"><id>'+idS+'</id><datasource>'+x(sat)+'</datasource><layername>Satellite (Esri)</layername><srs><spatialrefsys nativeFormat="Wkt"><authid>EPSG:3857</authid></spatialrefsys></srs><provider>wms</provider></maplayer>\n'
+    + '</projectlayers>\n</qgis>\n';
+}
+function apTelecharger(nom, texte, type){
+  const u = URL.createObjectURL(new Blob([texte], { type:type })), a = document.createElement('a');
+  a.href = u; a.download = nom; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(u), 5000);
+}
+function apQgis(){
+  if (!AP) return;
+  const D = AP.data, feats = [];
+  D.polys.forEach(p=>{
+    if (AP.supp.has(p.i)) return;
+    const g = AP.geo.get(p.i), r = AP.retire.get(p.i);
+    feats.push({ type:'Feature', properties:{ Name:p.n, id:p.i, surface_ha:Math.round(AP.ha.get(p.i)*1000)/1000, problemes:apProblemes(p).join(' ; '), sera_retire:r?(AP_NOMS[r]||r):'', modifie_apercu:AP.mod.has(p.i)?'oui':'' }, geometry:g });
+  });
+  const coop = String(D.nom||'coop'), slug = coop.replace(/[^A-Za-z0-9]+/g,'_').replace(/^_|_$/g,'');
+  const d = new Date(), pad = n => String(n).padStart(2,'0');
+  const base = slug+'_QGIS_'+d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'_'+pad(d.getHours())+pad(d.getMinutes());
+  apTelecharger(base+'.geojson', JSON.stringify({ type:'FeatureCollection', name:slug, features:feats }), 'application/geo+json');
+  setTimeout(()=>apTelecharger(base+'.qgs', apQgisProjet(base+'.geojson', base, coop), 'application/xml'), 600);
+  apDialogue('<b>🗺 Ouvrir dans QGIS</b><div style="margin:8px 0;font-size:13px;line-height:1.55">'
+    + '<b>1.</b> Deux fichiers viennent d\'être téléchargés dans le même dossier : <b>'+apEsc(base)+'.qgs</b> (le projet) et <b>'+apEsc(base)+'.geojson</b> (les polygones).<br>'
+    + '<b>2.</b> Ouvre le fichier <b>.qgs</b> (clic dans la barre de téléchargement) : QGIS démarre avec tes '+fmtNum(feats.length)+' polygones sur fond satellite.<br>'
+    + '<b>3.</b> Fais tes modifications (déplacement en masse, etc.) et enregistre la couche.<br>'
+    + '<b>4.</b> Reviens dans ORIGEN et dépose le GeoJSON modifié dans une <b>nouvelle préparation</b> : toute la suite (Whisp, analyse) repart de ta version.</div>'
+    + '<div class="hint" style="margin:0">Colonnes utiles dans QGIS : Name (code), problemes, sera_retire. Ne change pas la colonne Name.</div>',
+    [{ t:'OK', prim:true }]);
 }
 function apExcel(){
   const D = AP.data, c = AP.calc, ord = D.ordre.filter(a=>AP.actions.has(a));
