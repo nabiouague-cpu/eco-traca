@@ -3691,7 +3691,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-17-206';
+const APP_VERSION = '2026-10-17-207';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8421,7 +8421,7 @@ async function connChargerNouveaux(){
   try{
     if (!state.session) return false;
     if (!state.connSeuil) await connChargerSeuil();
-    const { data, error } = await supabaseClient.from('saigic_connaissements_vus').select('id,code_connaissement,cooperative_id,date_connaissement,fournisseur_saigic,poids_net,nb_sacs,achat_id,achat_cree_le,mag_dest:donnees->>mag_dest')
+    const { data, error } = await supabaseClient.from('saigic_connaissements_vus').select('id,code_connaissement,cooperative_id,date_connaissement,fournisseur_saigic,poids_net,nb_sacs,achat_id,achat_cree_le,mag_dest:donnees->>mag_dest,dest_port:donnees->>dest_port')
       .not('achat_cree_le','is',null).gt('achat_cree_le', state.connSeuil).order('achat_cree_le', { ascending:false }).limit(60);
     if (error) return false;
     const avant = (state.connNouveaux||[]).map(v=>v.id).join('|');
@@ -8458,6 +8458,19 @@ function connBasculer(){
   if (c) c.style.display = state.connOuvert ? '' : 'none';
   if (p) p.classList.toggle('ouvert', !!state.connOuvert);
 }
+// Provenance (ville de départ du cacao) : le lieu saisi sur l'achat ; à défaut, la ville de la coopérative (affichée en grisé : le SAIGIC ne donne pas le lieu de départ dans sa liste).
+function connProvenance(v, a){
+  if (a && a.lieu_origine) return { txt:a.lieu_origine, deduit:false };
+  const c = (v.cooperative_id && typeof coopById==='function' ? coopById(v.cooperative_id) : null) || (typeof saigicCoopDeCode==='function' ? saigicCoopDeCode(v) : null);
+  const t = c && (c.ville || c.departement); return t ? { txt:t, deduit:true } : null;
+}
+// Port de destination : ville du site d'usinage (US51 → San-Pédro, UA10 → Abidjan) ; à défaut le code port du SAIGIC (1 = Abidjan, 2 = San-Pédro).
+function connPortDest(v, a){
+  const u = String((a && a.usine_dechargement) || v.mag_dest || '').trim().toUpperCase();
+  const site = u ? (state.sitesUsinage||[]).find(x=>x.code && u.indexOf(String(x.code).toUpperCase())===0) : null;
+  if (site && site.ville) return site.ville;
+  return ({ '1':'Abidjan', '2':'San-Pédro' })[String(v.dest_port||'')] || '';
+}
 function connBanniereHtml(){
   const liste = state.connNouveaux || []; if (!liste.length) return '';
   const MAX = 15, vus = liste.slice(0, MAX), ouvert = !!state.connOuvert;
@@ -8465,7 +8478,9 @@ function connBanniereHtml(){
   const cel = x => x ? esc(x) : '<span class="vide">—</span>';
   const totKg = liste.reduce((a,v)=>a+(Number(v.poids_net)||0),0), totSacs = liste.reduce((a,v)=>a+(Number(v.nb_sacs)||0),0);
   const lignes = vus.map(v=>{ const a = (state.achats||[]).find(x=>x.id===v.achat_id) || {};
+    const prov = connProvenance(v, a), port = connPortDest(v, a);
     return '<tr><td class="code">'+esc(v.code_connaissement)+'</td><td>'+esc(coopNom(v))+'</td><td>'+esc(String(v.date_connaissement||'').slice(0,16))+'</td>'
+      + '<td>'+(prov ? (prov.deduit ? '<span style="color:#5f7a6b" title="Ville de la coopérative (lieu de départ non communiqué par le SAIGIC)">'+esc(prov.txt)+'</span>' : '<b>'+esc(prov.txt)+'</b>') : '<span class="vide">—</span>')+'</td><td>'+cel(port)+'</td>'
       + '<td class="num">'+(Number(v.poids_net)>0 ? fmtKg(v.poids_net) : '—')+'</td><td class="num">'+(Number(v.nb_sacs)>0 ? fmtNum(v.nb_sacs) : '—')+'</td>'
       + '<td>'+cel(a.nom_transporteur)+'</td><td>'+cel(a.immat_vehicule)+'</td><td>'+cel(a.nom_chauffeur)+'</td><td>'+cel(usineLibelle(a.usine_dechargement || v.mag_dest))+'</td>'
       + '<td><button class="btn-ghost btn-compact" onclick="connAller(\''+escJs(v.achat_id||'')+'\')">Voir</button></td></tr>'; }).join('');
@@ -8475,8 +8490,8 @@ function connBanniereHtml(){
     + '<span class="cb-droite"><button class="btn btn-primary btn-compact" onclick="event.stopPropagation();connMarquerVus()">J\'ai vu</button><span class="cb-puce'+(ouvert?' ouvert':'')+'" id="connPuce">▾</span></span></div>'
     + '<div class="cb-corps" id="connCorps"'+(ouvert?'':' style="display:none"')+'>'
     + '<div class="hint" style="margin:0 0 8px">Déjà placé'+(liste.length>1?'s':'')+' dans le tableau de bord (Achats), en attente de pesée.</div>'
-    + '<div class="cb-scroll"><table><thead><tr><th>Connaissement</th><th>Coopérative</th><th>Date</th><th class="num">Poids net</th><th class="num">Sacs</th><th>Transporteur</th><th>Camion</th><th>Chauffeur</th><th>Usine</th><th></th></tr></thead><tbody>'+lignes+'</tbody>'
-    + (liste.length>1 ? '<tfoot><tr><td colspan="3">Total ('+liste.length+')</td><td class="num">'+(totKg>0?fmtKg(totKg):'—')+'</td><td class="num">'+(totSacs>0?fmtNum(totSacs):'—')+'</td><td colspan="5"></td></tr></tfoot>' : '')
+    + '<div class="cb-scroll"><table><thead><tr><th>Connaissement</th><th>Coopérative</th><th>Date</th><th>Provenance</th><th>Port de destination</th><th class="num">Poids net</th><th class="num">Sacs</th><th>Transporteur</th><th>Camion</th><th>Chauffeur</th><th>Usine</th><th></th></tr></thead><tbody>'+lignes+'</tbody>'
+    + (liste.length>1 ? '<tfoot><tr><td colspan="5">Total ('+liste.length+')</td><td class="num">'+(totKg>0?fmtKg(totKg):'—')+'</td><td class="num">'+(totSacs>0?fmtNum(totSacs):'—')+'</td><td colspan="5"></td></tr></tfoot>' : '')
     + '</table></div>'
     + (liste.length>MAX ? '<div class="cb-plus">+ '+(liste.length-MAX)+' autre'+(liste.length-MAX>1?'s':'')+' — voir le tableau de bord, onglet Achats.</div>' : '')
     + '</div></div>';
