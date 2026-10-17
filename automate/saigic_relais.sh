@@ -204,7 +204,14 @@ t = re.sub(r'<(script|style)\b.*?</\1>', ' ', t, flags=re.S | re.I)
 print(" | ".join(re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]+>', ' ', c))).strip() for c in re.findall(r'<th\b[^>]*>(.*?)</th>', t, re.S | re.I)))
 PY
   echo "--- champs de recherche :"; grep -o -i '<\(input\|select\)[^>]*\(id\|name\)="[^"]*"' "$PAGE" | grep -o '\(id\|name\)="[^"]*"' | sort -u | tr '\n' ' '; echo
-  echo "--- adresses de la liste (ajax) :"; grep -n -i -E "sAjaxSource|ajax *[:(]|url *:|getJSON|\.post\(|\.get\(" "$PAGE" | cut -c1-200 | head -15
+  echo "--- code de la liste (lignes 296 a 345 de la page) :"; sed -n '296,345p' "$PAGE" | cut -c1-170 | grep -v '^[[:space:]]*$'
+  echo "--- appel de la liste avec les filtres habituels :"
+  DD0=$(date -d "$(date +%Y-%m-01) -1 month" +%d/%m/%Y); DF0=$(date +%d/%m/%Y)
+  C2=$("${CURLB[@]}" -G --max-time 90 -H 'X-Requested-With: XMLHttpRequest' -H 'Accept: application/json, text/javascript, */*; q=0.01' -e "$BASE/Tracabilite/Connaissements" \
+    --data-urlencode "sEcho=1" --data-urlencode "iColumns=12" --data-urlencode "iDisplayStart=0" --data-urlencode "iDisplayLength=3" \
+    --data-urlencode "DateDebut=$DD0" --data-urlencode "DateFin=$DF0" --data-urlencode "Prdt_Id=2" --data-urlencode "ddlExp_Id=$EXP" --data-urlencode "Exp_Id=$EXP" --data-urlencode "txtRecherche=" \
+    -o "$JS" -w '%{http_code}' "$BASE/Tracabilite/Connaissements")
+  echo "HTTP $C2, $(wc -c < "$JS") octets"; head -c 1800 "$JS"; echo
   exit 0
 fi
 
