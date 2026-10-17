@@ -3691,7 +3691,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-17-201';
+const APP_VERSION = '2026-10-17-202';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5188,6 +5188,11 @@ function ocNotifications(){
   if (nAPayer) items.push({ ic:'💳', titre:'Paiements à régler', detail:nAPayer+' livraison(s) pesée(s) non entièrement payée(s)', nb:nAPayer, niveau:'info', action:"ocAllerAchats('recu')" });
   const nDocs = (state.cooperatives||[]).filter(c=>!c.diligence_externe && missingDocs(c.id).length>0).length;
   if (nDocs) items.push({ ic:'🗂️', titre:'Documents manquants', detail:nDocs+' coopérative(s) avec des pièces de conformité manquantes', nb:nDocs, niveau:'warn', action:"ocAllerOnglet('conformite')" });
+  if (state.lotsCharges && typeof sachDechargeParUsine==='function'){
+    const seuil = Number((state.sachParam||{}).seuil_demande_t)>0 ? Number(state.sachParam.seuil_demande_t) : 75;
+    const atteints = sachDechargeParUsine().filter(g=>(g.kg-g.aff)/1000>=seuil);
+    if (atteints.length) items.push({ ic:'🏭', titre:'Usinage à demander', detail:atteints.map(g=>g.libelle+' : '+Math.round((g.kg-g.aff)/100)/10+' t').join(' · ')+' (seuil '+seuil+' t)', nb:atteints.length, niveau:'warn', action:"ocAllerOnglet('sacherie')" });
+  }
   const nNc = (state.nonconformites||[]).filter(n=>n.statut!=='resolue').length;
   if (nNc) items.push({ ic:'⚠️', titre:'Non-conformités ouvertes', detail:nNc+' non-conformité(s) à traiter', nb:nNc, niveau:'danger', action:"ocAllerOnglet('conformite')" });
   return items;
@@ -5899,6 +5904,69 @@ function sachIn(table, id, champ, val, w){
 function sachTxt(table, id, champ, val, w){
   return '<input type="text" value="'+esc(val||'')+'" style="width:'+(w||140)+'px;" onchange="sachMaj(\''+table+'\','+id+',\''+champ+'\',this.value,false)">';
 }
+// ---- Cacao déchargé par usine : tonnes reçues (poids net pesé à l'usine), solde pas encore mis en lot d'usinage, seuil de demande d'usinage ----
+function sachJetons(t){ return String(t||'').toUpperCase().split(/[^A-Z0-9]+/).filter(x=>x.length>=3 && x!=='EX' && x!=='ABJ' && x!=='USINE'); }
+function sachSiteDe(texte){
+  const u = String(texte||'').toUpperCase().trim(); if (!u) return null;
+  const S = state.sitesUsinage||[];
+  return S.find(x=>x.code && u.indexOf(String(x.code).toUpperCase())===0) || S.find(x=>x.nom && u.indexOf(String(x.nom).toUpperCase())>=0) || null;
+}
+function sachStockDe(libelle, siteNom){
+  const jl = sachJetons(libelle).concat(sachJetons(siteNom));
+  return (state.sachStock||[]).find(r=>{ const js = sachJetons(r.usine); return js.some(j=>jl.indexOf(j)>=0); }) || null;
+}
+function sachDechargeParUsine(){
+  const camp = ocAcCampagneId(), jours = 14, lim = new Date(Date.now()-jours*86400000).toISOString().slice(0,10);
+  const m = {};
+  (typeof lotsAchatsRecus==='function' ? lotsAchatsRecus() : []).filter(a=>!a.refoulee && a.usine_dechargement && (!camp || a.campagne_id===camp)).forEach(a=>{
+    const site = sachSiteDe(a.usine_dechargement);
+    const cle = site ? site.code : String(a.usine_dechargement).trim().toUpperCase();
+    const g = m[cle] || (m[cle] = { cle, site, libelle: site ? (site.nom+' ('+site.code+')') : String(a.usine_dechargement).trim(), n:0, kg:0, aff:0, dernier:'', kgRecent:0 });
+    const kg = lotsAchatPoidsRecu(a);
+    g.n++; g.kg += kg; g.aff += Math.min(kg, lotsAchatAffecte(a.id));
+    if (String(a.date||'') > g.dernier) g.dernier = String(a.date||'');
+    if (String(a.date||'') >= lim) g.kgRecent += kg;
+  });
+  return Object.values(m).sort((x,y)=>(y.kg-y.aff)-(x.kg-x.aff));
+}
+function sachDechargeHtml(P, spl, tpl, spp){
+  usineLibelle('-');   // charge la table des sites d'usinage si besoin
+  if (!state.lotsCharges && !state.lotsChargementLance){ state.lotsChargementLance = true; chargerLots().then(()=>render()); }
+  const seuilT = Number(P.seuil_demande_t)>0 ? Number(P.seuil_demande_t) : 75;
+  const L = sachDechargeParUsine(), camp = (state.campagnes||[]).find(c=>c.id===ocAcCampagneId());
+  const palLot = Math.ceil(spl/spp);
+  const tot = L.reduce((t,g)=>({ kg:t.kg+g.kg, aff:t.aff+g.aff, n:t.n+g.n }), {kg:0,aff:0,n:0});
+  let h = '<div class="panel"><div class="panel-head" style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;"><div><h2>Cacao déchargé par usine</h2>'
+    + '<p class="hint" style="margin:4px 0 0">Poids net pesé à l\'usine, connaissement par connaissement'+(camp?' · campagne <b>'+esc(camp.nom||camp.id)+'</b> (celle choisie en haut)':'')+'. Sert aux prévisions d\'usinage, à la demande des rapports et au calcul des sacs et palettes à déposer.</p></div>'
+    + '<label class="field" style="margin:0;">Seuil de demande d\'usinage (tonnes)<br>'+sachIn('sacherie_param',1,'seuil_demande_t',seuilT,80)+'</label></div>';
+  if (!state.lotsCharges) return h + '<div class="hint" style="padding:12px 18px">Chargement des livraisons…</div></div>';
+  if (!L.length) return h + '<div class="hint" style="padding:12px 18px">Aucune livraison pesée avec une usine de déchargement pour cette campagne.</div></div>';
+  h += '<div style="padding:8px 18px 18px;overflow:auto;"><table class="data-table pref-table"><thead><tr><th>Usine</th><th class="num">Livraisons</th><th class="num">Déchargé (t)</th><th class="num">Déjà en lots d\'usinage (t)</th><th class="num">Reste à usiner (t)</th><th style="min-width:150px">Avancement vers '+sachNb(seuilT)+' t</th><th class="num">Lots complets</th><th class="num">Rythme (t/jour, 14 j)</th><th>Seuil</th><th class="num">Sacs requis</th><th class="num">Palettes requises</th><th class="num">Sacs en stock</th><th class="num">Palettes en stock</th><th>Sacherie</th><th>Dernier déchargement</th></tr></thead><tbody>';
+  L.forEach(g=>{
+    const solde = Math.max(0, g.kg-g.aff)/1000, pct = Math.min(100, solde/seuilT*100), rythme = g.kgRecent/1000/14;
+    const lots = Math.floor(solde/tpl + 1e-9), nLotsReq = Math.ceil(solde/tpl - 1e-9);
+    const sacsReq = nLotsReq*spl, palReq = nLotsReq*palLot;
+    const st = sachStockDe(g.libelle, g.site && g.site.nom);
+    const sacs = st && st.sacs_stock!=null && st.sacs_stock!=='' ? Number(st.sacs_stock) : null, pal = st && st.palettes_stock!=null && st.palettes_stock!=='' ? Number(st.palettes_stock) : null;
+    const manque = (sacs!==null && sacs<sacsReq) || (pal!==null && pal<palReq);
+    let seuil;
+    if (solde >= seuilT) seuil = '<span style="background:#c0392b;color:#fff;border-radius:12px;padding:2px 10px;font-size:12px;white-space:nowrap">Atteint — demander l\'usinage</span>';
+    else if (rythme>0) seuil = '<span class="hint" style="margin:0">dans ~'+Math.max(1,Math.ceil((seuilT-solde)/rythme))+' j</span>';
+    else seuil = '<span class="hint" style="margin:0">—</span>';
+    const couleur = solde>=seuilT ? '#c0392b' : pct>=80 ? '#e08a00' : '#2c5fae';
+    const sach = !st ? '<span class="hint" style="margin:0">usine non suivie</span>' : (sacs===null && pal===null) ? '<span class="hint" style="margin:0">stock à renseigner</span>'
+      : manque ? '<span style="background:#e08a00;color:#fff;border-radius:12px;padding:2px 10px;font-size:12px;white-space:nowrap">À commander : '+(sacs!==null&&sacs<sacsReq?sachNb(sacsReq-sacs)+' sacs':'')+(sacs!==null&&sacs<sacsReq&&pal!==null&&pal<palReq?' · ':'')+(pal!==null&&pal<palReq?sachNb(palReq-pal)+' palettes':'')+'</span>'
+      : '<span style="background:#1e8449;color:#fff;border-radius:12px;padding:2px 10px;font-size:12px;">OK</span>';
+    h += '<tr><td style="text-align:left"><b>'+esc(g.libelle)+'</b></td><td class="num">'+sachNb(g.n)+'</td><td class="num">'+sachNb(g.kg/1000,1)+'</td><td class="num">'+sachNb(g.aff/1000,1)+'</td><td class="num" style="font-weight:700">'+sachNb(solde,1)+'</td>'
+      + '<td><div style="background:#e9eeec;border-radius:6px;height:10px;overflow:hidden"><div style="width:'+pct.toFixed(0)+'%;height:100%;background:'+couleur+'"></div></div><span class="hint" style="margin:0">'+sachNb(solde,1)+' / '+sachNb(seuilT)+' t</span></td>'
+      + '<td class="num">'+sachNb(lots)+'</td><td class="num">'+(rythme>0?sachNb(rythme,1):'—')+'</td><td>'+seuil+'</td>'
+      + '<td class="num">'+sachNb(sacsReq)+'</td><td class="num">'+sachNb(palReq)+'</td><td class="num">'+sachNb(sacs)+'</td><td class="num">'+sachNb(pal)+'</td><td>'+sach+'</td>'
+      + '<td class="hint">'+(g.dernier?esc(g.dernier.split('-').reverse().join('/')):'—')+'</td></tr>';
+  });
+  h += '<tr style="font-weight:700;background:var(--surface-2)"><td style="text-align:left">Total</td><td class="num">'+sachNb(tot.n)+'</td><td class="num">'+sachNb(tot.kg/1000,1)+'</td><td class="num">'+sachNb(tot.aff/1000,1)+'</td><td class="num">'+sachNb(Math.max(0,tot.kg-tot.aff)/1000,1)+'</td><td colspan="10"></td></tr></tbody></table>'
+    + '<p class="hint" style="margin-top:10px">Déchargé = poids net pesé à l\'usine. Reste à usiner = déchargé − ce qui est déjà affecté à un lot d\'usinage (onglet Lots &amp; export). Sacs et palettes requis = lots à former (reste ÷ '+sachNb(tpl)+' t, arrondi au-dessus) × '+sachNb(spl)+' sacs et × '+sachNb(palLot)+' palettes. Rythme = tonnes reçues sur les 14 derniers jours ÷ 14.</p></div></div>';
+  return h;
+}
 function renderSacherieTab(){
   if (!state.sachCharge){ chargerSacherie().then(()=>render()); return '<div class="panel"><div class="hint" style="padding:18px">Chargement de la sacherie…</div></div>'; }
   const P = state.sachParam || { sacs_par_lot:385, tonnes_par_lot:25, sacs_par_palette:40 };
@@ -5910,6 +5978,7 @@ function renderSacherieTab(){
     + '<label class="field" style="margin:0;">Sacs par palette<br>'+sachIn('sacherie_param',1,'sacs_par_palette',spp,80)+'</label>'
     + '<div class="hint" style="margin:0;">1 lot = '+sachNb(tpl)+' T = '+sachNb(spl)+' sacs = '+sachNb(Math.ceil(spl/spp))+' palettes <span style="opacity:.75">(la dernière n\'est pas pleine)</span></div></div></div>';
 
+  html += sachDechargeHtml(P, spl, tpl, spp);
   // ---- Stock par usine ----
   const S = state.sachStock||[];
   const lig = S.map(r=>{
