@@ -51,7 +51,7 @@ case "$MODE" in
     ( crontab -l 2>/dev/null | grep -vF "$SCRIPT" ) | crontab -
     echo "Planification retiree."
     exit 0 ;;
-  ""|--dry-run|--diag|--diag-detail|--diag-lien|--diag-recep) ;;
+  ""|--dry-run|--diag|--diag-detail|--diag-lien|--diag-recep|--diag-essais) ;;
   *) echo "Option inconnue : $MODE"; exit 2 ;;
 esac
 
@@ -190,6 +190,27 @@ CAMP=$(grep -oE '"name": *"Camp_Id", *"value": *'"'"'[0-9]+'"'"'' "$PAGE" | grep
 EXP=$(grep -oE 'Exp_Id", *"value": *[^}]*' "$PAGE" | grep -oE "[0-9]+" | tail -1)
 [ -n "$CAMP" ] || { journal "Attention : campagne non lue dans la page, valeur 26 utilisee."; CAMP=26; }
 [ -n "$EXP" ]  || { journal "Attention : exportateur non lu dans la page, valeur 009 utilisee."; EXP=009; }
+
+# --- Diagnostic : plusieurs facons de demander la page detail (rien n'est envoye) ---
+if [ "$MODE" = "--diag-essais" ]; then
+  ID="${2:-1162728}"
+  echo "=== Cookies de session (noms seulement) : $(awk 'NF>=7 && $1 !~ /^#/ {print $6}' "$CJ" | sort -u | tr '\n' ' ')"
+  essai() { # $1 = libelle, puis les arguments de curl
+    local L="$1"; shift
+    local C; C=$("${CURLB[@]}" -D "$JS" -o "$PAGE" -w '%{http_code}' "$@")
+    echo "[$L] HTTP $C, $(wc -c < "$PAGE") octets, « Fournisseur » : $(grep -c 'Fournisseur' "$PAGE"), « Aucune donn » : $(grep -c 'Aucune donn' "$PAGE"), cookies recus : $(grep -i -c '^set-cookie' "$JS")"
+  }
+  H1=(-H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' -H 'Accept-Language: fr-FR,fr;q=0.9' -H 'Upgrade-Insecure-Requests: 1')
+  essai "1 minuscule + en-tetes navigateur" "${H1[@]}" -e "$BASE/Pesee/ConnaissementValidation" "$BASE/pesee/ConnaissementDetails/$ID"
+  essai "2 majuscule Pesee"                  "${H1[@]}" -e "$BASE/Pesee/ConnaissementValidation" "$BASE/Pesee/ConnaissementDetails/$ID"
+  essai "3 avec ?id="                        "${H1[@]}" -e "$BASE/Pesee/ConnaissementValidation" "$BASE/pesee/ConnaissementDetails?id=$ID"
+  essai "4 sans referer"                     "${H1[@]}" "$BASE/pesee/ConnaissementDetails/$ID"
+  essai "5 POST"                             "${H1[@]}" -X POST -d '' -e "$BASE/Pesee/ConnaissementValidation" "$BASE/pesee/ConnaissementDetails/$ID"
+  C0=$("${CURLB[@]}" -D "$JS" -o "$PAGE" -w '%{http_code}' "$BASE/Pesee/ConnaissementValidation")
+  essai "6 apres rechargement de la page de validation" "${H1[@]}" -e "$BASE/Pesee/ConnaissementValidation" "$BASE/pesee/ConnaissementDetails/$ID"
+  echo "--- Un autre connaissement, pour comparer (le plus ancien de la liste) :"
+  exit 0
+fi
 
 # --- Diagnostic : page « Liste des receptions » (Tracabilite) : colonnes et adresse de la liste (rien n'est envoye) ---
 if [ "$MODE" = "--diag-recep" ]; then
