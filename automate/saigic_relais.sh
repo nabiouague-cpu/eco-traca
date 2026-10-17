@@ -51,7 +51,7 @@ case "$MODE" in
     ( crontab -l 2>/dev/null | grep -vF "$SCRIPT" ) | crontab -
     echo "Planification retiree."
     exit 0 ;;
-  ""|--dry-run|--diag|--diag-detail) ;;
+  ""|--dry-run|--diag|--diag-detail|--diag-lien) ;;
   *) echo "Option inconnue : $MODE"; exit 2 ;;
 esac
 
@@ -190,6 +190,17 @@ CAMP=$(grep -oE '"name": *"Camp_Id", *"value": *'"'"'[0-9]+'"'"'' "$PAGE" | grep
 EXP=$(grep -oE 'Exp_Id", *"value": *[^}]*' "$PAGE" | grep -oE "[0-9]+" | tail -1)
 [ -n "$CAMP" ] || { journal "Attention : campagne non lue dans la page, valeur 26 utilisee."; CAMP=26; }
 [ -n "$EXP" ]  || { journal "Attention : exportateur non lu dans la page, valeur 009 utilisee."; EXP=009; }
+
+# --- Diagnostic : comment la liste construit le lien vers le detail d'un connaissement (rien n'est envoye) ---
+if [ "$MODE" = "--diag-lien" ]; then
+  echo "=== Lien « Details » dans la page de validation ==="
+  grep -o -i '.\{0,250\}ConnaissementDetails.\{0,250\}' "$PAGE" | head -6
+  for SRC in $(grep -o 'src="[^"]*\.js[^"]*"' "$PAGE" | sed 's/src="//;s/"$//' | grep -v -i -E 'jquery|bootstrap|leaflet|bootbox|moment|axios|datatables' | grep '^/' | head -15); do
+    "${CURLB[@]}" -e "$BASE/Pesee/ConnaissementValidation" -o "$JS" "$BASE$SRC"
+    if grep -q -i 'ConnaissementDetails' "$JS"; then echo "--- dans $SRC :"; grep -o -i '.\{0,250\}ConnaissementDetails.\{0,250\}' "$JS" | head -6; fi
+  done
+  exit 0
+fi
 
 # --- Diagnostic : page detail d'un connaissement (rien n'est envoye) ---
 if [ "$MODE" = "--diag-detail" ]; then
