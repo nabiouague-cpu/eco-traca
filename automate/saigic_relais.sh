@@ -51,7 +51,7 @@ case "$MODE" in
     ( crontab -l 2>/dev/null | grep -vF "$SCRIPT" ) | crontab -
     echo "Planification retiree."
     exit 0 ;;
-  ""|--dry-run|--diag|--diag-detail|--diag-lien) ;;
+  ""|--dry-run|--diag|--diag-detail|--diag-lien|--diag-recep) ;;
   *) echo "Option inconnue : $MODE"; exit 2 ;;
 esac
 
@@ -190,6 +190,23 @@ CAMP=$(grep -oE '"name": *"Camp_Id", *"value": *'"'"'[0-9]+'"'"'' "$PAGE" | grep
 EXP=$(grep -oE 'Exp_Id", *"value": *[^}]*' "$PAGE" | grep -oE "[0-9]+" | tail -1)
 [ -n "$CAMP" ] || { journal "Attention : campagne non lue dans la page, valeur 26 utilisee."; CAMP=26; }
 [ -n "$EXP" ]  || { journal "Attention : exportateur non lu dans la page, valeur 009 utilisee."; EXP=009; }
+
+# --- Diagnostic : page « Liste des receptions » (Tracabilite) : colonnes et adresse de la liste (rien n'est envoye) ---
+if [ "$MODE" = "--diag-recep" ]; then
+  C=$("${CURLB[@]}" -e "$BASE/Pesee/ConnaissementValidation" -o "$PAGE" -w '%{http_code}' "$BASE/Tracabilite/Connaissements")
+  echo "=== Liste des receptions : HTTP $C, $(wc -c < "$PAGE") octets ==="
+  cp "$PAGE" "$DIR/saigic_recep.html"
+  echo "--- colonnes du tableau :"
+  python3 - "$PAGE" <<'PY'
+import re, html, sys
+t = open(sys.argv[1], encoding='utf-8', errors='replace').read()
+t = re.sub(r'<(script|style)\b.*?</\1>', ' ', t, flags=re.S | re.I)
+print(" | ".join(re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]+>', ' ', c))).strip() for c in re.findall(r'<th\b[^>]*>(.*?)</th>', t, re.S | re.I)))
+PY
+  echo "--- champs de recherche :"; grep -o -i '<\(input\|select\)[^>]*\(id\|name\)="[^"]*"' "$PAGE" | grep -o '\(id\|name\)="[^"]*"' | sort -u | tr '\n' ' '; echo
+  echo "--- adresses de la liste (ajax) :"; grep -n -i -E "sAjaxSource|ajax *[:(]|url *:|getJSON|\.post\(|\.get\(" "$PAGE" | cut -c1-200 | head -15
+  exit 0
+fi
 
 # --- Diagnostic : comment la liste construit le lien vers le detail d'un connaissement (rien n'est envoye) ---
 if [ "$MODE" = "--diag-lien" ]; then
