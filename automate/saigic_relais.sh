@@ -205,6 +205,13 @@ fi
 # --- Diagnostic : page detail d'un connaissement (rien n'est envoye) ---
 if [ "$MODE" = "--diag-detail" ]; then
   ID="${2:-}"; case "$ID" in ''|*[!0-9]*) echo "Usage : $0 --diag-detail <connaiss_id>   (ex. 1162728)"; exit 2 ;; esac
+  # comme dans le navigateur : on demande d'abord la liste (filtres campagne / exportateur), puis on ouvre le detail
+  DD0=$(date -d "$(date +%Y-%m-01) -1 month" +%d/%m/%Y); DF0=$(date +%d/%m/%Y)
+  "${CURLB[@]}" -G --max-time 90 -H 'X-Requested-With: XMLHttpRequest' -H 'Accept: application/json, text/javascript, */*; q=0.01' \
+    -e "$BASE/Pesee/ConnaissementValidation" --data-urlencode "sEcho=1" --data-urlencode "iColumns=11" \
+    --data-urlencode "iDisplayStart=0" --data-urlencode "iDisplayLength=200" --data-urlencode "Prdt_Id=2" --data-urlencode "Camp_Id=$CAMP" --data-urlencode "Exp_Id=$EXP" \
+    --data-urlencode "DateDebut=$DD0" --data-urlencode "DateFin=$DF0" --data-urlencode "TexteRecherche=" --data-urlencode "Statut=3" --data-urlencode "Trace=" \
+    -o "$JS" -w 'liste demandee d abord : HTTP %{http_code}\n' "$BASE/Pesee/ConnaissementValidation"
   CD=$("${CURLB[@]}" -e "$BASE/Pesee/ConnaissementValidation" -o "$PAGE" -w '%{http_code}' "$BASE/pesee/ConnaissementDetails/$ID")
   echo "=== Detail du connaissement $ID : HTTP $CD, $(wc -c < "$PAGE") octets ==="
   cp "$PAGE" "$DIR/saigic_detail_$ID.html" && echo "Page enregistree dans $DIR/saigic_detail_$ID.html"
