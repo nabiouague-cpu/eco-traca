@@ -3677,7 +3677,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-17-194';
+const APP_VERSION = '2026-10-17-195';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -17283,7 +17283,7 @@ function renderDefoVue(){
   if (nEnCours) h += '<div class="panel" style="border-left:4px solid #1f5fa8"><div style="padding:12px 18px"><b>⏳ '+nEnCours+' tâche'+(nEnCours>1?'s':'')+' en cours</b> <span class="hint" style="margin:0 0 0 6px">Quelques minutes. La liste se met à jour toute seule.</span></div></div>';
   h += '<div class="panel"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 18px 8px">'
     + '<div><b>Dossiers des coopératives</b><div class="hint" style="margin:2px 0 0">Une coopérative = un dossier = un seul parcours : <b>Préparation → Whisp → Analyse → Aperçu → Nettoyage → Base finale</b>. Dépose ses fichiers (KML, KMZ, GPX, GeoJSON, shapefile .zip), puis passe d\'un onglet à l\'autre : l\'onglet à faire s\'ouvre tout seul, les suivants attendent que le précédent soit terminé.</div></div>'
-    + '<button class="btn btn-primary" onclick="ouvrirDefoPrep()">🌳 Nouvelle préparation</button></div>';
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="ouvrirDefoCombine()" title="Un seul rapport Excel pour plusieurs coopératives">📊 Rapport combiné</button><button class="btn btn-primary" onclick="ouvrirDefoPrep()">🌳 Nouvelle préparation</button></div></div>';
   if (state.defoIndispo) h += '<div class="hint" style="padding:0 18px 14px;color:var(--warn)">Le suivi des analyses n\'est pas encore disponible sur cette base.</div>';
   else if (!state.defoCharge) h += '<div class="hint" style="padding:0 18px 14px">Chargement…</div>';
   else if (!liste.length) h += '<div class="hint" style="padding:0 18px 14px">Aucune préparation pour le moment.</div>';
@@ -17327,6 +17327,7 @@ function defoModalAnalyseHtml(){
 function defoModalsHtml(){
   const m = state.modal; if (m && m.type==='defoAnalyse') return defoModalAnalyseHtml();
   if (m && m.type==='defoFinale') return defoModalFinaleHtml();
+  if (m && m.type==='defoCombine') return defoModalCombineHtml();
   if (!m || m.type!=='defoPrep') return '';
   const opts = [...state.cooperatives].sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr')).map(c=>'<option value="'+esc(c.nom)+'"></option>').join('');
   return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:520px"><h3>Préparer les polygones</h3><div id="modal-fields">'
@@ -17485,11 +17486,99 @@ function defoFinaleHtml(a, nu){
       + (r.exclus?' · <span style="color:#b36b00">'+fmtNum(r.exclus)+' polygone(s) non repris (voir ci-dessous)</span>':'')+'</div>'
       + (r.controles && r.controles.geojson_egal_registre && r.controles.plotid_uniques && !r.controles.noms_manquants ? '<div class="hint" style="margin:2px 0 0;color:#1e8449">✔ GeoJSON et registre alignés, PlotID uniques, aucun nom manquant</div>' : '<div class="hint" style="margin:2px 0 0;color:#c0392b">⚠ Contrôle non conforme : voir le détail</div>')
       + (r.exclus_detail&&r.exclus_detail.length ? '<details><summary class="hint" style="cursor:pointer;margin:0">Polygones non repris</summary><div class="hint" style="margin:0">'+r.exclus_detail.map(x=>esc(x[0])+' : '+esc(x[1])).join('<br>')+'</div></details>' : '')
-      + defoSec('Fichiers', dl) + '</div>';
+      + defoSec('Fichiers', dl) + '<div style="margin-top:6px"><button class="btn btn-primary btn-compact" id="zip-'+escJs(ok.id)+'" onclick="defoToutTelecharger(\''+escJs(ok.id)+'\')">⬇ Tout télécharger en un clic (.zip)</button></div></div>';
   }
   return h + '</div>';
 }
 function ouvrirDefoFinale(aid){ openModal('defoFinale', { aid }); }
+// ===== Téléchargement groupé de la base finale (GeoJSON + registre + méthode) =====
+async function defoLireFichier(path){
+  const su = await supabaseClient.storage.from('documents-coop').createSignedUrl(path, 600);
+  if (su.error || !su.data) throw new Error('Fichier introuvable : '+path);
+  const r = await fetch(su.data.signedUrl); if (!r.ok) throw new Error('Téléchargement impossible ('+r.status+')');
+  return r.arrayBuffer();
+}
+function defoEnregistrer(blob, nom){ const u = URL.createObjectURL(blob), a = document.createElement('a'); a.href = u; a.download = nom; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(u), 8000); }
+async function defoToutTelecharger(finId){
+  const z = (state.defo||[]).find(q=>q.id===finId); if (!z) return;
+  const fl = defoUtiles(z.fichiers); if (!fl.length){ showToast('Aucun fichier à télécharger.'); return; }
+  if (typeof JSZip==='undefined'){ showToast('Compression indisponible (connexion internet requise).'); return; }
+  const btn = document.getElementById('zip-'+finId); if (btn){ btn.disabled = true; btn.textContent = 'Préparation du zip…'; }
+  try {
+    const zip = new JSZip();
+    for (const f of fl) zip.file(f.nom, await defoLireFichier(f.path));
+    const nom = 'Base_finale_'+String(z.cooperative_nom||'coop').toUpperCase().replace(/[^A-Z0-9]+/g,'_').replace(/^_|_$/g,'')+'.zip';
+    defoEnregistrer(await zip.generateAsync({ type:'blob', compression:'DEFLATE' }), nom);
+    showToast(fl.length+' fichiers dans '+nom, 'success');
+  } catch(e){ showToast('Échec du zip : '+(e.message||e)); }
+  if (btn){ btn.disabled = false; btn.textContent = '⬇ Tout télécharger en un clic (.zip)'; }
+}
+// ===== Rapport combiné de plusieurs coopératives =====
+function defoCombinables(){
+  const tout = state.defo||[], par = new Map();
+  tout.filter(x=>x.etape==='analyse' && x.statut==='terminee' && (x.fichiers||[]).some(f=>f.type==='rapport')).forEach(x=>{
+    const k = String(x.cooperative_nom||'').trim().toUpperCase(); if (!k) return;
+    if (!par.has(k) || String(x.created_at)>String(par.get(k).created_at)) par.set(k, x);
+  });
+  return Array.from(par.values()).sort((a,b)=>String(a.cooperative_nom).localeCompare(String(b.cooperative_nom),'fr'));
+}
+function ouvrirDefoCombine(){ openModal('defoCombine', { choisis:null }); }
+function defoCombineBascule(id, on){ const m = state.modal.payload; if (!m.choisis) m.choisis = new Set(defoCombinables().map(x=>x.id)); if (on) m.choisis.add(id); else m.choisis.delete(id); const b = document.getElementById('cmb-go'); if (b) b.textContent = 'Générer le rapport ('+m.choisis.size+')'; }
+function defoModalCombineHtml(){
+  const L = defoCombinables(), m = state.modal.payload; if (!m.choisis) m.choisis = new Set(L.map(x=>x.id));
+  const lignes = L.map(x=>{
+    const r = x.resume||{}, nb = (r.problemes||[]).reduce((t,p)=>t+(p.nb||0),0);
+    return '<label style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px solid var(--border)"><input type="checkbox" '+(m.choisis.has(x.id)?'checked ':'')+'onchange="defoCombineBascule(\''+escJs(x.id)+'\',this.checked)" style="margin-top:3px"><span><b>'+esc(x.cooperative_nom)+'</b><br><span class="hint" style="margin:0">analyse du '+esc(dateFr(String(x.created_at).slice(0,10)))+' · '+fmtNum(r.polygones||0)+' polygones · '+fmtNum(r.surface_ha||0)+' ha · '+fmtNum(nb)+' polygone(s) concerné(s) par une anomalie</span></span></label>';
+  }).join('');
+  return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:640px;max-height:90vh;overflow:auto"><h3>Rapport combiné</h3>'
+    + '<div class="hint" style="margin:0 0 8px">Un seul fichier Excel pour plusieurs coopératives : une synthèse comparée (une ligne par coopérative) puis le détail des anomalies, avec une colonne « Coopérative ». Pour chaque coopérative, c\'est sa dernière analyse terminée qui est utilisée.</div>'
+    + '<div id="modal-fields">'+(L.length ? lignes : '<div class="hint">Aucune analyse terminée pour le moment.</div>')+'<div id="defo-erreur" style="display:none;color:#c0392b;font-size:13px;margin:6px 0"></div></div>'
+    + '<div class="actions"><button class="btn" onclick="closeModal()">Annuler</button>'+(L.length?'<button class="btn btn-primary" id="cmb-go" onclick="defoCombineGenerer()">Générer le rapport ('+m.choisis.size+')</button>':'')+'</div></div></div>';
+}
+async function defoCombineGenerer(){
+  const m = state.modal.payload, L = defoCombinables().filter(x=>m.choisis.has(x.id));
+  if (!L.length){ defoErreurForm('Coche au moins une coopérative.'); return; }
+  if (typeof XLSX==='undefined'){ defoErreurForm('Excel indisponible (connexion internet requise).'); return; }
+  const btn = document.getElementById('cmb-go'); if (btn){ btn.disabled = true; btn.textContent = 'Préparation…'; }
+  try {
+    // synthèse : une ligne par coopérative, une colonne par type d'anomalie rencontré
+    const cols = new Map();
+    L.forEach(x=>((x.resume||{}).problemes||[]).forEach(p=>{ if (!cols.has(p.code)) cols.set(p.code, p.titre); }));
+    const ent = ['Coopérative','Date de l\'analyse','Polygones','Surface (ha)'].concat(Array.from(cols.values()), ['Producteurs du registre sans polygone','Polygones hors registre']);
+    const lignes = [ent], tot = new Array(ent.length).fill(0);
+    L.forEach(x=>{
+      const r = x.resume||{}, pb = {}; (r.problemes||[]).forEach(p=>{ pb[p.code] = p.nb||0; });
+      const l = [x.cooperative_nom, dateFr(String(x.created_at).slice(0,10)), r.polygones||0, r.surface_ha||0].concat(Array.from(cols.keys()).map(k=>pb[k]||0), [r.reg_producteurs_sans_polygone||0, r.reg_polygones_hors_registre||0]);
+      lignes.push(l); l.forEach((v,i)=>{ if (i>=2 && typeof v==='number') tot[i] += v; });
+    });
+    lignes.push(['TOTAL','',tot[2],Math.round(tot[3]*100)/100].concat(tot.slice(4)));
+    const wb = XLSX.utils.book_new(), ws = XLSX.utils.aoa_to_sheet(lignes);
+    ws['!cols'] = ent.map((e,i)=>({ wch: i===0?30:i===1?14:Math.max(12, Math.min(28, String(e).length*0.7)) })); ws['!freeze'] = { xSplit:1, ySplit:1 }; ws['!autofilter'] = { ref:'A1:'+XLSX.utils.encode_col(ent.length-1)+lignes.length };
+    XLSX.utils.book_append_sheet(wb, ws, 'Synthese');
+    // détail : on reprend les onglets de chaque rapport individuel, avec la coopérative en première colonne
+    const DETAILS = ['Polygones concernés','Parcelles vs registre','Registre sans polygone','Polygones hors registre','Noms remplacés par le code'];
+    const cumul = {}; DETAILS.forEach(d=>{ cumul[d] = { ent:null, lignes:[] }; });
+    for (const x of L){
+      const f = (x.fichiers||[]).find(q=>q.type==='rapport'); if (!f) continue;
+      const wbx = XLSX.read(await defoLireFichier(f.path), { type:'array' });
+      DETAILS.forEach(d=>{
+        const sh = wbx.Sheets[d]; if (!sh) return;
+        const rows = XLSX.utils.sheet_to_json(sh, { header:1, defval:'' }); if (rows.length<2) return;
+        if (!cumul[d].ent) cumul[d].ent = rows[0];
+        rows.slice(1).filter(r=>r.some(v=>v!=='') && String(r[0])!=='Aucun').forEach(r=>cumul[d].lignes.push([x.cooperative_nom].concat(r)));
+      });
+    }
+    DETAILS.forEach(d=>{
+      if (!cumul[d].ent || !cumul[d].lignes.length) return;
+      const w = XLSX.utils.aoa_to_sheet([['Coopérative'].concat(cumul[d].ent)].concat(cumul[d].lignes));
+      w['!cols'] = [{wch:28}].concat(cumul[d].ent.map((e,i)=>({ wch: i===0?30:Math.max(12, Math.min(60, String(e).length+4)) }))); w['!autofilter'] = { ref:'A1:'+XLSX.utils.encode_col(cumul[d].ent.length)+(cumul[d].lignes.length+1) };
+      XLSX.utils.book_append_sheet(wb, w, d.slice(0,31));
+    });
+    const d = new Date(), pad = n=>String(n).padStart(2,'0');
+    XLSX.writeFile(wb, 'Rapport_combine_'+L.length+'_cooperatives_'+d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'.xlsx');
+    closeModal(); showToast('Rapport combiné généré ('+L.length+' coopérative'+(L.length>1?'s':'')+').', 'success');
+  } catch(e){ if (btn){ btn.disabled = false; btn.textContent = 'Générer le rapport ('+L.length+')'; } defoErreurForm('Échec : '+(e.message||e)); }
+}
 const DEFO_ECHELLE = { rayon_km:2, d_bas:5, d_haut:45, c_bas:480, c_haut:660, demi:88 };
 function defoRendementPour(d, E){ const t = Math.min(1, Math.max(0, (d-E.d_bas)/(E.d_haut-E.d_bas))), c = E.c_bas + (E.c_haut-E.c_bas)*t; return [c-E.demi, c, c+E.demi]; }
 function defoLireEchelle(){
