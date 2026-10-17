@@ -3677,7 +3677,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-17-192';
+const APP_VERSION = '2026-10-17-193';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -17867,7 +17867,7 @@ function apPanneau(){
     + '<div class="hint" style="margin:6px 0 0">Polygones : <b>bleu</b> = sans problème ; <b>couleur du traitement</b> (case cochée) = sera retiré ; <b>gris pâle</b> = problème pas traité (case décochée) ; <b>contour jaune</b> = modifié à la main. Cocher fait apparaître la couleur, décocher la fait disparaître.</div></div>'
     + '<div class="ap-sec"><h4>Rapport et application</h4><div style="display:flex;flex-direction:column;gap:6px">'
     + '<button class="ap-btn" onclick="apExcel()">📊 Télécharger le rapport Excel de cet aperçu</button>'
-    + '<button class="ap-btn" onclick="apQgis()" title="Télécharge les polygones et un projet QGIS pour les retouches complexes">🗺 Ouvrir dans QGIS</button>'
+    + '<button class="ap-btn" onclick="apQgis()" title="Projet QGIS prêt à ouvrir : tes polygones, la base ECORIGINE de la zone, le raster cacao, les forêts classées et le satellite">🗺 Ouvrir dans QGIS</button>'
     + '<button class="ap-btn prim" onclick="apAppliquer()">✅ Appliquer : créer la copie nettoyée</button>'
     + '<div class="hint" style="margin:0">L\'application se fait sur une copie : tes fichiers et la base ECORIGINE ne sont jamais modifiés.</div></div></div>';
   side.innerHTML = h; apPanneauSel();
@@ -18035,8 +18035,7 @@ function apTelecharger(nom, texte, type){
   const u = URL.createObjectURL(new Blob([texte], { type:type })), a = document.createElement('a');
   a.href = u; a.download = nom; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(u), 5000);
 }
-function apQgis(){
-  if (!AP) return;
+function apQgisGeojson(){
   const D = AP.data, feats = [];
   D.polys.forEach(p=>{
     if (AP.supp.has(p.i)) return;
@@ -18044,17 +18043,57 @@ function apQgis(){
     feats.push({ type:'Feature', properties:{ Name:p.n, id:p.i, surface_ha:Math.round(AP.ha.get(p.i)*1000)/1000, problemes:apProblemes(p).join(' ; '), sera_retire:r?(AP_NOMS[r]||r):'', modifie_apercu:AP.mod.has(p.i)?'oui':'' }, geometry:g });
   });
   const coop = String(D.nom||'coop'), slug = coop.replace(/[^A-Za-z0-9]+/g,'_').replace(/^_|_$/g,'');
-  const d = new Date(), pad = n => String(n).padStart(2,'0');
-  const base = slug+'_QGIS_'+d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'_'+pad(d.getHours())+pad(d.getMinutes());
-  apTelecharger(base+'.geojson', JSON.stringify({ type:'FeatureCollection', name:slug, features:feats }), 'application/geo+json');
-  setTimeout(()=>apTelecharger(base+'.qgs', apQgisProjet(base+'.geojson', base, coop), 'application/xml'), 600);
-  apDialogue('<b>🗺 Ouvrir dans QGIS</b><div style="margin:8px 0;font-size:13px;line-height:1.55">'
-    + '<b>1.</b> Deux fichiers viennent d\'être téléchargés dans le même dossier : <b>'+apEsc(base)+'.qgs</b> (le projet) et <b>'+apEsc(base)+'.geojson</b> (les polygones).<br>'
-    + '<b>2.</b> Ouvre le fichier <b>.qgs</b> (clic dans la barre de téléchargement) : QGIS démarre avec tes '+fmtNum(feats.length)+' polygones sur fond satellite.<br>'
-    + '<b>3.</b> Fais tes modifications (déplacement en masse, etc.) et enregistre la couche.<br>'
-    + '<b>4.</b> Reviens dans ORIGEN et dépose le GeoJSON modifié dans une <b>nouvelle préparation</b> : toute la suite (Whisp, analyse) repart de ta version.</div>'
-    + '<div class="hint" style="margin:0">Colonnes utiles dans QGIS : Name (code), problemes, sera_retire. Ne change pas la colonne Name.</div>',
-    [{ t:'OK', prim:true }]);
+  return { feats:feats, coop:coop, slug:slug, texte:JSON.stringify({ type:'FeatureCollection', name:slug, features:feats }) };
+}
+// Version de secours (sans le robot) : polygones + projet QGIS simple, sans base ni raster
+function apQgisLocal(){
+  const q = apQgisGeojson(), d = new Date(), pad = n => String(n).padStart(2,'0');
+  const base = q.slug+'_QGIS_'+d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'_'+pad(d.getHours())+pad(d.getMinutes());
+  apTelecharger(base+'.geojson', q.texte, 'application/geo+json');
+  setTimeout(()=>apTelecharger(base+'.qgs', apQgisProjet(base+'.geojson', base, q.coop), 'application/xml'), 600);
+  apDialogueRemplacer('<b>🗺 Ouvrir dans QGIS</b><div style="margin:8px 0;font-size:13px;line-height:1.55">Le projet complet n\'a pas pu être préparé ; voici une version simple. Deux fichiers viennent d\'être téléchargés dans le même dossier : <b>'+apEsc(base)+'.qgs</b> (à ouvrir) et <b>'+apEsc(base)+'.geojson</b>. Elle contient tes polygones sur fond satellite, sans la base ECORIGINE ni le raster cacao.</div>', [{ t:'OK', prim:true }]);
+}
+function apDialogueRemplacer(html, boutons){ const o = document.getElementById('ap-dlg'); if (o) o.remove(); if (document.getElementById('ap-root')) apDialogue(html, boutons); }
+async function apQgis(){
+  if (!AP) return;
+  const aid = AP.aid, q = apQgisGeojson();
+  const id = genId('ad'), path = 'defo/'+id+'/entrees/polygones_qgis.geojson';
+  apDialogueRemplacer('<b>🗺 Préparation du projet QGIS…</b><div style="margin:8px 0;font-size:13px;line-height:1.55">Le robot assemble : tes '+fmtNum(q.feats.length)+' polygones, la base ECORIGINE la plus récente autour de ta zone, le raster des zones cacaoyères, les forêts classées et le fond satellite. Compte 1 à 3 minutes ; ne ferme pas l\'aperçu.</div>', [{ t:'Annuler' }]);
+  let ok = false;
+  try {
+    const up = await supabaseClient.storage.from('documents-coop').upload(path, new Blob([q.texte], { type:'application/geo+json' }), { upsert:true });
+    if (up.error) throw up.error;
+    const a = (state.defo||[]).find(z=>z.id===aid) || {};
+    const ins = await supabaseClient.from('analyses_defo').insert({ id:id, cooperative_id:a.cooperative_id||null, cooperative_nom:a.cooperative_nom||q.coop, etape:'qgis', statut:'demandee',
+      entrees:{ analyse_id:aid, polygones:{ nom:'polygones_qgis.geojson', path:path } }, demande_par:(state.session&&state.session.user&&state.session.user.email)||null });
+    if (ins.error) throw ins.error;
+    carteLancerRobot(); ok = true;
+  } catch(e){ console.warn('qgis', e); }
+  if (!ok){ if (AP) apQgisLocal(); return; }
+  const t0 = Date.now();
+  while (AP && AP.aid===aid && document.getElementById('ap-dlg') && Date.now()-t0 < 8*60*1000){
+    await new Promise(r=>setTimeout(r, 4000));
+    const r = await supabaseClient.from('analyses_defo').select('statut,fichiers,erreur,resume').eq('id', id).maybeSingle();
+    const x = r.data; if (!x) continue;
+    if (x.statut==='erreur'){ if (AP) apQgisLocal(); return; }
+    if (x.statut==='terminee'){
+      const f = (x.fichiers||[]).find(z=>z.type==='qgis'); if (!f){ if (AP) apQgisLocal(); return; }
+      const su = await supabaseClient.storage.from('documents-coop').createSignedUrl(f.path, 3600, { download:f.nom });
+      const url = su.data && su.data.signedUrl; if (!url){ if (AP) apQgisLocal(); return; }
+      const res = x.resume || {};
+      if (!AP) return;
+      apDialogueRemplacer('<b>🗺 Projet QGIS prêt</b><div style="margin:8px 0;font-size:13px;line-height:1.6">'
+        + '<a class="ap-btn prim" style="display:inline-block;text-decoration:none" href="'+apEsc(url)+'" download="'+apEsc(f.nom)+'">⬇ Télécharger '+apEsc(f.nom)+' ('+fmtNum(Math.round((f.taille||0)/1048576*10)/10)+' Mo)</a><br><br>'
+        + '<b>1.</b> Extrais le .zip (clic droit → Extraire tout) : <b>ne l\'ouvre pas directement depuis le zip</b>.<br>'
+        + '<b>2.</b> Dans le dossier extrait, ouvre le fichier <b>.qgs</b> : QGIS démarre avec toutes les couches.<br>'
+        + '<b>3.</b> Fais tes modifications dans la couche « polygones (à retoucher) » et enregistre.<br>'
+        + '<b>4.</b> Reviens dans ORIGEN et dépose ce GeoJSON modifié dans une <b>nouvelle préparation</b> : Whisp et l\'analyse repartent de ta version.</div>'
+        + '<div class="hint" style="margin:0"><b>Couches :</b> tes polygones (jaune) · '+(res.base_parcelles!=null?'base ECORIGINE de la zone, '+fmtNum(res.base_parcelles)+' parcelles ('+apEsc(res.base_source||'')+', noir)':'<span style="color:#c0392b">base ECORIGINE indisponible</span>')+' · zones cacaoyères BNETD 2020 (orange, '+(res.cacao_erreur?'<span style="color:#c0392b">indisponible</span>':'raster')+') · forêts classées (vert) · satellite. Ne change pas la colonne <b>Name</b>.</div>',
+        [{ t:'Fermer', prim:true }]);
+      return;
+    }
+  }
+  if (AP && AP.aid===aid && document.getElementById('ap-dlg')) apDialogueRemplacer('<b>Toujours en préparation</b><div style="margin:8px 0;font-size:13px">Le robot met plus de temps que prévu. Réessaie dans quelques minutes en recliquant sur « Ouvrir dans QGIS ».</div>', [{ t:'OK', prim:true }]);
 }
 function apExcel(){
   const D = AP.data, c = AP.calc, ord = D.ordre.filter(a=>AP.actions.has(a));
