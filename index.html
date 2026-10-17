@@ -3691,7 +3691,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-17-197';
+const APP_VERSION = '2026-10-17-198';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -17485,7 +17485,11 @@ function defoAnalyseParties(a){
 function defoAnalyseCarte(a){
   const P = defoAnalyseParties(a);
   let h = '<div style="border:1px solid var(--border);border-radius:10px;padding:12px 14px">' + P.entete + P.erreur;
-  if (P.termine) h += P.resume + P.netInfo + P.problemes + P.apres + defoFinaleHtml(a) + defoProposerHtml(a);
+  if (P.termine){
+    const clos = (state.defo||[]).some(z=>z.etape==='base_finale' && z.statut==='terminee' && z.entrees && z.entrees.analyse_id===a.id);
+    const pr = clos ? '<details style="margin-top:10px"><summary style="cursor:pointer;color:#2c5fae;font-weight:600">🗄 Base d\'origine de la coopérative : classée (base finale produite) — voir l\'historique des problèmes</summary>'+P.problemes+'</details>' : P.problemes;
+    h += P.resume + P.netInfo + pr + P.apres + defoFinaleHtml(a) + defoProposerHtml(a);
+  }
   return h + '</div>';
 }
 
@@ -17496,7 +17500,7 @@ function defoFinaleHtml(a, nu){
   const enCours = fins.find(z=>z.statut==='demandee'||z.statut==='en_cours'), ok = fins.find(z=>z.statut==='terminee'), err = fins[0] && fins[0].statut==='erreur' ? fins[0] : null;
   const aGmr = !!(a.entrees && a.entrees.gmr);
   let h = (nu ? '<div>' : '<div style="margin-top:12px;padding:10px 12px;border:1px dashed var(--border);border-radius:8px"><b>Base finale</b>')
-    + '<div class="hint" style="margin:2px 0 6px">Produit <b>Geolocalisation_'+esc(a.cooperative_nom||'')+'.geojson</b> et <b>Registre_'+esc(a.cooperative_nom||'')+'.xlsx</b> (modèle vert) à partir de '+(et.dernier?'la copie nettoyée la plus récente ('+fmtNum(et.dernier.resume.restants)+' polygones)':'<b>tes polygones d\'origine (aucun nettoyage fait)</b>')+'. Surface et coordonnées viennent des polygones. La base ECORIGINE n\'est pas touchée.</div>';
+    + '<div class="hint" style="margin:2px 0 6px">Produit <b>Geolocalisation_'+esc(a.cooperative_nom||'')+'.geojson</b> et <b>Registre_'+esc(a.cooperative_nom||'')+'.xlsx</b> (modèle vert) à partir de '+(et.dernier?'la copie nettoyée la plus récente ('+fmtNum(et.dernier.resume.restants)+' polygones)':'<b>tes polygones d\'origine (aucun nettoyage fait)</b>')+'. Surface et coordonnées viennent des polygones. Une fois produite, la coopérative est ajoutée automatiquement à la base ECORIGINE (nouvelle version, sans téléchargement).</div>';
   if (!aGmr) h += '<div class="hint" style="color:#b36b00;margin:0">Il faut le registre GMR dans l\'analyse pour produire la base finale.</div>';
   else if (enCours) h += '<div style="color:#1f5fa8;font-weight:600">⏳ Production en cours… <span class="hint" style="margin:0">'+carteDepuis(enCours)+'</span></div>';
   else h += '<button class="btn btn-primary btn-compact" '+(et.enCours?'disabled ':'')+'onclick="ouvrirDefoFinale(\''+aid+'\')">📦 Produire la base finale</button>';
@@ -17508,6 +17512,9 @@ function defoFinaleHtml(a, nu){
       + (r.exclus?' · <span style="color:#b36b00">'+fmtNum(r.exclus)+' polygone(s) non repris (voir ci-dessous)</span>':'')+'</div>'
       + (r.controles && r.controles.geojson_egal_registre && r.controles.plotid_uniques && !r.controles.noms_manquants ? '<div class="hint" style="margin:2px 0 0;color:#1e8449">✔ GeoJSON et registre alignés, PlotID uniques, aucun nom manquant</div>' : '<div class="hint" style="margin:2px 0 0;color:#c0392b">⚠ Contrôle non conforme : voir le détail</div>')
       + (r.exclus_detail&&r.exclus_detail.length ? '<details><summary class="hint" style="cursor:pointer;margin:0">Polygones non repris</summary><div class="hint" style="margin:0">'+r.exclus_detail.map(x=>esc(x[0])+' : '+esc(x[1])).join('<br>')+'</div></details>' : '')
+      + (r.base_ecorigine ? (r.base_ecorigine.erreur ? '<div class="hint" style="margin:2px 0 0;color:#c0392b">⚠ Non ajoutée à la base ECORIGINE : '+esc(r.base_ecorigine.erreur)+'</div>'
+            : r.base_ecorigine.version ? '<div class="hint" style="margin:2px 0 0;color:#2c5fae;font-weight:600">✔ Ajoutée à la base ECORIGINE : v'+r.base_ecorigine.version+' ('+fmtNum(r.base_ecorigine.parcelles_base)+' parcelles, +'+fmtNum(r.base_ecorigine.ajoutes)+(r.base_ecorigine.remplaces?', '+fmtNum(r.base_ecorigine.remplaces)+' remplacées':'')+'). Les prochaines analyses utilisent cette version.</div>'
+            : '<div class="hint" style="margin:2px 0 0">Base ECORIGINE : '+esc(r.base_ecorigine.ignoree||'non modifiée')+'</div>') : '')
       + defoSec('Fichiers', dl) + '<div style="margin-top:6px"><button class="btn btn-primary btn-compact" id="zip-'+escJs(ok.id)+'" onclick="defoToutTelecharger(\''+escJs(ok.id)+'\')">⬇ Tout télécharger en un clic (.zip)</button></div></div>';
   }
   return h + '</div>';
