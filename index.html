@@ -3691,7 +3691,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-17-196';
+const APP_VERSION = '2026-10-17-197';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -17420,16 +17420,23 @@ function defoProblemesHtml(a, et){
   const r = et.dernier ? et.dernier.resume : a.resume; const pb = (r&&r.problemes)||[];
   const aid = escJs(a.id), bloque = !!et.enCours;
   const idx = c=>{ const i = DEFO_ORDRE.indexOf(c); return i<0 ? 99 : i; };
-  const g1 = pb.filter(p=>p.bouton && p.niveau!=='decision' && p.niveau!=='info').sort((x,y)=>idx(x.code)-idx(y.code));
+  // une fois la base finale produite, ces trois cas sont réglés par construction (le registre final part des polygones gardés)
+  const fin = (state.defo||[]).filter(z=>z.etape==='base_finale' && z.statut==='terminee' && z.entrees && z.entrees.analyse_id===a.id).sort((x,y)=>String(y.created_at).localeCompare(String(x.created_at)))[0] || null;
+  const AUTO = { producteurs_sans_polygone:"Ces producteurs n'ont plus de polygone : la base finale ne les reprend pas" + (fin&&fin.resume&&fin.resume.producteurs ? ' (registre final : '+fmtNum(fin.resume.producteurs)+' producteurs).' : '.'),
+                 doublons_code:"Un seul polygone par PlotID dans la base finale (contrôle : PlotID uniques).",
+                 hors_registre:"Ces polygones ne sont pas repris dans la base finale." };
+  const auto = p => !!(fin && AUTO[p.code]);
+  const g1 = pb.filter(p=>p.bouton && p.niveau!=='decision' && p.niveau!=='info' && !auto(p)).sort((x,y)=>idx(x.code)-idx(y.code));
   const g2 = pb.filter(p=>p.niveau==='decision');
-  const g3 = pb.filter(p=>g1.indexOf(p)<0 && g2.indexOf(p)<0);
+  const g4 = pb.filter(p=>auto(p));
+  const g3 = pb.filter(p=>g1.indexOf(p)<0 && g2.indexOf(p)<0 && g4.indexOf(p)<0);
   const ligne = (p, num)=>{
-    const t = p.niveau==='decision' ? ['#fff4dc','#7a5200'] : p.niveau==='info' ? ['#eef1f0','#5f6b68'] : ['#fdecea','#c0392b'];
-    const btn = p.bouton ? '<button class="btn-ghost btn-compact" style="min-width:96px;font-weight:600;border:1px solid var(--accent);color:var(--accent)" '+(bloque?'disabled ':'')+'onclick="defoAppliquer(\''+aid+'\',\''+escJs(p.code)+'\')">'+esc(p.bouton)+'</button>' : '<span class="hint" style="margin:0">à contrôler</span>';
+    const t = auto(p) ? ['#e6f0fa','#2c5fae'] : p.niveau==='decision' ? ['#fff4dc','#7a5200'] : p.niveau==='info' ? ['#eef1f0','#5f6b68'] : ['#fdecea','#c0392b'];
+    const btn = auto(p) ? '<span style="color:#2c5fae;font-weight:600;font-size:12px">✔ traité dans la base finale</span>' : p.bouton ? '<button class="btn-ghost btn-compact" style="min-width:96px;font-weight:600;border:1px solid var(--accent);color:var(--accent)" '+(bloque?'disabled ':'')+'onclick="defoAppliquer(\''+aid+'\',\''+escJs(p.code)+'\')">'+esc(p.bouton)+'</button>' : '<span class="hint" style="margin:0">à contrôler</span>';
     return '<tr style="vertical-align:middle;border-bottom:1px solid var(--border)">'
       + '<td style="padding:8px 10px"><b>'+(num?num+'. ':'')+esc(p.titre)+'</b><div class="hint" style="margin:0">'+esc(p.detail||'')+'</div></td>'
       + '<td style="text-align:center;background:'+t[0]+';border-left:1px solid var(--border);border-right:1px solid var(--border)"><span style="display:inline-block;min-width:46px;padding:3px 10px;border-radius:999px;background:#fff;border:1.5px solid '+t[1]+';color:'+t[1]+';font-weight:800;font-size:13.5px">'+fmtNum(p.nb)+'</span></td>'
-      + '<td style="padding:8px 14px">'+esc(p.action||'')+'</td>'
+      + '<td style="padding:8px 14px">'+esc(auto(p) ? AUTO[p.code] : (p.action||''))+'</td>'
       + '<td style="text-align:center;background:#f8fbf9;border-left:1px solid var(--border);white-space:nowrap">'+btn+'</td></tr>';
   };
   const titre = t=>'<tr><td colspan="4" style="background:#f1f5f3;font-weight:700;padding:6px 8px;border-top:1px solid var(--border)">'+t+'</td></tr>';
@@ -17437,9 +17444,10 @@ function defoProblemesHtml(a, et){
   if (g1.length) lignes += titre('À corriger — dans l\'ordre standard') + g1.map((p,i)=>ligne(p, i+1)).join('');
   if (g2.length) lignes += titre('À décider — jamais appliqué d\'office') + g2.map(p=>ligne(p)).join('');
   if (g3.length) lignes += titre('À contrôler — rien à supprimer') + g3.map(p=>ligne(p)).join('');
+  if (g4.length) lignes += titre('Réglé par la base finale — rien à faire') + g4.map(p=>ligne(p)).join('');
   let h = '<div style="font-weight:700;margin-bottom:4px">Problèmes détectés</div><div style="overflow-x:auto"><table class="data-table" style="font-size:12.5px;width:100%;table-layout:fixed"><colgroup><col style="width:34%"><col style="width:96px"><col><col style="width:130px"></colgroup><thead><tr><th style="text-align:left">Problème</th><th style="text-align:center">Nombre</th><th style="text-align:left;padding-left:14px">Ce qu\'il y a à faire</th><th style="text-align:center">Action</th></tr></thead><tbody>'+(lignes||'<tr><td colspan="4" class="hint">Aucun problème détecté.</td></tr>')+'</tbody></table></div>';
   if (g1.length) h += '<div style="margin-top:8px"><button class="btn btn-primary btn-compact" '+(bloque?'disabled ':'')+'onclick="defoAppliquerTout(\''+aid+'\')">Tout appliquer dans l\'ordre standard ('+g1.length+' action'+(g1.length>1?'s':'')+')</button> <span class="hint" style="margin:0 0 6px 6px">Les numéros donnent l\'ordre d\'application.</span></div>';
-  else if (pb.length) h += '<div style="margin-top:8px;color:#1e8449;font-weight:600">✅ Plus aucune suppression à faire.</div>';
+  else if (pb.length) h += '<div style="margin-top:8px;color:#1e8449;font-weight:600">✅ Plus aucune suppression à faire.'+(fin?' <span class="hint" style="margin:0 0 0 4px;font-weight:400">Les lignes restantes sont des signaux à contrôler ou sont réglées par la base finale.</span>':'')+'</div>';
   return h;
 }
 function defoAnalyseParties(a){
