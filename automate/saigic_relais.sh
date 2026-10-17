@@ -413,7 +413,8 @@ fi
 
 # --- Etape 7 : detail de chaque connaissement (departement, sous-prefecture, localites) -> provenance du cacao ---
 # Ne touche jamais au compteur d'echecs. Au plus 15 pages detail par passage, une seule fois par connaissement (cache local).
-if [ "$DRY" != "1" ]; then
+# Desactivee tant que la page detail du SAIGIC ne renvoie rien au robot (diagnostic du 17/10/2026) : activer avec RELAIS_DETAILS=1.
+if [ "$DRY" != "1" ] && [ "${RELAIS_DETAILS:-0}" = "1" ]; then
   DETAILS_URL="${RELAIS_URL_DETAILS:-${RELAIS_URL}-details}"
   CACHE_DET="$DIR/.saigic_details.json"
   IDS=$(python3 - "$MERGED" "$TOUS" "$CACHE_DET" <<'PY'
