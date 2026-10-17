@@ -194,7 +194,11 @@ EXP=$(grep -oE 'Exp_Id", *"value": *[^}]*' "$PAGE" | grep -oE "[0-9]+" | tail -1
 # --- Diagnostic : plusieurs facons de demander la page detail (rien n'est envoye) ---
 if [ "$MODE" = "--diag-essais" ]; then
   ID="${2:-1162728}"
-  echo "=== Cookies de session (noms seulement) : $(awk 'NF>=7 && $1 !~ /^#/ {print $6}' "$CJ" | sort -u | tr '\n' ' ')"
+  echo "=== Cookies de session (noms seulement) : $(sed 's/^#HttpOnly_//' "$CJ" | awk -F'\t' 'NF>=7 {print $6}' | sort -u | tr '\n' ' ')"
+  echo "=== Liste des producteurs du connaissement avec des codes sous-prefecture possibles (taille > 433 octets = des producteurs sont revenus) :"
+  for SPF in 0840 084 08 08400 084002 0840020 08400200 KAADE GUIGLO; do
+    "${CURLB[@]}" -G -H 'X-Requested-With: XMLHttpRequest' -e "$BASE/pesee/ConnaissementDetails/$ID" --data-urlencode "cnsement_id=$ID" --data-urlencode "codeSpf=$SPF" -o "$JS" -w "  codeSpf=$SPF : HTTP %{http_code}, %{size_download} octets\n" "$BASE/Tracabilite/getCnsementProducteurs"
+  done
   essai() { # $1 = libelle, puis les arguments de curl
     local L="$1"; shift
     local C; C=$("${CURLB[@]}" -D "$JS" -o "$PAGE" -w '%{http_code}' "$@")
