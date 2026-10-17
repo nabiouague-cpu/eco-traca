@@ -3691,7 +3691,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-17-204';
+const APP_VERSION = '2026-10-17-205';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -17508,17 +17508,18 @@ function defoProblemesHtml(a, et){
   const idx = c=>{ const i = DEFO_ORDRE.indexOf(c); return i<0 ? 99 : i; };
   // une fois la base finale produite, ces trois cas sont réglés par construction (le registre final part des polygones gardés)
   const fin = (state.defo||[]).filter(z=>z.etape==='base_finale' && z.statut==='terminee' && z.entrees && z.entrees.analyse_id===a.id).sort((x,y)=>String(y.created_at).localeCompare(String(x.created_at)))[0] || null;
-  const AUTO = { producteurs_sans_polygone:"Ces producteurs n'ont plus de polygone : la base finale ne les reprend pas" + (fin&&fin.resume&&fin.resume.producteurs ? ' (registre final : '+fmtNum(fin.resume.producteurs)+' producteurs).' : '.'),
+  const AUTO = { producteurs_sans_polygone: fin ? "Ces producteurs n'ont pas de polygone : la base finale ne les reprend pas" + (fin.resume&&fin.resume.producteurs ? ' (registre final : '+fmtNum(fin.resume.producteurs)+' producteurs).' : '.') : "Rien à faire : à la production de la base finale, le registre final ne reprend que les producteurs qui ont un polygone.",
                  doublons_code:"Un seul polygone par PlotID dans la base finale (contrôle : PlotID uniques).",
                  hors_registre:"Ces polygones ne sont pas repris dans la base finale." };
-  const auto = p => !!(fin && AUTO[p.code]);
+  // les producteurs sans polygone sont écartés d'office à la production de la base finale : jamais une action à faire
+  const auto = p => !!(AUTO[p.code] && (fin || p.code==='producteurs_sans_polygone'));
   const g1 = pb.filter(p=>p.bouton && p.niveau!=='decision' && p.niveau!=='info' && !auto(p)).sort((x,y)=>idx(x.code)-idx(y.code));
   const g2 = pb.filter(p=>p.niveau==='decision');
   const g4 = pb.filter(p=>auto(p));
   const g3 = pb.filter(p=>g1.indexOf(p)<0 && g2.indexOf(p)<0 && g4.indexOf(p)<0);
   const ligne = (p, num)=>{
     const t = auto(p) ? ['#e6f0fa','#2c5fae'] : p.niveau==='decision' ? ['#fff4dc','#7a5200'] : p.niveau==='info' ? ['#eef1f0','#5f6b68'] : ['#fdecea','#c0392b'];
-    const btn = auto(p) ? '<span style="color:#2c5fae;font-weight:600;font-size:12px">✔ traité dans la base finale</span>' : p.bouton ? '<button class="btn-ghost btn-compact" style="min-width:96px;font-weight:600;border:1px solid var(--accent);color:var(--accent)" '+(bloque?'disabled ':'')+'onclick="defoAppliquer(\''+aid+'\',\''+escJs(p.code)+'\')">'+esc(p.bouton)+'</button>' : '<span class="hint" style="margin:0">à contrôler</span>';
+    const btn = auto(p) ? '<span style="color:#2c5fae;font-weight:600;font-size:12px">'+(fin?'✔ traité dans la base finale':'↪ réglé par la base finale')+'</span>' : p.bouton ? '<button class="btn-ghost btn-compact" style="min-width:96px;font-weight:600;border:1px solid var(--accent);color:var(--accent)" '+(bloque?'disabled ':'')+'onclick="defoAppliquer(\''+aid+'\',\''+escJs(p.code)+'\')">'+esc(p.bouton)+'</button>' : '<span class="hint" style="margin:0">à contrôler</span>';
     return '<tr style="vertical-align:middle;border-bottom:1px solid var(--border)">'
       + '<td style="padding:8px 10px"><b>'+(num?num+'. ':'')+esc(p.titre)+'</b><div class="hint" style="margin:0">'+esc(p.detail||'')+'</div></td>'
       + '<td style="text-align:center;background:'+t[0]+';border-left:1px solid var(--border);border-right:1px solid var(--border)"><span style="display:inline-block;min-width:46px;padding:3px 10px;border-radius:999px;background:#fff;border:1.5px solid '+t[1]+';color:'+t[1]+';font-weight:800;font-size:13.5px">'+fmtNum(p.nb)+'</span></td>'
@@ -17559,7 +17560,7 @@ function defoAnalyseParties(a){
       const det = Object.keys(n.cumul_retires||{}).filter(k=>n.cumul_retires[k]).map(k=>fmtNum(n.cumul_retires[k])+' '+(DEFO_MOTIFS[k]||k)).join(', ');
       const dl = defoUtiles(et.dernier.fichiers).map(defoChip).join('');
       P.apres = '<div style="margin-top:10px;padding:8px 10px;background:#eef6ef;border-radius:8px;font-size:12.5px"><b>Après nettoyage (copie) : '+fmtNum(n.restants)+' polygones · '+fmtNum(n.restants_ha)+' ha</b>'
-        + (det ? '<div class="hint" style="margin:2px 0 0">Retirés : '+esc(det)+(n.producteurs_retires&&n.producteurs_retires.length?' · '+fmtNum(n.producteurs_retires.length)+' producteur(s) sans polygone à retirer du registre final':'')+'</div>' : '')
+        + (det ? '<div class="hint" style="margin:2px 0 0">Retirés : '+esc(det)+(n.producteurs_retires&&n.producteurs_retires.length?' · '+fmtNum(n.producteurs_retires.length)+' producteur(s) sans polygone, non repris dans le registre final':'')+'</div>' : '')
         + defoSec('Fichiers', dl) + '</div>';
     }
     if (et.enCours) P.netInfo += '<div style="margin-top:6px;color:#1f5fa8;font-weight:600">⏳ Nettoyage en cours… <span class="hint" style="margin:0">'+carteDepuis(et.enCours)+'</span></div>';
