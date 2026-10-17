@@ -197,20 +197,25 @@ if [ "$MODE" = "--diag-detail" ]; then
   CD=$("${CURLB[@]}" -e "$BASE/Pesee/ConnaissementValidation" -o "$PAGE" -w '%{http_code}' "$BASE/pesee/ConnaissementDetails/$ID")
   echo "=== Detail du connaissement $ID : HTTP $CD, $(wc -c < "$PAGE") octets ==="
   cp "$PAGE" "$DIR/saigic_detail_$ID.html" && echo "Page enregistree dans $DIR/saigic_detail_$ID.html"
-  echo "--- champ txtCodeSpf dans la page :"; grep -o '<input[^>]*txtCodeSpf[^>]*>' "$PAGE" | head -3
-  echo "--- textes de la zone detail :"; grep -c "Aucune donn" "$PAGE" | sed 's/^/ occurrences de « Aucune donnee » : /'
-  echo "--- producteurs du connaissement (appel ajax, sans code sous-prefecture) :"
-  CP=$("${CURLB[@]}" -G -H 'X-Requested-With: XMLHttpRequest' -e "$BASE/pesee/ConnaissementDetails/$ID" \
-    --data-urlencode "cnsement_id=$ID" --data-urlencode "codeSpf=" -o "$JS" -w '%{http_code}' "$BASE/Tracabilite/getCnsementProducteurs")
-  echo "HTTP $CP, $(wc -c < "$JS") octets"
-  python3 - "$JS" <<'PY'
+  echo "--- La page (sans parametre) contient-elle les champs ? $(grep -c 'Fournisseur' "$PAGE") occurrence(s) de « Fournisseur », $(grep -c 'Aucune donn' "$PAGE") « Aucune donnee »"
+  shift 2
+  for SPF in "" "$@"; do
+    echo "=== codeSpf='$SPF' ==="
+    CP=$("${CURLB[@]}" -G -H 'X-Requested-With: XMLHttpRequest' -e "$BASE/pesee/ConnaissementDetails/$ID" \
+      --data-urlencode "cnsement_id=$ID" --data-urlencode "codeSpf=$SPF" -o "$JS" -w '%{http_code}' "$BASE/Tracabilite/getCnsementProducteurs")
+    echo "producteurs : HTTP $CP, $(wc -c < "$JS") octets"
+    python3 - "$JS" <<'PY'
 import re, html, sys
 t = open(sys.argv[1], encoding='utf-8', errors='replace').read()
 t = re.sub(r'<(script|style)\b.*?</\1>', ' ', t, flags=re.S | re.I)
 t = re.sub(r'<[^>]+>', ' | ', t)
-print(re.sub(r'(\s*\|\s*)+', ' | ', re.sub(r'\s+', ' ', html.unescape(t)))[:1800])
+print("  ", re.sub(r'(\s*\|\s*)+', ' | ', re.sub(r'\s+', ' ', html.unescape(t)))[:500])
 PY
-  lire_detail_page "$PAGE" "$ID" | head -12
+    if [ -n "$SPF" ]; then
+      CQ=$("${CURLB[@]}" -e "$BASE/Pesee/ConnaissementValidation" -o "$PAGE" -w '%{http_code}' "$BASE/pesee/ConnaissementDetails/$ID?codeSpf=$SPF")
+      echo "page avec ?codeSpf= : HTTP $CQ, $(grep -c 'Fournisseur' "$PAGE") « Fournisseur », $(grep -c 'Aucune donn' "$PAGE") « Aucune donnee »"
+    fi
+  done
   exit 0
 fi
 
