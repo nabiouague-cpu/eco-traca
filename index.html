@@ -3693,7 +3693,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-18-213';
+const APP_VERSION = '2026-10-18-214';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4189,6 +4189,7 @@ async function refreshDemandesTab(){
   } else {
     state.demandeFichiers = [];
   }
+  { const g = await supabaseClient.from('demande_fichiers').select('*').is('demande_id', null).eq('type','product_movements'); state.fichesGenerees = g.error ? (state.fichesGenerees||[]) : (g.data||[]); }
   await qcChargerReponsesAdmin();
   render();
 }
@@ -4411,6 +4412,10 @@ function fichiersParTypePourCoop(coopId){
     }
     dossiers[cleType].fichiers.push({ path:f.path, nom:nomAffiche, nomDonne, date:f.uploaded_at, titre:titreType, source:'demande_fichiers', sourceId:f.id, origine:'coop', statutDemande:dem&&dem.statut,
       fiche: cleType==='product_movements' && f.type==='product_movements' && !!f.connaissement });   // fiche de tracabilite (Excel) envoyee par la cooperative : geree par le panneau archivage / vidage
+  });
+  // Fiches generees par ECORIGINE (Tracer un volume) : rangees dans le dossier de la cooperative, sans demande
+  (state.fichesGenerees||[]).filter(f=>f.cooperative_id===coopId).forEach(f=>{
+    dossiers['product_movements'].fichiers.push({ path:f.path, nom:f.nom||f.path.split('/').pop(), date:f.uploaded_at, source:'demande_fichiers', sourceId:f.id, origine:'ecorigine', fiche:true });
   });
   // Documents de conformite (checklist doc_check) -- source distincte de
   // demande_fichiers, oubliee jusqu'ici : ces fichiers sont deposes directement
@@ -5367,7 +5372,7 @@ async function ocSupprimerConnaissementInterne(coopId, numero, achatId){
     lies.forEach(x=>{ x.connaissement = ''; });
   }
   const tr = ocTracageCourant();
-  if (tr && tr.connaissement && tr.connaissement.numero===numero){ tr.connaissement = null; tr.ticketFait = false; ocTracageSauver(tr); }
+  if (tr && tr.connaissement && tr.connaissement.numero===numero){ tr.connaissement = null; tr.ticketFait = false; ocTracageSauver(tr); await ocFicheStockeeConnaissement(tr, null); }
 }
 // Supprime le traçage de volume en cours (ses achats producteurs) et, s'il y en a un, le connaissement
 // qui lui est lié -- pour tout reproduire proprement.
@@ -5437,7 +5442,7 @@ async function ocTracageAnnulerDerniereOk(){
     } else if (d.cle==='conn'){
       const ac = state.achats.find(x=>x.cooperative_id===tr.coopId && x.connaissement===tr.connaissement.numero && !x.producteur_id);
       if (ac) await ocSupprimerConnaissementInterne(tr.coopId, tr.connaissement.numero, ac.id);
-      else { tr.connaissement = null; tr.ticketFait = false; ocTracageSauver(tr); }
+      else { tr.connaissement = null; tr.ticketFait = false; ocTracageSauver(tr); await ocFicheStockeeConnaissement(tr, null); }
     } else if (d.cle==='lien'){
       const lies = ocTracageAchatsProducteurs(tr);
       if (lies.length){
@@ -5445,7 +5450,7 @@ async function ocTracageAnnulerDerniereOk(){
         if (error) throw error;
         lies.forEach(a=>{ a.connaissement = ''; });
       }
-      const vuId = tr.vuId; tr.connaissement = null; tr.ticketFait = false; tr.vuId = null; ocTracageSauver(tr);
+      const vuId = tr.vuId; tr.connaissement = null; tr.ticketFait = false; tr.vuId = null; ocTracageSauver(tr); await ocFicheStockeeConnaissement(tr, null);
       await ocTracageRestaurerVu(vuId);
     } else {
       const producteurs = ocTracageAchatsProducteurs(tr), ids = producteurs.map(x=>x.id);
@@ -5454,6 +5459,7 @@ async function ocTracageAnnulerDerniereOk(){
         if (error) throw error;
         state.achats = state.achats.filter(x=>!ids.includes(x.id));
       }
+      await ocFicheStockeeSupprimer(tr);
       if (tr.ficheGenerationId) await supabaseClient.from('fiches_tracabilite_generees').delete().eq('id', tr.ficheGenerationId);
       const vuOrigine = tr.origine && tr.origine.vuId;
       ocTracageSauver(null);
@@ -9049,6 +9055,7 @@ async function ocTracageLierConnaissementSaigic(tr, vu){
   }
   tr.connaissement = { numero, achatId:achat.id, poidsNet:Number(vu.poids_net)||null, nombreSacs:Number(vu.nb_sacs)||null, date:iso, source:'saigic' };
   tr.vuId = vu.id; ocTracageSauver(tr);
+  await ocFicheStockeeConnaissement(tr, numero);
   await supabaseClient.from('saigic_connaissements_vus').update({ trace_le:new Date().toISOString() }).eq('id', vu.id);
   state.saigicATracer = (state.saigicATracer||[]).filter(x=>x.id!==vu.id);
 }
@@ -9062,6 +9069,7 @@ async function ocTracageLierAchat(tr, a){
   }
   tr.connaissement = { numero:a.connaissement, achatId:a.id, poidsNet:Number(a.quantite_kg)||null, nombreSacs:Number(a.nombre_sacs)||null, date:a.date, source:'coop' };
   ocTracageSauver(tr);
+  await ocFicheStockeeConnaissement(tr, a.connaissement);
 }
 async function ocTracageRattacher(){
   const tr = ocTracageCourant(); if (!tr) return;
@@ -9074,7 +9082,7 @@ async function ocTracageRattacher(){
     lies.forEach(x=>{ x.connaissement = a.connaissement; });
   }
   tr.connaissement = { numero:a.connaissement, achatId:a.id, poidsNet:Number(a.quantite_kg)||null, nombreSacs:Number(a.nombre_sacs)||null, date:a.date, source:'coop' };
-  ocTracageSauver(tr); showToast('Connaissement '+a.connaissement+' rattaché.', 'success'); render();
+  ocTracageSauver(tr); await ocFicheStockeeConnaissement(tr, a.connaissement); showToast('Connaissement '+a.connaissement+' rattaché.', 'success'); render();
 }
 function renderTracageDirect(tr){
   const coop = coopById(tr.coopId), camp = (state.campagnes||[]).find(c=>c.id===tr.campagneId), conn = tr.connaissement;
@@ -10128,6 +10136,7 @@ async function loadAll(silencieux){
         const { data, error } = await supabaseClient.from('demande_fichiers').select('*').in('demande_id', ids);
         state.demandeFichiers = error ? [] : (data || []);
       } else { state.demandeFichiers = []; }
+      { const g = await supabaseClient.from('demande_fichiers').select('*').is('demande_id', null).eq('type','product_movements'); state.fichesGenerees = g.error ? (state.fichesGenerees||[]) : (g.data||[]); }
     }
     // Sans ceci, state.questionnaireReponses reste a sa valeur initiale (jamais charge) tant que
     // l'onglet "Demandes coopératives" n'a pas ete visite dans cette session -- or le garde-fou de
@@ -10466,6 +10475,41 @@ function ocTelechargerBlob(blob, nomFichier){
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   setTimeout(()=>URL.revokeObjectURL(url), 1500);
 }
+// ---- Fiche generee rangee dans le dossier « Fiches de tracabilite » de la cooperative (stockage documents-coop + demande_fichiers sans demande) ----
+// Chemin : <coop>/fiches_tracabilite/<id de la fiche generee>/<nom du fichier> ; le connaissement est renseigne des qu'il est connu (et suit les liens/annulations du traçage).
+async function ocStockerFicheGeneree(fiche, coopId, genIdFiche, connaissement){
+  try{
+    const path = coopId+'/fiches_tracabilite/'+genIdFiche+'/'+assainirNomFichier(fiche.nomFichier);
+    const up = await supabaseClient.storage.from('documents-coop').upload(path, fiche.blob, { upsert:true, contentType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    if (up.error) throw new Error(up.error.message);
+    const uid = state.session && state.session.user ? state.session.user.id : null;
+    const ligne = { type:'product_movements', path, nom:fiche.nomFichier, cooperative_id:coopId, demande_id:null, connaissement:connaissement||null, uploaded_by:uid };
+    const ins = await supabaseClient.from('demande_fichiers').insert(ligne).select('*').single();
+    if (ins.error){ await supabaseClient.storage.from('documents-coop').remove([path]); throw new Error(ins.error.message); }
+    state.fichesGenerees = (state.fichesGenerees||[]).concat([ins.data]); state.fichesTracabilite = null;
+    return { path, id:ins.data.id };
+  }catch(e){ return { erreur: e && e.message ? e.message : String(e) }; }
+}
+function ocFichesGenereesDe(tr){ return (!tr || !tr.ficheGenerationId || !tr.coopId) ? null : tr.coopId+'/fiches_tracabilite/'+tr.ficheGenerationId+'/'; }
+async function ocFicheStockeeConnaissement(tr, numero){
+  const dossier = ocFichesGenereesDe(tr); if (!dossier) return;
+  try{
+    const { error } = await supabaseClient.from('demande_fichiers').update({ connaissement: numero||null }).eq('type','product_movements').like('path', dossier+'%');
+    if (!error){ (state.fichesGenerees||[]).forEach(f=>{ if (String(f.path).indexOf(dossier)===0) f.connaissement = numero||null; }); state.fichesTracabilite = null; }
+  }catch(e){ console.warn('Fiche rangée : connaissement non mis à jour', e && e.message); }
+}
+async function ocFicheStockeeSupprimer(tr){
+  const dossier = ocFichesGenereesDe(tr); if (!dossier) return;
+  try{
+    const { data } = await supabaseClient.from('demande_fichiers').select('id,path').eq('type','product_movements').like('path', dossier+'%');
+    const lignes = data || [];
+    if (lignes.length){
+      await supabaseClient.storage.from('documents-coop').remove(lignes.map(x=>x.path));
+      await supabaseClient.from('demande_fichiers').delete().in('id', lignes.map(x=>x.id));
+    }
+    state.fichesGenerees = (state.fichesGenerees||[]).filter(f=>String(f.path).indexOf(dossier)!==0); state.fichesTracabilite = null;
+  }catch(e){ console.warn('Fiche rangée : suppression impossible', e && e.message); }
+}
 async function ocGenererFicheTracabiliteDirecte(allocations, sacsArr, datesArr, coopId, campagneId, entete){
   const f = await ocConstruireFicheTracabiliteDirecte(allocations, sacsArr, datesArr, coopId, campagneId, entete);
   ocTelechargerBlob(f.blob, f.nomFichier);
@@ -10642,11 +10686,15 @@ async function submitTracerVolumeDirecte(){
     if (error){ showToast("Échec de l'enregistrement des achats : "+error.message); return; }
     lignes.forEach(l=>state.achats.push(l));
 
+    // 2 bis) la fiche est rangee dans le dossier « Fiches de tracabilite » de la cooperative (meme sans demande ni documents de conformite)
+    const rangee = await ocStockerFicheGeneree(fiche, coopId, genId_, entete.numero || '');
+
     // 3) ce tracage devient la chaine en cours de l'onglet Tracage de volume : l'etape suivante
     //    (connaissement de A transpose vers B) sera pre-remplie avec cette cooperative et ce volume.
     const trNouveau = { coopId, campagneId, ficheGenerationId: genId_, volumeKg, nbSacs, dateDebut, dateFin,
       achatIds: lignes.map(l=>l.id), creeLe: new Date().toISOString(), connaissement: null, ticketFait: false };
     if (pl.mode==='direct') trNouveau.mode = 'direct';
+    if (rangee && rangee.path) trNouveau.fichePath = rangee.path;
     const origVu = pl.mode==='direct' ? null : (itSrc && itSrc.vu);
     if (pl.mode!=='direct' && itSrc) trNouveau.origine = { vuId: itSrc.vu ? itSrc.vu.id : null, code:itSrc.code, coopId: coopSrc || null };
     ocTracageSauver(trNouveau);
@@ -10664,7 +10712,7 @@ async function submitTracerVolumeDirecte(){
     // 4) telechargement de la fiche
     ocTelechargerBlob(fiche.blob, fiche.nomFichier);
     closeModal();
-    showToast(resultat.nbUtilises+' producteur(s) · '+fmtKg(volumeKg)+' · '+nbSacs+' sacs : achats enregistrés et fiche téléchargée'
+    showToast(resultat.nbUtilises+' producteur(s) · '+fmtKg(volumeKg)+' · '+nbSacs+' sacs : achats enregistrés, fiche téléchargée'+(rangee && rangee.path ? ' et rangée dans le dossier Fiches de traçabilité' : ' (non rangée dans le dossier : '+(rangee && rangee.erreur ? rangee.erreur : 'erreur')+')')
       + (resultat.nbUtilises!==nbProd ? ' (nombre de producteurs ajusté de '+nbProd+' à '+resultat.nbUtilises+' pour respecter les plafonds)' : '')+'.', 'success');
   } finally {
     _ocTracerVolumeEnCours = false;
@@ -12611,6 +12659,7 @@ async function genererConnaissement(coopBIdOverride, poidsNetOverride, nombreSac
         date: dateEdition, lieuDepart, campagneId, coopANom };
       tr.ticketFait = false;
       ocTracageSauver(tr);
+      await ocFicheStockeeConnaissement(tr, numeroConnaissement);
     }
   }catch(e){ showToast('Erreur : '+e.message); return null; }
 
