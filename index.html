@@ -3693,7 +3693,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-18-210';
+const APP_VERSION = '2026-10-18-211';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7335,7 +7335,8 @@ async function lotMarquerAgree(id, agree){
 function pipeDetailHtml(L){
   const g = L.g, col = s=>'<div><h4 style="margin:0 0 6px;font-size:12.5px;color:var(--ink-soft)">'+s+'</h4>';
   const tbl = (th, rows, vide)=>rows.length ? '<table class="tbl-fiches" style="font-size:12px"><thead><tr>'+th.map(h=>'<th>'+h+'</th>').join('')+'</tr></thead><tbody>'+rows.join('')+'</tbody></table>' : '<div class="hint" style="margin:0">'+vide+'</div>';
-  let h = '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 22px;padding:4px 2px 6px;text-align:left;">';
+  let h = '<div style="padding:2px 2px 10px;text-align:left"><button class="btn" onclick="lotsRapportClient(\''+escJs(g.client)+'\')">⭳ Rapport d\'usinage du client (Excel)</button> <span class="hint" style="margin:0 0 0 6px">livraisons, lots, OT / BL et composition de chaque lot</span></div>'
+    + '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 22px;padding:4px 2px 6px;text-align:left;">';
   h += col('Contrats ('+g.contrats.length+')') + tbl(['Référence','Période','Volume','Statut'],
     g.contrats.map(c=>'<tr><td>'+esc(c.reference||'—')+'</td><td>'+esc(c.periode_embarquement||'—')+'</td><td class="num">'+pipeTonnes(Number(c.volume_contractuel_kg)||0)+'</td><td>'+esc(c.statut||'')+'</td></tr>'), 'Aucun contrat pour ce client.')+'</div>';
   const conn = g.achats.slice().sort((x,y)=>String(y.date).localeCompare(String(x.date)));
@@ -7938,6 +7939,240 @@ async function lotsExporterDossier(id){
   ch.livraisons.forEach(l=>{ const c = coopById(l.achat.cooperative_id)||{}; l.producteurs.forEach(p=>w6.addRow([c.nom||'', l.achat.connaissement||'', p.nom, p.matricule, p.kg])); }); entete(w6);
   await qcTelechargerClasseur(wb, 'Tracabilite_'+String(lot.numero).replace(/[^A-Za-z0-9]+/g,'_')+'.xlsx');
 }
+// ---- Rapport d'usinage de l'usinier (une feuille par usinage) : lecture et composition automatique des lots ----
+// Modele de l'usinier : « VIDAGE TREMIE (Camions) » = camions vides dans la tremie (code de pesee de l'usine + volume, une colonne par
+// programme), « PRODUCTIONS (LOTS) » = lots produits (N° + poids, une paire de colonnes par programme). Le code de pesee du camion est
+// le meme que celui du connaissement dans ORIGEN : il donne la cooperative. Les lots d'un meme programme sont usines ensemble
+// (ségrégation) : un lot vient du melange des camions de l'usinage, dans l'ordre d'arrivee. Cas particulier (series de lots reservees a une
+// cooperative) : le rapport nomme alors la cooperative au-dessus de ses camions et de ses lots, et un meme numero de lot peut se poursuivre sur
+// plusieurs jours (queue de lot).
+const USINE_CODE_CAMION = /^[A-Z]{1,5}\d{1,4}\s?[-–]\s?\d{2,6}$/;
+const USINE_BRUIT = /^(sechoirs?|silos?|total.*|volume|n°|poids|reusinage.*|freinte.*|dechets.*|brisures.*|grabots.*|balayure.*|petites feves.*|humidite.*|vidage.*|productions.*)$/;
+function usineNorm(t){ return String(t==null?'':t).normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/\s+/g,' ').trim(); }
+function usineCodeNorm(c){ return String(c||'').toUpperCase().replace(/\s+/g,'').replace(/–/g,'-'); }
+function usineProgramme(label){
+  const t = usineNorm(label).replace(/[^a-z]/g,'');
+  if (t==='ra' || t==='rainforest' || t==='rainforestalliance') return 'RA';
+  if (t==='ft' || t==='fairtrade') return 'Fairtrade';
+  if (t==='coh' || t==='cocoahorizons' || t==='cocoahorizon') return 'Cocoa Horizon';
+  if (t==='standard' || t==='std' || t==='utz' || t==='utz' || t==='ordinaire') return 'Ordinaire';
+  return '';
+}
+function usineDateFeuille(nom){
+  const m = String(nom||'').trim().match(/^(\d{1,2})[-./](\d{1,2})[-./](\d{2,4})$/); if (!m) return null;
+  const y = m[3].length===2 ? 2000+Number(m[3]) : Number(m[3]);
+  return y+'-'+String(m[2]).padStart(2,'0')+'-'+String(m[1]).padStart(2,'0');
+}
+function usineEstModele(feuilles){ return feuilles.some(f=>(f.aoa||[]).some(r=>(r||[]).some(c=>usineNorm(c).startsWith('vidage tremie')))); }
+// feuilles : [{ nom, aoa }]  ->  { lots:[{numero, poids, date, date_debut, programme, coop, sacs, feuilles:[]}], camions:[{code, volume, date, programme, coop, feuille}], anomalies:[] }
+function usineLire(feuilles){
+  const lots = new Map(), camions = [], anomalies = [];
+  const vusCamion = new Map();
+  feuilles.forEach((f, idx)=>{
+    const aoa = f.aoa || [];
+    const iV = aoa.findIndex(r=>(r||[]).some(c=>usineNorm(c).startsWith('vidage tremie')));
+    if (iV<0) return;
+    const iP = aoa.findIndex((r,i)=>i>iV && (r||[]).some(c=>{ const t = usineNorm(c); return t.startsWith('productions') }));
+    const iFin = aoa.findIndex((r,i)=>iP>=0 && i>iP && (r||[]).some(c=>usineNorm(c).startsWith('total lots')));
+    const iTot = aoa.findIndex((r,i)=>i>iV && (r||[]).some(c=>usineNorm(c).startsWith('total videes')));
+    const date = usineDateFeuille(f.nom);
+    // programme de chaque colonne (ligne d'en-tete du vidage)
+    const prog = {}; let colMax = 0;
+    (aoa[iV]||[]).forEach((c, k)=>{ const p = usineProgramme(c); if (p){ prog[k] = p; colMax = Math.max(colMax, k); } if (usineNorm(c)==='general') colMax = Math.max(colMax, k-1); });
+    const progDeCol = k=>{ for (let j=k; j>=0; j--) if (prog[j]) return prog[j]; return ''; };
+    const finV = iP>=0 ? iP : (iTot>=0 ? iTot : aoa.length);
+    // --- camions : code en colonne A, volume dans la colonne du programme ; une etiquette de texte en colonne A = cooperative des camions qui suivent
+    let coop = '', nbCamionsFeuille = 0;
+    for (let i=iV+1; i<Math.min(finV, iTot>=0?iTot:finV); i++){
+      const r = aoa[i] || [], a = String(r[0]==null?'':r[0]).trim(); if (!a) continue;
+      if (USINE_CODE_CAMION.test(a.toUpperCase())){
+        let col = -1; for (let k=1; k<=Math.max(colMax+1, 9); k++){ if (typeof r[k]==='number' && r[k]>0){ col = k; break; } }
+        if (col<0) continue;
+        const code = usineCodeNorm(a), c = { code, volume:r[col], date, programme:progDeCol(col), coop:coop||null, feuille:f.nom, rang:idx*1000+i };
+        if (vusCamion.has(code)){ const p = vusCamion.get(code); anomalies.push({ type:'camion_double', texte:'Camion '+code+' vu deux fois : '+p.volume+' kg ('+p.feuille+') puis '+c.volume+' kg ('+f.nom+')' }); }
+        else vusCamion.set(code, c);
+        camions.push(c); nbCamionsFeuille++;
+      } else if (!USINE_BRUIT.test(usineNorm(a))) coop = a.replace(/\s+/g,' ');
+    }
+    if (!nbCamionsFeuille) anomalies.push({ type:'sans_camion', texte:'Feuille '+f.nom+' : aucun camion vidé (lots de queues d\'un usinage précédent ?)' });
+    // --- lots : paires (N°, poids) ; une etiquette de texte dans la colonne du numero = cooperative des lots qui suivent
+    if (iP>=0){
+      const fin = iFin>=0 ? iFin : aoa.length, coopCol = {};
+      const colsNum = Object.keys(prog).map(Number);
+      for (let i=iP+1; i<fin; i++){
+        const r = aoa[i] || [];
+        const note = String(r[0]==null?'':r[0]).trim();
+        colsNum.forEach(k=>{
+          const v = r[k], w = r[k+1];
+          if (typeof v==='string' && v.trim() && !USINE_BRUIT.test(usineNorm(v))){ coopCol[k] = v.trim().replace(/\s+/g,' '); return; }
+          if (typeof v==='number' && typeof w==='number' && w>0){
+            const numero = String(v), sac = note.match(/(\d+)\s*sacs?/i);
+            let L = lots.get(numero);
+            if (!L){ L = { numero, poids:0, date, date_debut:date, programme:prog[k], coop:coopCol[k]||null, sacs:null, feuilles:[], parties:[] }; lots.set(numero, L); }
+            L.poids += w; L.date = date || L.date; L.parties.push({ feuille:f.nom, poids:w });
+            if (!L.feuilles.includes(f.nom)) L.feuilles.push(f.nom);
+            if (sac) L.sacs = Number(sac[1]);
+          }
+        });
+      }
+    }
+  });
+  const liste = Array.from(lots.values()).sort((a,b)=>Number(a.numero)-Number(b.numero));
+  liste.forEach(l=>{ if (l.feuilles.length>1) anomalies.push({ type:'lot_sur_plusieurs_jours', texte:'Lot '+l.numero+' : '+l.parties.map(p=>p.poids+' kg ('+p.feuille+')').join(' + ')+' = '+l.poids+' kg (queue complétée à l\'usinage suivant)', info:true }); });
+  return { lots:liste, camions, anomalies };
+}
+// Composition automatique. achatsParCode : Map code normalise -> achat ; poolAchats : achats a utiliser sans liste de camions (ordre d'arrivee).
+// poidsRecu(a) / solde(a) : fonctions fournies par l'appelant. Retourne { lignes:[{numero, achat, camion, poids_kg, mode}], restes:[...], sansCamion:[...] }
+function usineComposer(lots, camions, achatsParCode, poolAchats, poidsRecu, solde, achatCoop){
+  const lignes = [], restes = [], nonRetrouves = [];
+  const cle = x=>usineNorm(x.coop||'') || ('prog:'+(x.programme||''));
+  const parCle = new Map();
+  lots.forEach(l=>{ const k = cle(l); if (!parCle.has(k)) parCle.set(k, { lots:[], camions:[] }); parCle.get(k).lots.push(l); });
+  camions.forEach(c=>{
+    let k = cle(c);
+    if (!parCle.has(k)){ const ks = Array.from(parCle.keys()); k = ks.length===1 ? ks[0] : (ks.find(x=>x==='prog:'+c.programme) || k); }
+    if (parCle.has(k)) parCle.get(k).camions.push(c);
+  });
+  const dispoAchat = new Map();
+  const reste = a=>dispoAchat.has(a.id) ? dispoAchat.get(a.id) : solde(a);
+  parCle.forEach((g, k)=>{
+    g.lots.sort((a,b)=>String(a.date_debut||'').localeCompare(String(b.date_debut||''))||Number(a.numero)-Number(b.numero));
+    // file des camions (ordre du rapport) ; sans liste de camions : file des achats du pool, par date
+    let file = g.camions.slice().sort((a,b)=>a.rang-b.rang).map(c=>({ camion:c, achat:achatsParCode.get(c.code)||null, kg:null }));
+    const mode = file.length ? 'exact' : 'estime';
+    if (!file.length) file = poolAchats.slice().sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))).map(a=>({ camion:null, achat:a, kg:null }));
+    file.forEach(x=>{ x.kg = x.achat ? reste(x.achat) : (x.camion ? x.camion.volume : 0); if (x.achat && x.camion && !(x.kg>0)) x.kg = 0; });
+    file.forEach(x=>{ if (!x.achat && x.camion) nonRetrouves.push(x.camion); });
+    let i = 0;
+    g.lots.forEach(l=>{
+      let besoin = l.poids;
+      while (besoin > 0.5 && i < file.length){
+        const x = file[i];
+        if (!(x.kg > 0.5)){ i++; continue; }
+        const pris = Math.min(x.kg, besoin);
+        lignes.push({ numero:l.numero, achat:x.achat, camion:x.camion, poids_kg:Math.round(pris), mode });
+        x.kg -= pris; besoin -= pris;
+        if (x.achat) dispoAchat.set(x.achat.id, Math.max(0, reste(x.achat) - pris));
+        if (x.kg <= 0.5) i++;
+      }
+      if (besoin > 0.5) lignes.push({ numero:l.numero, achat:null, camion:null, poids_kg:Math.round(besoin), mode, manque:true });
+    });
+    file.forEach(x=>{ if (x.kg > 0.5) restes.push({ achat:x.achat, camion:x.camion, kg:Math.round(x.kg) }); });
+  });
+  return { lignes, restes, nonRetrouves };
+}
+
+// ---- Rapport d'usinage d'un client (Excel) : livraisons des coopératives, lots produits, OT / BL rattachés, composition de chaque lot ----
+// Modèle : rapport « Cargill JM » d'ECORIGINE (deux blocs côte à côte : livraisons à gauche, lots à droite, totaux en ligne 5, données dès la ligne 7).
+// D = { client, campagne, lots:[...lots_usinage], compo:Map(lotId -> [{achat, kg}]), ot:Map(lotId -> {ot, kg, premier}), coopNom(achat), usineDe(achat) }
+function lotsRapportNomFeuille(nom, pris){
+  let n = String(nom||'Feuille').replace(/[\\\/\?\*\[\]:]/g,' ').replace(/\s+/g,' ').trim().slice(0,28) || 'Feuille';
+  let k = n, i = 2; while (pris.has(k.toLowerCase())){ k = n.slice(0,26)+' '+i; i++; }
+  pris.add(k.toLowerCase()); return k;
+}
+function lotsRapportDonnees(D){
+  const kgNum = x=>Number(x)||0;
+  const lots = D.lots.slice().sort((a,b)=>String(a.date_fin||a.date_production||'').localeCompare(String(b.date_fin||b.date_production||''))||String(a.numero).localeCompare(String(b.numero),'fr',{numeric:true}));
+  // livraisons : toutes celles qui ont servi à ces lots (une ligne par connaissement, poids net complet)
+  const achats = new Map(); lots.forEach(l=>(D.compo.get(l.id)||[]).forEach(x=>{ if (x.achat && !achats.has(x.achat.id)) achats.set(x.achat.id, x.achat); }));
+  const livraisons = Array.from(achats.values()).sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))||String(a.connaissement||'').localeCompare(String(b.connaissement||''),'fr',{numeric:true}))
+    .map(a=>({ date:a.date, coop:D.coopNom(a), camion:a.immat_vehicule||'', conn:a.connaissement||'', kg:kgNum(a.poids_net_produit)||kgNum(a.poids_net)||kgNum(a.quantite_kg), sacs:kgNum(a.nombre_sacs_accepte)||kgNum(a.nombre_sacs), usine:D.usineDe(a), code:a.code_pesee||'' }));
+  const usineDuLot = l=>{ const m = new Map(); (D.compo.get(l.id)||[]).forEach(x=>{ if (!x.achat) return; const u = D.usineDe(x.achat)||''; m.set(u, (m.get(u)||0)+kgNum(x.kg)); }); return Array.from(m.entries()).sort((a,b)=>b[1]-a[1])[0] ? Array.from(m.entries()).sort((a,b)=>b[1]-a[1])[0][0] : (l.site||''); };
+  const lignesLots = lots.map(l=>{ const o = D.ot.get(l.id); return { lot:l, numero:l.numero, date:l.date_fin||l.date_production||'', kg:kgNum(l.poids_sortie_kg), client:l.client||D.client, niveau:l.niveau_tracabilite||'', usine:usineDuLot(l),
+      vendu:o&&o.premier ? o.kg : null, refVendeur:o&&o.premier ? (o.ot.ref_vendeur||o.ot.numero||'') : '', bl:o&&o.premier ? (o.ot.bl_numero||'') : '' }; });
+  return { livraisons, lots:lignesLots };
+}
+function lotsRapportFeuille(wb, titre, entete, liv, lots, avecUsine, avecNiveau){
+  const ws = wb.addWorksheet(titre, { views:[{ state:'frozen', ySplit:3, showGridLines:false }] });
+  const F = { name:'Trebuchet MS', size:9 };
+  const bord = { top:{style:'thin'}, left:{style:'thin'}, bottom:{style:'thin'}, right:{style:'thin'} };
+  const colsG = ['Date de déchargement','Coopérative','Référence camion','N° de connaissement'].concat(avecUsine?['usine de déchargement']:[], ['Poids net','Nombre de sac']);
+  const colsD = ['Date product°','N° Lots','Poids net (KG)','Client','Volume (vendu)'].concat(avecNiveau?['Niveau de traçabilité']:[], ['Réf vendeur','N°BL']);
+  const nG = colsG.length, deb = nG+2;                                   // une colonne vide entre les deux blocs
+  ws.getCell(1,1).value = entete; ws.getCell(1,1).font = { name:'Trebuchet MS', size:11, bold:true };
+  colsG.concat([''], colsD).forEach((t, k)=>{
+    if (!t) return;
+    const c = ws.getCell(3, k+1); c.value = t; c.font = Object.assign({ bold:true }, F);
+    c.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FF70AD47' } }; c.alignment = { horizontal:'center', vertical:'middle', wrapText:true }; c.border = bord;
+  });
+  ws.getRow(3).height = 28;
+  const ixPoids = colsG.indexOf('Poids net')+1, ixSacs = colsG.indexOf('Nombre de sac')+1, ixLotKg = deb+2, ixVendu = deb+4;
+  liv.forEach((x, i)=>{
+    const r = 7+i, v = [x.date?new Date(x.date+'T00:00:00'):null, x.coop, x.camion, x.conn].concat(avecUsine?[x.usine]:[], [x.kg||null, x.sacs||null]);
+    v.forEach((val, k)=>{ const c = ws.getCell(r, k+1); c.value = val; c.font = F; c.alignment = { horizontal:'center' }; if (k===0) c.numFmt = 'dd/mm/yyyy'; if (k===ixPoids-1||k===ixSacs-1) c.numFmt = '#,##0'; });
+  });
+  lots.forEach((x, i)=>{
+    const r = 7+i, v = [x.date?new Date(x.date+'T00:00:00'):null, isNaN(Number(x.numero))?x.numero:Number(x.numero), x.kg||null, x.client, x.vendu].concat(avecNiveau?[x.niveau]:[], [x.refVendeur||null, x.bl||null]);
+    v.forEach((val, k)=>{ const c = ws.getCell(r, deb+k); c.value = val; c.font = F; if (k===0){ c.numFmt = 'dd/mm/yyyy'; c.alignment = { horizontal:'center' }; } if (k===2||k===4) c.numFmt = '#,##0'; });
+  });
+  // totaux (ligne 5), comme dans le modèle
+  const tot = (col, from, to, f)=>{ if (!to) return; const c = ws.getCell(5, col); c.value = { formula:'SUM('+ws.getColumn(col).letter+'7:'+ws.getColumn(col).letter+to+')', result:f }; c.font = Object.assign({ bold:true }, F); c.numFmt = '#,##0'; c.alignment = { horizontal:'center' }; c.border = bord; };
+  ws.getCell(5,1).value = 'TOTAL'; ws.getCell(5,1).font = Object.assign({ bold:true }, F); ws.getCell(5,1).alignment = { horizontal:'center' };
+  tot(ixPoids, 7, 6+liv.length, liv.reduce((s,x)=>s+(x.kg||0),0)); tot(ixSacs, 7, 6+liv.length, liv.reduce((s,x)=>s+(x.sacs||0),0));
+  tot(ixLotKg, 7, 6+lots.length, lots.reduce((s,x)=>s+(x.kg||0),0)); tot(ixVendu, 7, 6+lots.length, lots.reduce((s,x)=>s+(x.vendu||0),0));
+  colsG.forEach((t,k)=>{ ws.getColumn(k+1).width = [14,26,16,22,avecUsine?18:12,12,11][k] || 12; });
+  ws.getColumn(nG+1).width = 2.4;
+  colsD.forEach((t,k)=>{ ws.getColumn(deb+k).width = [13,11,14,18,14,avecNiveau?18:22,avecNiveau?22:14,14][k] || 14; });
+  return ws;
+}
+function lotsRapportConstruire(ExcelJS, D){
+  const R = lotsRapportDonnees(D);
+  const wb = new ExcelJS.Workbook(); wb.creator = 'ORIGEN · ECORIGINE'; wb.created = new Date();
+  const pris = new Set(), titre = 'Rapport d\'usinage — '+D.client+(D.campagne?' — campagne '+D.campagne:'');
+  lotsRapportFeuille(wb, lotsRapportNomFeuille('Rapport '+D.client, pris), titre, R.livraisons, R.lots, false, false);
+  lotsRapportFeuille(wb, lotsRapportNomFeuille('Base', pris), titre, R.livraisons, R.lots, true, false);
+  // un onglet par usine : livraisons déchargées dans cette usine et lots qui en sont issus
+  const usines = Array.from(new Set(R.livraisons.map(x=>x.usine).concat(R.lots.map(x=>x.usine)).filter(Boolean)));
+  usines.forEach(u=>lotsRapportFeuille(wb, lotsRapportNomFeuille(u, pris), titre+' — '+u, R.livraisons.filter(x=>x.usine===u), R.lots.filter(x=>x.usine===u), true, true));
+  // composition de chaque lot : les coopératives qui l'ont formé
+  const ws = wb.addWorksheet(lotsRapportNomFeuille('Composition des lots', pris), { views:[{ state:'frozen', ySplit:3, showGridLines:false }] });
+  const F = { name:'Trebuchet MS', size:9 };
+  ws.getCell(1,1).value = 'Composition des lots — '+D.client+(D.campagne?' — campagne '+D.campagne:''); ws.getCell(1,1).font = { name:'Trebuchet MS', size:11, bold:true };
+  ['N° Lot','Date production','Poids du lot (kg)','Coopérative','N° de connaissement','Référence camion','Code de pesée','Poids pris (kg)','Part du lot (%)'].forEach((t,k)=>{
+    const c = ws.getCell(3,k+1); c.value = t; c.font = Object.assign({ bold:true }, F); c.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FF70AD47' } };
+    c.alignment = { horizontal:'center', vertical:'middle', wrapText:true }; c.border = { top:{style:'thin'}, left:{style:'thin'}, bottom:{style:'thin'}, right:{style:'thin'} };
+  });
+  let r = 4;
+  R.lots.forEach(L=>{
+    const parts = (D.compo.get(L.lot.id)||[]).filter(x=>x.achat);
+    if (!parts.length){ [L.numero, L.date?new Date(L.date+'T00:00:00'):null, L.kg, '— composition non renseignée —'].forEach((v,k)=>{ const c = ws.getCell(r,k+1); c.value = v; c.font = F; if (k===1) c.numFmt = 'dd/mm/yyyy'; if (k===2) c.numFmt = '#,##0'; }); r++; return; }
+    parts.forEach(x=>{
+      const a = x.achat, v = [L.numero, L.date?new Date(L.date+'T00:00:00'):null, L.kg, D.coopNom(a), a.connaissement||'', a.immat_vehicule||'', a.code_pesee||'', Math.round(x.kg), L.kg ? Math.round(1000*x.kg/L.kg)/10 : null];
+      v.forEach((val,k)=>{ const c = ws.getCell(r,k+1); c.value = val; c.font = F; c.alignment = { horizontal:'center' }; if (k===1) c.numFmt = 'dd/mm/yyyy'; if (k===2||k===7) c.numFmt = '#,##0'; if (k===8) c.numFmt = '0.0'; });
+      r++;
+    });
+  });
+  [10,14,14,28,22,16,16,14,12].forEach((w,k)=>{ ws.getColumn(k+1).width = w; });
+  return wb;
+}
+
+function lotsUsineLibelleUsine(a){
+  const code = String(a.code_pesee||'').slice(0,4).toUpperCase();
+  const nom = code ? lotsSiteNom(code) : '';
+  return (nom && nom!==code) ? code+' '+nom : (String(a.usine_dechargement||'').trim() || code || '');
+}
+async function lotsRapportClient(clientNom){
+  let ExcelJS; try{ ExcelJS = await qcChargerExcelJS(); }catch(e){ showToast('Impossible de préparer le classeur : '+e.message, 'error'); return; }
+  const campagneId = (state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : null;
+  const cle = ccClefClient(clientNom);
+  const lots = (state.lotsUsinage||[]).filter(l=>l.client && ccClefClient(l.client)===cle && (!campagneId || l.campagne_id===campagneId));
+  if (!lots.length){ showToast('Aucun lot d\'usinage pour '+clientNom+(campagneId?' dans cette campagne':'')+'.'); return; }
+  const compo = new Map(); lots.forEach(l=>compo.set(l.id, lotsUsinageCompo(l.id).map(x=>({ achat:lotsAchatParId(x.achat_id), kg:Number(x.poids_kg)||0 }))));
+  const ids = new Set(lots.map(l=>l.id)), numLot = new Map(lots.map(l=>[l.id, String(l.numero)])), ot = new Map();
+  (state.lotsExport||[]).forEach(o=>{
+    const tout = lotsExportCompo(o.id), cp = tout.filter(x=>ids.has(x.lot_usinage_id)); if (!cp.length) return;
+    const kg = tout.reduce((s,x)=>s+(Number(x.poids_kg)||0),0);
+    cp.sort((a,b)=>String(numLot.get(a.lot_usinage_id)).localeCompare(String(numLot.get(b.lot_usinage_id)),'fr',{numeric:true}));
+    cp.forEach((x,i)=>ot.set(x.lot_usinage_id, { ot:o, kg, premier:i===0 }));
+  });
+  const D = { client:clientNom, campagne:lotsCampagneNom(campagneId), lots, compo, ot,
+    coopNom:a=>(coopById(a.cooperative_id)||{}).nom || a.fournisseur_saigic || '', usineDe:lotsUsineLibelleUsine };
+  let wb; try{ wb = lotsRapportConstruire(ExcelJS, D); }catch(e){ showToast('Rapport impossible : '+e.message, 'error'); return; }
+  const sansCompo = lots.filter(l=>!(compo.get(l.id)||[]).some(x=>x.achat)).length;
+  await qcTelechargerClasseur(wb, 'Rapport_usinage_'+String(clientNom).replace(/[^A-Za-z0-9_-]+/g,'_')+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
+  showToast('Rapport de '+clientNom+' prêt : '+lots.length+' lot'+(lots.length>1?'s':'')+(sansCompo?' ('+sansCompo+' sans composition renseignée)':'')+'.', sansCompo?'':'success');
+}
+
 // ---- Import du rapport d'usinage (Excel) -------------------------------------------------------------
 // L'usinier produit les lots en reprenant la numerotation deja attribuee par ORIGEN (series de
 // numerotation) : son rapport de production liste donc des numeros de lots qui permettent, a eux seuls,
@@ -7953,6 +8188,8 @@ async function lotsUsinageImporterExcel(input){
   let wb;
   try{ wb = XLSX.read(await fichier.arrayBuffer(), { type:'array', cellDates:true }); }
   catch(e){ showToast('Fichier illisible : '+e.message, 'error'); return; }
+  const feuillesUsine = wb.SheetNames.map(n=>({ nom:String(n).trim(), aoa:XLSX.utils.sheet_to_json(wb.Sheets[n], { header:1, defval:'' }) }));
+  if (usineEstModele(feuillesUsine)) return lotsUsineImporterModele(feuillesUsine, campagne_id, fichier.name);
   const aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header:1, defval:'' });
   if (!aoa.length){ showToast('Le fichier est vide.', 'error'); return; }
   let ligneEntetes = -1;
@@ -7987,6 +8224,73 @@ async function lotsUsinageImporterExcel(input){
   state.modal = { type:'lotsUsinageImport', payload: { campagne_id, lignes, nomFichier: fichier.name } };
   render();
 }
+// Rapport au modele de l'usinier : lots (poids cumules sur les jours), camions (codes de pesee) relies aux livraisons d'ORIGEN, composition proposee.
+function lotsUsineAchatsParCode(){
+  const m = new Map();
+  (state.achats||[]).filter(a=>a.code_pesee && !a.producteur_id).forEach(a=>m.set(usineCodeNorm(a.code_pesee), a));
+  return m;
+}
+function lotsUsineCalculerCompo(lots, camions){
+  // lots : [{numero, poids, date_debut, programme, coop, client}] ; retourne le resultat de usineComposer (exact si le rapport liste les camions, sinon ordre d'arrivee par client)
+  const parCode = lotsUsineAchatsParCode();
+  const poids = lotsAchatPoidsRecu, solde = a=>lotsAchatSolde(a);
+  if (camions.length) return usineComposer(lots, camions, parCode, [], poids, solde, null);
+  const groupes = new Map();
+  lots.forEach(l=>{ const k = l.client||''; if (!groupes.has(k)) groupes.set(k, []); groupes.get(k).push(l); });
+  const out = { lignes:[], restes:[], nonRetrouves:[] };
+  groupes.forEach((ls, client)=>{
+    const pool = lotsAchatsRecus().filter(a=>!client || achatClientEffectif(a)===client);
+    const r = usineComposer(ls.map(l=>Object.assign({}, l, { coop:null })), [], parCode, pool, poids, solde, null);
+    out.lignes.push(...r.lignes); out.restes.push(...r.restes);
+  });
+  return out;
+}
+function lotsUsineImporterModele(feuilles, campagne_id, nomFichier){
+  const R = usineLire(feuilles);
+  if (!R.lots.length){ showToast('Aucun lot de production trouvé dans ce rapport d\'usinage.', 'error'); return; }
+  const existants = new Set((state.lotsUsinage||[]).filter(l=>l.campagne_id===campagne_id).map(l=>String(l.numero).trim()));
+  const parCode = lotsUsineAchatsParCode();
+  const lignes = R.lots.map(l=>{
+    const serie = lotsSerieParNumero(campagne_id, l.numero), dejaExistant = existants.has(String(l.numero));
+    return { numero:String(l.numero), poids_sortie_kg:l.poids, site:serie&&serie.site_code ? (lotsSiteNom(serie.site_code)||null) : null, site_code:serie?(serie.site_code||null):null,
+      programme:serie?(serie.programme||null):null, contrat_client_id:serie?(serie.contrat_client_id||null):null,
+      date_production:l.date||null, date_debut:l.date_debut||null, serie_id:serie?serie.id:null, client:serie?(serie.client||null):null,
+      type_cacao:serie?serie.type_cacao:(l.programme||null), niveau_tracabilite:serie?serie.niveau_tracabilite:null,
+      coop_rapport:l.coop||null, prog_rapport:l.programme||'', sacs:l.sacs, nb_jours:l.feuilles.length, dejaExistant, inclure:!dejaExistant };
+  });
+  const camionsTrouves = R.camions.filter(c=>parCode.has(c.code)).length;
+  const pl = { campagne_id, lignes, nomFichier, modele:true, camions:R.camions, anomalies:R.anomalies, camionsTrouves, composer:true, brut:R.lots };
+  pl.apercu = lotsUsineApercuCompo(pl);
+  state.modal = { type:'lotsUsinageImport', payload:pl };
+  render();
+}
+function lotsUsineLotsRetenus(pl){
+  return pl.lignes.filter(l=>l.inclure).map(l=>{ const b = pl.brut.find(x=>String(x.numero)===l.numero) || {}; return { numero:l.numero, poids:l.poids_sortie_kg, date_debut:l.date_debut||'', programme:b.programme||l.prog_rapport||'', coop:b.coop||null, client:l.client||'' }; });
+}
+function lotsUsineApercuCompo(pl){
+  try{ return lotsUsineCalculerCompo(lotsUsineLotsRetenus(pl), pl.camions||[]); }catch(e){ return { lignes:[], restes:[], nonRetrouves:[], erreur:e.message }; }
+}
+function lotsUsineBlocModele(pl){
+  if (!pl.modele) return '';
+  const A = pl.apercu || { lignes:[], restes:[], nonRetrouves:[] };
+  const nCam = (pl.camions||[]).length;
+  // composition proposee, lot par lot : cooperatives et tonnages
+  const parLot = new Map(); A.lignes.forEach(x=>{ if (!parLot.has(x.numero)) parLot.set(x.numero, []); parLot.get(x.numero).push(x); });
+  const lib = x=>{ if (x.manque) return '<span style="color:#b9770e">⚠ '+fmtNum(x.poids_kg)+' kg sans camion</span>'; const a = x.achat, coop = a ? coopById(a.cooperative_id) : null; return esc(coop ? coop.nom : (x.camion ? x.camion.code+' (non retrouvé)' : '—'))+' <span class="hint" style="margin:0">'+fmtNum(x.poids_kg)+' kg</span>'; };
+  const lignes = pl.lignes.filter(l=>l.inclure && parLot.has(l.numero)).slice(0, 60).map(l=>{
+    const parts = parLot.get(l.numero), agr = new Map();
+    parts.forEach(x=>{ const k = x.manque ? '__m' : (x.achat ? x.achat.id : (x.camion?x.camion.code:'?')); const o = agr.get(k); if (o) o.poids_kg += x.poids_kg; else agr.set(k, Object.assign({}, x)); });
+    return '<tr><td><b>'+esc(l.numero)+'</b></td><td class="num">'+fmtNum(l.poids_sortie_kg)+'</td><td>'+Array.from(agr.values()).map(lib).join(' · ')+'</td></tr>';
+  }).join('');
+  const mode = (A.lignes[0]||{}).mode==='estime' ? 'estimée : ordre d\'arrivée des camions (le rapport ne liste pas les camions)' : 'exacte : camions du rapport reliés aux livraisons par le code de pesée';
+  return '<div style="margin-top:12px;padding:10px 12px;border:1px solid var(--bord,#d9e2dc);border-radius:8px">'
+    + '<div style="font-weight:600;margin-bottom:4px">Camions et composition des lots</div>'
+    + '<div class="hint" style="margin:0 0 6px">'+nCam+' camion'+(nCam>1?'s':'')+' lu'+(nCam>1?'s':'')+' dans le rapport, dont <b>'+pl.camionsTrouves+'</b> retrouvé'+(pl.camionsTrouves>1?'s':'')+' dans ORIGEN par leur code de pesée'+(nCam&&pl.camionsTrouves<nCam?' (<b>'+(nCam-pl.camionsTrouves)+'</b> non retrouvé'+((nCam-pl.camionsTrouves)>1?'s':'')+')':'')+'. Composition '+mode+'.</div>'
+    + ((pl.anomalies||[]).filter(a=>!a.info).length ? '<div style="color:#b9770e;font-size:12.5px;margin:0 0 6px">'+(pl.anomalies||[]).filter(a=>!a.info).map(a=>'⚠ '+esc(a.texte)).join('<br>')+'</div>' : '')
+    + (lignes ? '<div class="achats-defile" style="max-height:28vh;overflow:auto"><table class="tbl-fiches"><thead><tr><th>N° lot</th><th>Poids (kg)</th><th>Coopératives du lot</th></tr></thead><tbody>'+lignes+'</tbody></table></div>' : '<div class="hint" style="margin:0">Aucune composition possible : aucune livraison reliée.</div>')
+    + '<label style="display:flex;gap:8px;align-items:center;margin-top:8px"><input type="checkbox" '+(pl.composer?'checked':'')+' onchange="lotsUsineCocherCompo(this.checked)"> Composer les lots automatiquement à l\'import</label></div>';
+}
+function lotsUsineCocherCompo(v){ const pl = state.modal && state.modal.type==='lotsUsinageImport' ? state.modal.payload : null; if (pl) pl.composer = !!v; }
 // Ne refait pas un render() complet (meme principe que la grille de series) : seul le compteur du bouton
 // "Importer" est mis a jour directement dans le DOM.
 function lotsUsinageImportCocher(i, coche){
@@ -8017,12 +8321,22 @@ async function lotsUsinageImportValider(){
       id: genId('lu'), numero:l.numero, campagne_id: pl.campagne_id, client:l.client||null, site:l.site||null,
       type_cacao:l.type_cacao||null, niveau_tracabilite:l.niveau_tracabilite||null, date_production:l.date_production||null,
       serie_id:l.serie_id||null, poids_sortie_kg:l.poids_sortie_kg||null, statut:'ouvert', updated_at:maintenant,
+      site_code:l.site_code||null, programme:l.programme||null, contrat_client_id:l.contrat_client_id||null, date_debut:l.date_debut||null, date_fin:l.date_production||null,
     }));
     const { error } = await supabaseClient.from('lots_usinage').insert(rows);
     if (error) throw error;
     const nonRattaches = aImporter.filter(l=>!l.serie_id).length;
+    let nCompo = 0, nSansCompo = 0;
+    if (pl.modele && pl.composer){
+      const idParNumero = new Map(rows.map(r=>[String(r.numero), r.id]));
+      await chargerLots();                       // les soldes tiennent compte des lots deja composes
+      const res = lotsUsineCalculerCompo(lotsUsineLotsRetenus(pl), pl.camions||[]);
+      const compo = res.lignes.filter(x=>x.achat && x.poids_kg>0).map(x=>({ id:genId('lua'), lot_id:idParNumero.get(String(x.numero)), achat_id:x.achat.id, poids_kg:x.poids_kg })).filter(x=>x.lot_id);
+      if (compo.length){ const { error: e2 } = await supabaseClient.from('lots_usinage_achats').insert(compo); if (e2) throw e2; }
+      nCompo = new Set(compo.map(x=>x.lot_id)).size; nSansCompo = rows.length - nCompo;
+    }
     await chargerLots(); closeModal();
-    showToast(aImporter.length+' lot(s) importé(s)'+(nonRattaches?' · '+nonRattaches+' non rattaché(s) à un client (numéro hors des séries connues)':'')+'.', 'success');
+    showToast(aImporter.length+' lot(s) importé(s)'+(nonRattaches?' · '+nonRattaches+' non rattaché(s) à un client (numéro hors des séries connues)':'')+(pl.modele&&pl.composer ? ' · composition automatique : '+nCompo+' lot(s)'+(nSansCompo?', '+nSansCompo+' sans camion retrouvé':'') : '')+'.', 'success');
   }catch(e){ showToast('Échec : '+e.message); }
 }
 // ---- Lots d'usinage : fiche, composition, statut, suppression ----
@@ -8267,12 +8581,12 @@ function lotsModalsHtml(){
       + '<div id="modal-fields"><div class="achats-defile" style="max-height:52vh;overflow:auto"><table class="tbl-fiches"><thead><tr><th></th><th>N° lot</th><th>Poids (kg)</th><th>Série / client détecté</th><th>Site</th><th>Date</th></tr></thead><tbody>'
       + pl.lignes.map((l,i)=>'<tr'+(l.dejaExistant?' style="opacity:.55"':'')+'>'
           + '<td><input type="checkbox" '+(l.inclure?'checked':'')+' onchange="lotsUsinageImportCocher('+i+', this.checked)"></td>'
-          + '<td><b>'+esc(l.numero)+'</b>'+(l.dejaExistant?' <span class="badge warn">déjà importé</span>':'')+'</td>'
+          + '<td><b>'+esc(l.numero)+'</b>'+(l.dejaExistant?' <span class="badge warn">déjà importé</span>':'')+(l.nb_jours>1?' <span class="hint" style="margin:0">(sur '+l.nb_jours+' jours)</span>':'')+(l.coop_rapport?' <span class="hint" style="margin:0">· '+esc(l.coop_rapport)+'</span>':'')+'</td>'
           + '<td>'+(l.poids_sortie_kg?fmtNum(l.poids_sortie_kg):'—')+'</td>'
           + '<td><select onchange="lotsUsinageImportSerieChange('+i+', this.value)">'+lotsSeriesOptionsPourImport(pl.campagne_id, l.serie_id)+'</select> <span id="lu-import-client-'+i+'" class="hint" style="margin:0">'+esc(l.client||(l.serie_id?'— générique —':'—'))+'</span></td>'
           + '<td>'+esc(l.site||'—')+'</td><td>'+esc(dateFr(l.date_production)||'—')+'</td>'
           + '</tr>').join('')
-      + '</tbody></table></div></div>'
+      + '</tbody></table></div>'+lotsUsineBlocModele(pl)+'</div>'
       + '<div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" id="lu-import-btn-valider" onclick="lotsUsinageImportValider()">Importer '+nbCoches+' lot'+(nbCoches>1?'s':'')+'</button></div></div></div>';
   }
   if (m.type==='lotUsinageCompo'){
