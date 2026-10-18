@@ -3693,7 +3693,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-18-209';
+const APP_VERSION = '2026-10-18-210';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -17424,6 +17424,54 @@ function renderDefoVue(){
   return h;
 }
 function ouvrirDefoPrep(){ openModal('defoPrep', { nom:'' }); }
+// ---- le nom saisi ressemble à une coopérative déjà connue : on demande « est-ce la même ? » (Oui / Non) avant de poursuivre ----
+function defoNomCle(t){ return String(t||'').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^A-Z0-9]+/g,' ').trim(); }
+function defoNomProche(saisi){
+  const k = defoNomCle(saisi), kc0 = k.replace(/ /g,''); if (kc0.length<2) return null;
+  const mots0 = new Set(k.split(' ')), bi = t=>{ const m = new Map(); for (let i=0;i<t.length-1;i++){ const g=t.slice(i,i+2); m.set(g,(m.get(g)||0)+1); } return m; };
+  const b0 = bi(kc0); let best = null;
+  for (const c of (state.cooperatives||[])){
+    for (const nom of [c.nom, c.nom_complet]){
+      const kn = defoNomCle(nom); if (!kn) continue;
+      const kc = kn.replace(/ /g,'');
+      if (kc===kc0) return { identique:true, nom:c.nom, coop:c, score:1 };
+      let sc = 0;
+      const pet = Math.min(kc.length, kc0.length), gr = Math.max(kc.length, kc0.length);
+      if (pet>=3 && (kc.includes(kc0)||kc0.includes(kc)) && pet/gr>=0.4) sc = Math.max(sc, 0.9);
+      const mots = new Set(kn.split(' ')); const inter = [...mots].filter(w=>mots0.has(w)).length; const jac = inter/new Set([...mots,...mots0]).size;
+      if (jac>=0.5) sc = Math.max(sc, jac);
+      const b1 = bi(kc); let com = 0; b0.forEach((n,g)=>{ com += Math.min(n, b1.get(g)||0); });
+      const dice = (kc0.length>1 && kc.length>1) ? 2*com/((kc0.length-1)+(kc.length-1)) : 0;
+      if (dice>=0.75) sc = Math.max(sc, dice);
+      if (sc>0 && (!best || sc>best.score)) best = { identique:false, nom:c.nom, coop:c, score:sc };
+    }
+  }
+  return best;
+}
+function defoNomResoudre(saisi, reprise){
+  // retourne le nom à utiliser, ou null si la question est posée (la saisie reprend après la réponse)
+  if (carteCoopParNom(saisi)) return { nom:carteCoopParNom(saisi).nom, exclus:[] };
+  const prop = defoNomProche(saisi); if (!prop) return { nom:saisi, exclus:[] };
+  if (prop.identique) return { nom:prop.nom, exclus:[] };
+  const r = window._defoNomRep;
+  if (r && r.saisi===saisi && r.propose===prop.nom) return r.oui ? { nom:prop.nom, exclus:[] } : { nom:saisi, exclus:[prop.nom] };
+  window._defoNomQ = { saisi, propose:prop.nom, reprise };
+  const f = document.getElementById('modal-fields'); if (!f){ return { nom:saisi, exclus:[] }; }
+  let box = document.getElementById('defo-nom-q');
+  if (!box){ box = document.createElement('div'); box.id = 'defo-nom-q'; f.insertBefore(box, f.firstChild); }
+  box.style.cssText = 'background:#fff7e6;border:1px solid #f0b429;border-radius:8px;padding:10px 12px;margin:0 0 12px;font-size:13px;line-height:1.45';
+  box.innerHTML = '<b>Est-ce la même coopérative ?</b><br>Tu as écrit « '+esc(saisi)+' ». ORIGEN connaît déjà « '+esc(prop.nom)+' ».'
+    + '<div style="display:flex;gap:8px;margin-top:8px"><button type="button" class="btn btn-primary" onclick="defoNomReponse(true)">Oui, c\'est la même</button><button type="button" class="btn" onclick="defoNomReponse(false)">Non, c\'est une autre</button></div>';
+  const btn = document.getElementById('da-envoyer')||document.getElementById('defo-envoyer'); if (btn){ btn.disabled = false; btn.textContent = btn.id==='da-envoyer' ? 'Lancer l\'analyse' : 'Lancer la préparation'; }
+  try { box.scrollIntoView({ block:'nearest' }); } catch(e){}
+  return null;
+}
+function defoNomReponse(oui){
+  const q = window._defoNomQ; if (!q) return;
+  window._defoNomRep = { saisi:q.saisi, propose:q.propose, oui:!!oui };
+  const b = document.getElementById('defo-nom-q'); if (b) b.remove();
+  q.reprise();
+}
 function defoErreurForm(msg){ const e = document.getElementById('defo-erreur'); if (e){ e.textContent = msg; e.style.display = 'block'; } else showToast(msg); }
 function defoModalAnalyseHtml(){
   if (state.modal && state.modal.payload && state.modal.payload.prepId) return defoModalDossierHtml(state.modal.payload.prepId);
@@ -17436,6 +17484,7 @@ function defoModalAnalyseHtml(){
     + '<label class="field">…ou GeoJSON déposé ici <span class="hint" style="margin:0">(.geojson, .json ou .zip)</span><input type="file" id="da-poly" accept=".geojson,.json,.zip"></label>'
     + '<label class="field">Rapport Whisp <span class="hint" style="margin:0">(.csv — sans lui, la déforestation n\'est pas évaluée)</span><input type="file" id="da-whisp" accept=".csv"></label>'
     + '<label class="field">Registre de la coopérative <span class="hint" style="margin:0">(GMR .xlsx)</span><input type="file" id="da-gmr" accept=".xlsx,.xlsm"></label>'
+    + '<label class="field">Ancien registre <span class="hint" style="margin:0">(facultatif, .xlsx — pour retrouver les anciens codes par le nom)</span><input type="file" id="da-gmr-old" accept=".xlsx,.xlsm"></label>'
     + '<label style="display:flex;gap:8px;align-items:center;margin:6px 0"><input type="checkbox" id="da-hc"> Coopérative hors chaîne d\'approvisionnement <span class="hint" style="margin:0">(chevauchements avec la base ECORIGINE ignorés)</span></label>'
     + '<label class="field">Si la base ECORIGINE contient déjà un lot de cette coopérative <select id="da-lot"><option value="ignorer">L\'ignorer : les nouveaux fichiers le remplacent (recommandé)</option><option value="garder">Le garder pour comparer</option></select></label>'
     + '<div id="defo-erreur" style="display:none;color:#c0392b;font-size:13px;margin:4px 0 8px"></div>'
@@ -17456,7 +17505,8 @@ function defoModalsHtml(){
     + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" id="defo-envoyer" onclick="defoEnvoyer()">Lancer la préparation</button></div></div></div>';
 }
 async function defoEnvoyer(){
-  const nomCoop = (fv('defo_coop')||'').trim(); if (!nomCoop){ defoErreurForm('Indique le nom de la coopérative.'); return; }
+  let nomCoop = (fv('defo_coop')||'').trim(); if (!nomCoop){ defoErreurForm('Indique le nom de la coopérative.'); return; }
+  const rn = defoNomResoudre(nomCoop, defoEnvoyer); if (!rn) return; nomCoop = rn.nom;
   const fl = Array.from((document.getElementById('defo-fichiers')||{}).files||[]); if (!fl.length){ defoErreurForm('Ajoute au moins un fichier.'); return; }
   const mauv = fl.filter(f=>!/\.(kml|kmz|gpx|geojson|json|zip)$/i.test(f.name)); if (mauv.length){ defoErreurForm('Format non pris en charge : '+mauv.map(f=>f.name).join(', ')); return; }
   const btn = document.getElementById('defo-envoyer'); if (btn){ btn.disabled = true; btn.textContent = 'Envoi…'; }
@@ -18458,6 +18508,7 @@ function defoModalDossierHtml(pid){
   return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:520px"><h3>Analyse — '+esc(p.cooperative_nom||'')+'</h3><div id="modal-fields">'
     + '<div class="hint" style="margin:0 0 10px">Déjà dans ce dossier : ✅ '+esc(g?g.nom:'GeoJSON')+' · ✅ '+esc(w?w.nom:'CSV de Whisp')+'</div>'
     + '<label class="field">Registre de la coopérative <span class="hint" style="margin:0">(GMR .xlsx)</span><input type="file" id="da-gmr" accept=".xlsx,.xlsm"></label>'
+    + '<label class="field">Ancien registre <span class="hint" style="margin:0">(facultatif, .xlsx — pour retrouver les anciens codes par le nom)</span><input type="file" id="da-gmr-old" accept=".xlsx,.xlsm"></label>'
     + '<label style="display:flex;gap:8px;align-items:center;margin:6px 0"><input type="checkbox" id="da-hc"> Coopérative hors chaîne d\'approvisionnement <span class="hint" style="margin:0">(chevauchements avec la base ECORIGINE ignorés)</span></label>'
     + '<label class="field">Si la base ECORIGINE contient déjà un lot de cette coopérative <select id="da-lot"><option value="ignorer">L\'ignorer : les nouveaux fichiers le remplacent (recommandé)</option><option value="garder">Le garder pour comparer</option></select></label>'
     + '<div id="defo-erreur" style="display:none;color:#c0392b;font-size:13px;margin:4px 0 8px"></div>'
@@ -18473,13 +18524,17 @@ async function defoAnalyseDossierEnvoyer(pid){
   if (!/\.(xlsx|xlsm)$/i.test(fg.name)){ defoErreurForm('Registre : fichier .xlsx attendu.'); return; }
   const btn = document.getElementById('da-envoyer'); if (btn){ btn.disabled = true; btn.textContent = 'Envoi…'; }
   const id = genId('ad'), nets = t=>String(t).normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^A-Za-z0-9._-]+/g,'_');
-  const coop = carteCoopParNom(p.cooperative_nom||'');
+  const rn = defoNomResoudre((p.cooperative_nom||'').trim(), ()=>defoAnalyseDossierEnvoyer(pid)); if (!rn) return;
+  const coop = carteCoopParNom(rn.nom);
   try {
     const path = 'defo/'+id+'/entrees/registre_'+nets(fg.name);
     const r = await supabaseClient.storage.from('documents-coop').upload(path, fg, { upsert:true }); if (r.error) throw r.error;
     const entrees = { prep_id:pid, hors_chaine:!!(document.getElementById('da-hc')||{}).checked, ancien_lot_mode:((document.getElementById('da-lot')||{}).value==='garder'?'garder':'ignorer'),
       polygones:{ nom:g.nom, path:g.path, propre:false }, whisp:{ nom:w.nom, path:w.path, propre:false }, gmr:{ nom:fg.name, path } };
-    const ins = await supabaseClient.from('analyses_defo').insert({ id, cooperative_id:(coop?coop.id:p.cooperative_id)||null, cooperative_nom:(coop?coop.nom:p.cooperative_nom), etape:'analyse', statut:'demandee', entrees,
+    const fo = (document.getElementById('da-gmr-old')||{}).files && document.getElementById('da-gmr-old').files[0];
+    if (fo){ if (!/\.(xlsx|xlsm)$/i.test(fo.name)) throw new Error('Ancien registre : fichier .xlsx attendu.'); const po = 'defo/'+id+'/entrees/ancien_registre_'+nets(fo.name); const ro = await supabaseClient.storage.from('documents-coop').upload(po, fo, { upsert:true }); if (ro.error) throw ro.error; entrees.gmr_ancien = { nom:fo.name, path:po }; }
+    if (rn.exclus && rn.exclus.length) entrees.lots_exclus = rn.exclus;
+    const ins = await supabaseClient.from('analyses_defo').insert({ id, cooperative_id:(coop?coop.id:p.cooperative_id)||null, cooperative_nom:(coop?coop.nom:rn.nom), etape:'analyse', statut:'demandee', entrees,
       demande_par:(state.session&&state.session.user&&state.session.user.email)||null }).select().single();
     if (ins.error) throw ins.error;
     state.defo = [ins.data].concat(state.defo||[]);
@@ -18498,7 +18553,8 @@ async function defoOuvrirWhisp(path, nom){
 }
 async function defoAnalyseEnvoyer(){
   if (state.modal && state.modal.payload && state.modal.payload.prepId) return defoAnalyseDossierEnvoyer(state.modal.payload.prepId);
-  const nomCoop = (fv('da_coop')||'').trim(); if (!nomCoop){ defoErreurForm('Indique le nom de la coopérative.'); return; }
+  let nomCoop = (fv('da_coop')||'').trim(); if (!nomCoop){ defoErreurForm('Indique le nom de la coopérative.'); return; }
+  const rn = defoNomResoudre(nomCoop, defoAnalyseEnvoyer); if (!rn) return; nomCoop = rn.nom;
   const fp = (document.getElementById('da-poly')||{}).files&&document.getElementById('da-poly').files[0];
   const prepId = fv('da_prep'); const prep = (state.defo||[]).find(z=>z.id===prepId);
   if (!fp && !prep){ defoErreurForm('Choisis une préparation ou dépose un GeoJSON.'); return; }
@@ -18516,6 +18572,9 @@ async function defoAnalyseEnvoyer(){
     else { const f = (prep.fichiers||[]).find(x=>x.type==='geojson'); if (!f) throw new Error('Cette préparation n\'a pas de GeoJSON.'); entrees.polygones = { nom:f.nom, path:f.path, propre:false }; }
     if (fw) entrees.whisp = await up(fw, 'whisp');
     if (fg) entrees.gmr = await up(fg, 'registre');
+    const fo = (document.getElementById('da-gmr-old')||{}).files && document.getElementById('da-gmr-old').files[0];
+    if (fo){ if (!/\.(xlsx|xlsm)$/i.test(fo.name)) throw new Error('Ancien registre : fichier .xlsx attendu.'); entrees.gmr_ancien = await up(fo, 'ancien_registre'); }
+    if (rn.exclus && rn.exclus.length) entrees.lots_exclus = rn.exclus;
     const ins = await supabaseClient.from('analyses_defo').insert({ id, cooperative_id:coop?coop.id:null, cooperative_nom:(coop?coop.nom:nomCoop), etape:'analyse', statut:'demandee', entrees,
       demande_par:(state.session&&state.session.user&&state.session.user.email)||null }).select().single();
     if (ins.error) throw ins.error;
