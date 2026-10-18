@@ -3693,7 +3693,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-18-211';
+const APP_VERSION = '2026-10-18-212';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5192,8 +5192,8 @@ function ocNotifications(){
   if (nDocs) items.push({ ic:'🗂️', titre:'Documents manquants', detail:nDocs+' coopérative(s) avec des pièces de conformité manquantes', nb:nDocs, niveau:'warn', action:"ocAllerOnglet('conformite')" });
   if (state.lotsCharges && typeof sachDechargeParUsine==='function'){
     const seuil = Number((state.sachParam||{}).seuil_demande_t)>0 ? Number(state.sachParam.seuil_demande_t) : 75;
-    const atteints = sachDechargeParUsine().filter(g=>g.demande && (g.kgAct-g.affAct)/1000>=seuil);
-    if (atteints.length) items.push({ ic:'🏭', titre:'Usinage à demander', detail:atteints.map(g=>g.libelle+' (ACT) : '+Math.round((g.kgAct-g.affAct)/100)/10+' t').join(' · ')+' (seuil '+seuil+' t)', nb:atteints.length, niveau:'warn', action:"ocAllerOnglet('sacherie')" });
+    const atteints = sachDechargeParUsine().filter(g=>g.demande && g.atteint);
+    if (atteints.length) items.push({ ic:'🏭', titre:'Usinage à demander', detail:atteints.map(g=>g.libelle+' (ACT) : '+Math.round((g.kgAct-g.affAct)/100)/10+' t · '+g.camions+' camion'+(g.camions>1?'s':'')).join(' · ')+' (seuil '+seuil+' t ou '+SACH_SEUIL_CAMIONS+' camions)', nb:atteints.length, niveau:'warn', action:"ocAllerOnglet('sacherie')" });
   }
   const nNc = (state.nonconformites||[]).filter(n=>n.statut!=='resolue').length;
   if (nNc) items.push({ ic:'⚠️', titre:'Non-conformités ouvertes', detail:nNc+' non-conformité(s) à traiter', nb:nNc, niveau:'danger', action:"ocAllerOnglet('conformite')" });
@@ -5907,6 +5907,7 @@ function sachTxt(table, id, champ, val, w){
   return '<input type="text" value="'+esc(val||'')+'" style="width:'+(w||140)+'px;" onchange="sachMaj(\''+table+'\','+id+',\''+champ+'\',this.value,false)">';
 }
 // ---- Cacao déchargé par usine : tonnes reçues (poids net pesé à l'usine) ; l'usinage n'est demandé par ECORIGINE que pour les lots ACT usinés à SUV ----
+const SACH_SEUIL_CAMIONS = 3;           // l'usinage se demande aussi des que 3 camions (livraisons pas encore usinees) attendent chez le client, meme sous 75 t
 const SACH_USINES_DEMANDE = ['SUV'];     // usines où ECORIGINE demande elle-même l'usinage (contrat ACT) ; ailleurs l'usinier gère, on suit seulement les tonnes
 function sachJetons(t){ return String(t||'').toUpperCase().split(/[^A-Z0-9]+/).filter(x=>x.length>=3 && x!=='EX' && x!=='ABJ' && x!=='USINE'); }
 function sachSiteDe(texte){
@@ -5926,16 +5927,24 @@ function sachDechargeParUsine(){
   (typeof lotsAchatsRecus==='function' ? lotsAchatsRecus() : []).filter(a=>!a.refoulee && a.usine_dechargement && (!camp || a.campagne_id===camp)).forEach(a=>{
     const site = sachSiteDe(a.usine_dechargement);
     const cle = site ? site.code : String(a.usine_dechargement).trim().toUpperCase();
-    const g = m[cle] || (m[cle] = { cle, site, libelle: site ? (site.nom+' ('+site.code+')') : String(a.usine_dechargement).trim(), n:0, kg:0, nAct:0, kgAct:0, affAct:0, dernier:'', kgRecentAct:0 });
+    const g = m[cle] || (m[cle] = { cle, site, libelle: site ? (site.nom+' ('+site.code+')') : String(a.usine_dechargement).trim(), n:0, kg:0, nAct:0, kgAct:0, affAct:0, dernier:'', kgRecentAct:0, camSet:new Set() });
     const kg = lotsAchatPoidsRecu(a);
     g.n++; g.kg += kg;
     if (String(a.date||'') > g.dernier) g.dernier = String(a.date||'');
     if (sachEstClientAct(a)){
       g.nAct++; g.kgAct += kg; g.affAct += Math.min(kg, lotsAchatAffecte(a.id));
+      if (kg - lotsAchatAffecte(a.id) > 500){ const imm = String(a.immat_vehicule||'').replace(/\s+/g,'').toUpperCase(); g.camSet.add(imm ? imm+'|'+String(a.date||'').slice(0,10) : 'achat:'+a.id); }   // un camion = une immatriculation par jour (deux connaissements sur le meme camion comptent pour un)
       if (String(a.date||'') >= lim) g.kgRecentAct += kg;
     }
   });
-  Object.values(m).forEach(g=>{ g.demande = sachDemandeUsinage(g); });
+  const seuilT = Number((state.sachParam||{}).seuil_demande_t)>0 ? Number(state.sachParam.seuil_demande_t) : 75;
+  Object.values(m).forEach(g=>{
+    g.demande = sachDemandeUsinage(g);
+    g.camions = g.camSet.size;
+    const sd = Math.max(0, g.kgAct-g.affAct)/1000;
+    g.raison = !g.demande ? '' : (sd>=seuilT ? 'tonnage' : (g.camions>=SACH_SEUIL_CAMIONS ? 'camions' : ''));
+    g.atteint = !!g.raison;
+  });
   return Object.values(m).sort((x,y)=>(y.demande-x.demande) || (y.kg-x.kg));
 }
 function sachDechargeHtml(P, spl, tpl, spp){
@@ -5953,12 +5962,12 @@ function sachDechargeHtml(P, spl, tpl, spp){
   const VERT = '#1e8449', AUTRE = '#b36b00';
   h += '<style>#sach-dech{font-size:11px;width:100%}#sach-dech th{font-size:10.5px;line-height:1.15;padding:4px 5px;white-space:normal;vertical-align:bottom}#sach-dech td{padding:3px 5px;white-space:nowrap}#sach-dech .hint{font-size:10.5px}</style>'
     + '<div style="padding:4px 14px 14px;overflow:auto;"><div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px;margin:2px 0 8px"><span><b style="color:'+VERT+'">■ Vert</b> : usinage demandé par ECORIGINE</span><span><b style="color:'+AUTRE+'">■ Orange</b> : usinage à la charge du client</span></div>'
-    + '<table id="sach-dech" class="data-table pref-table"><thead><tr><th>Usine</th><th class="num">Livrai-<br>sons</th><th class="num">Déchargé<br>(t)</th><th class="num">dont ACT<br>(t)</th><th class="num">ACT déjà<br>en lots (t)</th><th class="num">ACT reste<br>à usiner (t)</th><th style="min-width:110px">Avancement<br>vers '+sachNb(seuilT)+' t</th><th class="num">Lots<br>complets</th><th class="num">Rythme ACT<br>(t/j, 14 j)</th><th>Seuil</th><th class="num">Sacs<br>requis</th><th class="num">Palettes<br>requises</th><th class="num">Sacs<br>stock</th><th class="num">Palettes<br>stock</th><th>Sacherie</th><th>Dernier<br>déchargement</th></tr></thead><tbody>';
+    + '<table id="sach-dech" class="data-table pref-table"><thead><tr><th>Usine</th><th class="num">Livrai-<br>sons</th><th class="num">Déchargé<br>(t)</th><th class="num">dont ACT<br>(t)</th><th class="num">ACT déjà<br>en lots (t)</th><th class="num">ACT reste<br>à usiner (t)</th><th class="num">Camions<br>à usiner</th><th style="min-width:110px">Avancement<br>vers '+sachNb(seuilT)+' t</th><th class="num">Lots<br>complets</th><th class="num">Rythme ACT<br>(t/j, 14 j)</th><th>Seuil</th><th class="num">Sacs<br>requis</th><th class="num">Palettes<br>requises</th><th class="num">Sacs<br>stock</th><th class="num">Palettes<br>stock</th><th>Sacherie</th><th>Dernier<br>déchargement</th></tr></thead><tbody>';
   const gris = '<span class="hint" style="margin:0">—</span>';
   L.forEach(g=>{
     let cells;
     if (!g.demande){
-      cells = '<td class="num">'+sachNb(g.kgAct/1000,1)+'</td><td colspan="11" style="color:#9aa5a2">—</td>';
+      cells = '<td class="num">'+sachNb(g.kgAct/1000,1)+'</td><td colspan="12" style="color:#9aa5a2">—</td>';
     } else {
       const solde = Math.max(0, g.kgAct-g.affAct)/1000, pct = Math.min(100, solde/seuilT*100), rythme = g.kgRecentAct/1000/14;
       const lots = Math.floor(solde/tpl + 1e-9), nLotsReq = Math.ceil(solde/tpl - 1e-9);
@@ -5967,14 +5976,14 @@ function sachDechargeHtml(P, spl, tpl, spp){
       const sacs = st && st.sacs_stock!=null && st.sacs_stock!=='' ? Number(st.sacs_stock) : null, pal = st && st.palettes_stock!=null && st.palettes_stock!=='' ? Number(st.palettes_stock) : null;
       const manque = (sacs!==null && sacs<sacsReq) || (pal!==null && pal<palReq);
       let seuil;
-      if (solde >= seuilT) seuil = '<span style="background:#c0392b;color:#fff;border-radius:12px;padding:2px 10px;font-size:12px;white-space:nowrap">Atteint — demander l\'usinage</span>';
+      if (g.atteint) seuil = '<span style="background:#c0392b;color:#fff;border-radius:12px;padding:2px 10px;font-size:12px;white-space:nowrap">Atteint — demander l\'usinage'+(g.raison==='camions' ? ' ('+g.camions+' camions)' : '')+'</span>';
       else if (rythme>0) seuil = '<span class="hint" style="margin:0">dans ~'+Math.max(1,Math.ceil((seuilT-solde)/rythme))+' j</span>';
       else seuil = gris;
-      const couleur = solde>=seuilT ? '#c0392b' : pct>=80 ? '#e08a00' : '#2c5fae';
+      const couleur = g.atteint ? '#c0392b' : pct>=80 ? '#e08a00' : '#2c5fae';
       const sach = !st ? '<span class="hint" style="margin:0">usine non suivie</span>' : (sacs===null && pal===null) ? '<span class="hint" style="margin:0">stock à renseigner</span>'
         : manque ? '<span style="background:#e08a00;color:#fff;border-radius:12px;padding:2px 10px;font-size:12px;white-space:nowrap">À commander : '+(sacs!==null&&sacs<sacsReq?sachNb(sacsReq-sacs)+' sacs':'')+(sacs!==null&&sacs<sacsReq&&pal!==null&&pal<palReq?' · ':'')+(pal!==null&&pal<palReq?sachNb(palReq-pal)+' palettes':'')+'</span>'
         : '<span style="background:#1e8449;color:#fff;border-radius:12px;padding:2px 10px;font-size:12px;">OK</span>';
-      cells = '<td class="num">'+sachNb(g.kgAct/1000,1)+'</td><td class="num">'+sachNb(g.affAct/1000,1)+'</td><td class="num" style="font-weight:700">'+sachNb(solde,1)+'</td>'
+      cells = '<td class="num">'+sachNb(g.kgAct/1000,1)+'</td><td class="num">'+sachNb(g.affAct/1000,1)+'</td><td class="num" style="font-weight:700">'+sachNb(solde,1)+'</td><td class="num" style="font-weight:700;'+(g.camions>=SACH_SEUIL_CAMIONS?'color:#c0392b':'')+'">'+sachNb(g.camions)+' / '+SACH_SEUIL_CAMIONS+'</td>'
         + '<td><div style="background:#e9eeec;border-radius:6px;height:10px;overflow:hidden"><div style="width:'+pct.toFixed(0)+'%;height:100%;background:'+couleur+'"></div></div><span class="hint" style="margin:0">'+sachNb(solde,1)+' / '+sachNb(seuilT)+' t</span></td>'
         + '<td class="num">'+sachNb(lots)+'</td><td class="num">'+(rythme>0?sachNb(rythme,1):'—')+'</td><td>'+seuil+'</td>'
         + '<td class="num">'+sachNb(sacsReq)+'</td><td class="num">'+sachNb(palReq)+'</td><td class="num">'+sachNb(sacs)+'</td><td class="num">'+sachNb(pal)+'</td><td>'+sach+'</td>';
@@ -5982,8 +5991,8 @@ function sachDechargeHtml(P, spl, tpl, spp){
     h += '<tr><td style="text-align:left"><b style="color:'+(g.demande?VERT:AUTRE)+'">'+esc(g.libelle)+'</b></td><td class="num">'+sachNb(g.n)+'</td><td class="num">'+sachNb(g.kg/1000,1)+'</td>'+cells
       + '<td class="hint">'+(g.dernier?esc(g.dernier.split('-').reverse().join('/')):'—')+'</td></tr>';
   });
-  h += '<tr style="font-weight:700;background:var(--surface-2)"><td style="text-align:left">Total</td><td class="num">'+sachNb(tot.n)+'</td><td class="num">'+sachNb(tot.kg/1000,1)+'</td><td colspan="13"></td></tr></tbody></table>'
-    + '<p class="hint" style="margin-top:10px">Déchargé = poids net pesé à l\'usine, tous clients. ACT = connaissements attribués au client ACT (attribution faite sur chaque achat) ; les lots de SUCDEN à SUV ne comptent pas. Reste à usiner = ACT déchargé − ce qui est déjà affecté à un lot d\'usinage (onglet Lots &amp; export). Sacs et palettes requis = lots à former (reste ÷ '+sachNb(tpl)+' t, arrondi au-dessus) × '+sachNb(spl)+' sacs et × '+sachNb(palLot)+' palettes. Rythme = tonnes ACT reçues sur les 14 derniers jours ÷ 14.</p></div></div>';
+  h += '<tr style="font-weight:700;background:var(--surface-2)"><td style="text-align:left">Total</td><td class="num">'+sachNb(tot.n)+'</td><td class="num">'+sachNb(tot.kg/1000,1)+'</td><td colspan="14"></td></tr></tbody></table>'
+    + '<p class="hint" style="margin-top:10px">Déchargé = poids net pesé à l\'usine, tous clients. ACT = connaissements attribués au client ACT (attribution faite sur chaque achat) ; les lots de SUCDEN à SUV ne comptent pas. Reste à usiner = ACT déchargé − ce qui est déjà affecté à un lot d\'usinage (onglet Lots &amp; export). Sacs et palettes requis = lots à former (reste ÷ '+sachNb(tpl)+' t, arrondi au-dessus) × '+sachNb(spl)+' sacs et × '+sachNb(palLot)+' palettes. Camions à usiner = camions ACT dont la livraison n\'est pas encore entièrement affectée à un lot (un camion = une immatriculation par jour) : l\'usinage est à demander dès que le seuil en tonnes OU les '+SACH_SEUIL_CAMIONS+' camions sont atteints. Rythme = tonnes ACT reçues sur les 14 derniers jours ÷ 14.</p></div></div>';
   return h;
 }
 function renderSacherieTab(){
