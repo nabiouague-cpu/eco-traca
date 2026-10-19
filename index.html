@@ -3693,7 +3693,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-19-218';
+const APP_VERSION = '2026-10-19-219';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -17776,7 +17776,7 @@ function renderDefoVue(){
   if (nEnCours) h += '<div class="panel" style="border-left:4px solid #1f5fa8"><div style="padding:12px 18px"><b>⏳ '+nEnCours+' tâche'+(nEnCours>1?'s':'')+' en cours</b> <span class="hint" style="margin:0 0 0 6px">Quelques minutes. La liste se met à jour toute seule.</span></div></div>';
   h += '<div class="panel"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 18px 8px">'
     + '<div><b>Dossiers des coopératives</b><div class="hint" style="margin:2px 0 0">Une coopérative = un dossier = un seul parcours : <b>Préparation → Whisp → Analyse → Aperçu → Nettoyage → Base finale</b>. Dépose ses fichiers (KML, KMZ, GPX, GeoJSON, shapefile .zip), puis passe d\'un onglet à l\'autre : l\'onglet à faire s\'ouvre tout seul, les suivants attendent que le précédent soit terminé.</div></div>'
-    + '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="ouvrirDefoCombine()" title="Un seul rapport Excel pour plusieurs coopératives">📊 Rapport combiné</button><button class="btn" onclick="ouvrirDefoEnvoi()" title="Mails individuels aux coopératives ou mail groupé à un partenaire">✉ Envoyer par e-mail</button><button class="btn btn-primary" onclick="ouvrirDefoPrep()">🌳 Nouvelle préparation</button></div></div>';
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="ouvrirDefoCombine()" title="Un seul rapport Excel pour plusieurs coopératives">📊 Rapport combiné</button><button class="btn" onclick="ouvrirDefoCompare()" title="Comparer la version initiale et la version actualisée des données d\'une coopérative">⚖ Comparer deux versions</button><button class="btn" onclick="ouvrirDefoEnvoi()" title="Mails individuels aux coopératives ou mail groupé à un partenaire">✉ Envoyer par e-mail</button><button class="btn btn-primary" onclick="ouvrirDefoPrep()">🌳 Nouvelle préparation</button></div></div>';
   if (state.defoIndispo) h += '<div class="hint" style="padding:0 18px 14px;color:var(--warn)">Le suivi des analyses n\'est pas encore disponible sur cette base.</div>';
   else if (!state.defoCharge) h += '<div class="hint" style="padding:0 18px 14px">Chargement…</div>';
   else if (!liste.length) h += '<div class="hint" style="padding:0 18px 14px">Aucune préparation pour le moment.</div>';
@@ -17791,6 +17791,7 @@ function renderDefoVue(){
       + defoFilHtml(x) + '</div>';
   }).join('') + '</div>';
   h += '</div>';
+  h += defoComparePanelHtml();
   // anciennes analyses lancées à la main (sans dossier) : affichées seulement s'il en reste, pour pouvoir les consulter ou les supprimer
   if (state.defoCharge && !state.defoIndispo && analyses.length){
     h += '<div class="panel"><div style="padding:14px 18px 6px"><b>Anciennes analyses (sans dossier)</b><div class="hint" style="margin:2px 0 0">Lancées avant les dossiers. Les nouvelles analyses se font dans l\'onglet « Analyse » du dossier de la coopérative.</div></div>'
@@ -17871,6 +17872,7 @@ function defoModalsHtml(){
   if (m && m.type==='defoFinale') return defoModalFinaleHtml();
   if (m && m.type==='defoCombine') return defoModalCombineHtml();
   if (m && m.type==='defoEnvoi') return defoModalEnvoiHtml();
+  if (m && m.type==='defoCompare') return defoModalCompareHtml();
   if (!m || m.type!=='defoPrep') return '';
   const opts = [...state.cooperatives].sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr')).map(c=>'<option value="'+esc(c.nom)+'"></option>').join('');
   return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:520px"><h3>Préparer les polygones</h3><div id="modal-fields">'
@@ -17921,7 +17923,7 @@ function defoChemins(x){
   if (Array.isArray(e)) e.forEach(f=>{ if (f&&f.path) c.push(f.path); });
   else if (e && typeof e==='object'){
     if (e.polygones && e.polygones.path && e.polygones.propre) c.push(e.polygones.path);
-    ['whisp','gmr'].forEach(k=>{ if (e[k] && e[k].path && e[k].propre!==false) c.push(e[k].path); });
+    ['whisp','gmr','v1_polygones','v1_registre','v2_polygones','v2_registre'].forEach(k=>{ if (e[k] && e[k].path && e[k].propre!==false) c.push(e[k].path); });
   }
   (x.fichiers||[]).forEach(f=>{ if (f&&f.path) c.push(f.path); });
   return c;
@@ -17939,6 +17941,91 @@ async function defoSupprimerOk(id){
   if (chemins.length){ try { await supabaseClient.storage.from('documents-coop').remove(chemins); } catch(e){} }
   state.defo = state.defo.filter(z=>!ids.includes(z.id)); showToast('Supprimé.', 'success'); render();
 }
+// ----- Comparer deux versions (V1 / V2) d'une même coopérative -----
+function ouvrirDefoCompare(){ openModal('defoCompare', { nom:'' }); }
+function defoModalCompareHtml(){
+  const opts = [...state.cooperatives].sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr')).map(c=>'<option value="'+esc(c.nom)+'"></option>').join('');
+  const bloc = (v, titre)=>'<fieldset style="border:1px solid var(--line,#d6dcd9);border-radius:8px;padding:8px 12px;margin:8px 0"><legend style="font-weight:600;padding:0 6px">'+titre+'</legend>'
+    + '<label class="field">Polygones <span class="hint" style="margin:0">(.geojson, .json ou .zip)</span><input type="file" id="dc-'+v+'-poly" accept=".geojson,.json,.zip"></label>'
+    + '<label class="field">Registre <span class="hint" style="margin:0">(.xlsx — recommandé)</span><input type="file" id="dc-'+v+'-reg" accept=".xlsx,.xlsm,.csv"></label></fieldset>';
+  return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:540px"><h3>Comparer deux versions</h3><div id="modal-fields">'
+    + '<p class="hint" style="margin-top:0">Pour une coopérative qui renvoie des données actualisées. Rien n\'est validé ni remplacé : tu reçois un rapport de différences.</p>'
+    + '<label class="field">Nom de la coopérative <span class="hint" style="margin:0">(tape le nom, ou choisis-en une déjà dans ORIGEN)</span><input type="text" name="dc_coop" list="dc-coops" placeholder="Ex. SOCOPAK" autocomplete="off"><datalist id="dc-coops">'+opts+'</datalist></label>'
+    + bloc('v1','Version 1 — initiale') + bloc('v2','Version 2 — actualisée')
+    + '<label class="field">Délai de réponse demandé au fournisseur (jours)<input type="text" inputmode="numeric" name="dc_delai" value="7" style="max-width:100px"></label>'
+    + '<div id="defo-erreur" style="display:none;color:#c0392b;font-size:13px;margin:4px 0 8px"></div>'
+    + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" id="dc-envoyer" onclick="defoCompareEnvoyer()">Lancer la comparaison</button></div></div></div>';
+}
+async function defoCompareEnvoyer(){
+  let nomCoop = (fv('dc_coop')||'').trim(); if (!nomCoop){ defoErreurForm('Indique le nom de la coopérative.'); return; }
+  const f = id=>{ const e = document.getElementById(id); return e && e.files && e.files[0]; };
+  const p1 = f('dc-v1-poly'), p2 = f('dc-v2-poly'), r1 = f('dc-v1-reg'), r2 = f('dc-v2-reg');
+  if (!p1 || !p2){ defoErreurForm('Dépose les polygones des deux versions.'); return; }
+  if (!/\.(geojson|json|zip)$/i.test(p1.name) || !/\.(geojson|json|zip)$/i.test(p2.name)){ defoErreurForm('Polygones : GeoJSON (.geojson, .json ou .zip).'); return; }
+  for (const r of [r1, r2]) if (r && !/\.(xlsx|xlsm|csv)$/i.test(r.name)){ defoErreurForm('Registre : fichier .xlsx attendu.'); return; }
+  if (!!r1 !== !!r2){ defoErreurForm('Dépose le registre des deux versions, ou d\'aucune.'); return; }
+  const delai = Math.max(1, Math.min(60, parseInt(fv('dc_delai'),10) || 7));
+  const btn = document.getElementById('dc-envoyer'); if (btn){ btn.disabled = true; btn.textContent = 'Envoi…'; }
+  const id = genId('ad'), nets = s=>String(s).normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^A-Za-z0-9._-]+/g,'_');
+  const coop = carteCoopParNom(nomCoop);
+  try {
+    const up = async (fl, nom)=>{ const path = 'defo/'+id+'/entrees/'+nom+'_'+nets(fl.name); const r = await supabaseClient.storage.from('documents-coop').upload(path, fl, { upsert:true }); if (r.error) throw r.error; return { nom:fl.name, path }; };
+    const entrees = { delai_jours: delai };
+    entrees.v1_polygones = await up(p1, 'v1_polygones'); entrees.v2_polygones = await up(p2, 'v2_polygones');
+    if (r1) entrees.v1_registre = await up(r1, 'v1_registre');
+    if (r2) entrees.v2_registre = await up(r2, 'v2_registre');
+    const ins = await supabaseClient.from('analyses_defo').insert({ id, cooperative_id:coop?coop.id:null, cooperative_nom:(coop?coop.nom:nomCoop), etape:'comparaison', statut:'demandee', entrees,
+      demande_par:(state.session&&state.session.user&&state.session.user.email)||null }).select().single();
+    if (ins.error) throw ins.error;
+    state.defo = [ins.data].concat(state.defo||[]); state.defoIndispo = false;
+    closeModal(); carteLancerRobot(); showToast('Comparaison lancée.', 'success');
+  } catch(e){
+    if (btn){ btn.disabled = false; btn.textContent = 'Lancer la comparaison'; }
+    defoErreurForm('Envoi impossible : '+((e&&e.message)||e));
+  }
+}
+function defoComparePanelHtml(){
+  const l = (state.defo||[]).filter(x=>x.etape==='comparaison');
+  if (!l.length) return '';
+  return '<div class="panel"><div style="padding:14px 18px 6px"><b>Comparaisons de versions (V1 / V2)</b><div class="hint" style="margin:2px 0 0">Les signaux sont des éléments à examiner, jamais une conclusion. Rien n\'est validé ni remplacé automatiquement.</div></div>'
+    + '<div style="padding:0 18px 14px;display:flex;flex-direction:column;gap:14px">' + l.map(defoCompareCarte).join('') + '</div></div>';
+}
+function defoCompareCarte(x){
+  const st = CARTE_STATUTS[x.statut] || [x.statut,'#7a8683'];
+  const tete = '<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center"><span><span style="display:inline-block;background:'+st[1]+';color:#fff;border-radius:10px;padding:1px 9px;font-size:11.5px;font-weight:600">'+st[0]+'</span> <b style="margin-left:6px">'+esc(x.cooperative_nom||'—')+'</b><span class="hint" style="margin:0 0 0 8px">'+esc(dateFr(String(x.created_at).slice(0,10)))+'</span></span>'
+    + '<span>'+(x.statut==='demandee' ? '<button class="btn-ghost btn-compact" onclick="defoAnnuler(\''+escJs(x.id)+'\')">Annuler</button>' : '')
+    + (['annulee','terminee','erreur'].includes(x.statut) ? ' <button class="btn-ghost btn-compact" style="color:#c0392b" onclick="defoCompareSupprimer(\''+escJs(x.id)+'\')">🗑 Supprimer</button>' : '')+'</span></div>';
+  if (x.statut==='demandee' || x.statut==='en_cours') return '<div class="achat-item" style="display:block;border:1px solid var(--line,#d6dcd9);border-radius:10px;padding:10px 14px">'+tete+'<div class="hint" style="margin:6px 0 0">⏳ Comparaison en cours (quelques minutes)…</div></div>';
+  if (x.statut==='erreur') return '<div class="achat-item" style="display:block;border:1px solid var(--line,#d6dcd9);border-radius:10px;padding:10px 14px">'+tete+'<div style="color:#c0392b;font-size:13px;margin-top:6px">'+esc(x.erreur||'Erreur')+'</div></div>';
+  const r = x.resume; if (!r || !r.polygones) return '<div class="achat-item" style="display:block;border:1px solid var(--line,#d6dcd9);border-radius:10px;padding:10px 14px">'+tete+'</div>';
+  const P = r.polygones, G = r.registre || {};
+  const alerte = !r.identique && (r.signaux||[]).length && r.a_justifier;
+  const fich = (x.fichiers||[]).find(f=>f.type==='comparaison');
+  const n = v=>(v==null?'—':fmtNum(v));
+  const ligne = (a,b,c)=>'<tr><td style="padding:2px 10px 2px 0">'+a+'</td><td style="padding:2px 10px;text-align:right">'+b+'</td><td style="padding:2px 0 2px 10px;text-align:right">'+c+'</td></tr>';
+  const chiffres = '<table style="font-size:12.5px;border-collapse:collapse;margin:8px 0"><tr class="hint"><td></td><td style="text-align:right;padding:0 10px">V1</td><td style="text-align:right;padding-left:10px">V2</td></tr>'
+    + ligne('Polygones', n(P.v1), n(P.v2)) + ligne('Surface des polygones (ha)', n(P.surface_v1_ha), n(P.surface_v2_ha))
+    + (G.producteurs_v1 ? ligne('Producteurs (registre)', n(G.producteurs_v1), n(G.producteurs_v2)) + ligne('Surface du registre (ha)', n(G.surface_registre_v1), n(G.surface_registre_v2)) + ligne('Volume du registre (t)', n(G.volume_v1_t), n(G.volume_v2_t)) + ligne('Rendement médian (kg/ha)', n(G.rendement_med_v1), n(G.rendement_med_v2)) : '')
+    + '</table>';
+  const classes = '<div style="font-size:13px;margin:4px 0"><b>'+n(P.inchanges)+'</b> inchangés · <b>'+n(P.remplaces)+'</b> remplacés · <b>'+n(P.ajoutes)+'</b> ajoutés · <b>'+n(P.retires)+'</b> retirés'
+    + (G.surface_modifiee ? '<br>Surfaces du registre modifiées : <b>'+n(G.surface_modifiee)+'</b> ('+n(G.surface_baisse)+' en baisse, '+n(G.surface_hausse)+' en hausse, '+n(G.surface_ecart_50)+' écarts &gt; 50 %)' : '')+'</div>';
+  const sig = (r.signaux||[]).length ? '<div style="margin:6px 0"><b style="font-size:13px">Signaux à examiner</b><ul style="margin:4px 0 0 18px;padding:0;font-size:12.5px">'+r.signaux.map(s=>'<li>'+esc(s)+'</li>').join('')+'</ul></div>' : '';
+  const av = (r.avertissements||[]).map(a=>'<div style="color:#b36b00;font-size:12.5px;margin:4px 0">⚠️ '+esc(a)+'</div>').join('');
+  const dec = (r.decisions||[]).length ? '<div style="margin:6px 0"><b style="font-size:13px">Décisions proposées</b> <span class="hint" style="margin:0">(ORIGEN ne tranche pas)</span><ul style="margin:4px 0 0 18px;padding:0;font-size:12.5px">'+r.decisions.map(d=>'<li>'+esc(d.texte)+'</li>').join('')+'</ul></div>' : '';
+  const msg = (!r.identique && r.message_fournisseur) ? '<details style="margin-top:6px"><summary style="cursor:pointer;font-size:13px;font-weight:600">Message au fournisseur (généré)</summary><textarea id="dc-msg-'+esc(x.id)+'" rows="12" style="width:100%;margin-top:6px;font-size:12.5px">'+esc(r.message_fournisseur)+'</textarea><button class="btn btn-compact" onclick="defoCompareCopier(\''+escJs(x.id)+'\')">Copier le message</button></details>' : '';
+  return '<div class="achat-item" style="display:block;border:1px solid var(--line,#d6dcd9);border-radius:10px;padding:10px 14px">'+tete
+    + '<div style="margin-top:8px;padding:8px 10px;border-radius:8px;font-size:13px;font-weight:600;background:'+(alerte?'#fdecea;color:#9c0006':'#eef6ef;color:#375623')+'">'+esc(r.conclusion||'')+'</div>'
+    + '<div style="margin-top:6px"><span style="display:inline-block;background:#fff2cc;color:#7a5200;border-radius:10px;padding:1px 9px;font-size:11.5px;font-weight:600">V2 : version reçue, non validée</span> <span class="hint" style="margin:0 0 0 6px">La V1 est conservée telle quelle.</span></div>'
+    + classes + chiffres + sig + av + dec + msg
+    + (fich ? '<div style="margin-top:8px"><button class="btn btn-primary btn-compact" onclick="carteTelecharger(\''+escJs(fich.path)+'\')">⬇ Rapport Excel de comparaison</button></div>' : '')
+    + '</div>';
+}
+async function defoCompareCopier(id){
+  const t = document.getElementById('dc-msg-'+id); if (!t) return;
+  try { await navigator.clipboard.writeText(t.value); showToast('Message copié.', 'success'); }
+  catch(e){ t.select(); showToast('Copie impossible ici : le texte est sélectionné, copie-le (Ctrl+C).'); }
+}
+function defoCompareSupprimer(id){ askConfirm('Supprimer définitivement cette comparaison et son rapport ? Les versions de la coopérative ne sont pas touchées.', ()=>defoSupprimerOk(id)); }
 // ----- Étape 2 : carte d'analyse, tableau des problèmes, actions -----
 const DEFO_MOTIFS = { reparer:'géométries réparées', zones_protegees:'zones protégées', prioritaires:'déforestation prioritaire', irreguliers:'irréguliers', internes:'superpositions internes', base_autres:'autres coopératives (base ECORIGINE)', hors_registre:'hors registre', doublons_code:'codes en double', producteurs_sans_polygone:'producteurs sans polygone', sans_whisp:'sans résultat Whisp', manuel:'supprimés à la main' };
 const DEFO_ORDRE = ['reparer','zones_protegees','prioritaires','irreguliers','internes','base_autres','hors_registre','doublons_code','producteurs_sans_polygone'];
