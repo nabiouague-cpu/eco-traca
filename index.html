@@ -3697,7 +3697,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-19-227';
+const APP_VERSION = '2026-10-19-228';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -17877,6 +17877,7 @@ function defoModalAnalyseHtml(){
 function defoModalsHtml(){
   const m = state.modal; if (m && m.type==='defoAnalyse') return defoModalAnalyseHtml();
   if (m && m.type==='defoFinale') return defoModalFinaleHtml();
+  if (m && m.type==='defoGuide') return defoGuideModalHtml();
   if (m && m.type==='defoCombine') return defoModalCombineHtml();
   if (m && m.type==='defoEnvoi') return defoModalEnvoiHtml();
   if (m && m.type==='defoCompare') return defoModalCompareHtml();
@@ -18074,7 +18075,8 @@ function defoProblemesHtml(a, et){
   if (g2.length) lignes += titre('À décider — jamais appliqué d\'office') + g2.map(p=>ligne(p)).join('');
   if (g3.length) lignes += titre('À contrôler — rien à supprimer') + g3.map(p=>ligne(p)).join('');
   if (g4.length) lignes += titre('✔ Réglé — rien à faire') + g4.map(p=>ligne(p)).join('');
-  let h = '<div style="font-weight:700;margin-bottom:4px">Problèmes détectés</div><div style="overflow-x:auto"><table class="data-table" style="font-size:12.5px;width:100%;table-layout:fixed"><colgroup><col style="width:34%"><col style="width:96px"><col><col style="width:130px"></colgroup><thead><tr><th style="text-align:left">Problème</th><th style="text-align:center">Nombre</th><th style="text-align:left;padding-left:14px">Ce qu\'il y a à faire</th><th style="text-align:center">Action</th></tr></thead><tbody>'+(lignes||'<tr><td colspan="4" class="hint">Aucun problème détecté.</td></tr>')+'</tbody></table></div>';
+  const guideBtn = (r && r.simulateur && pb.length) ? '<div style="margin:4px 0 10px;padding:10px 12px;background:#eef4fb;border:1px solid #b9d0ea;border-radius:8px"><button class="btn btn-primary btn-compact" '+(bloque?'disabled ':'')+'onclick="defoGuideOuvrir(\''+aid+'\')">🧭 Nettoyage guidé</button> <span class="hint" style="margin:0 0 0 6px">Constats → propositions → validation → application. Rien n\'est appliqué sans ton clic de validation ; ton fichier d\'origine n\'est jamais modifié.</span></div>' : '';
+  let h = guideBtn + '<div style="font-weight:700;margin-bottom:4px">Problèmes détectés (mode action par action)</div><div style="overflow-x:auto"><table class="data-table" style="font-size:12.5px;width:100%;table-layout:fixed"><colgroup><col style="width:34%"><col style="width:96px"><col><col style="width:130px"></colgroup><thead><tr><th style="text-align:left">Problème</th><th style="text-align:center">Nombre</th><th style="text-align:left;padding-left:14px">Ce qu\'il y a à faire</th><th style="text-align:center">Action</th></tr></thead><tbody>'+(lignes||'<tr><td colspan="4" class="hint">Aucun problème détecté.</td></tr>')+'</tbody></table></div>';
   if (g1.length) h += '<div style="margin-top:8px"><button class="btn btn-primary btn-compact" '+(bloque?'disabled ':'')+'onclick="defoAppliquerTout(\''+aid+'\')">Tout appliquer dans l\'ordre standard ('+g1.length+' action'+(g1.length>1?'s':'')+')</button> <span class="hint" style="margin:0 0 6px 6px">Les numéros donnent l\'ordre d\'application.</span></div>';
   else if (pb.length) h += '<div style="margin-top:8px;color:#1e8449;font-weight:600">✅ Plus aucune suppression à faire.'+(g4.length?' <span class="hint" style="margin:0 0 0 4px;font-weight:400">Les lignes « Réglé » sont validées.</span>':'')+'</div>';
   return h;
@@ -18102,6 +18104,8 @@ function defoAnalyseParties(a){
       const det = Object.keys(n.cumul_retires||{}).filter(k=>n.cumul_retires[k]).map(k=>fmtNum(n.cumul_retires[k])+' '+(DEFO_MOTIFS[k]||k)).join(', ');
       const dl = defoUtiles(et.dernier.fichiers).map(defoChip).join('');
       P.apres = '<div style="margin-top:10px;padding:8px 10px;background:#eef6ef;border-radius:8px;font-size:12.5px"><b>Après nettoyage (copie) : '+fmtNum(n.restants)+' polygones · '+fmtNum(n.restants_ha)+' ha</b>'
+        + (n.avant!=null ? '<div class="hint" style="margin:2px 0 0">Bilan : avant '+fmtNum(n.avant)+' polygones · '+fmtNum(n.avant_ha)+' ha → après '+fmtNum(n.restants)+' polygones · '+fmtNum(n.restants_ha)+' ha (−'+fmtNum(n.retires_total||0)+' polygones, −'+fmtNum(n.retires_ha||0)+' ha)</div>' : '')
+        + (n.decisions ? '<div class="hint" style="margin:2px 0 0">Décisions validées par '+esc(n.decisions.par||'—')+' le '+esc(n.decisions.le ? new Date(n.decisions.le).toLocaleString('fr-FR') : '—')+' · détail : onglets « Decisions » et « Supprimes » du journal</div>' : '')
         + (det ? '<div class="hint" style="margin:2px 0 0">Retirés : '+esc(det)+(n.producteurs_retires&&n.producteurs_retires.length?' · '+fmtNum(n.producteurs_retires.length)+' producteur(s) sans polygone, non repris dans le registre final':'')+'</div>' : '')
         + defoSec('Fichiers', dl) + '</div>';
     }
@@ -18591,16 +18595,159 @@ function defoAppliquerTout(aid){
   const txt = codes.map(c=>{ const p = pb.find(z=>z.code===c); return '• '+p.titre+' ('+fmtNum(p.nb)+')'; }).join('\n');
   askConfirm('Appliquer dans l\'ordre standard :\n'+txt+'\n\nLe travail se fait sur une copie ; rien n\'est modifié dans tes fichiers ni dans la base ECORIGINE.', ()=>defoLancerNettoyage(aid, codes));
 }
-async function defoLancerNettoyage(aid, actions, retouches){
+async function defoLancerNettoyage(aid, actions, retouches, decisions){
   const a = (state.defo||[]).find(z=>z.id===aid); if (!a) return false;
   const et = defoEtat(a); if (et.enCours){ showToast('Un nettoyage est déjà en cours.'); return false; }
   const entrees = { analyse_id:aid, source_id:et.dernier?et.dernier.id:null, actions };
   if (retouches && ((retouches.supprimes||[]).length || Object.keys(retouches.modifies||{}).length)) entrees.retouches = retouches;
+  if (decisions) entrees.decisions = decisions;
   const ins = await supabaseClient.from('analyses_defo').insert({ id:genId('ad'), cooperative_id:a.cooperative_id||null, cooperative_nom:a.cooperative_nom, etape:'nettoyage', statut:'demandee',
     entrees:entrees, demande_par:(state.session&&state.session.user&&state.session.user.email)||null }).select().single();
   if (ins.error){ showToast('Lancement impossible : '+ins.error.message); return false; }
   state.defo = [ins.data].concat(state.defo||[]); carteLancerRobot(); showToast('Nettoyage lancé.', 'success'); render();
   return true;
+}
+
+// ===== Nettoyage guidé : constats → propositions → validation → application =====
+// ORIGEN ne nettoie jamais seul : chaque problème a une proposition recommandée (★) et des alternatives ; rien ne s'applique sans le clic de validation.
+const DEFO_GUIDE = {
+  garde_fou_registre:{ g:'r' },
+  reparer:{ g:'o', opts:[{id:'oui', lab:'Réparer le contour (le polygone est gardé, jamais supprimé pour ce motif)', act:'reparer', star:1}] },
+  hors_registre:{ g:'o', reg:1, opts:[{id:'ret', lab:'Retirer ces polygones', act:'hors_registre', star:1},{id:'gar', lab:'Les garder dans la copie (producteur à ajouter plus tard au registre ; ils ne seront pas repris dans la base finale)', act:null}] },
+  doublons_code:{ g:'o', reg:1, opts:[{id:'un', lab:'Garder un seul polygone par code (la plus grande copie)', act:'doublons_code', star:1}] },
+  producteurs_sans_polygone:{ g:'o', reg:1, opts:[{id:'ret', lab:'Retirer ces producteurs du registre final', act:'producteurs_sans_polygone', star:1}] },
+  zones_protegees:{ g:'o', opts:[{id:'ret', lab:'Retirer ces polygones', act:'zones_protegees', star:1},{id:'gar', lab:'Les garder (dérogation)', act:null}] },
+  irreguliers:{ g:'o', opts:[{id:'ret', lab:'Retirer ces polygones', act:'irreguliers', star:1},{id:'gar', lab:'Les garder', act:null}] },
+  internes:{ g:'o', opts:[{id:'ret', lab:'Garder la plus grande parcelle de chaque paire (retirer l\'autre)', act:'internes', star:1},{id:'gar', lab:'Ne rien retirer (je choisis à la main dans l\'aperçu)', act:null}] },
+  base_autres:{ g:'o', opts:[{id:'ret', lab:'Retirer ces polygones', act:'base_autres', star:1},{id:'gar', lab:'Les garder (coopérative hors chaîne)', act:null}] },
+  prioritaires:{ g:'o', opts:[{id:'non', lab:'Aucune action pour l\'instant (jamais retiré sans décision explicite)', act:null, star:1},{id:'ret', lab:'Retirer ces parcelles', act:'prioritaires'}] },
+  sans_whisp:{ g:'j', opts:[{id:'gar', lab:'Les garder (statut inconnu)', act:null, star:1},{id:'ret', lab:'Les retirer', act:'sans_whisp'}] }
+};
+const DEFO_GRAV = { r:['🔴','Bloquant','#c0392b','#fdecea'], o:['🟠','À traiter','#d35400','#fff1e6'], j:['🟡','À vérifier','#8a6d00','#fff9e0'] };
+function defoGuideGrav(p){ const d = DEFO_GUIDE[p.code]; return d ? d.g : 'j'; }
+// même logique que nettoyer() du robot : ordre standard, une seule parcelle gardée par paire de superposition
+function defoGuideSim(sim, actions){
+  const viv = new Uint8Array(sim.n).fill(1), ret = {};
+  sim.ordre.forEach(a=>{
+    if (actions.indexOf(a)<0 || a==='reparer' || a==='producteurs_sans_polygone') return;
+    let sel;
+    if (a==='internes'){
+      const pris = new Set();
+      sim.paires.forEach(([i,j,pc,perdu])=>{ if (!viv[i]||!viv[j]||pris.has(i)||pris.has(j)) return; pris.add(perdu); });
+      sel = Array.from(pris).filter(i=>viv[i]);
+    } else sel = (sim.ind[a]||[]).filter(i=>viv[i]);
+    sel.forEach(i=>{ viv[i]=0; }); ret[a] = sel;
+  });
+  let nb=0, ha=0; const fe = new Set();
+  for (let i=0;i<sim.n;i++) if (viv[i]){ nb++; ha += sim.surf[i]; if (sim.ferme[i]>=0) fe.add(sim.ferme[i]); }
+  const haDe = l=>l.reduce((t,i)=>t+sim.surf[i],0);
+  return { ret, restants:nb, restants_ha:ha, producteurs:fe.size, haDe, tonnes: h=>h*sim.rend_kg_ha/1000 };
+}
+function defoGuideDonnees(){
+  const G = state.guide; if (!G) return null;
+  const a = (state.defo||[]).find(z=>z.id===G.aid); if (!a) return null;
+  const et = defoEtat(a), r = (et.dernier ? et.dernier.resume : a.resume) || {};
+  const pb = (r.problemes||[]).slice();
+  return { a, et, r, sim:r.simulateur, pb };
+}
+function defoGuideChoix(p){ const d = DEFO_GUIDE[p.code]; if (!d || !d.opts) return null; const G = state.guide; const sel = G.choix[p.code]; return d.opts.find(o=>o.id===sel) || d.opts.find(o=>o.star) || d.opts[0]; }
+function defoGuideActions(D){
+  const acts = [];
+  D.pb.forEach(p=>{ const o = defoGuideChoix(p); if (!o || !o.act) return; if (DEFO_GUIDE[p.code].reg && D.sim.garde_fou) return; acts.push(o.act); });
+  return acts;
+}
+function defoGuideOuvrir(aid){
+  const a = (state.defo||[]).find(z=>z.id===aid); if (!a) return;
+  const et = defoEtat(a), r = (et.dernier ? et.dernier.resume : a.resume) || {};
+  if (!r.simulateur){ showToast('Relance l\'analyse : cette ancienne analyse n\'a pas les données du nettoyage guidé.'); return; }
+  state.guide = { aid, etape:1, choix:{} };
+  openModal('defoGuide', { aid });
+}
+function defoGuideRendre(haut){ const m = document.querySelector('.modal'); const y = m ? m.scrollTop : 0; render(); const m2 = document.querySelector('.modal'); if (m2) m2.scrollTop = haut ? 0 : y; }
+function defoGuideEtape(n){ if (state.guide){ state.guide.etape = n; defoGuideRendre(true); } }
+function defoGuideChoisir(code, id){ if (state.guide){ state.guide.choix[code] = id; defoGuideRendre(false); } }
+function defoGuideBandeau(D, sim_){
+  const s = D.sim, rend = s.rend_kg_ha;
+  const ha0 = s.surf.reduce((t,x)=>t+x,0), prod0 = new Set(s.ferme.filter(x=>x>=0)).size;
+  const cnt = {r:0,o:0,j:0}; D.pb.forEach(p=>{ cnt[defoGuideGrav(p)]++; });
+  const c = (txt,col)=>'<span style="display:inline-block;margin:0 10px 0 0;color:'+col+';font-weight:700">'+txt+'</span>';
+  return '<div style="padding:10px 12px;background:#f1f5f3;border-radius:8px;margin-bottom:10px"><b>'+fmtNum(s.n)+' polygones · '+fmtNum(prod0)+' producteurs · '+fmtNum(Math.round(ha0))+' ha · ≈ '+fmtNum(Math.round(ha0*rend/1000))+' t</b>'
+    + '<div style="margin-top:4px;font-size:12.5px">'+c('🔴 '+cnt.r+' bloquant'+(cnt.r>1?'s':''),'#c0392b')+c('🟠 '+cnt.o+' à traiter','#d35400')+c('🟡 '+cnt.j+' à vérifier','#8a6d00')+'</div>'
+    + '<div class="hint" style="margin:4px 0 0">Tonnage indicatif : surface × '+fmtNum(Math.round(rend))+' kg/ha ('+esc(s.rend_source)+'). Le rendement définitif se valide à la production de la base finale.</div></div>';
+}
+function defoGuideCarte(p, D, mode){
+  const d = DEFO_GUIDE[p.code] || {}, gr = DEFO_GRAV[defoGuideGrav(p)], s = D.sim;
+  const t = (p.ha!=null && p.ha!=='') ? p.ha*s.rend_kg_ha/1000 : null;
+  let h = '<div style="border:1px solid var(--border);border-left:5px solid '+gr[2]+';border-radius:8px;padding:10px 12px;margin:0 0 10px;background:'+gr[3]+'">'
+    + '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap"><b>'+gr[0]+' '+esc(p.titre)+'</b><span style="font-weight:800;color:'+gr[2]+'">'+fmtNum(p.nb)+' cas'+(p.ha!=null&&p.ha!==''?' · '+fmtNum(Math.round(p.ha*10)/10)+' ha'+(t!=null?' · ≈ '+fmtNum(Math.round(t*10)/10)+' t':''):'')+'</span></div>'
+    + '<div class="hint" style="margin:3px 0 0">'+esc(p.detail||'')+'</div>';
+  if (p.exemples && p.exemples.length) h += '<div class="hint" style="margin:3px 0 0">Exemples : '+p.exemples.map(esc).join(' · ')+'</div>';
+  if (mode==='constats'){
+    h += '<div class="hint" style="margin:3px 0 0">Liste complète : rapport Excel de l\'analyse (onglet du même nom).</div>';
+  } else if (d.opts){
+    const bloqueReg = d.reg && s.garde_fou;
+    if (bloqueReg) h += '<div style="margin:6px 0 0;color:#a8281c;font-size:12.5px"><b>Proposition bloquée</b> : moins de 50 % des polygones se rapprochent du registre. Vérifie d\'abord les deux fichiers.</div>';
+    else {
+      const ch = defoGuideChoix(p);
+      h += '<div style="margin-top:6px">'+d.opts.map(o=>'<label style="display:flex;gap:8px;align-items:flex-start;margin:3px 0;cursor:pointer"><input type="radio" name="gd-'+escJs(p.code)+'" '+(o===ch?'checked ':'')+'onchange="defoGuideChoisir(\''+escJs(p.code)+'\',\''+o.id+'\')" style="margin-top:3px"><span>'+(o.star?'<b>★ </b>':'')+esc(o.lab)+'</span></label>').join('')+'</div>';
+      const sim = D.simRes, i = ch && ch.act ? sim.ret[ch.act] : null;
+      if (ch && ch.act && ch.act!=='reparer' && ch.act!=='producteurs_sans_polygone' && i) h += '<div style="margin-top:4px;font-size:12.5px;color:#a8281c"><b>Impact : retire '+fmtNum(i.length)+' polygone'+(i.length>1?'s':'')+' · −'+fmtNum(Math.round(sim.haDe(i)*10)/10)+' ha · −'+fmtNum(Math.round(sim.tonnes(sim.haDe(i))*10)/10)+' t</b></div>';
+      else if (ch && ch.act==='reparer') h += '<div style="margin-top:4px;font-size:12.5px;color:#14633a"><b>Impact : '+fmtNum(p.nb)+' contour(s) réparé(s), aucun polygone retiré</b></div>';
+      else if (ch && ch.act==='producteurs_sans_polygone') h += '<div style="margin-top:4px;font-size:12.5px;color:#a8281c"><b>Impact : '+fmtNum(p.nb)+' producteur(s) non repris dans le registre final</b></div>';
+      else h += '<div style="margin-top:4px;font-size:12.5px;color:#14633a"><b>Impact : aucun retrait</b></div>';
+    }
+  } else if (p.code==='garde_fou_registre'){
+    h += '<div style="margin:4px 0 0;color:#a8281c;font-size:12.5px"><b>Bloquant</b> : tant que ce n\'est pas vérifié, les retraits « absent du registre » (polygones hors registre, codes en double, producteurs sans polygone) sont désactivés. Vérifie que le registre et le fichier de polygones sont les bons, ou demande au fournisseur une table de correspondance.</div>';
+  } else h += '<div class="hint" style="margin:3px 0 0;color:#555"><b>Signalé seulement</b> : rien n\'est modifié ; à contrôler dans le rapport Excel.</div>';
+  return h + '</div>';
+}
+function defoGuideModalHtml(){
+  const D = defoGuideDonnees(); if (!D || !D.sim) return '';
+  const G = state.guide, e = G.etape, acts = defoGuideActions(D);
+  D.simRes = defoGuideSim(D.sim, acts);
+  const ordre = {r:0,o:1,j:2}, idx = c=>{ const i = DEFO_ORDRE.indexOf(c); return i<0 ? 99 : i; };
+  const pb = D.pb.slice().sort((x,y)=>ordre[defoGuideGrav(x)]-ordre[defoGuideGrav(y)] || idx(x.code)-idx(y.code));
+  const tete = ['1. Constats','2. Propositions','3. Validation'].map((t,k)=>'<span style="padding:4px 12px;border-radius:999px;font-size:12.5px;font-weight:700;'+(k+1===e?'background:#1f5fa8;color:#fff':'background:#eef1f0;color:#5f6b68')+'">'+t+'</span>').join('<span style="color:#aaa"> › </span>');
+  let corps = '';
+  if (e===1){
+    corps = defoGuideBandeau(D) + pb.map(p=>defoGuideCarte(p, D, 'constats')).join('');
+  } else if (e===2){
+    corps = '<div class="hint" style="margin:0 0 8px">Pour chaque problème : la proposition recommandée (★) est cochée, sauf Whisp qui n\'est jamais retiré sans décision explicite. Change ou refuse librement.</div>' + pb.map(p=>defoGuideCarte(p, D, 'propositions')).join('')
+      + '<div style="padding:10px 12px;background:#e8f5e9;border-radius:8px"><b>Après application : '+fmtNum(D.simRes.restants)+' polygones · '+fmtNum(D.simRes.producteurs)+' producteurs · '+fmtNum(Math.round(D.simRes.restants_ha))+' ha · ≈ '+fmtNum(Math.round(D.simRes.tonnes(D.simRes.restants_ha)))+' t</b></div>';
+  } else {
+    const lignes = [], gardes = [];
+    pb.forEach(p=>{ const d = DEFO_GUIDE[p.code]; if (!d || !d.opts) return; const ch = defoGuideChoix(p); const bloque = d.reg && D.sim.garde_fou;
+      if (bloque){ gardes.push(esc(p.titre)+' : proposition bloquée (rapprochement < 50 %)'); return; }
+      if (!ch.act){ gardes.push(esc(p.titre)+' ('+fmtNum(p.nb)+') : '+esc(ch.lab)); return; }
+      const i = D.simRes.ret[ch.act];
+      if (ch.act==='reparer') lignes.push('Réparer <b>'+fmtNum(p.nb)+'</b> contour(s) — '+esc(p.titre));
+      else if (ch.act==='producteurs_sans_polygone') lignes.push('Retirer du registre final <b>'+fmtNum(p.nb)+'</b> producteur(s) — '+esc(p.titre));
+      else if (i && i.length) lignes.push('Retirer <b>'+fmtNum(i.length)+'</b> polygone(s) (−'+fmtNum(Math.round(D.simRes.haDe(i)*10)/10)+' ha, −'+fmtNum(Math.round(D.simRes.tonnes(D.simRes.haDe(i))*10)/10)+' t) — '+esc(p.titre));
+    });
+    const S = D.simRes, s = D.sim, ha0 = s.surf.reduce((t,x)=>t+x,0);
+    corps = '<div style="font-weight:700;margin-bottom:6px">Vous allez :</div>' + (lignes.length ? '<ul style="margin:0 0 10px 18px;padding:0;font-size:13px">'+lignes.map(l=>'<li style="margin:3px 0">'+l+'</li>').join('')+'</ul>' : '<div class="hint" style="color:#a8281c">Aucune action sélectionnée : rien à appliquer.</div>')
+      + (gardes.length ? '<div class="hint" style="margin:0 0 6px"><b>Laissé tel quel :</b></div><ul style="margin:0 0 10px 18px;padding:0;font-size:12.5px;color:#5f6b68">'+gardes.map(l=>'<li style="margin:2px 0">'+l+'</li>').join('')+'</ul>' : '')
+      + '<div style="padding:10px 12px;background:#f1f5f3;border-radius:8px;font-size:13px"><b>Avant :</b> '+fmtNum(s.n)+' polygones · '+fmtNum(Math.round(ha0))+' ha → <b>Après :</b> '+fmtNum(S.restants)+' polygones · '+fmtNum(S.producteurs)+' producteurs · '+fmtNum(Math.round(S.restants_ha))+' ha · ≈ '+fmtNum(Math.round(S.tonnes(S.restants_ha)))+' t</div>'
+      + '<div class="hint" style="margin:8px 0 0">Le travail se fait sur une copie : tes fichiers d\'origine et la base ECORIGINE ne sont pas modifiés. Tes décisions (qui, quand, quoi) sont enregistrées dans le journal Excel (onglets « Decisions » et « Supprimes »). Ensuite : produire la base finale, qui lance le contrôle qualité.</div>';
+  }
+  const nav = e===1 ? '<button class="btn" onclick="closeModal()">Fermer</button><button class="btn btn-primary" onclick="defoGuideEtape(2)">Voir les propositions →</button>'
+    : e===2 ? '<button class="btn" onclick="defoGuideEtape(1)">← Constats</button><button class="btn btn-primary" onclick="defoGuideEtape(3)">Valider →</button>'
+    : '<button class="btn" onclick="defoGuideEtape(2)">← Propositions</button><button class="btn btn-primary" '+(acts.length?'':'disabled ')+'onclick="defoGuideAppliquer()">✅ Appliquer ces décisions</button>';
+  return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:860px;max-height:92vh;overflow:auto"><h3>Nettoyage guidé — '+esc(D.a.cooperative_nom||'')+'</h3>'
+    + '<div style="margin:0 0 10px">'+tete+'</div><div id="modal-fields">'+corps+'</div><div class="actions">'+nav+'</div></div></div>';
+}
+async function defoGuideAppliquer(){
+  const D = defoGuideDonnees(); if (!D) return;
+  const acts = defoGuideActions(D); if (!acts.length){ showToast('Aucune action sélectionnée.'); return; }
+  const S = defoGuideSim(D.sim, acts), rend = D.sim.rend_kg_ha;
+  const choix = [];
+  D.pb.forEach(p=>{ const d = DEFO_GUIDE[p.code]; if (!d || !d.opts) return; const ch = defoGuideChoix(p), bloque = d.reg && D.sim.garde_fou;
+    const i = ch.act && S.ret[ch.act] ? S.ret[ch.act] : null;
+    choix.push({ code:p.code, titre:p.titre, choix:bloque ? 'proposition bloquée (rapprochement < 50 %)' : ch.lab, action:(bloque?null:ch.act), nb:(i ? i.length : p.nb), ha:(i ? Math.round(S.haDe(i)*100)/100 : (p.ha!=null?p.ha:null)), t:(i ? Math.round(S.tonnes(S.haDe(i))*100)/100 : null) });
+  });
+  const decisions = { par:(state.session&&state.session.user&&state.session.user.email)||null, le:new Date().toISOString(), choix, avant:D.sim.n, apres:S.restants };
+  const ok = await defoLancerNettoyage(D.a.id, acts, null, decisions);
+  if (ok){ state.guide = null; closeModal(); }
 }
 // ===== Aperçu cartographique et éditeur de polygones (étape « Aperçu » du dossier) =====
 // Palette : vert = forêts classées, orange = zones cacaoyères, noir = autres coopératives de la base, bleu = tes polygones sans problème ; rouges, violets et marron = polygones à problème (une couleur par traitement).
