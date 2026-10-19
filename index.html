@@ -3697,7 +3697,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-19-226';
+const APP_VERSION = '2026-10-19-227';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -18137,6 +18137,19 @@ function defoAnalyseCarte(a){
 }
 
 // ----- Étape 3 : base finale (GeoJSON + registre vert) -----
+function defoControleQualiteHtml(c){
+  if (!c) return '';
+  if (c.erreur) return '<div class="hint" style="margin:6px 0 0;color:#b36b00">Contrôle qualité non exécuté : '+esc(c.erreur)+'</div>';
+  const t = c.totaux || {};
+  const entete = c.valide
+    ? '<div style="padding:8px 10px;background:#e8f5e9;border:1px solid #1e8449;border-radius:8px;color:#14633a;font-size:12.5px"><b>✔ BASE VALIDE</b> · '+fmtNum(c.controles)+' contrôles passés'+(c.alertes?' · <span style="color:#8a5a00">'+fmtNum(c.alertes)+' alerte(s)</span>':'')+'</div>'
+    : '<div style="padding:8px 10px;background:#fdecea;border:1px solid #c0392b;border-radius:8px;color:#a8281c;font-size:12.5px"><b>⛔ '+fmtNum(c.echecs_bloquants)+' contrôle(s) bloquant(s) en échec : NE PAS LIVRER cette base.</b></div>';
+  const lig = (x,col)=>'<div style="margin:3px 0;color:'+col+'">• '+esc(x.libelle)+(x.detail?' <span class="hint" style="margin:0">→ '+esc(x.detail)+'</span>':'')+'</div>';
+  const corps = (c.echecs||[]).map(x=>lig(x,'#a8281c')).join('') + (c.alertes_detail||[]).map(x=>lig(x,'#8a5a00')).join('');
+  return '<div style="margin-top:8px"><div class="hint" style="margin:0 0 4px"><b>Contrôle qualité</b> (fait automatiquement avant l\'ajout à la base ECORIGINE)</div>'+entete
+    + (corps ? '<div style="font-size:12.5px;margin-top:6px">'+corps+'</div>' : '')
+    + '<div class="hint" style="margin:4px 0 0">Détail de chacun des '+fmtNum(c.controles)+' contrôles dans le fichier « Methode_rendement », onglet « Contrôle qualité ».</div></div>';
+}
 function defoFinaleHtml(a, nu){
   const aid = escJs(a.id), et = defoEtat(a);
   const fins = (state.defo||[]).filter(z=>z.etape==='base_finale' && z.entrees && z.entrees.analyse_id===a.id).sort((p,q)=>String(q.created_at).localeCompare(String(p.created_at)));
@@ -18156,6 +18169,7 @@ function defoFinaleHtml(a, nu){
       + '<div class="hint" style="margin:2px 0 0">NodeID '+esc(r.node_id||'')+' · '+(r.intervalle_impose?'intervalle imposé '+fmtNum(r.intervalle_impose[0])+'–'+fmtNum(r.intervalle_impose[1])+' kg/ha':'rendement moyen '+fmtNum(r.rendement_moy_kg_ha)+' kg/ha (de '+fmtNum(Math.round(r.rendement_min_parcelle))+' à '+fmtNum(Math.round(r.rendement_max_parcelle))+' selon la parcelle, cacao autour : '+fmtNum(r.densite_moy_pct)+' % en moyenne)')+' · '+(r.depuis_copie_nettoyee?'depuis la copie nettoyée':'depuis les polygones d\'origine')
       + (r.exclus?' · <span style="color:#b36b00">'+fmtNum(r.exclus)+' polygone(s) non repris (voir ci-dessous)</span>':'')+'</div>'
       + (r.controles && r.controles.geojson_egal_registre && r.controles.plotid_uniques && !r.controles.noms_manquants ? '<div class="hint" style="margin:2px 0 0;color:#1e8449">✔ GeoJSON et registre alignés, PlotID uniques, aucun nom manquant</div>' : '<div class="hint" style="margin:2px 0 0;color:#c0392b">⚠ Contrôle non conforme : voir le détail</div>')
+      + defoControleQualiteHtml(r.controle_qualite)
       + (r.exclus_detail&&r.exclus_detail.length ? '<details><summary class="hint" style="cursor:pointer;margin:0">Polygones non repris</summary><div class="hint" style="margin:0">'+r.exclus_detail.map(x=>esc(x[0])+' : '+esc(x[1])).join('<br>')+'</div></details>' : '')
       + (r.base_ecorigine ? (r.base_ecorigine.erreur ? '<div class="hint" style="margin:2px 0 0;color:#c0392b">⚠ Non ajoutée à la base ECORIGINE : '+esc(r.base_ecorigine.erreur)+'</div>'
             : r.base_ecorigine.version ? '<div class="hint" style="margin:2px 0 0;color:#2c5fae;font-weight:600">✔ Ajoutée à la base ECORIGINE : v'+r.base_ecorigine.version+' ('+fmtNum(r.base_ecorigine.parcelles_base)+' parcelles, +'+fmtNum(r.base_ecorigine.ajoutes)+(r.base_ecorigine.remplaces?', '+fmtNum(r.base_ecorigine.remplaces)+' remplacées':'')+'). Les prochaines analyses utilisent cette version.</div>'
