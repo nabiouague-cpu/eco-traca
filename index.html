@@ -3693,7 +3693,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-19-217';
+const APP_VERSION = '2026-10-19-218';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -23353,9 +23353,11 @@ function qcTransfertSuivant(){
   if (prochain){ pl.repId = prochain.x.id; render(); } else { showToast('Tous les questionnaires terminés sont saisis dans Forms.', 'success'); render(); }
 }
 // Lignes « question → reponse » dans l'ordre du formulaire, pour la reponse donnee (seules les questions du chemin suivi).
+// Nom de la coopérative tel qu'il est enregistré chez CARGILL (champ « nom_forms » de la fiche) : s'il existe, il remplace le nom ORIGEN dans Forms.
+function qcNomForms(coop){ return coop ? (String(coop.nom_forms||'').trim() || coop.nom || '') : ''; }
 function qcTransfertLignes(x){
-  const r = x.reponses || {};
-  return QC_QUESTIONS.filter(q=>qcVisible(q, r)).map(q=>({ q, valeur: qcValeur(r, q.cle) }));
+  const r = x.reponses || {}, d = qcDemandeParId(x.demande_id), coop = d ? qcCoopDe(d) : null;
+  return QC_QUESTIONS.filter(q=>qcVisible(q, r)).map(q=>({ q, valeur: (q.cle==='cooperative' && coop && String(coop.nom_forms||'').trim()) ? qcNomForms(coop) : qcValeur(r, q.cle) }));
 }
 async function qcCopierTexte(texte, libelle){
   try{ await navigator.clipboard.writeText(String(texte||'')); showToast((libelle||'Réponse')+' copié'+(libelle&&/e$/.test(libelle)?'e':'')+' — colle dans Forms (Ctrl+V).', 'success'); }
@@ -23452,7 +23454,7 @@ const QC_AUTOMATE_URL = 'https://nabiouague-cpu.github.io/eco-traca/automate/ori
 function qcAutomateLot(demandeId){
   const d = qcDemandeParId(demandeId); const coop = d ? qcCoopDe(d) : null;
   const restants = qcTransfertReponses(demandeId).filter(l=>!l.transmis);
-  return { origen_forms_lot: true, cooperative: coop ? coop.nom : '', demande_id: demandeId, lien: qcLienForms() || '',
+  return { origen_forms_lot: true, cooperative: coop ? qcNomForms(coop) : '', demande_id: demandeId, lien: qcLienForms() || '',
     questions: QC_QUESTIONS.map(q=>({ cle:q.cle, libelle:q.libelle, type:q.type })),
     reponses: restants.map(l=>{ const valeurs = {}; qcTransfertLignes(l.x).forEach(li=>{ if (li.valeur) valeurs[li.q.cle] = li.valeur; }); return { id:l.x.id, nom:l.nom, valeurs }; }) };
 }
