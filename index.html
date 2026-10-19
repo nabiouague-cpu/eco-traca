@@ -3693,7 +3693,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-19-219';
+const APP_VERSION = '2026-10-19-220';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -18174,16 +18174,21 @@ function defoCombinables(){
   });
   return Array.from(par.values()).sort((a,b)=>String(a.cooperative_nom).localeCompare(String(b.cooperative_nom),'fr'));
 }
+function defoCombineDefaut(){
+  const fin = new Set(defoEnvoiLignes().map(r=>r.cle));
+  return new Set(defoCombinables().filter(x=>fin.has(String(x.cooperative_nom||'').trim().toUpperCase())).map(x=>x.id));
+}
 function ouvrirDefoCombine(){ openModal('defoCombine', { choisis:null }); }
-function defoCombineBascule(id, on){ const m = state.modal.payload; if (!m.choisis) m.choisis = new Set(defoCombinables().map(x=>x.id)); if (on) m.choisis.add(id); else m.choisis.delete(id); const b = document.getElementById('cmb-go'); if (b) b.textContent = 'Générer le rapport ('+m.choisis.size+')'; }
+function defoCombineBascule(id, on){ const m = state.modal.payload; if (!m.choisis) m.choisis = defoCombineDefaut(); if (on) m.choisis.add(id); else m.choisis.delete(id); const b = document.getElementById('cmb-go'); if (b) b.textContent = 'Générer le rapport ('+m.choisis.size+')'; }
 function defoModalCombineHtml(){
-  const L = defoCombinables(), m = state.modal.payload; if (!m.choisis) m.choisis = new Set(L.map(x=>x.id));
+  const L = defoCombinables(), m = state.modal.payload; if (!m.choisis) m.choisis = defoCombineDefaut();
+  const finSet = new Set(defoEnvoiLignes().map(r=>r.cle));
   const lignes = L.map(x=>{
     const r = x.resume||{}, nb = (r.problemes||[]).reduce((t,p)=>t+(p.nb||0),0);
-    return '<label style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px solid var(--border)"><input type="checkbox" '+(m.choisis.has(x.id)?'checked ':'')+'onchange="defoCombineBascule(\''+escJs(x.id)+'\',this.checked)" style="margin-top:3px"><span><b>'+esc(x.cooperative_nom)+'</b><br><span class="hint" style="margin:0">analyse du '+esc(dateFr(String(x.created_at).slice(0,10)))+' · '+fmtNum(r.polygones||0)+' polygones · '+fmtNum(r.surface_ha||0)+' ha · '+fmtNum(nb)+' polygone(s) concerné(s) par une anomalie</span></span></label>';
+    return '<label style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px solid var(--border)"><input type="checkbox" '+(m.choisis.has(x.id)?'checked ':'')+'onchange="defoCombineBascule(\''+escJs(x.id)+'\',this.checked)" style="margin-top:3px"><span><b>'+esc(x.cooperative_nom)+'</b>'+(finSet.has(String(x.cooperative_nom||'').trim().toUpperCase()) ? ' <span style="background:#e3f4e8;color:#1e6b3a;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:600">base finale</span>' : '')+'<br><span class="hint" style="margin:0">analyse du '+esc(dateFr(String(x.created_at).slice(0,10)))+' · '+fmtNum(r.polygones||0)+' polygones · '+fmtNum(r.surface_ha||0)+' ha · '+fmtNum(nb)+' polygone(s) concerné(s) par une anomalie</span></span></label>';
   }).join('');
   return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:640px;max-height:90vh;overflow:auto"><h3>Rapport combiné</h3>'
-    + '<div class="hint" style="margin:0 0 8px">Un seul fichier Excel pour plusieurs coopératives : une synthèse comparée (une ligne par coopérative) puis le détail des anomalies, avec une colonne « Coopérative ». Pour chaque coopérative, c\'est sa dernière analyse terminée qui est utilisée.</div>'
+    + '<div class="hint" style="margin:0 0 8px">Un seul fichier Excel pour plusieurs coopératives : une synthèse comparée (une ligne par coopérative), le détail des anomalies (colonne « Coopérative ») et, pour celles arrivées à la <b>base finale</b>, l\'onglet « État des certificats » (producteurs validés, potentiel de livraison validé, date de validité du certificat, autorisation de livrer). Les coopératives à la base finale sont cochées d\'office.</div>'
     + '<div id="modal-fields">'+(L.length ? lignes : '<div class="hint">Aucune analyse terminée pour le moment.</div>')+'<div id="defo-erreur" style="display:none;color:#c0392b;font-size:13px;margin:6px 0"></div></div>'
     + '<div class="actions"><button class="btn" onclick="closeModal()">Annuler</button>'+(L.length?'<button class="btn btn-primary" id="cmb-go" onclick="defoCombineGenerer()">Générer le rapport ('+m.choisis.size+')</button>':'')+'</div></div></div>';
 }
@@ -18226,6 +18231,14 @@ async function defoCombineGenerer(){
       w['!cols'] = [{wch:28}].concat(cumul[d].ent.map((e,i)=>({ wch: i===0?30:Math.max(12, Math.min(60, String(e).length+4)) }))); w['!autofilter'] = { ref:'A1:'+XLSX.utils.encode_col(cumul[d].ent.length)+(cumul[d].lignes.length+1) };
       XLSX.utils.book_append_sheet(wb, w, d.slice(0,31));
     });
+    const etat = defoEnvoiLignes().filter(r=>L.some(x=>String(x.cooperative_nom||'').trim().toUpperCase()===r.cle));
+    if (etat.length){
+      const en = ['Coopérative','Producteurs validés','Potentiel de livraison validé (t)','Date de validité du certificat','Jours restants','Autorisée à livrer','Observation'];
+      const rows2 = [en].concat(etat.map(r=>[r.nom, r.prod, r.pot, r.lic.certifiee ? (r.expiration ? dateFr(r.expiration) : 'non renseignée') : 'non certifiée', r.jours, r.lic.autorise, r.lic.obs]));
+      rows2.push(['TOTAL', etat.reduce((t,r)=>t+(r.prod||0),0), Math.round(etat.reduce((t,r)=>t+(r.pot||0),0)*10)/10, '', '', '', '']);
+      const w3 = XLSX.utils.aoa_to_sheet(rows2); w3['!cols'] = [34,18,22,22,12,16,56].map(w=>({ wch:w })); w3['!freeze'] = { xSplit:1, ySplit:1 }; w3['!autofilter'] = { ref:'A1:G'+rows2.length };
+      XLSX.utils.book_append_sheet(wb, w3, 'Etat des certificats');
+    }
     const d = new Date(), pad = n=>String(n).padStart(2,'0');
     XLSX.writeFile(wb, 'Rapport_combine_'+L.length+'_cooperatives_'+d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'.xlsx');
     closeModal(); showToast('Rapport combiné généré ('+L.length+' coopérative'+(L.length>1?'s':'')+').', 'success');
@@ -18258,7 +18271,7 @@ function defoEnvoiLignes(){
     if (x.etape==='base_finale' && x.statut==='terminee' && x.resume) e.fin = plus(e.fin, x);
     par.set(k, e);
   });
-  return Array.from(par.values()).filter(e=>e.analyse || e.fin).map(e=>{
+  return Array.from(par.values()).filter(e=>e.fin).map(e=>{
     const coop = carteCoopParNom(e.nom), jours = coop ? coopJoursLicence(coop) : null, lic = defoLicenceEtat(coop, jours);
     const r = e.fin ? e.fin.resume : null;
     const suspect = defoBaseSuspecte(r);
@@ -18330,30 +18343,54 @@ function defoEnvoiBascule(cle, on){
   const m = state.modal.payload; if (!m.choisis) m.choisis = new Set(defoEnvoiLignes().filter(r=>!r.suspect).map(r=>r.cle));
   if (on) m.choisis.add(cle); else m.choisis.delete(cle);
   const n = m.choisis.size; ['env-n1','env-n2'].forEach(i=>{ const b = document.getElementById(i); if (b) b.textContent = n; });
+  defoEnvoiMajApercu();
+}
+function defoEnvoiLic(r){ return r.lic.certifiee ? (r.expiration ? dateFr(r.expiration)+(r.jours!=null ? (r.jours<0 ? ' (expirée depuis '+(-r.jours)+' j)' : ' ('+r.jours+' j restants)') : '') : 'date non renseignée') : 'non certifiée'; }
+function defoEnvoiAutorisation(r){ return r.lic.autorise+(r.lic.declarer ? ' — déclarer immédiatement les volumes vendus' : ''); }
+const DEFO_ENVOI_CONDITION = 'Condition : lorsque le délai avant l\'expiration de la licence d\'une coopérative atteint '+DEFO_ENVOI_SEUIL_J+' jours, elle doit déclarer immédiatement à ECORIGINE les volumes vendus.';
+// Message groupé : introduction + tableau (HTML pour le collage dans un e-mail, texte en secours)
+function defoEnvoiGroupeHtml(rows, intro){
+  const cA = a=>a==='Oui' ? '#1e6b3a' : a==='Non' ? '#a8281c' : '#8a5a00';
+  const th = 'border:1px solid #b9c4bf;padding:6px 10px;background:#e8f1ec;text-align:left;font-size:13px;font-family:Arial,sans-serif';
+  const td = 'border:1px solid #b9c4bf;padding:6px 10px;font-size:13px;font-family:Arial,sans-serif';
+  const para = String(intro||'').split(/\n{2,}/).map(b=>'<p style="margin:0 0 10px;font-family:Arial,sans-serif;font-size:14px">'+esc(b).replace(/\n/g,'<br>')+'</p>').join('');
+  const tot = rows.reduce((t,r)=>t+(r.prod||0),0), totT = Math.round(rows.reduce((t,r)=>t+(r.pot||0),0)*10)/10;
+  const corps = rows.map(r=>'<tr><td style="'+td+';font-weight:bold">'+esc(r.nom)+'</td><td style="'+td+';text-align:right">'+(r.prod!=null ? fmtNum(r.prod) : '—')+'</td><td style="'+td+';text-align:right">'+(r.pot!=null ? String(r.pot).replace('.',',') : '—')+'</td><td style="'+td+'">'+esc(defoEnvoiLic(r))+'</td><td style="'+td+';font-weight:bold;color:'+cA(r.lic.autorise)+'">'+esc(defoEnvoiAutorisation(r))+'</td></tr>').join('');
+  return para + '<table style="border-collapse:collapse;margin:4px 0 12px"><thead><tr><th style="'+th+'">Coopérative</th><th style="'+th+'">Producteurs validés</th><th style="'+th+'">Potentiel de livraison validé (t)</th><th style="'+th+'">Date de validité du certificat</th><th style="'+th+'">Autorisée à livrer</th></tr></thead><tbody>'+corps
+    + '<tr><td style="'+td+';font-weight:bold;background:#f1f5f3">TOTAL</td><td style="'+td+';text-align:right;font-weight:bold;background:#f1f5f3">'+fmtNum(tot)+'</td><td style="'+td+';text-align:right;font-weight:bold;background:#f1f5f3">'+String(totT).replace('.',',')+'</td><td style="'+td+';background:#f1f5f3"></td><td style="'+td+';background:#f1f5f3"></td></tr></tbody></table>'
+    + '<p style="margin:0 0 10px;font-family:Arial,sans-serif;font-size:13px"><i>'+esc(DEFO_ENVOI_CONDITION)+'</i></p>';
+}
+function defoEnvoiGroupeTexte(rows, intro){
+  const l = [String(intro||'').trim(), ''];
+  rows.forEach(r=>l.push('• '+r.nom+' — '+(r.prod!=null ? fmtNum(r.prod) : '—')+' producteurs validés · '+(r.pot!=null ? String(r.pot).replace('.',',') : '—')+' t · certificat : '+defoEnvoiLic(r)+' · autorisée à livrer : '+defoEnvoiAutorisation(r)));
+  l.push('', DEFO_ENVOI_CONDITION);
+  return l.join('\n');
+}
+function defoEnvoiMajApercu(){
+  const el = document.getElementById('env-apercu'); if (!el || !state.modal || !state.modal.payload) return;
+  const m = state.modal.payload, rows = defoEnvoiLignes().filter(r=>m.choisis && m.choisis.has(r.cle));
+  el.innerHTML = rows.length ? defoEnvoiGroupeHtml(rows, fv('env_intro')) : '<div class="hint">Coche au moins une coopérative.</div>';
 }
 function defoModalEnvoiHtml(){
   const R = defoEnvoiLignes(), m = state.modal.payload; if (!m.choisis) m.choisis = new Set(R.filter(r=>!r.suspect).map(r=>r.cle));
   const cAut = a=>a==='Oui' ? '#1e6b3a' : a==='Non' ? '#a8281c' : '#8a5a00';
   const lignes = R.map(r=>{
-    const lic = r.expiration ? dateFr(r.expiration)+(r.jours!=null ? ' · '+(r.jours<0 ? 'expirée depuis '+(-r.jours)+' j' : r.jours+' j') : '') : (r.lic.certifiee ? 'date inconnue' : 'non certifiée');
     return '<label style="display:flex;gap:8px;align-items:flex-start;padding:7px 0;border-bottom:1px solid var(--border)"><input type="checkbox" '+(m.choisis.has(r.cle)?'checked ':'')+'onchange="defoEnvoiBascule(\''+escJs(r.cle)+'\',this.checked)" style="margin-top:3px"><span style="flex:1"><b>'+esc(r.nom)+'</b>'
-      + '<br><span class="hint" style="margin:0">'+(r.prod!=null ? fmtNum(r.prod)+' producteurs conformes · '+String(r.pot).replace('.',',')+' t' : 'pas de base finale')+' · licence : '+esc(lic)+' · <b style="color:'+cAut(r.lic.autorise)+'">livrer : '+esc(r.lic.autorise)+'</b>'
+      + '<br><span class="hint" style="margin:0">'+(r.prod!=null ? fmtNum(r.prod)+' producteurs validés · '+String(r.pot).replace('.',',')+' t' : 'chiffres indisponibles')+' · certificat : '+esc(defoEnvoiLic(r))+' · <b style="color:'+cAut(r.lic.autorise)+'">livrer : '+esc(r.lic.autorise)+'</b>'
       + (r.emails.length ? '' : ' · <span style="color:#c0392b">aucune adresse e-mail</span>')+(r.suspect ? '<br><b style="color:#c0392b">⚠ Chiffres incohérents ('+esc(r.suspect)+') : refaire l\'analyse et la base finale avant d\'envoyer.</b>' : '')+'</span></span></label>';
   }).join('');
-  const prem = R.find(r=>m.choisis.has(r.cle)) || R[0];
-  return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:720px;max-height:92vh;overflow:auto"><h3>Envoyer par e-mail</h3>'
-    + '<div class="hint" style="margin:0 0 8px">Coche les coopératives. Tu peux écrire à chacune (rapport d\'analyse et données validées, dans « Documents reçus » de son portail) et/ou envoyer un seul mail groupé à un partenaire avec le tableau Excel de l\'état des certificats. Les deux mails rappellent la condition : <b>à '+DEFO_ENVOI_SEUIL_J+' jours avant l\'expiration de la licence, déclaration immédiate des volumes vendus à ECORIGINE</b>.</div>'
-    + '<div id="modal-fields">' + (R.length ? lignes : '<div class="hint">Aucune analyse ou base finale terminée pour le moment.</div>')
-    + '<label class="field" style="margin-top:12px">Message ajouté en tête <span class="hint" style="margin:0">(facultatif, pour les mails individuels)</span><textarea name="env_extra" style="min-height:50px"></textarea></label>'
-    + '<div style="margin-top:10px;padding:10px 12px;border:1px solid var(--border);border-radius:8px"><b>Mail groupé au partenaire</b>'
-    + '<label class="field">Adresse(s) du partenaire <span class="hint" style="margin:0">(séparées par une virgule)</span><input type="text" name="env_part" autocomplete="off" placeholder="nom@partenaire.com"></label>'
-    + '<label class="field">Objet<input type="text" name="env_objet" value="ECORIGINE — État de validité des certificats des coopératives"></label>'
-    + '<label class="field">Introduction<textarea name="env_intro" style="min-height:70px">Bonjour,\n\nVeuillez trouver ci-dessous l\'état de validité des certificats des coopératives concernées : producteurs conformes, potentiel conforme, date d\'expiration de la licence et autorisation de livrer.</textarea></label>'
-    + '<label style="display:flex;gap:8px;align-items:center;margin:6px 0"><input type="checkbox" name="env_liens" checked> Joindre les liens vers les rapports d\'analyse et les données validées <span class="hint" style="margin:0">(valables 30 jours)</span></label></div>'
-    + '<details style="margin-top:10px"><summary class="hint" style="cursor:pointer;margin:0">Aperçu du message individuel'+(prem?' ('+esc(prem.nom)+')':'')+'</summary><pre style="white-space:pre-wrap;font-family:inherit;font-size:12.5px;background:#f6f7f6;border-radius:8px;padding:10px;margin:6px 0 0">'+(prem ? esc(defoEnvoiMessageCoop(prem, '')) : '')+'</pre></details>'
+  const intro0 = 'Bonjour,\n\nVeuillez trouver ci-dessous l\'état des coopératives dont les données sont validées : producteurs validés, potentiel de livraison validé, date de validité du certificat et autorisation de livrer.';
+  return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:760px;max-height:92vh;overflow:auto"><h3>Envoyer par e-mail</h3>'
+    + '<div class="hint" style="margin:0 0 8px">Coopératives arrivées à la <b>base finale</b>. Coche celles qui t\'intéressent, puis : <b>mails individuels</b> (rapport d\'analyse et données validées, envoyés à chaque coopérative) ou <b>message groupé</b> à copier pour ton partenaire.</div>'
+    + '<div id="modal-fields">' + (R.length ? lignes : '<div class="hint">Aucune coopérative n\'est encore arrivée à la base finale.</div>')
+    + (R.length ? '<div style="margin-top:12px;padding:10px 12px;border:1px solid var(--border);border-radius:8px"><b>Message groupé (à copier)</b>'
+    + '<label class="field">Objet<div style="display:flex;gap:6px"><input type="text" name="env_objet" value="ECORIGINE — État des coopératives : certificats et autorisation de livrer" style="flex:1"><button class="btn btn-compact" type="button" onclick="defoEnvoiCopierObjet()">Copier l\'objet</button></div></label>'
+    + '<label class="field">Introduction<textarea name="env_intro" style="min-height:70px" oninput="defoEnvoiMajApercu()">'+esc(intro0)+'</textarea></label>'
+    + '<div class="hint" style="margin:6px 0 4px">Aperçu (le tableau se met à jour avec les cases cochées) :</div><div id="env-apercu" style="background:#fff;border:1px solid var(--border);border-radius:8px;padding:10px;overflow:auto">'+defoEnvoiGroupeHtml(R.filter(r=>m.choisis.has(r.cle)), intro0)+'</div></div>'
+    + '<label class="field" style="margin-top:12px">Message ajouté en tête des mails individuels <span class="hint" style="margin:0">(facultatif)</span><textarea name="env_extra" style="min-height:50px"></textarea></label>' : '')
     + '<div id="defo-erreur" style="display:none;color:#c0392b;font-size:13px;margin:6px 0"></div></div>'
-    + '<div class="actions" style="flex-wrap:wrap;gap:6px"><button class="btn" onclick="closeModal()">Annuler</button>'
-    + (R.length ? '<button class="btn" onclick="defoEnvoiTelecharger()">⬇ Tableau Excel</button><button class="btn" id="env-test" onclick="defoEnvoiGroupe(true)">Test groupé (à moi)</button><button class="btn" id="env-grp" onclick="defoEnvoiGroupe(false)">✉ Mail groupé (<span id="env-n1">'+m.choisis.size+'</span>)</button><button class="btn btn-primary" id="env-ind" onclick="defoEnvoiIndividuel()">✉ Mails individuels (<span id="env-n2">'+m.choisis.size+'</span>)</button>' : '')
+    + '<div class="actions" style="flex-wrap:wrap;gap:6px"><button class="btn" onclick="closeModal()">Fermer</button>'
+    + (R.length ? '<button class="btn" onclick="defoEnvoiTelecharger()">⬇ Tableau Excel</button><button class="btn btn-primary" onclick="defoEnvoiCopier()">📋 Copier le message (<span id="env-n1">'+m.choisis.size+'</span>)</button><button class="btn" id="env-ind" onclick="defoEnvoiIndividuel()">✉ Mails individuels (<span id="env-n2">'+m.choisis.size+'</span>)</button>' : '')
     + '</div></div></div>';
 }
 function defoEnvoiChoisies(){
@@ -18403,37 +18440,21 @@ async function defoEnvoiIndividuel(){
   if (echecs.length) showToast(faits.length+' mail(s) envoyé(s). Échecs : '+echecs.join(' ; '));
   else showToast(faits.length+' mail'+(faits.length>1?'s':'')+' envoyé'+(faits.length>1?'s':'')+(sans.length ? ' ('+sans.length+' sans adresse ignorée'+(sans.length>1?'s':'')+')' : '')+'.', 'success');
 }
-async function defoEnvoiGroupe(test){
+async function defoEnvoiCopier(){
   const rows = defoEnvoiChoisies(); if (!rows.length){ defoErreurForm('Coche au moins une coopérative.'); return; }
-  const dest = String(fv('env_part')||'').split(/[\s,;]+/).map(x=>x.trim()).filter(Boolean);
-  if (!test && !dest.length){ defoErreurForm('Indique l\'adresse e-mail du partenaire.'); return; }
-  const objet = (fv('env_objet')||'').trim(), intro = (fv('env_intro')||'').trim();
-  if (!objet || !intro){ defoErreurForm('L\'objet et l\'introduction sont obligatoires.'); return; }
-  if (!test && !confirm('Envoyer le mail groupé ('+rows.length+' coopérative'+(rows.length>1?'s':'')+') à :\n'+dest.join('\n')+' ?')) return;
-  const avecLiens = !!(document.querySelector('#modal-fields [name="env_liens"]')||{}).checked;
-  const btn = document.getElementById(test ? 'env-test' : 'env-grp'); const txt0 = btn ? btn.innerHTML : ''; if (btn){ btn.disabled = true; btn.textContent = 'Préparation…'; }
+  const intro = (fv('env_intro')||'').trim(); if (!intro){ defoErreurForm('L\'introduction est vide.'); return; }
+  const html = defoEnvoiGroupeHtml(rows, intro), txt = defoEnvoiGroupeTexte(rows, intro);
   try {
-    let docs = [];
-    if (avecLiens){
-      const bk = supabaseClient.storage.from('documents-coop'), SEC = 30*86400;
-      for (const r of rows){
-        const liens = [], vus = new Set();
-        const fs = [];
-        if (r.analyse){ const f = (r.analyse.fichiers||[]).find(q=>q.type==='rapport' && q.path); if (f) fs.push(['Rapport d\'analyse', f]); }
-        if (r.fin) defoUtiles(r.fin.fichiers).forEach(f=>fs.push([/registre/i.test(f.type+' '+f.nom) ? 'Registre validé' : /geo/i.test(f.type+' '+f.nom) ? 'Géolocalisation validée' : f.nom, f]));
-        for (const x of fs){ if (vus.has(x[1].path)) continue; vus.add(x[1].path); const su = await bk.createSignedUrl(x[1].path, SEC); if (su.data && su.data.signedUrl) liens.push({ nom:x[0], url:su.data.signedUrl }); }
-        docs.push({ cooperative:r.nom, liens });
-      }
-    }
-    const wb = await defoEnvoiClasseur(rows, docs.filter(d=>d.liens.length)), buf = await wb.xlsx.writeBuffer();
-    const body = { mode:test?'test':'envoi', destinataires:dest, objet, introduction:intro, seuil_jours:DEFO_ENVOI_SEUIL_J, fichier_nom:'Etat_certificats_'+new Date().toISOString().slice(0,10)+'.xlsx', xlsx_base64:defoBase64(buf),
-      lignes:rows.map(r=>({ cooperative:r.nom, producteurs:r.prod, potentiel_t:r.pot, date_expiration:r.expiration, jours:r.jours, autorise:r.lic.autorise, observation:r.lic.obs })), documents:docs };
-    const rep = await supabaseClient.functions.invoke('email-groupe-partenaire', { body });
-    if (rep.error){ let d = rep.error.message||''; try { const j = await rep.error.context.json(); if (j && j.error) d = j.error; } catch(e){} throw new Error(d||'envoi impossible'); }
-    if (rep.data && rep.data.error) throw new Error(rep.data.error);
-    if (test){ if (btn){ btn.disabled = false; btn.innerHTML = txt0; } showToast('Test envoyé à ton adresse. Vérifie-le avant l\'envoi réel.', 'success'); }
-    else { closeModal(); showToast('Mail groupé envoyé à '+dest.join(', ')+' ('+rows.length+' coopérative'+(rows.length>1?'s':'')+').', 'success'); }
-  } catch(e){ if (btn){ btn.disabled = false; btn.innerHTML = txt0; } defoErreurForm('Échec : '+(e.message||e)); }
+    if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) await navigator.clipboard.write([new ClipboardItem({ 'text/html':new Blob([html], { type:'text/html' }), 'text/plain':new Blob([txt], { type:'text/plain' }) })]);
+    else await navigator.clipboard.writeText(txt);
+    showToast('Message copié ('+rows.length+' coopérative'+(rows.length>1?'s':'')+') — colle-le dans ton e-mail (Ctrl+V).', 'success');
+  } catch(e){
+    try { await navigator.clipboard.writeText(txt); showToast('Message copié en texte simple (sans mise en forme du tableau).', 'success'); }
+    catch(e2){ defoErreurForm('Copie impossible dans ce navigateur : sélectionne l\'aperçu et copie-le (Ctrl+C).'); }
+  }
+}
+async function defoEnvoiCopierObjet(){
+  try { await navigator.clipboard.writeText(String(fv('env_objet')||'')); showToast('Objet copié.', 'success'); } catch(e){ showToast('Copie impossible : sélectionne le texte et copie-le (Ctrl+C).'); }
 }
 const DEFO_ECHELLE = { rayon_km:2, d_bas:5, d_haut:45, c_bas:480, c_haut:660, demi:88 };
 function defoRendementPour(d, E){ const t = Math.min(1, Math.max(0, (d-E.d_bas)/(E.d_haut-E.d_bas))), c = E.c_bas + (E.c_haut-E.c_bas)*t; return [c-E.demi, c, c+E.demi]; }
