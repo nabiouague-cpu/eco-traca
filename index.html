@@ -3697,7 +3697,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-19-229';
+const APP_VERSION = '2026-10-19-230';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4633,9 +4633,15 @@ let _pdfJs = null;
 function chargerPdfJs(){
   if (_pdfJs) return _pdfJs;
   _pdfJs = (async()=>{
-    if (typeof pdfjsLib==='undefined') await chargerScriptExterne(PDFJS_CDN);
-    if (typeof pdfjsLib==='undefined') throw new Error('pdf.js indisponible');
-    pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_CDN;
+    if (typeof pdfjsLib==='undefined'){
+      await Promise.race([ chargerScriptExterne(PDFJS_CDN), new Promise((_,rej)=>setTimeout(()=>rej(new Error('le lecteur PDF ne se charge pas (connexion lente ou bloquée)')),20000)) ]);
+    }
+    if (typeof pdfjsLib==='undefined') throw new Error('lecteur PDF indisponible');
+    // le worker est recupere puis servi depuis un blob : evite les blocages de worker inter-domaines
+    try{
+      const rep = await fetch(PDFJS_WORKER_CDN); if (!rep.ok) throw new Error('worker');
+      pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(new Blob([await rep.text()], { type:'text/javascript' }));
+    }catch(_){ pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_CDN; }
     return pdfjsLib;
   })().catch(e=>{ _pdfJs = null; throw e; });
   return _pdfJs;
@@ -4901,7 +4907,7 @@ async function ccImporterContrat(inputEl){
       ? 'Champ(s) non trouvé(s) dans le PDF, à compléter à la main : '+manquants.join(', ')+'.'
       : 'Champs importés depuis le PDF — vérifie avant d\'enregistrer.';
   }catch(e){
-    if (statutEl) statutEl.textContent = e.message.includes('scan') ? e.message : '';
+    if (statutEl) statutEl.textContent = e.message.includes('scan') ? e.message : 'Lecture automatique impossible ('+e.message+') — remplis les champs à la main ; le fichier sera tout de même joint au contrat.';
     if (!e.message.includes('scan')) showToast('Échec de la lecture du PDF : '+e.message);
   }
 }
