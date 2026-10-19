@@ -3693,7 +3693,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-18-215';
+const APP_VERSION = '2026-10-19-216';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -17776,7 +17776,7 @@ function renderDefoVue(){
   if (nEnCours) h += '<div class="panel" style="border-left:4px solid #1f5fa8"><div style="padding:12px 18px"><b>⏳ '+nEnCours+' tâche'+(nEnCours>1?'s':'')+' en cours</b> <span class="hint" style="margin:0 0 0 6px">Quelques minutes. La liste se met à jour toute seule.</span></div></div>';
   h += '<div class="panel"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 18px 8px">'
     + '<div><b>Dossiers des coopératives</b><div class="hint" style="margin:2px 0 0">Une coopérative = un dossier = un seul parcours : <b>Préparation → Whisp → Analyse → Aperçu → Nettoyage → Base finale</b>. Dépose ses fichiers (KML, KMZ, GPX, GeoJSON, shapefile .zip), puis passe d\'un onglet à l\'autre : l\'onglet à faire s\'ouvre tout seul, les suivants attendent que le précédent soit terminé.</div></div>'
-    + '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="ouvrirDefoCombine()" title="Un seul rapport Excel pour plusieurs coopératives">📊 Rapport combiné</button><button class="btn btn-primary" onclick="ouvrirDefoPrep()">🌳 Nouvelle préparation</button></div></div>';
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="ouvrirDefoCombine()" title="Un seul rapport Excel pour plusieurs coopératives">📊 Rapport combiné</button><button class="btn" onclick="ouvrirDefoEnvoi()" title="Mails individuels aux coopératives ou mail groupé à un partenaire">✉ Envoyer par e-mail</button><button class="btn btn-primary" onclick="ouvrirDefoPrep()">🌳 Nouvelle préparation</button></div></div>';
   if (state.defoIndispo) h += '<div class="hint" style="padding:0 18px 14px;color:var(--warn)">Le suivi des analyses n\'est pas encore disponible sur cette base.</div>';
   else if (!state.defoCharge) h += '<div class="hint" style="padding:0 18px 14px">Chargement…</div>';
   else if (!liste.length) h += '<div class="hint" style="padding:0 18px 14px">Aucune préparation pour le moment.</div>';
@@ -17870,6 +17870,7 @@ function defoModalsHtml(){
   const m = state.modal; if (m && m.type==='defoAnalyse') return defoModalAnalyseHtml();
   if (m && m.type==='defoFinale') return defoModalFinaleHtml();
   if (m && m.type==='defoCombine') return defoModalCombineHtml();
+  if (m && m.type==='defoEnvoi') return defoModalEnvoiHtml();
   if (!m || m.type!=='defoPrep') return '';
   const opts = [...state.cooperatives].sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr')).map(c=>'<option value="'+esc(c.nom)+'"></option>').join('');
   return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:520px"><h3>Préparer les polygones</h3><div id="modal-fields">'
@@ -18140,6 +18141,199 @@ async function defoCombineGenerer(){
     XLSX.writeFile(wb, 'Rapport_combine_'+L.length+'_cooperatives_'+d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'.xlsx');
     closeModal(); showToast('Rapport combiné généré ('+L.length+' coopérative'+(L.length>1?'s':'')+').', 'success');
   } catch(e){ if (btn){ btn.disabled = false; btn.textContent = 'Générer le rapport ('+L.length+')'; } defoErreurForm('Échec : '+(e.message||e)); }
+}
+// ===== Envoi par e-mail : mails individuels aux coopératives + mail groupé à un partenaire (état de validité des certificats) =====
+const DEFO_ENVOI_SEUIL_J = 15;
+// Règle d'autorisation de livrer, d'après la licence : Oui / Non / À vérifier. Le délai atteint 15 jours => déclaration immédiate des volumes vendus.
+function defoLicenceEtat(c, jours){
+  if (!c) return { autorise:'À vérifier', obs:'Coopérative introuvable dans ORIGEN', declarer:false, certifiee:false };
+  if (c.statut!=='Certifiée') return { autorise:'Oui', obs:'Non certifiée : pas de licence à contrôler', declarer:false, certifiee:false };
+  if (jours===null || jours===undefined) return { autorise:'À vérifier', obs:'Date de fin de licence inconnue', declarer:false, certifiee:true };
+  if (jours<0) return { autorise:'Non', obs:'Licence expirée depuis '+(-jours)+' j', declarer:false, certifiee:true };
+  if (jours<=DEFO_ENVOI_SEUIL_J) return { autorise:'Oui', obs:'Licence expire dans '+jours+' j : déclaration immédiate des volumes vendus à ECORIGINE', declarer:true, certifiee:true };
+  return { autorise:'Oui', obs:'', declarer:false, certifiee:true };
+}
+function defoEnvoiLignes(){
+  const par = new Map(), cle = n=>String(n||'').trim().toUpperCase();
+  const plus = (a,b)=>(!a || String(b.created_at)>String(a.created_at)) ? b : a;
+  (state.defo||[]).forEach(x=>{
+    const k = cle(x.cooperative_nom); if (!k) return;
+    const e = par.get(k) || { nom:x.cooperative_nom, analyse:null, fin:null };
+    if (x.etape==='analyse' && x.statut==='terminee' && (x.fichiers||[]).some(f=>f.type==='rapport' && f.path)) e.analyse = plus(e.analyse, x);
+    if (x.etape==='base_finale' && x.statut==='terminee' && x.resume) e.fin = plus(e.fin, x);
+    par.set(k, e);
+  });
+  return Array.from(par.values()).filter(e=>e.analyse || e.fin).map(e=>{
+    const coop = carteCoopParNom(e.nom), jours = coop ? coopJoursLicence(coop) : null, lic = defoLicenceEtat(coop, jours);
+    const r = e.fin ? e.fin.resume : null;
+    return { cle:cle(e.nom), nom:coop ? coop.nom : e.nom, coop, analyse:e.analyse, fin:e.fin, jours, lic,
+      prod: r && r.producteurs!=null ? Number(r.producteurs) : null,
+      pot: r && r.tonnage_kg!=null ? Math.round(Number(r.tonnage_kg)/100)/10 : null,
+      expiration: coop && coop.date_fin_licence ? String(coop.date_fin_licence).slice(0,10) : '',
+      emails: coop ? [coop.email1, coop.email2, coop.email3].map(x=>String(x||'').trim()).filter(Boolean) : [] };
+  }).sort((a,b)=>String(a.nom).localeCompare(String(b.nom),'fr'));
+}
+function defoEnvoiMessageCoop(r, extra){
+  const l = [];
+  l.push('Veuillez trouver ci-joint le rapport d\'analyse de vos données'+(r.fin ? ' ainsi que vos données validées (registre et géolocalisation).' : '.'));
+  if (extra) { l.push(''); l.push(extra); }
+  l.push(''); l.push('Situation de votre coopérative :');
+  l.push('• Producteurs conformes : '+(r.prod!=null ? fmtNum(r.prod) : 'à confirmer'));
+  l.push('• Potentiel conforme : '+(r.pot!=null ? String(r.pot).replace('.',',')+' t' : 'à confirmer'));
+  if (r.lic.certifiee){
+    l.push('• Expiration de la licence : '+(r.expiration ? dateFr(r.expiration)+(r.jours!=null ? (r.jours<0 ? ' (expirée depuis '+(-r.jours)+' jours)' : ' ('+r.jours+' jours restants)') : '') : 'date non renseignée'));
+    l.push('• Autorisation de livrer : '+r.lic.autorise);
+  }
+  l.push('');
+  if (r.lic.declarer) l.push('⚠ Votre licence expire dans '+r.jours+' jours : vous devez dès maintenant déclarer immédiatement à ECORIGINE les volumes que vous avez vendus.');
+  l.push('Condition : lorsque le délai avant l\'expiration de votre licence atteint '+DEFO_ENVOI_SEUIL_J+' jours, vous devez déclarer immédiatement à ECORIGINE les volumes que vous avez vendus.');
+  return l.join('\n');
+}
+function defoBase64(buf){ const u = new Uint8Array(buf); let s = ''; for (let i=0;i<u.length;i+=0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i+0x8000)); return btoa(s); }
+// Classeur Excel « état de validité des certificats » (une ligne par coopérative) ; liens facultatifs en 2e onglet.
+async function defoEnvoiClasseur(rows, liens){
+  const ExcelJS = await qcChargerExcelJS();
+  const wb = new ExcelJS.Workbook(); wb.creator = 'ORIGEN · ECORIGINE'; wb.created = new Date();
+  const ws = wb.addWorksheet('État des certificats', { views:[{ state:'frozen', ySplit:4 }] });
+  const ent = ['Coopérative','Producteurs conformes','Potentiel conforme (t)','Date d\'expiration de la licence','Jours restants','Autorisée à livrer','Observation'];
+  qcBandeauTitre(ws, ent.length, 'État de validité des certificats des coopératives', 'ORIGEN · ECORIGINE — édité le '+dateFr(new Date().toISOString().slice(0,10))+'. Condition : lorsque le délai avant l\'expiration de la licence atteint '+DEFO_ENVOI_SEUIL_J+' jours, la coopérative doit déclarer immédiatement à ECORIGINE les volumes vendus.');
+  ws.getRow(3).height = 6;
+  ent.forEach((t,i)=>{ const c = ws.getCell(4, i+1); c.value = t; qcStyleCellule(c, { fill:QC_XL.accentSoft, gras:true, retour:true, h:i===0||i>=5?'left':'center' }); });
+  ws.getRow(4).height = 32;
+  [34,16,16,18,12,16,56].forEach((w,i)=>{ ws.getColumn(i+1).width = w; });
+  rows.forEach((r,k)=>{
+    const n = 5+k, vals = [r.nom, r.prod, r.pot, r.expiration ? new Date(r.expiration+'T12:00:00') : '', r.jours, r.lic.autorise, r.lic.obs];
+    vals.forEach((v,i)=>{
+      const c = ws.getCell(n, i+1); c.value = (v===null || v===undefined) ? '' : v;
+      qcStyleCellule(c, { fill:k%2 ? QC_XL.zebre : null, h:(i===0||i>=5)?'left':'center', retour:i===6, gras:i===0||i===5 });
+      if (i===1) c.numFmt = '#,##0'; if (i===2) c.numFmt = '#,##0.0'; if (i===3) c.numFmt = 'dd/mm/yyyy';
+      if (i===5){ const col = v==='Oui' ? ['FFE3F4E8','FF1E6B3A'] : v==='Non' ? ['FFFBE4E1','FFA8281C'] : ['FFFDF0D5','FF8A5A00']; c.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:col[0] } }; c.font = Object.assign({}, c.font, { color:{ argb:col[1] }, bold:true }); }
+      if (i===4 && v!==null && v!==undefined && v!=='' && v<=DEFO_ENVOI_SEUIL_J) c.font = Object.assign({}, c.font, { color:{ argb:QC_XL.danger }, bold:true });
+    });
+  });
+  const f = 5+rows.length;
+  const tot = ws.getCell(f, 1); tot.value = 'TOTAL'; qcStyleCellule(tot, { fill:QC_XL.gris, gras:true });
+  const s1 = ws.getCell(f, 2); s1.value = rows.reduce((t,r)=>t+(r.prod||0),0); s1.numFmt = '#,##0'; qcStyleCellule(s1, { fill:QC_XL.gris, gras:true, h:'center' });
+  const s2 = ws.getCell(f, 3); s2.value = Math.round(rows.reduce((t,r)=>t+(r.pot||0),0)*10)/10; s2.numFmt = '#,##0.0'; qcStyleCellule(s2, { fill:QC_XL.gris, gras:true, h:'center' });
+  for (let i=4;i<=ent.length;i++) qcStyleCellule(ws.getCell(f, i), { fill:QC_XL.gris });
+  if (liens && liens.length){
+    const w2 = wb.addWorksheet('Rapports et données');
+    ['Coopérative','Document','Lien (valable 30 jours)'].forEach((t,i)=>{ const c = w2.getCell(1, i+1); c.value = t; qcStyleCellule(c, { fill:QC_XL.accentSoft, gras:true }); });
+    [34,44,70].forEach((w,i)=>{ w2.getColumn(i+1).width = w; });
+    let n = 2;
+    liens.forEach(d=>d.liens.forEach(k=>{
+      qcStyleCellule(w2.getCell(n,1), {}); w2.getCell(n,1).value = d.cooperative;
+      qcStyleCellule(w2.getCell(n,2), {}); w2.getCell(n,2).value = k.nom;
+      const c = w2.getCell(n,3); c.value = { text:'Ouvrir', hyperlink:k.url }; qcStyleCellule(c, { couleur:'FF1B6CA8' }); n++;
+    }));
+  }
+  return wb;
+}
+function ouvrirDefoEnvoi(){ openModal('defoEnvoi', { choisis:null }); }
+function defoEnvoiBascule(cle, on){
+  const m = state.modal.payload; if (!m.choisis) m.choisis = new Set(defoEnvoiLignes().map(r=>r.cle));
+  if (on) m.choisis.add(cle); else m.choisis.delete(cle);
+  const n = m.choisis.size; ['env-n1','env-n2'].forEach(i=>{ const b = document.getElementById(i); if (b) b.textContent = n; });
+}
+function defoModalEnvoiHtml(){
+  const R = defoEnvoiLignes(), m = state.modal.payload; if (!m.choisis) m.choisis = new Set(R.map(r=>r.cle));
+  const cAut = a=>a==='Oui' ? '#1e6b3a' : a==='Non' ? '#a8281c' : '#8a5a00';
+  const lignes = R.map(r=>{
+    const lic = r.expiration ? dateFr(r.expiration)+(r.jours!=null ? ' · '+(r.jours<0 ? 'expirée depuis '+(-r.jours)+' j' : r.jours+' j') : '') : (r.lic.certifiee ? 'date inconnue' : 'non certifiée');
+    return '<label style="display:flex;gap:8px;align-items:flex-start;padding:7px 0;border-bottom:1px solid var(--border)"><input type="checkbox" '+(m.choisis.has(r.cle)?'checked ':'')+'onchange="defoEnvoiBascule(\''+escJs(r.cle)+'\',this.checked)" style="margin-top:3px"><span style="flex:1"><b>'+esc(r.nom)+'</b>'
+      + '<br><span class="hint" style="margin:0">'+(r.prod!=null ? fmtNum(r.prod)+' producteurs conformes · '+String(r.pot).replace('.',',')+' t' : 'pas de base finale')+' · licence : '+esc(lic)+' · <b style="color:'+cAut(r.lic.autorise)+'">livrer : '+esc(r.lic.autorise)+'</b>'
+      + (r.emails.length ? '' : ' · <span style="color:#c0392b">aucune adresse e-mail</span>')+'</span></span></label>';
+  }).join('');
+  const prem = R.find(r=>m.choisis.has(r.cle)) || R[0];
+  return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:720px;max-height:92vh;overflow:auto"><h3>Envoyer par e-mail</h3>'
+    + '<div class="hint" style="margin:0 0 8px">Coche les coopératives. Tu peux écrire à chacune (rapport d\'analyse et données validées, dans « Documents reçus » de son portail) et/ou envoyer un seul mail groupé à un partenaire avec le tableau Excel de l\'état des certificats. Les deux mails rappellent la condition : <b>à '+DEFO_ENVOI_SEUIL_J+' jours avant l\'expiration de la licence, déclaration immédiate des volumes vendus à ECORIGINE</b>.</div>'
+    + '<div id="modal-fields">' + (R.length ? lignes : '<div class="hint">Aucune analyse ou base finale terminée pour le moment.</div>')
+    + '<label class="field" style="margin-top:12px">Message ajouté en tête <span class="hint" style="margin:0">(facultatif, pour les mails individuels)</span><textarea name="env_extra" style="min-height:50px"></textarea></label>'
+    + '<div style="margin-top:10px;padding:10px 12px;border:1px solid var(--border);border-radius:8px"><b>Mail groupé au partenaire</b>'
+    + '<label class="field">Adresse(s) du partenaire <span class="hint" style="margin:0">(séparées par une virgule)</span><input type="text" name="env_part" autocomplete="off" placeholder="nom@partenaire.com"></label>'
+    + '<label class="field">Objet<input type="text" name="env_objet" value="ECORIGINE — État de validité des certificats des coopératives"></label>'
+    + '<label class="field">Introduction<textarea name="env_intro" style="min-height:70px">Bonjour,\n\nVeuillez trouver ci-dessous l\'état de validité des certificats des coopératives concernées : producteurs conformes, potentiel conforme, date d\'expiration de la licence et autorisation de livrer.</textarea></label>'
+    + '<label style="display:flex;gap:8px;align-items:center;margin:6px 0"><input type="checkbox" name="env_liens" checked> Joindre les liens vers les rapports d\'analyse et les données validées <span class="hint" style="margin:0">(valables 30 jours)</span></label></div>'
+    + '<details style="margin-top:10px"><summary class="hint" style="cursor:pointer;margin:0">Aperçu du message individuel'+(prem?' ('+esc(prem.nom)+')':'')+'</summary><pre style="white-space:pre-wrap;font-family:inherit;font-size:12.5px;background:#f6f7f6;border-radius:8px;padding:10px;margin:6px 0 0">'+(prem ? esc(defoEnvoiMessageCoop(prem, '')) : '')+'</pre></details>'
+    + '<div id="defo-erreur" style="display:none;color:#c0392b;font-size:13px;margin:6px 0"></div></div>'
+    + '<div class="actions" style="flex-wrap:wrap;gap:6px"><button class="btn" onclick="closeModal()">Annuler</button>'
+    + (R.length ? '<button class="btn" onclick="defoEnvoiTelecharger()">⬇ Tableau Excel</button><button class="btn" id="env-test" onclick="defoEnvoiGroupe(true)">Test groupé (à moi)</button><button class="btn" id="env-grp" onclick="defoEnvoiGroupe(false)">✉ Mail groupé (<span id="env-n1">'+m.choisis.size+'</span>)</button><button class="btn btn-primary" id="env-ind" onclick="defoEnvoiIndividuel()">✉ Mails individuels (<span id="env-n2">'+m.choisis.size+'</span>)</button>' : '')
+    + '</div></div></div>';
+}
+function defoEnvoiChoisies(){ const m = state.modal.payload; return defoEnvoiLignes().filter(r=>m.choisis.has(r.cle)); }
+async function defoEnvoiTelecharger(){
+  const rows = defoEnvoiChoisies(); if (!rows.length){ defoErreurForm('Coche au moins une coopérative.'); return; }
+  try { const wb = await defoEnvoiClasseur(rows, null); await qcTelechargerClasseur(wb, 'Etat_certificats_'+new Date().toISOString().slice(0,10)+'.xlsx'); }
+  catch(e){ defoErreurForm('Échec : '+(e.message||e)); }
+}
+async function defoCopierFichier(src, dest){
+  const bk = supabaseClient.storage.from('documents-coop');
+  const cp = await bk.copy(src, dest); if (!cp.error) return true;
+  const buf = await defoLireFichier(src);
+  const up = await bk.upload(dest, new Blob([buf]), { upsert:true }); if (up.error) throw new Error(up.error.message);
+  return true;
+}
+async function defoEnvoiIndividuel(){
+  const rows = defoEnvoiChoisies(); if (!rows.length){ defoErreurForm('Coche au moins une coopérative.'); return; }
+  const ok = rows.filter(r=>r.coop && r.emails.length), sans = rows.filter(r=>!(r.coop && r.emails.length));
+  if (!ok.length){ defoErreurForm('Aucune des coopératives cochées n\'a d\'adresse e-mail enregistrée.'); return; }
+  if (!confirm('Envoyer un mail à '+ok.length+' coopérative'+(ok.length>1?'s':'')+' ?\n\n'+ok.map(r=>'• '+r.nom+' → '+r.emails.join(', ')).join('\n')+(sans.length ? '\n\nSans adresse (ignorées) : '+sans.map(r=>r.nom).join(', ') : ''))) return;
+  const extra = (fv('env_extra')||'').trim(), expediteur = (state.session&&state.session.user&&state.session.user.email)||'ECORIGINE';
+  const btn = document.getElementById('env-ind'); if (btn){ btn.disabled = true; btn.textContent = 'Envoi en cours…'; }
+  const faits = [], echecs = [];
+  for (const r of ok){
+    try {
+      const envoiId = 'env_'+Date.now()+'_'+r.coop.id+'_'+Math.random().toString(36).slice(2,7), fichiers = [];
+      const sources = [];
+      if (r.analyse){ const f = (r.analyse.fichiers||[]).find(q=>q.type==='rapport' && q.path); if (f) sources.push(f); }
+      if (r.fin) defoUtiles(r.fin.fichiers).forEach(f=>sources.push(f));
+      for (const f of sources){ const path = r.coop.id+'/envois/'+envoiId+'/'+assainirNomFichier(f.nom); await defoCopierFichier(f.path, path); fichiers.push({ path, nom:f.nom }); }
+      if (!fichiers.length) throw new Error('aucun fichier à joindre');
+      const envoi = { id:envoiId, cooperative_id:r.coop.id, titre:'Rapport d\'analyse — '+r.nom, message:defoEnvoiMessageCoop(r, extra), fichiers, envoye_par:expediteur, lu:false };
+      const ins = await supabaseClient.from('envois_coop').insert(envoi); if (ins.error) throw new Error(ins.error.message);
+      state.envoisCoop = (state.envoisCoop||[]).concat([envoi]);
+      const rep = await supabaseClient.functions.invoke('email-envoi-documents', { body:{ envoi_id:envoiId } });
+      if (rep.error) throw new Error(rep.error.message || 'e-mail non parti');
+      if (rep.data && rep.data.error) throw new Error(rep.data.error);
+      faits.push(r.nom);
+    } catch(e){ echecs.push(r.nom+' ('+(e.message||e)+')'); }
+    await new Promise(res=>setTimeout(res, 700));
+  }
+  closeModal();
+  if (echecs.length) showToast(faits.length+' mail(s) envoyé(s). Échecs : '+echecs.join(' ; '));
+  else showToast(faits.length+' mail'+(faits.length>1?'s':'')+' envoyé'+(faits.length>1?'s':'')+(sans.length ? ' ('+sans.length+' sans adresse ignorée'+(sans.length>1?'s':'')+')' : '')+'.', 'success');
+}
+async function defoEnvoiGroupe(test){
+  const rows = defoEnvoiChoisies(); if (!rows.length){ defoErreurForm('Coche au moins une coopérative.'); return; }
+  const dest = String(fv('env_part')||'').split(/[\s,;]+/).map(x=>x.trim()).filter(Boolean);
+  if (!test && !dest.length){ defoErreurForm('Indique l\'adresse e-mail du partenaire.'); return; }
+  const objet = (fv('env_objet')||'').trim(), intro = (fv('env_intro')||'').trim();
+  if (!objet || !intro){ defoErreurForm('L\'objet et l\'introduction sont obligatoires.'); return; }
+  if (!test && !confirm('Envoyer le mail groupé ('+rows.length+' coopérative'+(rows.length>1?'s':'')+') à :\n'+dest.join('\n')+' ?')) return;
+  const avecLiens = !!(document.querySelector('#modal-fields [name="env_liens"]')||{}).checked;
+  const btn = document.getElementById(test ? 'env-test' : 'env-grp'); const txt0 = btn ? btn.innerHTML : ''; if (btn){ btn.disabled = true; btn.textContent = 'Préparation…'; }
+  try {
+    let docs = [];
+    if (avecLiens){
+      const bk = supabaseClient.storage.from('documents-coop'), SEC = 30*86400;
+      for (const r of rows){
+        const liens = [], vus = new Set();
+        const fs = [];
+        if (r.analyse){ const f = (r.analyse.fichiers||[]).find(q=>q.type==='rapport' && q.path); if (f) fs.push(['Rapport d\'analyse', f]); }
+        if (r.fin) defoUtiles(r.fin.fichiers).forEach(f=>fs.push([/registre/i.test(f.type+' '+f.nom) ? 'Registre validé' : /geo/i.test(f.type+' '+f.nom) ? 'Géolocalisation validée' : f.nom, f]));
+        for (const x of fs){ if (vus.has(x[1].path)) continue; vus.add(x[1].path); const su = await bk.createSignedUrl(x[1].path, SEC); if (su.data && su.data.signedUrl) liens.push({ nom:x[0], url:su.data.signedUrl }); }
+        docs.push({ cooperative:r.nom, liens });
+      }
+    }
+    const wb = await defoEnvoiClasseur(rows, docs.filter(d=>d.liens.length)), buf = await wb.xlsx.writeBuffer();
+    const body = { mode:test?'test':'envoi', destinataires:dest, objet, introduction:intro, seuil_jours:DEFO_ENVOI_SEUIL_J, fichier_nom:'Etat_certificats_'+new Date().toISOString().slice(0,10)+'.xlsx', xlsx_base64:defoBase64(buf),
+      lignes:rows.map(r=>({ cooperative:r.nom, producteurs:r.prod, potentiel_t:r.pot, date_expiration:r.expiration, jours:r.jours, autorise:r.lic.autorise, observation:r.lic.obs })), documents:docs };
+    const rep = await supabaseClient.functions.invoke('email-groupe-partenaire', { body });
+    if (rep.error){ let d = rep.error.message||''; try { const j = await rep.error.context.json(); if (j && j.error) d = j.error; } catch(e){} throw new Error(d||'envoi impossible'); }
+    if (rep.data && rep.data.error) throw new Error(rep.data.error);
+    if (test){ if (btn){ btn.disabled = false; btn.innerHTML = txt0; } showToast('Test envoyé à ton adresse. Vérifie-le avant l\'envoi réel.', 'success'); }
+    else { closeModal(); showToast('Mail groupé envoyé à '+dest.join(', ')+' ('+rows.length+' coopérative'+(rows.length>1?'s':'')+').', 'success'); }
+  } catch(e){ if (btn){ btn.disabled = false; btn.innerHTML = txt0; } defoErreurForm('Échec : '+(e.message||e)); }
 }
 const DEFO_ECHELLE = { rayon_km:2, d_bas:5, d_haut:45, c_bas:480, c_haut:660, demi:88 };
 function defoRendementPour(d, E){ const t = Math.min(1, Math.max(0, (d-E.d_bas)/(E.d_haut-E.d_bas))), c = E.c_bas + (E.c_haut-E.c_bas)*t; return [c-E.demi, c, c+E.demi]; }
