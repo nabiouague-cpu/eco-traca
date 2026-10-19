@@ -3697,7 +3697,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-19-228';
+const APP_VERSION = '2026-10-19-229';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -18650,7 +18650,8 @@ function defoGuideDonnees(){
   const pb = (r.problemes||[]).slice();
   return { a, et, r, sim:r.simulateur, pb };
 }
-function defoGuideChoix(p){ const d = DEFO_GUIDE[p.code]; if (!d || !d.opts) return null; const G = state.guide; const sel = G.choix[p.code]; return d.opts.find(o=>o.id===sel) || d.opts.find(o=>o.star) || d.opts[0]; }
+function defoGuideOpts(code){ const d = DEFO_GUIDE[code]; if (!d || !d.opts) return null; return d.opts.some(o=>!o.act) ? d.opts : d.opts.concat([{ id:'aucune', lab:'Ne rien faire', act:null }]); }
+function defoGuideChoix(p){ const O = defoGuideOpts(p.code); if (!O) return null; const sel = state.guide.choix[p.code]; return O.find(o=>o.id===sel) || O.find(o=>o.star) || O[0]; }
 function defoGuideActions(D){
   const acts = [];
   D.pb.forEach(p=>{ const o = defoGuideChoix(p); if (!o || !o.act) return; if (DEFO_GUIDE[p.code].reg && D.sim.garde_fou) return; acts.push(o.act); });
@@ -18664,8 +18665,54 @@ function defoGuideOuvrir(aid){
   openModal('defoGuide', { aid });
 }
 function defoGuideRendre(haut){ const m = document.querySelector('.modal'); const y = m ? m.scrollTop : 0; render(); const m2 = document.querySelector('.modal'); if (m2) m2.scrollTop = haut ? 0 : y; }
-function defoGuideEtape(n){ if (state.guide){ state.guide.etape = n; defoGuideRendre(true); } }
+function defoGuideEtape(n){ if (state.guide){ state.guide.etape = n; if (n===2) state.guide.scenario = null; defoGuideRendre(true); } }
 function defoGuideChoisir(code, id){ if (state.guide){ state.guide.choix[code] = id; defoGuideRendre(false); } }
+
+// Trois façons de nettoyer, présentées comme dans une conversation : simplifié, standard (recommandé), agressif.
+const DEFO_SCENARIOS = [
+  { id:'simple', titre:'Nettoyage simplifié', sous:'Seulement l\'indispensable : ce qui ne peut pas entrer dans la base finale (hors registre, doublons, zones protégées) et les contours à réparer.', acts:['reparer','hors_registre','doublons_code','producteurs_sans_polygone','zones_protegees'] },
+  { id:'standard', titre:'Nettoyage standard (recommandé)', sous:'Le simplifié, plus les superpositions entre polygones (internes et avec la base ECORIGINE) et les polygones irréguliers. Whisp n\'est jamais retiré sans ta décision.', acts:['reparer','hors_registre','doublons_code','producteurs_sans_polygone','zones_protegees','internes','base_autres','irreguliers'] },
+  { id:'agressif', titre:'Nettoyage agressif', sous:'Le standard, plus les parcelles à déforestation prioritaire (Whisp) et les polygones sans résultat Whisp. À réserver au cas où tu veux une base sans aucun doute.', acts:['reparer','hors_registre','doublons_code','producteurs_sans_polygone','zones_protegees','internes','base_autres','irreguliers','prioritaires','sans_whisp'] }
+];
+function defoGuideScenario(D, sc){
+  const pres = new Set(D.pb.filter(p=>DEFO_GUIDE[p.code] && DEFO_GUIDE[p.code].opts && !(DEFO_GUIDE[p.code].reg && D.sim.garde_fou)).map(p=>p.code));
+  const acts = sc.acts.filter(a=>pres.has(a)); const S = defoGuideSim(D.sim, acts);
+  const lis = [];
+  acts.forEach(a=>{ const p = D.pb.find(z=>z.code===a);
+    if (a==='reparer') lis.push('réparer '+fmtNum(p.nb)+' contour(s) (aucun polygone perdu)');
+    else if (a==='producteurs_sans_polygone') lis.push('sortir '+fmtNum(p.nb)+' producteur(s) sans polygone du registre final');
+    else if ((S.ret[a]||[]).length) lis.push('retirer '+fmtNum(S.ret[a].length)+' polygone(s) : '+(DEFO_MOTIFS[a]||a)+' (−'+fmtNum(Math.round(S.haDe(S.ret[a])*10)/10)+' ha)'); });
+  return { sc, acts, S, lis };
+}
+function defoGuideChoisirScenario(id){
+  const D = defoGuideDonnees(); if (!D) return; const sc = DEFO_SCENARIOS.find(x=>x.id===id); if (!sc) return;
+  state.guide.choix = {};
+  D.pb.forEach(p=>{ const O = defoGuideOpts(p.code); if (!O) return; const o = O.find(x=>x.act && sc.acts.indexOf(x.act)>=0) || O.find(x=>!x.act); state.guide.choix[p.code] = o.id; });
+  state.guide.scenario = id; state.guide.etape = 3; defoGuideRendre(true);
+}
+function defoGuideNarration(D){
+  const s = D.sim, ha0 = s.surf.reduce((t,x)=>t+x,0), prod0 = new Set(s.ferme.filter(x=>x>=0)).size, rend = s.rend_kg_ha;
+  const retire = D.pb.filter(p=>DEFO_GUIDE[p.code] && DEFO_GUIDE[p.code].opts || p.code==='garde_fou_registre');
+  const autres = D.pb.filter(p=>retire.indexOf(p)<0);
+  const nb = p=>esc(p.titre)+' : <b>'+fmtNum(p.nb)+'</b>'+(p.ha!=null&&p.ha!==''?' ('+fmtNum(Math.round(p.ha*10)/10)+' ha)':'');
+  let h = '<div style="font-size:13.5px;line-height:1.55">'
+    + '<p style="margin:0 0 8px">J\'ai analysé <b>'+esc(D.a.cooperative_nom||'')+'</b> : <b>'+fmtNum(s.n)+' polygones</b>, '+fmtNum(prod0)+' producteurs, '+fmtNum(Math.round(ha0))+' ha, soit environ '+fmtNum(Math.round(ha0*rend/1000))+' t à '+fmtNum(Math.round(rend))+' kg/ha ('+esc(s.rend_source)+').</p>';
+  if (retire.length || autres.length){
+    h += '<p style="margin:0 0 4px"><b>Ce que j\'ai trouvé</b></p><ul style="margin:0 0 10px 18px;padding:0">'
+      + retire.map(p=>'<li style="margin:3px 0">'+(p.code==='garde_fou_registre' ? '<b>⚠ Moins de 50 % des polygones se rapprochent du registre.</b> Je ne propose aucun retrait « absent du registre » tant que ce n\'est pas vérifié (registre ou fichier de polygones probablement pas les bons).' : nb(p)+' — '+esc(p.detail||''))+(p.exemples&&p.exemples.length?' <span class="hint" style="margin:0">(ex. '+p.exemples.map(esc).join(', ')+')</span>':'')+'</li>').join('') + '</ul>';
+    if (autres.length) h += '<p style="margin:0 0 4px"><b>À contrôler, rien à retirer</b></p><ul style="margin:0 0 10px 18px;padding:0">'+autres.map(p=>'<li style="margin:3px 0">'+nb(p)+' — '+esc(p.detail||'')+'</li>').join('')+'</ul>';
+  } else h += '<p style="margin:0 0 10px">Je n\'ai trouvé aucune anomalie.</p>';
+  h += '<p style="margin:0 0 6px"><b>Ce que je te propose</b> (calculé sur tes données, rien n\'est appliqué avant ta validation) :</p>';
+  let prec = null;
+  DEFO_SCENARIOS.forEach(sc=>{ const r = defoGuideScenario(D, sc); const idem = prec && prec.S.restants===r.S.restants && prec.lis.join('|')===r.lis.join('|'); prec = r;
+    h += '<div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin:0 0 8px">'
+      + '<b>'+esc(sc.titre)+'</b><div class="hint" style="margin:2px 0 4px">'+esc(sc.sous)+'</div>'
+      + (idem ? '<div class="hint" style="margin:0 0 4px"><b>Même résultat que le scénario précédent sur cette coopérative</b> : il n\'y a rien de plus à retirer.</div>' : '')
+      + (r.lis.length ? '<ul style="margin:0 0 4px 18px;padding:0;font-size:13px">'+r.lis.map(l=>'<li>'+l+'</li>').join('')+'</ul>' : '<div class="hint" style="margin:0 0 4px">Rien à retirer dans ce scénario.</div>')
+      + '<div style="font-size:13px"><b>Il resterait '+fmtNum(r.S.restants)+' polygones · '+fmtNum(r.S.producteurs)+' producteurs · '+fmtNum(Math.round(r.S.restants_ha))+' ha · ≈ '+fmtNum(Math.round(r.S.tonnes(r.S.restants_ha)))+' t</b></div>'
+      + '<div style="margin-top:6px"><button class="btn '+(sc.id==='standard'?'btn-primary':'')+' btn-compact" '+(r.acts.length?'':'disabled ')+'onclick="defoGuideChoisirScenario(\''+sc.id+'\')">Choisir ce scénario</button></div></div>'; });
+  return h + '<p class="hint" style="margin:6px 0 0">Tu peux aussi <a href="#" onclick="defoGuideEtape(2);return false;">décider problème par problème</a>.</p></div>';
+}
 function defoGuideBandeau(D, sim_){
   const s = D.sim, rend = s.rend_kg_ha;
   const ha0 = s.surf.reduce((t,x)=>t+x,0), prod0 = new Set(s.ferme.filter(x=>x>=0)).size;
@@ -18689,7 +18736,7 @@ function defoGuideCarte(p, D, mode){
     if (bloqueReg) h += '<div style="margin:6px 0 0;color:#a8281c;font-size:12.5px"><b>Proposition bloquée</b> : moins de 50 % des polygones se rapprochent du registre. Vérifie d\'abord les deux fichiers.</div>';
     else {
       const ch = defoGuideChoix(p);
-      h += '<div style="margin-top:6px">'+d.opts.map(o=>'<label style="display:flex;gap:8px;align-items:flex-start;margin:3px 0;cursor:pointer"><input type="radio" name="gd-'+escJs(p.code)+'" '+(o===ch?'checked ':'')+'onchange="defoGuideChoisir(\''+escJs(p.code)+'\',\''+o.id+'\')" style="margin-top:3px"><span>'+(o.star?'<b>★ </b>':'')+esc(o.lab)+'</span></label>').join('')+'</div>';
+      h += '<div style="margin-top:6px">'+defoGuideOpts(p.code).map(o=>'<label style="display:flex;gap:8px;align-items:flex-start;margin:3px 0;cursor:pointer"><input type="radio" name="gd-'+escJs(p.code)+'" '+(o===ch?'checked ':'')+'onchange="defoGuideChoisir(\''+escJs(p.code)+'\',\''+o.id+'\')" style="margin-top:3px"><span>'+(o.star?'<b>★ </b>':'')+esc(o.lab)+'</span></label>').join('')+'</div>';
       const sim = D.simRes, i = ch && ch.act ? sim.ret[ch.act] : null;
       if (ch && ch.act && ch.act!=='reparer' && ch.act!=='producteurs_sans_polygone' && i) h += '<div style="margin-top:4px;font-size:12.5px;color:#a8281c"><b>Impact : retire '+fmtNum(i.length)+' polygone'+(i.length>1?'s':'')+' · −'+fmtNum(Math.round(sim.haDe(i)*10)/10)+' ha · −'+fmtNum(Math.round(sim.tonnes(sim.haDe(i))*10)/10)+' t</b></div>';
       else if (ch && ch.act==='reparer') h += '<div style="margin-top:4px;font-size:12.5px;color:#14633a"><b>Impact : '+fmtNum(p.nb)+' contour(s) réparé(s), aucun polygone retiré</b></div>';
@@ -18707,10 +18754,10 @@ function defoGuideModalHtml(){
   D.simRes = defoGuideSim(D.sim, acts);
   const ordre = {r:0,o:1,j:2}, idx = c=>{ const i = DEFO_ORDRE.indexOf(c); return i<0 ? 99 : i; };
   const pb = D.pb.slice().sort((x,y)=>ordre[defoGuideGrav(x)]-ordre[defoGuideGrav(y)] || idx(x.code)-idx(y.code));
-  const tete = ['1. Constats','2. Propositions','3. Validation'].map((t,k)=>'<span style="padding:4px 12px;border-radius:999px;font-size:12.5px;font-weight:700;'+(k+1===e?'background:#1f5fa8;color:#fff':'background:#eef1f0;color:#5f6b68')+'">'+t+'</span>').join('<span style="color:#aaa"> › </span>');
+  const tete = ['1. Analyse et scénarios','2. Décider problème par problème','3. Validation'].map((t,k)=>'<span style="padding:4px 12px;border-radius:999px;font-size:12.5px;font-weight:700;'+(k+1===e?'background:#1f5fa8;color:#fff':'background:#eef1f0;color:#5f6b68')+'">'+t+'</span>').join('<span style="color:#aaa"> › </span>');
   let corps = '';
   if (e===1){
-    corps = defoGuideBandeau(D) + pb.map(p=>defoGuideCarte(p, D, 'constats')).join('');
+    corps = defoGuideNarration(D);
   } else if (e===2){
     corps = '<div class="hint" style="margin:0 0 8px">Pour chaque problème : la proposition recommandée (★) est cochée, sauf Whisp qui n\'est jamais retiré sans décision explicite. Change ou refuse librement.</div>' + pb.map(p=>defoGuideCarte(p, D, 'propositions')).join('')
       + '<div style="padding:10px 12px;background:#e8f5e9;border-radius:8px"><b>Après application : '+fmtNum(D.simRes.restants)+' polygones · '+fmtNum(D.simRes.producteurs)+' producteurs · '+fmtNum(Math.round(D.simRes.restants_ha))+' ha · ≈ '+fmtNum(Math.round(D.simRes.tonnes(D.simRes.restants_ha)))+' t</b></div>';
@@ -18730,9 +18777,9 @@ function defoGuideModalHtml(){
       + '<div style="padding:10px 12px;background:#f1f5f3;border-radius:8px;font-size:13px"><b>Avant :</b> '+fmtNum(s.n)+' polygones · '+fmtNum(Math.round(ha0))+' ha → <b>Après :</b> '+fmtNum(S.restants)+' polygones · '+fmtNum(S.producteurs)+' producteurs · '+fmtNum(Math.round(S.restants_ha))+' ha · ≈ '+fmtNum(Math.round(S.tonnes(S.restants_ha)))+' t</div>'
       + '<div class="hint" style="margin:8px 0 0">Le travail se fait sur une copie : tes fichiers d\'origine et la base ECORIGINE ne sont pas modifiés. Tes décisions (qui, quand, quoi) sont enregistrées dans le journal Excel (onglets « Decisions » et « Supprimes »). Ensuite : produire la base finale, qui lance le contrôle qualité.</div>';
   }
-  const nav = e===1 ? '<button class="btn" onclick="closeModal()">Fermer</button><button class="btn btn-primary" onclick="defoGuideEtape(2)">Voir les propositions →</button>'
-    : e===2 ? '<button class="btn" onclick="defoGuideEtape(1)">← Constats</button><button class="btn btn-primary" onclick="defoGuideEtape(3)">Valider →</button>'
-    : '<button class="btn" onclick="defoGuideEtape(2)">← Propositions</button><button class="btn btn-primary" '+(acts.length?'':'disabled ')+'onclick="defoGuideAppliquer()">✅ Appliquer ces décisions</button>';
+  const nav = e===1 ? '<button class="btn" onclick="closeModal()">Fermer</button>'
+    : e===2 ? '<button class="btn" onclick="defoGuideEtape(1)">← Scénarios</button><button class="btn btn-primary" onclick="defoGuideEtape(3)">Valider →</button>'
+    : '<button class="btn" onclick="defoGuideEtape('+(G.scenario?1:2)+')">← '+(G.scenario?'Scénarios':'Propositions')+'</button><button class="btn btn-primary" '+(acts.length?'':'disabled ')+'onclick="defoGuideAppliquer()">✅ Appliquer ces décisions</button>';
   return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:860px;max-height:92vh;overflow:auto"><h3>Nettoyage guidé — '+esc(D.a.cooperative_nom||'')+'</h3>'
     + '<div style="margin:0 0 10px">'+tete+'</div><div id="modal-fields">'+corps+'</div><div class="actions">'+nav+'</div></div></div>';
 }
