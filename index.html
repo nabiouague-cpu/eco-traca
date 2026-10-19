@@ -3693,7 +3693,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-19-222';
+const APP_VERSION = '2026-10-19-223';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -17864,6 +17864,7 @@ function defoModalAnalyseHtml(){
     + '<label class="field">Registre de la coopérative <span class="hint" style="margin:0">(GMR .xlsx)</span><input type="file" id="da-gmr" accept=".xlsx,.xlsm"></label>'
     + '<label class="field">Ancien registre <span class="hint" style="margin:0">(facultatif, .xlsx — pour retrouver les anciens codes par le nom)</span><input type="file" id="da-gmr-old" accept=".xlsx,.xlsm"></label>'
     + '<label style="display:flex;gap:8px;align-items:center;margin:6px 0"><input type="checkbox" id="da-hc"> Coopérative hors chaîne d\'approvisionnement <span class="hint" style="margin:0">(chevauchements avec la base ECORIGINE ignorés)</span></label>'
+    + '<label style="display:flex;gap:8px;align-items:flex-start;margin:6px 0"><input type="checkbox" id="da-nm" style="margin-top:3px"><span>Noms des polygones saisis à la main (KML) : <b>rattachement strict</b> au registre <span class="hint" style="margin:0">(code direct, code corrigé, ou nom identique mot pour mot ; sinon « absent du registre ». Le registre GMR est obligatoire.)</span></span></label>'
     + '<label class="field">Si la base ECORIGINE contient déjà un lot de cette coopérative <select id="da-lot"><option value="ignorer">L\'ignorer : les nouveaux fichiers le remplacent (recommandé)</option><option value="garder">Le garder pour comparer</option></select></label>'
     + '<div id="defo-erreur" style="display:none;color:#c0392b;font-size:13px;margin:4px 0 8px"></div>'
     + '<p class="hint">Rien n\'est supprimé à cette étape : tu verras d\'abord la liste des problèmes.</p>'
@@ -18106,13 +18107,25 @@ function defoAnalyseParties(a){
   }
   return P;
 }
+function defoKmlHtml(a){
+  const k = a.resume && a.resume.kml_strict; if (!k) return '';
+  const n = v=>fmtNum(v||0);
+  const al = k.alerte_foret_classee ? '<div style="margin:6px 0;padding:8px 10px;background:#fdecea;border:1px solid #c0392b;border-radius:8px;color:#a8281c;font-size:12.5px"><b>⚠ '+esc(k.alerte_foret_classee)+'</b></div>' : '';
+  const lig = [];
+  lig.push('<b>'+n(k.directs)+'</b> rattachés directement · <b>'+n(k.corriges)+'</b> code corrigé · <b>'+n(k.par_nom)+'</b> par le nom · <b style="color:'+(k.non_resolus?'#a8281c':'inherit')+'">'+n(k.non_resolus)+'</b> non résolus (producteur absent du registre)');
+  lig.push(n(k.noms_mal_formes)+' noms mal formés · '+n(k.identifiants_parcelle_en_double)+' identifiants de parcelle en double · '+n(k.registre_sans_polygone)+' producteurs du registre sans polygone');
+  lig.push(n(k.plus_de_polygones_que_unites)+' producteurs avec plus de polygones que d\'unités · '+n(k.moins_de_polygones_que_unites)+' avec moins');
+  if (k.copies_de_formes) lig.push('<b style="color:#8a5a00">Signal : '+n(k.copies_de_formes)+' paire(s) de polygones de producteurs différents avec la même forme (même aire et même périmètre)</b> : copies déplacées possibles, à vérifier avec le fournisseur (rien n\'est supprimé).');
+  return '<div style="margin-top:10px;padding:10px 12px;border:1px solid var(--border);border-radius:8px"><b>Rattachement des noms saisis à la main (KML)</b>'+al
+    + '<div style="font-size:12.5px;margin-top:4px">'+lig.map(x=>'<div>'+x+'</div>').join('')+'</div><div class="hint" style="margin:4px 0 0">Détail de chaque polygone (méthode utilisée) dans le rapport Excel, onglets « KML … ».</div></div>';
+}
 function defoAnalyseCarte(a){
   const P = defoAnalyseParties(a);
   let h = '<div style="border:1px solid var(--border);border-radius:10px;padding:12px 14px">' + P.entete + P.erreur;
   if (P.termine){
     const clos = (state.defo||[]).some(z=>z.etape==='base_finale' && z.statut==='terminee' && z.entrees && z.entrees.analyse_id===a.id);
     const pr = clos ? '<details style="margin-top:10px"><summary style="cursor:pointer;color:#2c5fae;font-weight:600">🗄 Base d\'origine de la coopérative : classée (base finale produite) — voir l\'historique des problèmes</summary>'+P.problemes+'</details>' : P.problemes;
-    h += P.resume + P.netInfo + pr + P.apres + defoFinaleHtml(a) + defoProposerHtml(a);
+    h += P.resume + defoKmlHtml(a) + P.netInfo + pr + P.apres + defoFinaleHtml(a) + defoProposerHtml(a);
   }
   return h + '</div>';
 }
@@ -19205,6 +19218,7 @@ function defoModalDossierHtml(pid){
     + '<label class="field">Registre de la coopérative <span class="hint" style="margin:0">(GMR .xlsx)</span><input type="file" id="da-gmr" accept=".xlsx,.xlsm"></label>'
     + '<label class="field">Ancien registre <span class="hint" style="margin:0">(facultatif, .xlsx — pour retrouver les anciens codes par le nom)</span><input type="file" id="da-gmr-old" accept=".xlsx,.xlsm"></label>'
     + '<label style="display:flex;gap:8px;align-items:center;margin:6px 0"><input type="checkbox" id="da-hc"> Coopérative hors chaîne d\'approvisionnement <span class="hint" style="margin:0">(chevauchements avec la base ECORIGINE ignorés)</span></label>'
+    + '<label style="display:flex;gap:8px;align-items:flex-start;margin:6px 0"><input type="checkbox" id="da-nm" style="margin-top:3px"><span>Noms des polygones saisis à la main (KML) : <b>rattachement strict</b> au registre <span class="hint" style="margin:0">(code direct, code corrigé, ou nom identique mot pour mot ; sinon « absent du registre ». Le registre GMR est obligatoire.)</span></span></label>'
     + '<label class="field">Si la base ECORIGINE contient déjà un lot de cette coopérative <select id="da-lot"><option value="ignorer">L\'ignorer : les nouveaux fichiers le remplacent (recommandé)</option><option value="garder">Le garder pour comparer</option></select></label>'
     + '<div id="defo-erreur" style="display:none;color:#c0392b;font-size:13px;margin:4px 0 8px"></div>'
     + '<p class="hint">Rien n\'est supprimé à cette étape : tu verras d\'abord la liste des problèmes.</p>'
@@ -19224,7 +19238,7 @@ async function defoAnalyseDossierEnvoyer(pid){
   try {
     const path = 'defo/'+id+'/entrees/registre_'+nets(fg.name);
     const r = await supabaseClient.storage.from('documents-coop').upload(path, fg, { upsert:true }); if (r.error) throw r.error;
-    const entrees = { prep_id:pid, hors_chaine:!!(document.getElementById('da-hc')||{}).checked, ancien_lot_mode:((document.getElementById('da-lot')||{}).value==='garder'?'garder':'ignorer'),
+    const entrees = { prep_id:pid, noms_manuels:!!(document.getElementById('da-nm')||{}).checked, hors_chaine:!!(document.getElementById('da-hc')||{}).checked, ancien_lot_mode:((document.getElementById('da-lot')||{}).value==='garder'?'garder':'ignorer'),
       polygones:{ nom:g.nom, path:g.path, propre:false }, whisp:{ nom:w.nom, path:w.path, propre:false }, gmr:{ nom:fg.name, path } };
     const fo = (document.getElementById('da-gmr-old')||{}).files && document.getElementById('da-gmr-old').files[0];
     if (fo){ if (!/\.(xlsx|xlsm)$/i.test(fo.name)) throw new Error('Ancien registre : fichier .xlsx attendu.'); const po = 'defo/'+id+'/entrees/ancien_registre_'+nets(fo.name); const ro = await supabaseClient.storage.from('documents-coop').upload(po, fo, { upsert:true }); if (ro.error) throw ro.error; entrees.gmr_ancien = { nom:fo.name, path:po }; }
@@ -19262,7 +19276,7 @@ async function defoAnalyseEnvoyer(){
   const coop = carteCoopParNom(nomCoop);
   try {
     const up = async (f, nom)=>{ const path = 'defo/'+id+'/entrees/'+nom+'_'+nets(f.name); const r = await supabaseClient.storage.from('documents-coop').upload(path, f, { upsert:true }); if (r.error) throw r.error; return { nom:f.name, path }; };
-    const entrees = { hors_chaine: !!(document.getElementById('da-hc')||{}).checked, ancien_lot_mode:((document.getElementById('da-lot')||{}).value==='garder'?'garder':'ignorer') };
+    const entrees = { noms_manuels: !!(document.getElementById('da-nm')||{}).checked, hors_chaine: !!(document.getElementById('da-hc')||{}).checked, ancien_lot_mode:((document.getElementById('da-lot')||{}).value==='garder'?'garder':'ignorer') };
     if (fp){ entrees.polygones = await up(fp, 'polygones'); entrees.polygones.propre = true; }
     else { const f = (prep.fichiers||[]).find(x=>x.type==='geojson'); if (!f) throw new Error('Cette préparation n\'a pas de GeoJSON.'); entrees.polygones = { nom:f.nom, path:f.path, propre:false }; }
     if (fw) entrees.whisp = await up(fw, 'whisp');
