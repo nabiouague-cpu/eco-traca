@@ -3693,7 +3693,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-19-216';
+const APP_VERSION = '2026-10-19-217';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -18041,7 +18041,9 @@ function defoFinaleHtml(a, nu){
   if (err) h += '<div style="margin-top:6px;color:#c0392b;font-size:12.5px">La dernière production a échoué : '+esc(err.erreur||'erreur inconnue')+' <button class="btn-ghost btn-compact" onclick="defoFermerErreur(\''+escJs(err.id)+'\')">Fermer</button></div>';
   if (ok && ok.resume){
     const r = ok.resume, dl = defoUtiles(ok.fichiers).map(defoChip).join('');
-    h += '<div style="margin-top:8px;padding:8px 10px;background:#eef6ef;border-radius:8px;font-size:12.5px"><b>'+fmtNum(r.parcelles)+' parcelles · '+fmtNum(r.producteurs)+' producteurs · '+fmtNum(r.surface_ha)+' ha · '+fmtNum(Math.round(r.tonnage_kg/1000*10)/10)+' t estimées</b>'
+    const susp = defoBaseSuspecte(r);
+    h += (susp ? '<div style="margin-top:8px;padding:8px 10px;background:#fdecea;border:1px solid #c0392b;border-radius:8px;font-size:12.5px;color:#a8281c"><b>⚠ Chiffres incohérents : '+esc(susp)+'.</b> Le rapprochement du registre et des polygones s\'est mal fait (ancienne version des règles). Relance l\'<b>analyse</b>, puis le nettoyage et la base finale.</div>' : '')
+      + '<div style="margin-top:8px;padding:8px 10px;background:#eef6ef;border-radius:8px;font-size:12.5px"><b>'+fmtNum(r.parcelles)+' parcelles · '+fmtNum(r.producteurs)+' producteurs · '+fmtNum(r.surface_ha)+' ha · '+fmtNum(Math.round(r.tonnage_kg/1000*10)/10)+' t estimées</b>'
       + '<div class="hint" style="margin:2px 0 0">NodeID '+esc(r.node_id||'')+' · '+(r.intervalle_impose?'intervalle imposé '+fmtNum(r.intervalle_impose[0])+'–'+fmtNum(r.intervalle_impose[1])+' kg/ha':'rendement moyen '+fmtNum(r.rendement_moy_kg_ha)+' kg/ha (de '+fmtNum(Math.round(r.rendement_min_parcelle))+' à '+fmtNum(Math.round(r.rendement_max_parcelle))+' selon la parcelle, cacao autour : '+fmtNum(r.densite_moy_pct)+' % en moyenne)')+' · '+(r.depuis_copie_nettoyee?'depuis la copie nettoyée':'depuis les polygones d\'origine')
       + (r.exclus?' · <span style="color:#b36b00">'+fmtNum(r.exclus)+' polygone(s) non repris (voir ci-dessous)</span>':'')+'</div>'
       + (r.controles && r.controles.geojson_egal_registre && r.controles.plotid_uniques && !r.controles.noms_manquants ? '<div class="hint" style="margin:2px 0 0;color:#1e8449">✔ GeoJSON et registre alignés, PlotID uniques, aucun nom manquant</div>' : '<div class="hint" style="margin:2px 0 0;color:#c0392b">⚠ Contrôle non conforme : voir le détail</div>')
@@ -18153,6 +18155,12 @@ function defoLicenceEtat(c, jours){
   if (jours<=DEFO_ENVOI_SEUIL_J) return { autorise:'Oui', obs:'Licence expire dans '+jours+' j : déclaration immédiate des volumes vendus à ECORIGINE', declarer:true, certifiee:true };
   return { autorise:'Oui', obs:'', declarer:false, certifiee:true };
 }
+// Base finale incohérente (ex. 1185 parcelles pour 1 producteur) : beaucoup trop de parcelles par producteur => rapprochement registre/polygones à refaire
+function defoBaseSuspecte(r){
+  if (!r || r.producteurs==null || r.parcelles==null) return null;
+  const p = Number(r.parcelles), q = Math.max(1, Number(r.producteurs));
+  return (p>=30 && p/q>10) ? fmtNum(p)+' parcelles pour '+fmtNum(r.producteurs)+' producteur(s)' : null;
+}
 function defoEnvoiLignes(){
   const par = new Map(), cle = n=>String(n||'').trim().toUpperCase();
   const plus = (a,b)=>(!a || String(b.created_at)>String(a.created_at)) ? b : a;
@@ -18166,7 +18174,8 @@ function defoEnvoiLignes(){
   return Array.from(par.values()).filter(e=>e.analyse || e.fin).map(e=>{
     const coop = carteCoopParNom(e.nom), jours = coop ? coopJoursLicence(coop) : null, lic = defoLicenceEtat(coop, jours);
     const r = e.fin ? e.fin.resume : null;
-    return { cle:cle(e.nom), nom:coop ? coop.nom : e.nom, coop, analyse:e.analyse, fin:e.fin, jours, lic,
+    const suspect = defoBaseSuspecte(r);
+    return { cle:cle(e.nom), nom:coop ? coop.nom : e.nom, coop, analyse:e.analyse, fin:e.fin, jours, lic, suspect,
       prod: r && r.producteurs!=null ? Number(r.producteurs) : null,
       pot: r && r.tonnage_kg!=null ? Math.round(Number(r.tonnage_kg)/100)/10 : null,
       expiration: coop && coop.date_fin_licence ? String(coop.date_fin_licence).slice(0,10) : '',
@@ -18231,18 +18240,18 @@ async function defoEnvoiClasseur(rows, liens){
 }
 function ouvrirDefoEnvoi(){ openModal('defoEnvoi', { choisis:null }); }
 function defoEnvoiBascule(cle, on){
-  const m = state.modal.payload; if (!m.choisis) m.choisis = new Set(defoEnvoiLignes().map(r=>r.cle));
+  const m = state.modal.payload; if (!m.choisis) m.choisis = new Set(defoEnvoiLignes().filter(r=>!r.suspect).map(r=>r.cle));
   if (on) m.choisis.add(cle); else m.choisis.delete(cle);
   const n = m.choisis.size; ['env-n1','env-n2'].forEach(i=>{ const b = document.getElementById(i); if (b) b.textContent = n; });
 }
 function defoModalEnvoiHtml(){
-  const R = defoEnvoiLignes(), m = state.modal.payload; if (!m.choisis) m.choisis = new Set(R.map(r=>r.cle));
+  const R = defoEnvoiLignes(), m = state.modal.payload; if (!m.choisis) m.choisis = new Set(R.filter(r=>!r.suspect).map(r=>r.cle));
   const cAut = a=>a==='Oui' ? '#1e6b3a' : a==='Non' ? '#a8281c' : '#8a5a00';
   const lignes = R.map(r=>{
     const lic = r.expiration ? dateFr(r.expiration)+(r.jours!=null ? ' · '+(r.jours<0 ? 'expirée depuis '+(-r.jours)+' j' : r.jours+' j') : '') : (r.lic.certifiee ? 'date inconnue' : 'non certifiée');
     return '<label style="display:flex;gap:8px;align-items:flex-start;padding:7px 0;border-bottom:1px solid var(--border)"><input type="checkbox" '+(m.choisis.has(r.cle)?'checked ':'')+'onchange="defoEnvoiBascule(\''+escJs(r.cle)+'\',this.checked)" style="margin-top:3px"><span style="flex:1"><b>'+esc(r.nom)+'</b>'
       + '<br><span class="hint" style="margin:0">'+(r.prod!=null ? fmtNum(r.prod)+' producteurs conformes · '+String(r.pot).replace('.',',')+' t' : 'pas de base finale')+' · licence : '+esc(lic)+' · <b style="color:'+cAut(r.lic.autorise)+'">livrer : '+esc(r.lic.autorise)+'</b>'
-      + (r.emails.length ? '' : ' · <span style="color:#c0392b">aucune adresse e-mail</span>')+'</span></span></label>';
+      + (r.emails.length ? '' : ' · <span style="color:#c0392b">aucune adresse e-mail</span>')+(r.suspect ? '<br><b style="color:#c0392b">⚠ Chiffres incohérents ('+esc(r.suspect)+') : refaire l\'analyse et la base finale avant d\'envoyer.</b>' : '')+'</span></span></label>';
   }).join('');
   const prem = R.find(r=>m.choisis.has(r.cle)) || R[0];
   return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:720px;max-height:92vh;overflow:auto"><h3>Envoyer par e-mail</h3>'
@@ -18260,7 +18269,11 @@ function defoModalEnvoiHtml(){
     + (R.length ? '<button class="btn" onclick="defoEnvoiTelecharger()">⬇ Tableau Excel</button><button class="btn" id="env-test" onclick="defoEnvoiGroupe(true)">Test groupé (à moi)</button><button class="btn" id="env-grp" onclick="defoEnvoiGroupe(false)">✉ Mail groupé (<span id="env-n1">'+m.choisis.size+'</span>)</button><button class="btn btn-primary" id="env-ind" onclick="defoEnvoiIndividuel()">✉ Mails individuels (<span id="env-n2">'+m.choisis.size+'</span>)</button>' : '')
     + '</div></div></div>';
 }
-function defoEnvoiChoisies(){ const m = state.modal.payload; return defoEnvoiLignes().filter(r=>m.choisis.has(r.cle)); }
+function defoEnvoiChoisies(){
+  const m = state.modal.payload, L = defoEnvoiLignes().filter(r=>m.choisis.has(r.cle)), mauvaises = L.filter(r=>r.suspect);
+  if (mauvaises.length){ defoErreurForm('Envoi bloqué : chiffres incohérents pour '+mauvaises.map(r=>r.nom+' ('+r.suspect+')').join(' ; ')+'. Refais l\'analyse et la base finale, ou décoche cette coopérative.'); return []; }
+  return L;
+}
 async function defoEnvoiTelecharger(){
   const rows = defoEnvoiChoisies(); if (!rows.length){ defoErreurForm('Coche au moins une coopérative.'); return; }
   try { const wb = await defoEnvoiClasseur(rows, null); await qcTelechargerClasseur(wb, 'Etat_certificats_'+new Date().toISOString().slice(0,10)+'.xlsx'); }
