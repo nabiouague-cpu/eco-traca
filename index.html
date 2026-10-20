@@ -3358,8 +3358,10 @@ const QCO_LIEN_CLE = 'origen_lien_forms_enquete_coop';
 function qcoLien(){ try{ return localStorage.getItem(QCO_LIEN_CLE) || ''; }catch(e){ return ''; } }
 function qcoLienMaj(v){ try{ if (String(v||'').trim()) localStorage.setItem(QCO_LIEN_CLE, String(v).trim()); else localStorage.removeItem(QCO_LIEN_CLE); }catch(e){} }
 function qcoNorm(s){ return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toUpperCase().replace(/[^A-Z0-9]+/g,' ').trim(); }
+// Seules les coopératives dont l'enquête coopérative n'est pas cochée dans le point CARGILL (ECOPAK, SOVA, UNITE ; COOPROABLOS n'existe pas encore dans ORIGEN)
+const QCO_CIBLES = ['SCOOPS ECOPAK','SOVA SCOOPS','SCOOPS-UM'].map(n=>qcoNorm(n));
 function qcoCoops(){
-  return (state.cooperatives||[]).filter(c=>!c.a_classer && (!c.type || c.type==='cooperative'))
+  return (state.cooperatives||[]).filter(c=>!c.a_classer && (!c.type || c.type==='cooperative') && QCO_CIBLES.indexOf(qcoNorm(c.nom))>=0)
     .sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'}));
 }
 // Délégation CCC : celle enregistrée, sinon la ville de la fiche si c'est l'une des 13 délégations (simple suggestion, modifiable)
@@ -3833,7 +3835,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-20-238';
+const APP_VERSION = '2026-10-20-239';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -23869,6 +23871,7 @@ function _renderBrut(){
     const lst = qcoCoops(), nbPret = lst.filter(c=>!c.enquete_forms_le && !qcoManques(c).length).length;
     html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal wide" style="max-width:1280px">'
       + '<h3>Questionnaire coopératives (Forms)</h3>'
+      + '<div class="hint" style="margin-bottom:6px">Coopératives dont l\'enquête coopérative n\'est pas cochée chez CARGILL : ECOPAK, SOVA, UNITE. COOPROABLOS n\'est pas encore enregistrée dans ORIGEN.</div>'
       + '<div class="hint" style="margin-bottom:10px">Les 15 réponses viennent de la fiche de chaque coopérative. Complète ici ce qui manque (adresse postale, directeur ou gérant, CNPS, DFE, GPS, délégation) : chaque champ est enregistré dès que tu quittes la case. Les autres informations (PCA, téléphone, RCCM, email, CCC) se modifient dans la fiche de la coopérative (« Modifier »). Le GPS du siège est celui de la localité du siège.</div>'
       + '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">'
       + '<input type="text" id="qco_lien" value="'+esc(qcoLien())+'" placeholder="Lien du formulaire Forms (facultatif, sert à l\'automate pour enchaîner)" style="flex:1;min-width:260px;font-size:12px" onchange="qcoLienMaj(this.value)">'
