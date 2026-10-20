@@ -459,7 +459,8 @@
   table.pesee th, table.pesee td{padding:7px 8px;border-bottom:1px solid var(--border);text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;}
   table.pesee thead th{font-family:var(--sans);font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-faint);font-weight:600;vertical-align:bottom;}
   table.pesee thead th small{display:block;text-transform:none;letter-spacing:0;font-weight:400;}
-  .detail-bloc.analyse-cq{margin-top:12px;}
+  .detail-bloc.analyse-cq.pesee-usine{margin-top:4px;}
+  .detail-bloc.analyse-cq.resultats-cq{margin-top:22px;}
   table.pesee.cq{width:100%;font-size:12px;}
   table.pesee.cq th, table.pesee.cq td{text-align:center;padding:5px 6px;white-space:nowrap;}
   table.pesee.cq td small{display:block;color:var(--ink-faint);font-family:var(--sans);font-size:10.5px;}
@@ -3993,7 +3994,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-20-245';
+const APP_VERSION = '2026-10-20-246';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -21846,7 +21847,7 @@ function detailAchatHtml(a, etat){
       + (base>0 ? '' : '<div class="attente-note">La prime est calculée sur le poids net pesé à l\'usine, pas sur le poids du connaissement : elle sera connue après la pesée.</div>')
     + '</div>'
     + '</div>'
-    + (a.connaissement && (a.pesee_detail || a.code_pesee || Number(a.poids_net_produit)>0) ? '<div class="detail-bloc analyse-cq"><h4>Contrôle qualité à l\'usine <small>lu sur le SAIGIC</small></h4>'+analyseBlocHtml(a)+'</div>' : '')
+    + (a.connaissement && (a.pesee_detail || a.code_pesee || Number(a.poids_net_produit)>0) ? analyseBlocHtml(a) : '')
     + actionsDetail+'</td></tr>';
 }
 // ====================== BORDEREAU DE RECEPTION (même modèle que l'ERP OBC) ======================
@@ -21863,8 +21864,8 @@ const ANALYSE_CHAMPS = [ ['Humidite','Humidité','%'], ['Grainage','Grainage','/
 // Bloc « Analyse / contrôle qualité » du détail d'une livraison (lu sur le SAIGIC par le robot des pesées).
 function analyseBlocHtml(a){
   if (!a || !a.pesee_detail || typeof a.pesee_detail!=='object'){
-    return (a && (a.pesee_humidite!=null || a.pesee_grade)) ? '<table class="pesee cq"><tbody><tr><th scope="row">Humidité</th><td>'+(a.pesee_humidite!=null ? esc(fmtDec(a.pesee_humidite,1))+' %' : '—')+'</td><th scope="row">Grade</th><td>'+esc(a.pesee_grade||'—')+'</td></tr></tbody></table>'
-      : '<div class="vide">Pas encore lu sur le SAIGIC (le robot des pesées le récupère au prochain passage).</div>';
+    return '<div class="detail-bloc analyse-cq">' + ((a && (a.pesee_humidite!=null || a.pesee_grade)) ? '<table class="pesee cq"><tbody><tr><th scope="row">Humidité</th><td>'+(a.pesee_humidite!=null ? esc(fmtDec(a.pesee_humidite,1))+' %' : '—')+'</td><th scope="row">Grade</th><td>'+esc(a.pesee_grade||'—')+'</td></tr></tbody></table>'
+      : '<div class="vide">Pas encore lu sur le SAIGIC (le robot des pesées le récupère au prochain passage).</div>') + '</div>';
   }
   const d1 = pdDate(a,'Date P1'), d2 = pdDate(a,'Date P2'), dA = pdDate(a,'Date Analyse');
   const conf = pdVal(a,'Conformite'), acc = pdVal(a,'Acceptation'), motif = pdVal(a,'Motif Refoulement');
@@ -21872,19 +21873,19 @@ function analyseBlocHtml(a){
   const col = (ok)=>'color:'+(ok ? 'var(--ok,#1f7a4d)' : 'var(--danger,#b42318)')+';font-weight:600';
   const c = (v)=> v==null || v==='' ? '<span class="vide">—</span>' : esc(String(v));
   // Ligne 1 : identification et poids de la pesée usine (le poids « net livré » est le brut moins la tare des sacs).
-  let h = '<table class="pesee cq"><thead><tr><th>Code pesée</th><th>N° ticket</th><th>Pesée 1 <small>entrée (enreg. SAIGIC)</small></th><th>Pesée 2 <small>sortie</small></th><th>Peseur</th><th>Poids brut</th><th>Tare sacs</th><th>Net livré</th><th>Sacs <small>décl. / déch. / acc. / ref.</small></th></tr></thead><tbody><tr>'
+  let h = '<div class="detail-bloc analyse-cq pesee-usine"><h4>Pesée à l\'usine <small>lue sur le SAIGIC</small></h4><table class="pesee cq"><thead><tr><th>Code pesée</th><th>N° ticket</th><th>Pesée 1 <small>entrée (enreg. SAIGIC)</small></th><th>Pesée 2 <small>sortie</small></th><th>Peseur</th><th>Poids brut</th><th>Tare sacs</th><th>Net livré</th><th>Sacs <small>décl. / déch. / acc. / ref.</small></th></tr></thead><tbody><tr>'
     + '<td>'+c(pdVal(a,'Code Pesee')||a.code_pesee)+'</td><td>'+c(pdVal(a,'N° Ticket'))+'</td>'
     + '<td>'+(d1 ? esc(d1.jour+(d1.heure?' '+d1.heure:''))+'<small>'+esc(fmtNum(pdNum(a,'Poids1')))+' kg</small>' : c(''))+'</td>'
     + '<td>'+(d2 ? esc(d2.jour+(d2.heure?' '+d2.heure:''))+'<small>'+esc(fmtNum(pdNum(a,'Poids2')))+' kg</small>' : c(''))+'</td>'
     + '<td>'+c(pdVal(a,'Peseur1')||pdVal(a,'Peseur2'))+'</td><td>'+c(pdNum(a,'PdsBrute')!=null ? fmtNum(pdNum(a,'PdsBrute'))+' kg' : '')+'</td><td>'+c(pdNum(a,'Tare Emb')!=null ? fmtDec(pdNum(a,'Tare Emb'),0)+' kg' : '')+'</td><td>'+c(pdNum(a,'Poids Net')!=null ? fmtNum(pdNum(a,'Poids Net'))+' kg' : '')+'</td>'
-    + '<td>'+c(pdVal(a,'NSDeclarés'))+' / '+c(pdVal(a,'NSDechargé'))+' / '+c(pdVal(a,'NSAcceptés'))+' / '+c(pdVal(a,'NSRefoulés')||'0')+'</td></tr></tbody></table>';
-  // Ligne 2 : résultat de l'analyse et les 13 critères, côte à côte.
-  h += '<table class="pesee cq" style="margin-top:6px;"><thead><tr><th>N° analyse</th><th>Échantillon</th><th>Grade</th><th>Conformité</th><th>Acceptation</th>'
+    + '<td>'+c(pdVal(a,'NSDeclarés'))+' / '+c(pdVal(a,'NSDechargé'))+' / '+c(pdVal(a,'NSAcceptés'))+' / '+c(pdVal(a,'NSRefoulés')||'0')+'</td></tr></tbody></table></div>';
+  // Bloc 2, séparé : résultats de l'analyse et les 13 critères, côte à côte.
+  h += '<div class="detail-bloc analyse-cq resultats-cq"><h4>Résultats d\'analyse <small>contrôle qualité</small></h4><table class="pesee cq"><thead><tr><th>N° analyse</th><th>Échantillon</th><th>Grade</th><th>Conformité</th><th>Acceptation</th>'
     + ANALYSE_CHAMPS.map(([cle, lib, u])=>'<th>'+esc(lib.replace('Fèves ','').replace('Matières étrangères','Mat. étr.'))+'<small>'+esc(u)+'</small></th>').join('')+'</tr></thead><tbody><tr>'
     + '<td>'+c(pdVal(a,'Analyse'))+(dA ? '<small>'+esc(dA.jour)+'</small>' : '')+'</td><td>'+c(pdVal(a,'Echantillon'))+(pdVal(a,'CCQ') ? '<small>CCQ '+esc(pdVal(a,'CCQ'))+'</small>' : '')+'</td>'
     + '<td><b>'+c(pdVal(a,'Grade')||a.pesee_grade)+'</b></td><td style="'+col(okConf)+'">'+c(conf)+'</td><td style="'+col(okAcc)+'">'+c(acc)+(motif ? '<small>'+esc(motif)+'</small>' : '')+'</td>'
     + ANALYSE_CHAMPS.map(([cle, lib, u])=>{ const v = pdNum(a, cle); return '<td>'+(v==null ? '<span class="vide">—</span>' : esc(fmtDec(v, u==='%' ? 2 : 0)))+'</td>'; }).join('')
-    + '</tr></tbody></table>';
+    + '</tr></tbody></table></div>';
   return h;
 }
 // Données du bordereau, calculées comme OBC les affiche.
