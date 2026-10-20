@@ -3697,7 +3697,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-19-232';
+const APP_VERSION = '2026-10-20-233';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7329,7 +7329,7 @@ function renderLivraisonsClients(campagneId){
   const groupes = Array.from(parClef.values()).sort((x,y)=>ccClefClient(x.client).localeCompare(ccClefClient(y.client),'fr') || x.programme.localeCompare(y.programme,'fr'));
   const kgLivre = l=>l.reduce((s,a)=>s+(Number(a.poids_net_produit)||0),0);
   const kgSans = kgLivre(sansClient);
-  let html = '<h3 style="margin:0 0 10px;font-size:14px;color:var(--ink-soft)">Livraisons aux clients — calculées depuis les pesées attribuées</h3>';
+  let html = '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 10px"><h3 style="margin:0;font-size:14px;color:var(--ink-soft)">Livraisons aux clients — calculées depuis les pesées attribuées</h3><button class="btn btn-compact" onclick="livraisonsClientsExporter(\''+escJs(campagneId||'')+'\')">⭳ Point des livraisons (Excel)</button></div>';
   if (sansClient.length) html += '<div class="hint" style="margin:0 0 10px;padding:8px 10px;background:#FFF6E0;border-radius:8px;color:#7a5200"><b>'+fmtNum(sansClient.length)+' connaissement'+(sansClient.length>1?'s':'')+' sans client</b> ('+fmtKg(kgSans)+') — attribue-les depuis la liste des achats (colonne « Fiche de traçabilité », menu client) pour qu\'ils comptent ici.</div>';
   if (!groupes.length) return html + '<div class="hint" style="margin-bottom:16px">Aucun client connu pour cette campagne.</div>';
   html += '<div class="sa-grille" style="margin-bottom:18px">';
@@ -7362,6 +7362,152 @@ function renderLivraisonsClients(campagneId){
   return html + '</div>';
 }
 function livrClientsBasculer(client){ state.livrClientsOuverts = state.livrClientsOuverts || {}; state.livrClientsOuverts[client] = !state.livrClientsOuverts[client]; render(); }
+
+// ---- Point des livraisons par client (Excel) : une feuille par partenaire, formules intégrées, statut déclaré ou non ----
+// Modèle : TRACA_SAPO_ECORIGINE (COOPERATIVES, PRODUITS, DATE LIVRAISON, N° CCC = n° de connaissement, immatriculations, # SACS, POIDS LIVRE, POIDS ACCEPTE),
+// auquel s'ajoutent écart (formule), poids net payé, statut déclaré (Multitrace / Fairtrace) et date de déclaration.
+function livrNiveauCode(niv){ const t = String(niv||''); return /mass/i.test(t) ? 'MB' : /identit|pr[ée]serv/i.test(t) ? 'IP' : 'SEG'; }
+function livrProduit(a, niv){
+  const pf = plateformesDeclaration(a), ra = pf.indexOf('ra')>=0, ft = pf.indexOf('ft')>=0;
+  if (!ra && !ft) return 'ORDINAIRE';
+  return (ra && ft ? 'RAINFOREST+FAIRTRADE' : ra ? 'RAINFOREST' : 'FAIRTRADE') + '-' + niv;
+}
+function livrStatutDecl(a){
+  const pf = plateformesDeclaration(a);
+  if (!pf.length) return { txt:'Sans objet', date:'', code:'na' };
+  if (!declarable(a)) return { txt:'À peser', date:'', code:'pesee' };
+  const sig = l=>l.map(k=>PLATEFORMES_DECLARATION[k].sigle).join('+');
+  const faits = pf.filter(k=>dateDeclaration(a,k)), manque = pf.filter(k=>!dateDeclaration(a,k));
+  const dates = faits.map(k=>dateFr(dateDeclaration(a,k))).join(' / ');
+  if (!manque.length) return { txt:'Déclaré ('+sig(pf)+')', date:dates, code:'ok' };
+  if (faits.length) return { txt:'Partiel : reste '+sig(manque), date:dates, code:'part' };
+  return { txt:'Non déclaré ('+sig(pf)+')', date:'', code:'non' };
+}
+async function livraisonsClientsExporter(campagneId){
+  let ExcelJS; try{ ExcelJS = await qcChargerExcelJS(); }catch(e){ showToast('Impossible de préparer le classeur : '+e.message, 'error'); return; }
+  const camp = campagneId || null, campNom = camp ? lotsCampagneNom(camp) : 'toutes campagnes';
+  const achats = (state.achats||[]).filter(a=>!a.producteur_id && !a.refoulee && (!camp || a.campagne_id===camp));
+  const nbRefoules = (state.achats||[]).filter(a=>!a.producteur_id && a.refoulee && (!camp || a.campagne_id===camp)).length;
+  const connus = ccClientsConnus(), groupes = new Map(), sans = [];
+  achats.forEach(a=>{
+    const nom = achatClientEffectif(a); if (!nom){ sans.push(a); return; }
+    const cle = ccClefClient(nom); if (!groupes.has(cle)) groupes.set(cle, { nom: connus.get(cle) || nom, achats: [] });
+    groupes.get(cle).achats.push(a);
+  });
+  const liste = Array.from(groupes.values()).sort((x,y)=>x.nom.localeCompare(y.nom,'fr'));
+  if (sans.length) liste.push({ nom:'Sans client', achats:sans, sans:true });
+  if (!liste.length){ showToast('Aucune livraison à exporter pour cette campagne.'); return; }
+
+  const VERT = 'FF0E3B36', VERT_CLAIR = 'FFE6F0EC', OR = 'FFC8962E', GRIS = 'FFF4F6F5', BLANC = 'FFFFFFFF';
+  const bord = { style:'thin', color:{ argb:'FFD5DDD9' } }, cadre = { top:bord, bottom:bord, left:bord, right:bord };
+  const wb = new ExcelJS.Workbook(); wb.creator = 'ORIGEN · ECORIGINE'; wb.created = new Date();
+  const aujourdhui = new Date().toISOString().slice(0,10);
+  const synth = wb.addWorksheet('Synthèse', { views:[{ showGridLines:false }] });   // créée d'abord pour être en tête ; remplie à la fin
+  const noms = new Set(['Synthèse']), feuilles = [];
+  const nomFeuille = n=>{ let b = String(n).replace(/[\\\/\?\*\[\]:]/g,' ').trim().slice(0,31) || 'Partenaire', k = b, i = 2; while (noms.has(k)){ k = b.slice(0,28)+' '+i; i++; } noms.add(k); return k; };
+  const dateXl = iso=>{ const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso||'')); return m ? new Date(Date.UTC(+m[1], +m[2]-1, +m[3])) : null; };
+  const kpi = (ws, col, lab, val, fmt)=>{
+    const l = ws.getCell(4, col), v = ws.getCell(5, col);
+    l.value = lab; l.font = { bold:true, size:9, color:{ argb:'FF5F6B68' } }; l.alignment = { horizontal:'center', vertical:'middle', wrapText:true }; l.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:VERT_CLAIR } }; l.border = cadre;
+    v.value = val; v.font = { bold:true, size:13, color:{ argb:VERT } }; v.alignment = { horizontal:'center', vertical:'middle' }; v.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:BLANC } }; v.border = cadre;
+    if (fmt) v.numFmt = fmt;
+  };
+  const NB = '#,##0;[Red]-#,##0;"-"', PCT = '0.0%;[Red]-0.0%;"-"';
+  liste.forEach(g=>{
+    const cle = ccClefClient(g.nom);
+    const contrats = (state.contratsClients||[]).filter(c=>ccClefClient(c.client||'')===cle && (!camp || c.campagne_id===camp) && c.statut!=='annule' && c.statut!=='annulé');
+    const contracte = contrats.reduce((t,c)=>t+(Number(c.volume_contractuel_kg)||0), 0);
+    const niveaux = Array.from(new Set(contrats.map(c=>c.niveau_tracabilite).filter(Boolean))), niv = livrNiveauCode(niveaux.length===1 ? niveaux[0] : '');
+    const avecProjet = g.achats.some(a=>a.programme);
+    const nom = nomFeuille(g.nom), ws = wb.addWorksheet(nom, { views:[{ state:'frozen', ySplit:8, showGridLines:false }] });
+    const cols = [['COOPERATIVES',20],['PRODUITS',22],['DATE LIVRAISON',15],['N° CCC',24],['Immatriculation du véhicule',17],['Immatriculation de la remorque',17],['# SACS',11],['POIDS LIVRE',14],['POIDS ACCEPTE',14],['ÉCART (kg)',13],['ÉCART (%)',11],['POIDS NET PAYÉ',15],['STATUT DÉCLARÉ',24],['DATE DÉCLARATION',18]];
+    if (avecProjet) cols.push(['PROJET DE DURABILITÉ',20]);
+    ws.columns = cols.map(c=>({ width:c[1] }));
+    const NC = cols.length, L = n=>String.fromCharCode(64+n);
+    ws.mergeCells(1,1,1,NC); const t = ws.getCell(1,1); t.value = 'POINT DES LIVRAISONS — '+g.nom.toUpperCase(); t.font = { bold:true, size:16, color:{ argb:BLANC } }; t.alignment = { vertical:'middle', indent:1 }; t.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:VERT } };
+    ws.getRow(1).height = 32;
+    ws.mergeCells(2,1,2,NC); const st = ws.getCell(2,1); st.value = 'Campagne '+campNom+' · édité le '+dateFr(aujourdhui)+' · source : ORIGEN (pesées SAIGIC)'+(g.sans?' · connaissements à attribuer à un client':''); st.font = { italic:true, size:10, color:{ argb:'FF5F6B68' } }; st.alignment = { indent:1 };
+    ws.getRow(3).height = 6; ws.getRow(4).height = 30; ws.getRow(5).height = 26;
+    const R0 = 9, n = g.achats.length, R1 = R0+n-1, RT = R1+1;
+    const rng = c=>L(c)+R0+':'+L(c)+R1;
+    ws.mergeCells(7,1,7,NC);
+    // en-tête du tableau
+    const h = ws.getRow(8); h.height = 34;
+    cols.forEach((c,i)=>{ const x = h.getCell(i+1); x.value = c[0]; x.font = { bold:true, color:{ argb:BLANC }, size:10 }; x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:VERT } }; x.alignment = { horizontal:'center', vertical:'middle', wrapText:true }; x.border = cadre; });
+    const tri = g.achats.slice().sort((x,y)=>String(x.date||'').localeCompare(String(y.date||'')) || String(x.connaissement||'').localeCompare(String(y.connaissement||''), 'fr', { numeric:true }));
+    let sLiv = 0, sAcc = 0, sSacs = 0, sNet = 0, nOk = 0, nAd = 0, sEcart = 0, sLivPese = 0;
+    tri.forEach((a,i)=>{
+      const r = R0+i, c = coopById(a.cooperative_id), sd = livrStatutDecl(a);
+      const livre = Number(a.quantite_kg)||Number(a.poids_brut)||0, acc = Number(a.poids_brut_accepte)||0, sacs = Number(a.nombre_sacs)||0, net = Number(a.poids_net_produit)||0;
+      sLiv += livre; sAcc += acc; sSacs += sacs; sNet += net; if (livre>0 && acc>0){ sEcart += acc-livre; sLivPese += livre; } if (sd.code==='ok') nOk++; if (sd.code==='non' || sd.code==='part') nAd++;
+      const row = ws.getRow(r);
+      const ecart = acc>0 ? acc-livre : 0;
+      const v = [ c ? c.nom : '', livrProduit(a, niv), dateXl(a.date), a.connaissement||'', a.immat_vehicule||'', a.immat_remorque||'', sacs||null, livre||null, acc||null,
+        { formula:'IF(AND(H'+r+'>0,I'+r+'>0),I'+r+'-H'+r+',"")', result: (livre>0&&acc>0) ? acc-livre : '' },
+        { formula:'IF(AND(H'+r+'>0,I'+r+'>0),(I'+r+'-H'+r+')/H'+r+',"")', result: (livre>0&&acc>0) ? (acc-livre)/livre : '' },
+        net||null, sd.txt, sd.date ];
+      if (avecProjet) v.push(a.programme||'');
+      v.forEach((val,k)=>{ const x = row.getCell(k+1); x.value = val; x.border = cadre; x.font = { size:10 }; x.alignment = { vertical:'middle', horizontal: (k===2||k===4||k===5||k===12||k===13) ? 'center' : (k>=6&&k<=11) ? 'right' : 'left' };
+        if (i%2===1) x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:GRIS } }; });
+      row.getCell(3).numFmt = 'dd/mm/yyyy'; [7,8,9,10,12].forEach(k=>row.getCell(k).numFmt = NB); row.getCell(11).numFmt = PCT;
+      const col = { ok:['FFDDF3E4','FF14633A'], non:['FFFDE2DF','FFA8281C'], part:['FFFFF1D6','FF8A5A00'], pesee:['FFFFF1D6','FF8A5A00'], na:['FFEEF1F0','FF5F6B68'] }[sd.code];
+      const cs = row.getCell(13); cs.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:col[0] } }; cs.font = { bold:true, size:10, color:{ argb:col[1] } };
+    });
+    // ligne de total (formules)
+    const tr = ws.getRow(RT); tr.height = 24;
+    for (let k=1;k<=NC;k++){ const x = tr.getCell(k); x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:VERT_CLAIR } }; x.font = { bold:true, color:{ argb:VERT } }; x.border = { top:{ style:'medium', color:{ argb:VERT } }, bottom:{ style:'medium', color:{ argb:VERT } } }; x.alignment = { vertical:'middle', horizontal: k>=7&&k<=12 ? 'right' : 'left' }; }
+    tr.getCell(1).value = 'TOTAL';
+    tr.getCell(4).value = { formula:'COUNTA('+rng(4)+')&" camion"&IF(COUNTA('+rng(4)+')>1,"s","")', result: n+' camion'+(n>1?'s':'') };
+    [[7,sSacs],[8,sLiv],[9,sAcc],[12,sNet]].forEach(([k,val])=>{ tr.getCell(k).value = { formula:'SUM('+rng(k)+')', result:val }; tr.getCell(k).numFmt = NB; });
+    tr.getCell(10).value = { formula:'SUM('+rng(10)+')', result:sEcart }; tr.getCell(10).numFmt = NB;      // écart des seuls camions pesés
+    tr.getCell(11).value = { formula:'IFERROR(J'+RT+'/SUMIF('+rng(9)+',">0",'+rng(8)+'),"")', result: sLivPese>0 ? sEcart/sLivPese : '' }; tr.getCell(11).numFmt = PCT;
+    // indicateurs (formules sur le tableau)
+    const rM = rng(13);
+    kpi(ws,1,'CAMIONS',{ formula:'COUNTA('+rng(4)+')', result:n }, NB);
+    kpi(ws,2,'SACS LIVRÉS',{ formula:'SUM('+rng(7)+')', result:sSacs }, NB);
+    kpi(ws,3,'POIDS LIVRÉ (kg)',{ formula:'SUM('+rng(8)+')', result:sLiv }, NB);
+    kpi(ws,4,'POIDS ACCEPTÉ (kg)',{ formula:'SUM('+rng(9)+')', result:sAcc }, NB);
+    kpi(ws,5,'ÉCART (kg) — camions pesés',{ formula:'SUM('+rng(10)+')', result:sEcart }, NB);
+    kpi(ws,6,'NET PAYÉ (kg)',{ formula:'SUM('+rng(12)+')', result:sNet }, NB);
+    kpi(ws,7,'CONTRACTÉ (kg)', contracte>0 ? contracte : '—', NB);
+    kpi(ws,8,'RESTE À LIVRER (kg)',{ formula:'IF(ISNUMBER(G5),MAX(G5-F5,0),"—")', result: contracte>0 ? Math.max(contracte-sNet,0) : '—' }, NB);
+    kpi(ws,9,'DÉCLARÉS',{ formula:'COUNTIF('+rM+',"Déclaré*")', result:nOk }, NB);
+    kpi(ws,10,'À DÉCLARER',{ formula:'COUNTIF('+rM+',"Non déclaré*")+COUNTIF('+rM+',"Partiel*")', result:nAd }, NB);
+    kpi(ws,11,'TAUX DÉCLARÉ',{ formula:'IFERROR(I5/(I5+J5),"—")', result:(nOk+nAd)>0 ? nOk/(nOk+nAd) : '—' }, PCT);
+    ws.getCell(7,1).value = 'Produit : '+(niv==='SEG'&&!niveaux.length ? 'niveau de traçabilité « SEG » (ségrégation) par défaut, aucun niveau précisé dans les contrats' : 'niveau de traçabilité du contrat')+' · Statut déclaré : Multitrace (RA) / Fairtrace (FT) — « Sans objet » pour le cacao ordinaire, « À peser » tant que l\'usine n\'a pas pesé.';
+    ws.getCell(7,1).font = { italic:true, size:9, color:{ argb:'FF7A8683' } };
+    ws.autoFilter = { from:{ row:8, column:1 }, to:{ row:R1, column:NC } };
+    ws.pageSetup = { orientation:'landscape', fitToPage:true, fitToWidth:1, fitToHeight:0, paperSize:9, margins:{ left:0.4, right:0.4, top:0.5, bottom:0.5, header:0.2, footer:0.2 } };
+    ws.headerFooter = { oddFooter:'&L'+g.nom+'&CPage &P / &N&RORIGEN · ECORIGINE' };
+    ws.properties.tabColor = { argb: g.sans ? 'FFC0392B' : VERT };
+    feuilles.push({ nom, g });
+  });
+  // synthèse : formules qui lisent les indicateurs de chaque feuille
+  const colsS = [['PARTENAIRE',26],['CAMIONS',11],['SACS',12],['POIDS LIVRÉ (kg)',17],['POIDS ACCEPTÉ (kg)',18],['ÉCART (kg)',13],['NET PAYÉ (kg)',16],['CONTRACTÉ (kg)',16],['RESTE À LIVRER (kg)',18],['DÉCLARÉS',11],['À DÉCLARER',12],['TAUX DÉCLARÉ',13]];
+  synth.columns = colsS.map(c=>({ width:c[1] }));
+  synth.mergeCells(1,1,1,colsS.length); const ts = synth.getCell(1,1); ts.value = 'POINT DES LIVRAISONS PAR CLIENT — ECORIGINE'; ts.font = { bold:true, size:16, color:{ argb:BLANC } }; ts.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:VERT } }; ts.alignment = { vertical:'middle', indent:1 }; synth.getRow(1).height = 32;
+  synth.mergeCells(2,1,2,colsS.length); const ss = synth.getCell(2,1); ss.value = 'Campagne '+campNom+' · édité le '+dateFr(aujourdhui)+' · une feuille par partenaire'+(nbRefoules ? ' · '+nbRefoules+' camion'+(nbRefoules>1?'s':'')+' refoulé'+(nbRefoules>1?'s':'')+' exclu'+(nbRefoules>1?'s':'')+' (non acheté)' : ''); ss.font = { italic:true, size:10, color:{ argb:'FF5F6B68' } }; ss.alignment = { indent:1 };
+  const hs = synth.getRow(4); hs.height = 34;
+  colsS.forEach((c,i)=>{ const x = hs.getCell(i+1); x.value = c[0]; x.font = { bold:true, color:{ argb:BLANC }, size:10 }; x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:VERT } }; x.alignment = { horizontal:'center', vertical:'middle', wrapText:true }; x.border = cadre; });
+  const refK = ['A','B','C','D','E','F','G','H','I','J','K'];     // indicateurs de chaque feuille (ligne 5)
+  feuilles.forEach((f,i)=>{
+    const r = 5+i, q = "'"+f.nom.replace(/'/g,"''")+"'!";
+    const row = synth.getRow(r), v = [{ text:f.nom, hyperlink:"#"+q+'A1' }];
+    refK.forEach(k=>v.push({ formula:q+k+'5' }));
+    v.forEach((val,k)=>{ const x = row.getCell(k+1); x.value = val; x.border = cadre; x.font = k===0 ? { bold:true, color:{ argb:'FF1F5FA8' }, underline:true } : { size:10 }; x.alignment = { vertical:'middle', horizontal: k===0 ? 'left' : 'right' }; if (i%2===1) x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:GRIS } }; if (k>0) x.numFmt = k===11 ? PCT : NB; });
+  });
+  const RS = 5+feuilles.length, tS = synth.getRow(RS); tS.height = 24;
+  for (let k=1;k<=colsS.length;k++){ const x = tS.getCell(k); x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:VERT_CLAIR } }; x.font = { bold:true, color:{ argb:VERT } }; x.border = { top:{ style:'medium', color:{ argb:VERT } }, bottom:{ style:'medium', color:{ argb:VERT } } }; x.alignment = { horizontal: k===1?'left':'right', vertical:'middle' }; }
+  tS.getCell(1).value = 'TOTAL';
+  [2,3,4,5,6,7,8,10,11].forEach(k=>{ const c = String.fromCharCode(64+k); tS.getCell(k).value = { formula:'SUM('+c+'5:'+c+(RS-1)+')' }; tS.getCell(k).numFmt = NB; });
+    tS.getCell(9).value = { formula:'SUM(I5:I'+(RS-1)+')' }; tS.getCell(9).numFmt = NB;
+  tS.getCell(12).value = { formula:'IFERROR(J'+RS+'/(J'+RS+'+K'+RS+'),"—")' }; tS.getCell(12).numFmt = PCT;
+  synth.getCell(RS+2,1).value = 'Les chiffres de cette page lisent les indicateurs de chaque feuille (formules) : modifier une ligne de livraison met la synthèse à jour.'; synth.getCell(RS+2,1).font = { italic:true, size:9, color:{ argb:'FF7A8683' } };
+  synth.views = [{ state:'frozen', ySplit:4, showGridLines:false }]; synth.properties.tabColor = { argb:OR };
+  synth.pageSetup = { orientation:'landscape', fitToPage:true, fitToWidth:1, fitToHeight:0, paperSize:9 };
+  await qcTelechargerClasseur(wb, 'Point_livraisons_clients_'+String(campNom).replace(/[^A-Za-z0-9]+/g,'_')+'_'+aujourdhui+'.xlsx');
+  showToast('Point des livraisons téléchargé ('+feuilles.length+' feuille'+(feuilles.length>1?'s':'')+' + synthèse).', 'success');
+}
 
 // ---- Suivi achats par client : UN tableau, une ligne par client, les colonnes dans l'ordre de la chaine ----
 // Contrat -> Achete (net paye usine) -> Reste a acheter -> Camions en attente (decharges, pas encore peses)
