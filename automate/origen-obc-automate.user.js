@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.3
+// @version      0.1.4
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -155,7 +155,8 @@
   async function trouverFournisseur(lot) {
     const ccc = String(lot.cooperative.ccc || '').toUpperCase();
     const parse = (doc) => lignesTable(doc).map((l) => ({ nom: l.c[2], code: l.c[3], poste: l.c[9] || '', id: (l.c[10] || '').trim() })).filter((r) => r.id);
-    let rows = parse(await getHtml('/Fournisseur/Index?isProjetProv=0&filterEntite=' + ENTITE + '&filtrePosteComptable=&filter=' + encodeURIComponent(lot.cooperative.sigle) + '&pageSize=100'));
+    const mot = N(lot.cooperative.sigle).split(' ').find((m) => m.length >= 3) || N(lot.cooperative.sigle).split(' ')[0] || '';
+    let rows = parse(await getHtml('/Fournisseur/Index?isProjetProv=0&filterEntite=' + ENTITE + '&filtrePosteComptable=&filter=' + encodeURIComponent(mot) + '&pageSize=100'));
     let r = rows.find((x) => ccc && x.poste.toUpperCase().includes(ccc)) || rows.find((x) => N(x.code) === N(lot.cooperative.sigle) || N(x.nom) === N(lot.cooperative.nom_complet));
     if (!r && ccc) { rows = parse(await getHtml('/Fournisseur/Index?isProjetProv=0&filterEntite=' + ENTITE + '&filtrePosteComptable=&filter=&pageSize=5000')); r = rows.find((x) => x.poste.toUpperCase().includes(ccc)); }
     return r || null;
@@ -227,9 +228,11 @@
   async function etapeProducteur(e) {
     const lot = e.lot;
     // 1) page Historique des producteurs filtrée sur la coopérative ; 2) en secours, la liste qu'OBC utilise dans ses formulaires
+    // Le filtre d'OBC ne prend qu'un mot : on cherche sur le premier mot du nom (puis sur le n° CCC), et on vérifie la colonne Coopérative.
     const nomCoop = e.ids.fournisseur_nom || lot.cooperative.sigle;
-    const docP = await getHtml('/AgroAchatProducteur/Index?filter=' + encodeURIComponent(nomCoop) + '&pageSize=100');
-    const lignesP = lignesTable(docP).filter((l) => l.c.some((t) => N(t) === N(nomCoop)));
+    const motsCle = [...new Set([N(nomCoop).split(' ').find((m) => m.length >= 3) || N(nomCoop).split(' ')[0], String(lot.cooperative.ccc || '').toUpperCase()].filter(Boolean))];
+    let lignesP = [];
+    for (const mot of motsCle) { const docP = await getHtml('/AgroAchatProducteur/Index?filter=' + encodeURIComponent(mot) + '&pageSize=200'); lignesP = lignesTable(docP).filter((l) => N(l.c[2]) === N(nomCoop)); if (lignesP.length) break; }
     if (lignesP.length) { const nomP = lignesP[0].c.slice(3, 5).join(' ').trim(); e.fait[3] = 'déjà dans OBC : ' + nomP; journal(e, 'Producteur trouvé : ' + nomP); return 'suivant'; }
     const liste = await getJson('/AppMethods1/LoadAgroProducteursByFournisseurId2?FournisseurId=' + e.ids.fournisseur_id);
     const prods = liste.filter((p) => jsonVal(p) !== '' && jsonTxt(p) !== '');
