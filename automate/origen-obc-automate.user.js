@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.1
+// @version      0.1.2
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -94,7 +94,8 @@
   }
 
   // ---------- accès OBC ----------
-  async function getJson(url) { const r = await fetch(url, { credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } }); if (!r.ok) throw new Error('HTTP ' + r.status + ' sur ' + url.split('?')[0]); const j = await r.json(); return Array.isArray(j) ? j : (j.data || j.Data || j.result || []); }
+  async function getJson(url) { const r = await fetch(url, { credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } }); if (!r.ok) throw new Error('HTTP ' + r.status + ' sur ' + url.split('?')[0] + (r.status === 403 || r.status === 401 ? ' — session OBC expirée : reconnecte-toi puis « Continuer »' : '')); const j = await r.json(); if (Array.isArray(j)) return j; if (j && typeof j === 'object') { const arr = Object.values(j).find(Array.isArray); if (arr) return arr; } return []; }
+  const jsonVal = (x) => x == null ? '' : String(x.Value ?? x.value ?? x.Id ?? x.id ?? ''); const jsonTxt = (x) => x == null ? '' : String(x.Text ?? x.text ?? x.Nom ?? x.nom ?? x.Name ?? x.name ?? '');
   async function getHtml(url) { const r = await fetch(url, { credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } }); if (!r.ok) throw new Error('HTTP ' + r.status + ' sur ' + url.split('?')[0]); return new DOMParser().parseFromString(await r.text(), 'text/html'); }
   const lignesTable = (doc) => [...doc.querySelectorAll('table tbody tr')].map((tr) => ({ tr, c: [...tr.querySelectorAll('td')].map((td) => td.innerText.trim()) })).filter((l) => l.c.length > 3);
   function connecte() { return !/\/Account\/Login/i.test(location.pathname) && !!document.querySelector('#logoutForm'); }
@@ -107,12 +108,25 @@
   function setInput(el, v) { if (!el) return; el.value = v == null ? '' : String(v); el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }
   function setSelect(el, value) {
     if (!el) return false;
-    el.value = String(value);
-    if (el.value !== String(value)) return false;
+    const v = String(value);
+    const opt = [...el.options].find((o) => o.value === v); if (!opt) return false;
+    [...el.options].forEach((o) => { o.selected = (o === opt); }); el.value = v;
     const jq = $();
-    if (jq) { try { if (jq.fn.selectpicker) jq(el).selectpicker('refresh'); } catch (e) { /* pas un selectpicker */ } try { jq(el).trigger('change'); } catch (e) { el.dispatchEvent(new Event('change', { bubbles: true })); } }
-    else el.dispatchEvent(new Event('change', { bubbles: true }));
+    if (jq && jq.fn && jq.fn.selectpicker) { try { jq(el).selectpicker('val', v); } catch (e) { /* liste non initialisée */ } try { jq(el).selectpicker('refresh'); } catch (e) { /* idem */ } }
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    if (jq) { try { jq(el).trigger('change'); } catch (e) { /* ignoré */ } }
+    // mémorise la valeur voulue : OBC réinitialise parfois ses listes après coup, on la réapplique (voir reappliquer)
+    el.dataset.origenVal = v;
     return true;
+  }
+  // Réapplique les valeurs voulues sur les listes du formulaire après un délai (si OBC les a réinitialisées) ; renvoie ce qui manque encore.
+  async function reappliquer(form, ms) {
+    await dormir(ms || 1500);
+    const manques = [];
+    [...form.querySelectorAll('select[data-origen-val]')].forEach((el) => { const v = el.dataset.origenVal; if (el.value !== v) { if (!setSelect(el, v)) manques.push(el.id); } });
+    await dormir(400);
+    [...form.querySelectorAll('select[data-origen-val]')].forEach((el) => { if (el.value !== el.dataset.origenVal && !manques.includes(el.id)) manques.push(el.id); });
+    return manques;
   }
   async function setSelectTexte(el, test, libelle, affiche) { const o = await attendreOption(el, test); if (!o) throw new Error(libelle + ' : « ' + (affiche || (test instanceof RegExp ? test.source : typeof test === 'function' ? '?' : test)) + ' » non reconnu dans la liste OBC'); setSelect(el, o.value); return o; }
   function setRadio(id) { const el = document.getElementById(id); if (!el) return; el.checked = true; el.dispatchEvent(new Event('change', { bubbles: true })); }
@@ -185,6 +199,7 @@
     await attendreOption(q('#txtnumero_poste_comptableAdd0'), new RegExp('^' + poste.Value + '\\b'));
     if (!setSelect(q('#txtnumero_poste_comptableAdd0'), poste.Value)) throw new Error('Poste comptable non sélectionnable');
     setSelect(q('#txttype_prestation_achatAdd0'), '1');
+    { const m = await reappliquer(f); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
     e.note = 'Coopérative ' + c.sigle + ' (' + c.ccc + ').'; return 'rempli';
   }
   async function etapeTransporteur(e) {
@@ -205,15 +220,19 @@
   }
   async function etapeProducteur(e) {
     const lot = e.lot;
+    // 1) page Historique des producteurs filtrée sur la coopérative ; 2) en secours, la liste qu'OBC utilise dans ses formulaires
+    const docP = await getHtml('/AgroAchatProducteur/Index?id_fournisseur=' + e.ids.fournisseur_id + '&pageSize=50');
+    const lignesP = lignesTable(docP).filter((l) => l.c.some((t) => N(t) === N(e.ids.fournisseur_nom)));
+    if (lignesP.length) { const nomP = lignesP[0].c.slice(3, 5).join(' ').trim(); e.fait[3] = 'déjà dans OBC : ' + nomP; journal(e, 'Producteur trouvé : ' + nomP); return 'suivant'; }
     const liste = await getJson('/AppMethods1/LoadAgroProducteursByFournisseurId2?FournisseurId=' + e.ids.fournisseur_id);
-    const prods = liste.filter((p) => String(p.Value || '') !== '');
-    if (prods.length) { e.ids.producteur_id = prods[0].Value; e.fait[3] = 'déjà dans OBC : ' + prods[0].Text; journal(e, 'Producteur trouvé : ' + prods[0].Text); return 'suivant'; }
+    const prods = liste.filter((p) => jsonVal(p) !== '' && jsonTxt(p) !== '');
+    if (prods.length) { e.ids.producteur_id = jsonVal(prods[0]); e.fait[3] = 'déjà dans OBC : ' + jsonTxt(prods[0]); journal(e, 'Producteur trouvé : ' + jsonTxt(prods[0])); return 'suivant'; }
     if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
     const f = await ouvrirFormulaire(3); if (!f) return 'navigation';
     const p = lot.producteur;
     setSelect(q('#txtid_entiteAdd'), ENTITE);
     setInput(q('#txtproducteur_nomAdd'), p.nom); setInput(q('#txtproducteur_prenomsAdd'), p.prenoms);
-    setInput(q('#txtproducteur_matricule_regulateurAdd'), p.matricule_ccc || '');
+    setInput(q('#txtproducteur_matricule_cooperativeAdd'), p.code || p.matricule_ccc || ''); setInput(q('#txtproducteur_matricule_regulateurAdd'), p.matricule_ccc || p.code || '');
     setRadio('txtproducteur_typeAdd1'); setRadio('txtproducteur_genreAdd1');
     setInput(q('#txtproducteur_localiteAdd'), p.localite);
     await attendreOption(q('#txtid_fournisseurAdd'), /./);
@@ -221,6 +240,7 @@
     setInput(q('#txtproducteur_date_adhesionAdd'), isoDate(lot.connaissement.date));
     setSelect(q('#txtcommodite_idAdd0'), '2'); setInput(q('#txtproducteur_parcelle_codeAdd0'), 'P001');
     setInput(q('#txtparcelle_superficie_totaleAdd0'), '1'); setInput(q('#txtparcelle_superficie_commoditeAdd0'), '1'); setInput(q('#txtparcelle_production_potentielleAdd0'), '500');
+    const manques = await reappliquer(f); if (manques.length) throw new Error('Liste non prise en compte par OBC : ' + manques.join(', '));
     e.note = 'Producteur ' + p.nom + ' ' + p.prenoms + (p.fictif ? ' (nom neutre : aucun producteur de cette coopérative dans ORIGEN).' : '.'); return 'rempli';
   }
   // Existence : les pages « Historique » d'OBC acceptent un filtre exact dans l'adresse ; la colonne 4 porte le numéro.
@@ -250,6 +270,7 @@
     const d = c.detail_arbitraire || {};
     setInput(q('#txtdate_achatAdd0'), isoDate(d.date_achat || c.date)); setInput(q('#txtnumero_recu_achatAdd0'), d.numero_recu || '001');
     setInput(q('#txtlivraison_nb_sacsAdd0'), d.sacs || 1); setInput(q('#txtlivraison_poids_netAdd0'), d.poids_net || 56); setInput(q('#txtlivraison_prix_unitaireAdd0'), num(c.prix_bord_champ));
+    { const m = await reappliquer(f); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
     e.note = 'Connaissement ' + c.numero + ' (' + c.type_commodite + (c.certification ? ' ' + c.certification : '') + '), prix bord champ ' + c.prix_bord_champ + '.'; return 'rempli';
   }
   async function etapeLivraison(e) {
@@ -275,6 +296,7 @@
     await setSelectTexte(q('#txtusine_idAdd'), new RegExp('-\\s*' + c.usine_code + '\\s*$', 'i'), 'Usine');
     setInput(q('#txtconnaissement_usine_nb_sacs_chargeAdd'), c.sacs_declares); setInput(q('#txtconnaissement_usine_nb_sacs_receptionneAdd'), c.sacs_declares);
     setInput(q('#txtconnaissement_usine_poids_brut_chargeAdd'), c.poids_brut_declare || ''); setInput(q('#txtconnaissement_usine_poids_refactionAdd'), '0');
+    { const m = await reappliquer(f); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
     e.note = 'Livraison ' + c.numero + ' : ' + c.sacs_declares + ' sacs, brut déclaré ' + (c.poids_brut_declare || '?') + ', TKM ' + c.tkm + ', usine ' + c.usine_code + '.'; return 'rempli';
   }
   async function etapePesee(e) {
@@ -299,6 +321,7 @@
     setInput(q('#txtpesee_brousse_sacs_dechargesAdd'), p.sacs_decharges != null ? p.sacs_decharges : p.sacs_acceptes); setInput(q('#txtpesee_brousse_sacs_acceptesAdd'), p.sacs_acceptes);
     setInput(q('#txtpesee_brousse_tare_sacs_acceptesAdd'), num(p.tare_sacs)); setInput(q('#txtpesee_brousse_tare_palettesAdd'), '0'); setInput(q('#txtpesee_brousse_poids_refactionAdd'), '0');
     if (p.classement) await setSelectTexte(q('#txtqualite_idAdd'), exact(p.classement), 'Classement', p.classement);
+    { const m = await reappliquer(f); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
     e.note = 'Pesée ' + p.code + ' : entrée ' + p.poids_entree + ' / sortie ' + p.poids_sortie + ', ' + paires.length + ' rubriques qualité, ' + p.classement + '. Poids net payé attendu : ' + p.poids_net_paye_attendu + '.'; return 'rempli';
   }
   async function etapeBordereau(e) {
@@ -318,6 +341,7 @@
     if (nat1 && !nat1.value) await setSelectTexte(nat1, /STOCK BROUSSE\s*-\s*321110000/i, 'Nature (livraison produit)');
     if (nat2 && !nat2.value) await setSelectTexte(nat2, /Fournitures Li\w+\s*-\s*602000/i, 'Nature (facturation)');
     await dormir(1200);
+    { const m = await reappliquer(f, 800); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
     const net = [...f.querySelectorAll('input')].find((i) => /net_a_payer|netapayer/i.test(i.name + i.id));
     let verif = '';
     if (net && b.net_attendu != null) { const v = Number(String(net.value).replace(/\s/g, '').replace(',', '.')); verif = isFinite(v) && Math.abs(v - b.net_attendu) < 1 ? ' ✓ Net à payer OBC = ORIGEN (' + v.toLocaleString('fr-FR') + ').' : ' ⚠ Net à payer OBC ' + net.value + ' ≠ ORIGEN ' + b.net_attendu.toLocaleString('fr-FR') + ' : vérifie avant d\'enregistrer.'; }
