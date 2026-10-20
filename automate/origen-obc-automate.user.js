@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.2
+// @version      0.1.3
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -121,14 +121,20 @@
   }
   // Réapplique les valeurs voulues sur les listes du formulaire après un délai (si OBC les a réinitialisées) ; renvoie ce qui manque encore.
   async function reappliquer(form, ms) {
-    await dormir(ms || 1500);
-    const manques = [];
-    [...form.querySelectorAll('select[data-origen-val]')].forEach((el) => { const v = el.dataset.origenVal; if (el.value !== v) { if (!setSelect(el, v)) manques.push(el.id); } });
-    await dormir(400);
+    let manques = [];
+    for (let passe = 0; passe < 3; passe++) {
+      await dormir(ms || 1500); manques = [];
+      [...form.querySelectorAll('select[data-origen-val]')].forEach((el) => { const v = el.dataset.origenVal; if (el.value !== v) { if (!setSelect(el, v)) manques.push(el.id); } });
+    }
+    await dormir(600);
     [...form.querySelectorAll('select[data-origen-val]')].forEach((el) => { if (el.value !== el.dataset.origenVal && !manques.includes(el.id)) manques.push(el.id); });
     return manques;
   }
   async function setSelectTexte(el, test, libelle, affiche) { const o = await attendreOption(el, test); if (!o) throw new Error(libelle + ' : « ' + (affiche || (test instanceof RegExp ? test.source : typeof test === 'function' ? '?' : test)) + ' » non reconnu dans la liste OBC'); setSelect(el, o.value); return o; }
+  // Entité : déjà ECORIGINE dans OBC ; la changer déclenche le rechargement de toutes les listes (et efface les sélections).
+  function setEntite(el) { if (!el) return; if (String(el.value) !== ENTITE) setSelect(el, ENTITE); }
+  // Attend qu'une liste ait fini de se (re)charger : nombre d'options stable pendant 1,2 s et au moins une valeur.
+  async function listeStable(el) { let n = -1, stableDepuis = 0; const t0 = Date.now(); while (Date.now() - t0 < ATTENTE_MAX) { const m = el ? el.options.length : 0; if (m === n && m > 1) { if (Date.now() - stableDepuis > 1200) return true; } else { n = m; stableDepuis = Date.now(); } await dormir(200); } return el && el.options.length > 1; }
   function setRadio(id) { const el = document.getElementById(id); if (!el) return; el.checked = true; el.dispatchEvent(new Event('change', { bubbles: true })); }
   const q = (s) => document.querySelector(s);
 
@@ -188,7 +194,7 @@
     if (!poste) { e.erreur = 'Le poste comptable « ' + lot.cooperative.ccc + ' – ' + lot.cooperative.sigle + ' » n\'existe pas dans le plan comptable d\'OBC : crée-le d\'abord, puis « Continuer ».'; return 'stop'; }
     const f = await ouvrirFormulaire(1); if (!f) return 'navigation';
     const c = lot.cooperative;
-    setSelect(q('#txtid_entiteAdd'), ENTITE);
+    setEntite(q('#txtid_entiteAdd'));
     setInput(q('#txtnom_fournisseurAdd'), c.nom_complet); setInput(q('#txtcode_fournisseurAdd'), c.sigle);
     setSelect(q('#txtmode_reglement_fournisseurAdd'), '2'); setSelect(q('#txtsecteur_fournisseurAdd'), '1');
     setInput(q('#txtville_fournisseurAdd'), c.ville); setInput(q('#txtnumero_cc_fournisseurAdd'), c.dfe); setInput(q('#txtnumero_rccm_fournisseurAdd'), c.rccm);
@@ -212,7 +218,7 @@
     if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
     e.ids.transporteur_nouveau = ch.nouveauNom;
     const f = await ouvrirFormulaire(2); if (!f) return 'navigation';
-    setSelect(q('#txtid_entiteAdd'), ENTITE);
+    setEntite(q('#txtid_entiteAdd'));
     setInput(q('#txttransporteur_nomAdd'), ch.nouveauNom); setInput(q('#txttransporteur_codeAdd'), ch.nouveauNom);
     setInput(q('#txttransporteur_immatriculation_vehiculeAdd'), lot.transporteur.immat_vehicule); setInput(q('#txttransporteur_immatriculation_remorqueAdd'), lot.transporteur.immat_remorque);
     setInput(q('#txttransporteur_nom_chauffeurAdd'), lot.transporteur.chauffeur);
@@ -221,8 +227,9 @@
   async function etapeProducteur(e) {
     const lot = e.lot;
     // 1) page Historique des producteurs filtrée sur la coopérative ; 2) en secours, la liste qu'OBC utilise dans ses formulaires
-    const docP = await getHtml('/AgroAchatProducteur/Index?id_fournisseur=' + e.ids.fournisseur_id + '&pageSize=50');
-    const lignesP = lignesTable(docP).filter((l) => l.c.some((t) => N(t) === N(e.ids.fournisseur_nom)));
+    const nomCoop = e.ids.fournisseur_nom || lot.cooperative.sigle;
+    const docP = await getHtml('/AgroAchatProducteur/Index?filter=' + encodeURIComponent(nomCoop) + '&pageSize=100');
+    const lignesP = lignesTable(docP).filter((l) => l.c.some((t) => N(t) === N(nomCoop)));
     if (lignesP.length) { const nomP = lignesP[0].c.slice(3, 5).join(' ').trim(); e.fait[3] = 'déjà dans OBC : ' + nomP; journal(e, 'Producteur trouvé : ' + nomP); return 'suivant'; }
     const liste = await getJson('/AppMethods1/LoadAgroProducteursByFournisseurId2?FournisseurId=' + e.ids.fournisseur_id);
     const prods = liste.filter((p) => jsonVal(p) !== '' && jsonTxt(p) !== '');
@@ -230,12 +237,12 @@
     if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
     const f = await ouvrirFormulaire(3); if (!f) return 'navigation';
     const p = lot.producteur;
-    setSelect(q('#txtid_entiteAdd'), ENTITE);
+    setEntite(q('#txtid_entiteAdd'));
     setInput(q('#txtproducteur_nomAdd'), p.nom); setInput(q('#txtproducteur_prenomsAdd'), p.prenoms);
-    setInput(q('#txtproducteur_matricule_cooperativeAdd'), p.code || p.matricule_ccc || ''); setInput(q('#txtproducteur_matricule_regulateurAdd'), p.matricule_ccc || p.code || '');
+    setInput(q('#txtproducteur_matricule_cooperativeAdd'), p.code || lot.cooperative.ccc || ''); setInput(q('#txtproducteur_matricule_regulateurAdd'), p.matricule_ccc || lot.cooperative.ccc || '');
     setRadio('txtproducteur_typeAdd1'); setRadio('txtproducteur_genreAdd1');
     setInput(q('#txtproducteur_localiteAdd'), p.localite);
-    await attendreOption(q('#txtid_fournisseurAdd'), /./);
+    await listeStable(q('#txtid_fournisseurAdd'));
     if (!setSelect(q('#txtid_fournisseurAdd'), e.ids.fournisseur_id)) throw new Error('Coopérative (id ' + e.ids.fournisseur_id + ') introuvable dans la liste du producteur');
     setInput(q('#txtproducteur_date_adhesionAdd'), isoDate(lot.connaissement.date));
     setSelect(q('#txtcommodite_idAdd0'), '2'); setInput(q('#txtproducteur_parcelle_codeAdd0'), 'P001');
@@ -258,12 +265,13 @@
     const f = await ouvrirFormulaire(4); if (!f) return 'navigation';
     const c = lot.connaissement;
     setSelect(q('#txtcampagne_idAdd'), e.ids.campagne_id);
+    await listeStable(q('#txtid_fournisseurAdd')); await listeStable(q('#txttype_commodite_idAdd'));
     await setSelectTexte(q('#txtcommodite_idAdd'), /^CACAO/i, 'Commodité');
     await setSelectTexte(q('#txttype_commodite_idAdd'), new RegExp('^' + c.type_commodite, 'i'), 'Type commodité');
     if (c.certification) await setSelectTexte(q('#txtcertification_idAdd'), new RegExp('^' + c.certification, 'i'), 'Certification');
     setInput(q('#txtconnaissement_brousse_numeroAdd'), c.numero); setInput(q('#txtconnaissement_brousse_dateAdd'), isoDate(c.date));
-    await attendreOption(q('#txtid_fournisseurAdd'), /./);
     if (!setSelect(q('#txtid_fournisseurAdd'), e.ids.fournisseur_id)) throw new Error('Coopérative (id ' + e.ids.fournisseur_id + ') absente de la liste Fournisseur du connaissement');
+    await listeStable(q('#txtproducteur_idAdd0'));
     const prod = await attendreOption(q('#txtproducteur_idAdd0'), /./); if (!prod) throw new Error('Aucun producteur proposé pour cette coopérative');
     setSelect(q('#txtproducteur_idAdd0'), prod.value);
     const parc = await attendre(() => optionParTexte(q('#txtproducteur_parcelle_idAdd0'), /./), 8000); if (parc) setSelect(q('#txtproducteur_parcelle_idAdd0'), parc.value);
@@ -280,6 +288,7 @@
     const f = await ouvrirFormulaire(5); if (!f) return 'navigation';
     const c = lot.connaissement;
     setSelect(q('#txtcampagne_idAdd'), e.ids.campagne_id);
+    await listeStable(q('#txtconnaissement_brousse_idAdd')); await listeStable(q('#txttransporteur_idAdd')); await listeStable(q('#txtorigine_idAdd'));
     await setSelectTexte(q('#txtcampagne_recolte_idAdd'), new RegExp('^' + lot.campagne.recolte, 'i'), 'Récolte');
     await setSelectTexte(q('#txtconnaissement_brousse_idAdd'), c.numero, 'Connaissement brousse');
     await dormir(1500);
@@ -306,6 +315,7 @@
     const f = await ouvrirFormulaire(6); if (!f) return 'navigation';
     const p = lot.pesee, c = lot.connaissement;
     setSelect(q('#txtcampagne_idAdd'), e.ids.campagne_id);
+    await listeStable(q('#txtconnaissement_usine_idAdd')); await listeStable(q('#txtqualite_idAdd'));
     await setSelectTexte(q('#txtconnaissement_usine_idAdd'), c.numero, 'Connaissement usine');
     await dormir(1500);
     setInput(q('#txtpesee_brousse_dateAdd'), isoDate(p.date || c.date)); setInput(q('#txtpesee_brousse_numeroAdd'), p.code);
@@ -330,6 +340,7 @@
     if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
     const f = await ouvrirFormulaire(7); if (!f) return 'navigation';
     setSelect(q('#txtcampagne_idAdd'), e.ids.campagne_id);
+    await listeStable(q('#txtpesee_brousse_idAdd'));
     await setSelectTexte(q('#txtpesee_brousse_idAdd'), lot.pesee.code, 'Pesée brousse');
     await dormir(1500);
     setInput(q('#txtbordereau_reception_dateAdd'), isoDate(b.date)); setInput(q('#txtbordereau_reception_numeroAdd'), b.numero);
