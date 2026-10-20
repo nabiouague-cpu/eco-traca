@@ -4036,7 +4036,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-20-255';
+const APP_VERSION = '2026-10-20-256';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -9349,7 +9349,8 @@ function coopsAClasserHtml(){
           + '<td style="white-space:nowrap">'
           + '<button class="btn btn-primary btn-compact" onclick="coopClasser(\''+escJs(c.id)+'\',\'base\')">Dans notre base</button> '
           + '<button class="btn-ghost btn-compact" onclick="coopClasser(\''+escJs(c.id)+'\',\'client\')">Pour un client</button> '
-          + '<button class="btn-ghost btn-compact" onclick="coopClasser(\''+escJs(c.id)+'\',\'autre\')">Volume tracé sur une autre coopérative</button></td></tr>'; }).join('')
+          + '<button class="btn-ghost btn-compact" onclick="coopClasser(\''+escJs(c.id)+'\',\'autre\')">Volume tracé sur une autre coopérative</button> '
+          + '<button class="btn-ghost btn-compact" style="color:#B42318" title="Supprime cette coopérative et ses connaissements en attente ; le robot ne la recréera plus" onclick="coopRetirer(\''+escJs(c.id)+'\')">Retirer</button></td></tr>'; }).join('')
     + '</tbody></table></div>';
 }
 async function coopClasser(id, choix){
@@ -9363,6 +9364,36 @@ async function coopClasser(id, choix){
   Object.assign(c, maj);
   if (choix==='autre'){ showToast(c.nom+' : volume tracé sur une autre coopérative.', 'success'); render(); }
   else { showToast(c.nom+' ajoutée à la base : complète sa fiche (code court, contacts…).', 'success'); openModal('cooperative', c); }
+}
+// « Retirer » : une coopérative créée d'office par le robot qui n'a rien à faire dans ORIGEN (ex. connaissement introuvable ailleurs, qui fausse les prévisions).
+// La coopérative et ses connaissements en attente (non pesés) sont supprimés ; son n° CCC est mémorisé (saigic_ccc_ignores) : le robot ne la recrée plus
+// et n'ouvre plus d'achat pour elle. Refusé si elle a déjà des livraisons pesées ou des producteurs.
+function coopRetirer(id){
+  const c = coopById(id); if (!c) return;
+  const livr = (state.achats||[]).filter(a=>a.cooperative_id===id);
+  if (livr.some(a=>a.producteur_id || Number(a.poids_net_produit)>0) || (state.producteurs||[]).some(p=>p.cooperative_id===id)){
+    showToast('« '+c.nom+' » a déjà des livraisons pesées ou des producteurs : elle ne peut pas être retirée d\'un clic.'); return;
+  }
+  const n = livr.length;
+  askConfirm('Retirer « '+c.nom+' » ? La coopérative'+(n ? ' et '+n+' connaissement'+(n>1?'s':'')+' en attente' : '')+' seront supprimés, et le robot ne la recréera plus.', ()=>coopRetirerConfirme(id));
+}
+async function coopRetirerConfirme(id){
+  const c = coopById(id); if (!c) return;
+  const ccc = String(c.ccc_num||'').trim().toUpperCase();
+  try{
+    if (ccc){
+      const r = await supabaseClient.from('saigic_ccc_ignores').upsert({ code_ccc:ccc, nom:c.nom }, { onConflict:'code_ccc' });
+      if (r.error) throw r.error;
+    }
+    const d1 = await supabaseClient.from('achats').delete().eq('cooperative_id', id).is('producteur_id', null).or('poids_net_produit.is.null,poids_net_produit.eq.0');
+    if (d1.error) throw d1.error;
+    const d2 = await supabaseClient.from('cooperatives').delete().eq('id', id);
+    if (d2.error) throw d2.error;
+  }catch(e){ showToast('Retrait impossible : '+(e && e.message ? e.message : e)); return; }
+  state.achats = (state.achats||[]).filter(a=>!(a.cooperative_id===id && !a.producteur_id));
+  state.cooperatives = (state.cooperatives||[]).filter(x=>x.id!==id);
+  state.saigicATracer = (state.saigicATracer||[]).filter(v=>v.cooperative_id!==id);
+  showToast(c.nom+' retirée : le robot ne la recréera plus.', 'success'); render();
 }
 function coopClasserBanniereHtml(){
   const n = coopsAClasser().length; if (!n) return '';
