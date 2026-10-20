@@ -1893,7 +1893,7 @@
   .qc-tr-automate summary{cursor:pointer;font-weight:600;color:var(--ink);}
   .qc-tr-automate ol{margin:8px 0 6px;padding-left:20px;} .qc-tr-automate li{margin:4px 0;}
 </style>
-</head>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet"></head>
 <body>
 <div id="update-banner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:999;background:var(--accent);color:#fff;padding:10px 18px;font-size:13.5px;justify-content:center;align-items:center;gap:16px;">
   <span>⟳ Une nouvelle version de la plateforme est disponible.</span>
@@ -3485,6 +3485,145 @@ function qcoLigneHtml(c){
     + '<td id="qco_etat_'+esc(c.id)+'">'+qcoEtatHtml(c)+'</td></tr>';
 }
 
+// ============================================================
+// Présentation des achats : trois « fenêtres » (feuilles) calculées en direct depuis ORIGEN,
+// sur le modèle du classeur Suivi achats : Suivi achats / Achats quotidien / Tracking brousse.
+// ============================================================
+function ouvrirPresentationAchats(){ state.presAchatsTab = 0; state.modal = { type:'presAchats', payload:{} }; render(); }
+function presAchatsOnglet(i){ state.presAchatsTab = i; render(); }
+function presAchatsDonnees(){
+  const camp = (state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : null;
+  const dansCamp = x=>!camp || x.campagne_id===camp;
+  const tous = (state.achats||[]).filter(a=>!a.producteur_id && dansCamp(a));
+  const achats = tous.filter(a=>!a.refoulee), refoules = tous.filter(a=>a.refoulee);
+  const pese = a=>Number(a.poids_net_produit)>0;
+  const netKg = a=>Number(a.poids_net_produit)||0, livKg = a=>Number(a.quantite_kg)||Number(a.poids_brut)||0;
+  const certifie = t=>/^(ra|rainforest|fairtrade|ft)/i.test(String(t||'').trim());
+  const connus = ccClientsConnus();
+  const nomClient = n=>{ const k = ccClefClient(n); return connus.get(k) || n; };
+  // --- fenêtre 1 : clients x périodes
+  const contrats = (state.contratsClients||[]).filter(c=>c.client && dansCamp(c) && c.statut!=='annule' && c.statut!=='annulé');
+  const parClient = new Map();
+  const G = n=>{ const k = ccClefClient(n); if (!parClient.has(k)) parClient.set(k, { nom:nomClient(n), contrats:[], net:0, att:0, nAtt:0, nPese:0, lots:0, agrees:0 }); return parClient.get(k); };
+  contrats.forEach(c=>G(c.client).contrats.push(c));
+  achats.forEach(a=>{ const n = achatClientEffectif(a); if (!n) return; const g = G(n); if (pese(a)){ g.net += netKg(a); g.nPese++; } else { g.att += livKg(a); g.nAtt++; } });
+  (state.lotsUsinage||[]).filter(l=>l.client && dansCamp(l)).forEach(l=>{ const g = G(l.client); g.lots += Number(l.poids_sortie_kg)||0; if (l.agree_le) g.agrees += Number(l.poids_sortie_kg)||0; });
+  const code = c=>{ const p = String(c.periode_embarquement||'').trim().toUpperCase().split(/\s+/)[0]; return p==='OD'||p==='JM' ? p : (p||'AUTRE'); };
+  const periodes = ['OD','JM'];
+  contrats.forEach(c=>{ const p = code(c); if (periodes.indexOf(p)<0) periodes.push(p); });
+  const groupes = periodes.map(p=>({ code:p, lignes:[] }));
+  Array.from(parClient.values()).sort((x,y)=>x.nom.localeCompare(y.nom,'fr')).forEach(g=>{
+    let reste = g.net, resteAtt = g.att, nAtt = g.nAtt;
+    const parP = periodes.map(p=>({ p, a: g.contrats.filter(c=>code(c)===p).reduce((s,c)=>s+(Number(c.volume_contractuel_kg)||0),0) }));
+    const avecContrat = parP.filter(x=>x.a>0);
+    (avecContrat.length ? avecContrat : [{ p:'OD', a:0 }]).forEach((x,i,arr)=>{
+      const dernier = i===arr.length-1;
+      const b = dernier ? reste : Math.min(reste, x.a), att = i===0 ? resteAtt : 0;
+      reste -= b; if (i===0) resteAtt = 0;
+      const ligne = { nom:g.nom, a:x.a, b, c:b+att, d:i===0?g.lots:0, e:i===0?g.agrees:0, att, nAtt:i===0?nAtt:0 };
+      groupes.find(z=>z.code===x.p).lignes.push(ligne);
+    });
+  });
+  const somme = ls=>ls.reduce((s,l)=>({ a:s.a+l.a, b:s.b+l.b, c:s.c+l.c, d:s.d+l.d, e:s.e+l.e, att:s.att+l.att, nAtt:s.nAtt+l.nAtt }), { a:0,b:0,c:0,d:0,e:0,att:0,nAtt:0 });
+  groupes.forEach(g=>g.st = somme(g.lignes));
+  const total = somme(groupes.map(g=>g.st));
+  // --- fenêtre 2 : sites, objectifs, jours
+  const sitesM = new Map(), jours = new Map();
+  achats.forEach(a=>{
+    const u = String(a.usine_dechargement||'').trim() || 'Usine non renseignée';
+    if (!sitesM.has(u)) sitesM.set(u, { nom:u, n:0, ord:0, ra:0, att:0, nAtt:0 });
+    const s = sitesM.get(u), d = String(a.date||'').slice(0,10);
+    if (!jours.has(d)) jours.set(d, { d, net:0, att:0 });
+    if (pese(a)){ s.n++; if (certifie(a.type_cacao)) s.ra += netKg(a); else s.ord += netKg(a); jours.get(d).net += netKg(a); }
+    else { s.att += livKg(a); s.nAtt++; jours.get(d).att += livKg(a); }
+  });
+  const sites = Array.from(sitesM.values()).sort((x,y)=>(y.ra+y.ord)-(x.ra+x.ord) || x.nom.localeCompare(y.nom,'fr'));
+  const objCert = contrats.filter(c=>certifie(c.type_cacao)).reduce((s,c)=>s+(Number(c.volume_contractuel_kg)||0),0);
+  const objOrd = contrats.filter(c=>!certifie(c.type_cacao)).reduce((s,c)=>s+(Number(c.volume_contractuel_kg)||0),0);
+  // --- fenêtre 3 : camions
+  const camions = tous.slice().sort((x,y)=>String(x.date||'').localeCompare(String(y.date||'')) || String(x.connaissement||'').localeCompare(String(y.connaissement||''),'fr',{numeric:true}));
+  return { camp, achats, refoules, groupes, total, sites, jours:Array.from(jours.values()).sort((x,y)=>x.d.localeCompare(y.d)), objCert, objOrd, camions, pese, netKg, livKg, certifie };
+}
+function renderPresAchats(){
+  const D = presAchatsDonnees(), tab = state.presAchatsTab||0;
+  const T = kg=>(kg/1000).toLocaleString('fr-FR',{ minimumFractionDigits:1, maximumFractionDigits:1 });
+  const Tz = kg=>kg>0 ? T(kg) : '<span style="color:#A6B1AD">—</span>';
+  const kg = n=>n>0 ? Math.round(n).toLocaleString('fr-FR') : '<span style="color:#A6B1AD">—</span>';
+  const P = (n,d)=>d>0 ? (n/d*100).toLocaleString('fr-FR',{ maximumFractionDigits:1 })+' %' : '—';
+  const F = "font-family:'Manrope',system-ui,sans-serif;font-variant-numeric:tabular-nums";
+  const kpi = (lab,val,unit,sub,bg)=>'<div style="border:1px solid #D5DDD9;border-radius:12px;padding:12px 16px;background:'+bg+'"><div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#4D5B57">'+lab+'</div><div style="display:flex;align-items:baseline;gap:6px;margin-top:4px"><span style="font-size:26px;font-weight:800;color:#0E3B36">'+val+'</span><span style="font-size:13px;font-weight:600;color:#4D5B57">'+unit+'</span></div><div style="font-size:12px;color:#4D5B57;margin-top:2px">'+sub+'</div></div>';
+  const barre = (n,d,fond,col)=>{ const p = d>0 ? Math.max(n>0?3:0, Math.min(100,n/d*100)) : 0; return '<div style="display:flex;align-items:center;gap:10px;padding-left:14px"><div style="flex:1;height:8px;border-radius:4px;background:'+fond+';overflow:hidden"><div style="height:8px;border-radius:4px;background:'+col+';width:'+p+'%"></div></div><div style="width:46px;text-align:right;font-size:12px;font-weight:700">'+P(n,d)+'</div></div>'; };
+  let corps = '';
+  if (tab===0){
+    const G1 = '170px 96px 108px 108px 88px 88px 108px 120px 1fr';
+    const entete = '<div style="display:grid;grid-template-columns:'+G1+';align-items:end;background:#0E3B36;color:#fff;padding:10px 16px;column-gap:6px;height:52px;box-sizing:border-box"><div style="font-size:12px;font-weight:700">Client</div>'
+      + [['a','Volume contrat'],['b','Validé sur connaissement'],['c','Livraison brousse'],['d','Lots export'],['e','En agréage'],['f = a − b','Reste à acheter'],['c − b','En attente de pesée']].map(x=>'<div style="text-align:right;font-size:11px;font-weight:600;line-height:1.2"><span style="color:#E3C16F;font-weight:800">'+x[0]+'</span><br>'+x[1]+'</div>').join('')
+      + '<div style="font-size:11px;font-weight:600;padding-left:14px">Avancement (b ÷ a)</div></div>';
+    const cellules = l=>[l.a,l.b,l.c,l.d,l.e,Math.max(0,l.a-l.b),l.att].map(v=>'<div style="text-align:right">'+Tz(v)+'</div>').join('');
+    const ligne = (nom,l,st)=>'<div style="display:grid;grid-template-columns:'+G1+';align-items:center;column-gap:6px;padding:0 16px;height:34px;box-sizing:border-box;border-bottom:1px solid #E3E9E6;font-size:13px;'+(st==='sous'?'background:#E6F0EC;color:#0E3B36;font-weight:800':st==='tot'?'background:#0E3B36;color:#fff;font-weight:800':'background:#fff;font-weight:500')+'"><div style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis">'+esc(nom)+'</div>'+cellules(l)+barre(l.b,l.a, st==='tot'?'#2F5F58':st==='sous'?'#C9D9D3':'#E1EBE7', st==='tot'?'#E3C16F':'#0E3B36')+'</div>';
+    corps += '<div style="border:1px solid #D5DDD9;border-radius:12px;overflow:hidden">'+entete;
+    D.groupes.filter(g=>g.lignes.length).forEach(g=>{
+      corps += '<div style="height:30px;display:flex;align-items:center;gap:10px;padding:0 16px;background:#F4EBD3;border-bottom:1px solid #E5D6A8"><span style="font-size:11px;font-weight:800;letter-spacing:.08em;color:#fff;background:#8A5A00;border-radius:999px;padding:3px 10px">'+esc(g.code)+'</span><span style="font-size:12px;font-weight:600;color:#5C4200">Période d’embarquement '+esc(g.code)+'</span></div>';
+      g.lignes.forEach(l=>{ corps += ligne(l.nom,l,''); });
+      corps += ligne('Sous-total '+g.code, g.st, 'sous');
+    });
+    corps += ligne('TOTAL', D.total, 'tot')+'</div>';
+    const tuiles = '<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px">'
+      + kpi('Volume contrat', T(D.total.a),'t', D.groupes.reduce((s,g)=>s+g.lignes.filter(l=>l.a>0).length,0)+' ligne(s) de contrat','#fff')
+      + kpi('Validé sur connaissement', T(D.total.b),'t', P(D.total.b,D.total.a)+' du volume contrat','#E6F0EC')
+      + kpi('En attente de pesée', T(D.total.att),'t', D.total.nAtt+' camion'+(D.total.nAtt>1?'s':'')+' arrivé'+(D.total.nAtt>1?'s':'')+', pas encore pesé'+(D.total.nAtt>1?'s':''),'#FFF1D6')
+      + kpi('Reste à acheter', T(Math.max(0,D.total.a-D.total.b)),'t','sur '+T(D.total.a)+' t de contrat','#fff')+'</div>';
+    corps = tuiles + corps;
+  } else if (tab===1){
+    const sP = D.sites.reduce((s,x)=>({ n:s.n+x.n, ord:s.ord+x.ord, ra:s.ra+x.ra, att:s.att+x.att, nAtt:s.nAtt+x.nAtt }), { n:0,ord:0,ra:0,att:0,nAtt:0 });
+    const objTot = D.objCert + D.objOrd;
+    const tuile = (lab,obj,ach,bg)=>'<div style="border:1px solid #D5DDD9;border-radius:12px;padding:12px 16px;background:'+bg+'"><div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#4D5B57">'+lab+'</div><div style="display:flex;align-items:baseline;gap:6px;margin-top:4px"><span style="font-size:26px;font-weight:800;color:#0E3B36">'+T(ach)+'</span><span style="font-size:13px;font-weight:600;color:#4D5B57">t achetées</span></div><div style="font-size:12px;color:#4D5B57;margin-top:2px">'+(obj>0 ? 'objectif '+T(obj)+' t · '+P(ach,obj) : 'aucun contrat de ce type')+'</div><div style="height:6px;border-radius:3px;background:#DCE6E2;margin-top:8px;overflow:hidden"><div style="height:6px;border-radius:3px;background:#0E3B36;width:'+(obj>0?Math.min(100,ach/obj*100):0)+'%"></div></div></div>';
+    corps += '<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px">'+tuile('Cacao ordinaire',D.objOrd,sP.ord,'#fff')+tuile('Cacao certifié',D.objCert,sP.ra,'#E6F0EC')+tuile('Total',objTot,sP.ord+sP.ra,'#fff')+'</div>';
+    const G2 = '154px 64px 84px 84px 80px 60px 1fr';
+    const ent = '<div style="display:grid;grid-template-columns:'+G2+';column-gap:6px;align-items:end;background:#0E3B36;color:#fff;padding:10px 16px;height:50px;box-sizing:border-box">'+['Site de déchargement','Camions<br>pesés','Ordinaire<br>(t)','Certifié<br>(t)','Total<br>(t)','% de<br>l’objectif','Arrivés, pas<br>encore pesés'].map((h,i)=>'<div style="'+(i?'text-align:right;':'')+'font-size:11px;font-weight:'+(i?600:700)+';line-height:1.2">'+h+'</div>').join('')+'</div>';
+    const lg = (x,tot)=>'<div style="display:grid;grid-template-columns:'+G2+';column-gap:6px;align-items:center;padding:0 16px;height:40px;box-sizing:border-box;border-bottom:1px solid #E3E9E6;font-size:13px;'+(tot?'background:#0E3B36;color:#fff;font-weight:800':'background:#fff')+'"><div style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis">'+esc(x.nom)+'</div><div style="text-align:right">'+(x.n||'—')+'</div><div style="text-align:right">'+Tz(x.ord)+'</div><div style="text-align:right">'+Tz(x.ra)+'</div><div style="text-align:right;font-weight:800">'+Tz(x.ord+x.ra)+'</div><div style="text-align:right">'+(objTot>0&&(x.ord+x.ra)>0?P(x.ord+x.ra,objTot):'—')+'</div><div style="text-align:right;color:'+(tot?'#F0C56A':'#8A5A00')+'">'+(x.att>0 ? x.nAtt+' · '+T(x.att)+' t' : '<span style="color:#A6B1AD">—</span>')+'</div></div>';
+    const tableau = '<div style="width:690px;max-width:100%;flex:none;display:flex;flex-direction:column;gap:14px"><div style="border:1px solid #D5DDD9;border-radius:12px;overflow:hidden">'+ent+D.sites.map(x=>lg(x,false)).join('')+lg(Object.assign({ nom:'Total déchargé' }, sP), true)+'</div>'
+      + '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px"><div style="border-radius:12px;background:#FFF1D6;padding:12px 16px"><div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#6B4600">À peser</div><div style="font-size:13px;color:#4A3200;margin-top:4px;line-height:1.45">'+sP.nAtt+' camion'+(sP.nAtt>1?'s':'')+' arrivé'+(sP.nAtt>1?'s':'')+', pas encore pesé'+(sP.nAtt>1?'s':'')+' : '+T(sP.att)+' t sur connaissement. Ils entrent dans les achats dès la pesée.</div></div>'
+      + '<div style="border-radius:12px;background:#F2F5F4;padding:12px 16px"><div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#4D5B57">Refoulé, non acheté</div><div style="font-size:13px;color:#2C3A36;margin-top:4px;line-height:1.45">'+(D.refoules.length ? D.refoules.length+' camion'+(D.refoules.length>1?'s':'')+' refoulé'+(D.refoules.length>1?'s':'')+' ('+T(D.refoules.reduce((s,a)=>s+D.livKg(a),0))+' t) exclu'+(D.refoules.length>1?'s':'')+' de tous les totaux.' : 'Aucun camion refoulé.')+'</div></div></div></div>';
+    const maxJ = Math.max(1, ...D.jours.map(j=>j.net+j.att)), H = 190;
+    const colonnes = D.jours.map(j=>'<div style="flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%"><div style="font-size:11px;font-weight:700;color:#8A5A00;height:14px;margin-bottom:1px;white-space:nowrap">'+(j.att>0?'+'+T(j.att):'')+'</div><div style="font-size:11px;font-weight:800;color:#0E3B36;height:14px;margin-bottom:3px;white-space:nowrap">'+(j.net>0?T(j.net):'')+'</div><div style="width:100%;height:'+(j.att>0?Math.max(3,j.att/maxJ*H):0)+'px;background:#F0C56A;border-radius:4px 4px 0 0"></div><div style="width:100%;height:'+(j.net>0?Math.max(3,j.net/maxJ*H):0)+'px;background:#0E3B36;border-radius:'+(j.att>0?'0':'4px 4px 0 0')+'"></div></div>').join('');
+    const dates = D.jours.map(j=>'<div style="flex:1;min-width:0;text-align:center;font-size:11px;font-weight:600;color:#4D5B57">'+esc(dateFr(j.d).slice(0,5))+'</div>').join('');
+    const graphe = '<div style="flex:1;min-width:300px;border:1px solid #D5DDD9;border-radius:12px;padding:14px 18px 12px;display:flex;flex-direction:column"><div style="font-size:14px;font-weight:800;color:#0E3B36">Achats par jour de livraison</div><div style="font-size:12px;color:#5A6865;margin-top:2px">Tonnes</div><div style="display:flex;align-items:flex-end;gap:10px;height:270px;margin-top:14px;border-bottom:2px solid #0E3B36;padding:0 4px">'+colonnes+'</div><div style="display:flex;gap:10px;padding:0 4px;margin-top:6px">'+dates+'</div><div style="display:flex;gap:18px;margin-top:14px;font-size:12px;color:#4D5B57;flex-wrap:wrap"><div style="display:flex;align-items:center;gap:6px"><span style="width:12px;height:12px;border-radius:3px;background:#0E3B36"></span>Validé (poids net payé)</div><div style="display:flex;align-items:center;gap:6px"><span style="width:12px;height:12px;border-radius:3px;background:#F0C56A"></span>Arrivé, pas encore pesé</div></div></div>';
+    corps += '<div style="display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap">'+tableau+graphe+'</div>';
+  } else {
+    const G3 = '52px 140px 112px 150px 62px 70px 96px 62px 44px 66px 66px 80px';
+    const ok = D.camions.filter(a=>!a.refoulee);
+    const sum = f=>ok.reduce((s,a)=>s+f(a),0);
+    const nPese = ok.filter(D.pese).length, nAtt = ok.length-nPese;
+    const puce = (n,lab,bg,fg)=>'<div style="display:flex;align-items:center;gap:8px;border-radius:999px;padding:6px 12px;font-size:12px;font-weight:700;background:'+bg+';color:'+fg+'"><span style="font-size:15px;font-weight:800">'+n+'</span>'+lab+'</div>';
+    corps += '<div style="display:flex;gap:8px;flex-wrap:wrap">'+puce(nPese,'pesés','#DDF3E4','#14633A')+puce(nAtt,'à peser','#FFF1D6','#6B4600')+puce(D.refoules.length,'refoulé'+(D.refoules.length>1?'s':'')+' (exclu'+(D.refoules.length>1?'s':'')+')','#FDE2DF','#A8281C')+'</div>';
+    const cel = (v,st)=>'<div style="'+(st||'')+'overflow:hidden;white-space:nowrap;text-overflow:ellipsis">'+v+'</div>';
+    const ent = '<div style="display:grid;grid-template-columns:'+G3+';column-gap:4px;align-items:center;background:#0E3B36;color:#fff;padding:0 16px;height:40px;box-sizing:border-box;font-size:11px;font-weight:700"><div>Date</div><div>Coopérative</div><div>Camion</div><div>N° connaissement</div><div>Type</div><div>Origine</div><div>Usine</div><div>Client</div><div style="text-align:right">Sacs</div><div style="text-align:right">Livré</div><div style="text-align:right">Net payé</div><div style="text-align:center">Statut</div></div>';
+    const tot = '<div style="display:grid;grid-template-columns:'+G3+';column-gap:4px;align-items:center;background:#E6F0EC;color:#0E3B36;padding:0 16px;height:34px;box-sizing:border-box;font-size:12px;font-weight:800;border-bottom:2px solid #0E3B36"><div style="grid-column:1 / span 8">TOTAL · '+ok.length+' camion'+(ok.length>1?'s':'')+' acheté'+(ok.length>1?'s':'')+'</div><div style="text-align:right">'+kg(sum(a=>Number(a.nombre_sacs)||0))+'</div><div style="text-align:right">'+kg(sum(D.livKg))+'</div><div style="text-align:right">'+kg(sum(D.netKg))+'</div><div></div></div>';
+    const lignes = D.camions.map(a=>{
+      const c = coopById(a.cooperative_id), ref = !!a.refoulee, net = D.netKg(a);
+      const st = ref ? ['Refoulé','#FDE2DF','#A8281C'] : net>0 ? ['Pesé','#DDF3E4','#14633A'] : ['À peser','#FFF1D6','#6B4600'];
+      const cl = achatClientEffectif(a), t = D.certifie(a.type_cacao);
+      const tir = v=>v ? esc(v) : '<span style="color:#A6B1AD">—</span>';
+      return '<div style="display:grid;grid-template-columns:'+G3+';column-gap:4px;align-items:center;padding:0 16px;height:30px;box-sizing:border-box;border-bottom:1px solid #E3E9E6;font-size:12px;background:'+(ref?'#FBF4F3':'#fff')+';color:'+(ref?'#7A6B69':'#14231F')+'">'
+        + cel(esc(dateFr(String(a.date||'').slice(0,10)).slice(0,5)))+cel(esc(c?c.nom:''),'font-weight:700;')+'<div title="'+esc(a.immat_vehicule||'')+'" style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis">'+tir(a.immat_vehicule)+'</div>'+cel(esc(a.connaissement||''))
+        + '<div style="font-weight:700;color:'+(t?'#0E3B36':'#5A6865')+'">'+(t?(/^fair|^ft/i.test(a.type_cacao)?'FT':'RA'):'Ord.')+'</div>'+cel(tir(a.lieu_origine))+cel(tir(a.usine_dechargement))+'<div style="font-weight:600">'+tir(cl)+'</div>'
+        + '<div style="text-align:right">'+kg(Number(a.nombre_sacs)||0)+'</div><div style="text-align:right">'+kg(D.livKg(a))+'</div><div style="text-align:right;font-weight:800">'+kg(net)+'</div>'
+        + '<div style="display:flex;justify-content:center"><span style="font-size:11px;font-weight:700;border-radius:999px;padding:2px 9px;background:'+st[1]+';color:'+st[2]+'">'+st[0]+'</span></div></div>';
+    }).join('');
+    corps += '<div style="border:1px solid #D5DDD9;border-radius:12px;overflow:auto"><div style="min-width:1076px">'+ent+tot+lignes+'</div></div>';
+  }
+  const titres = [['Suivi achats','Contrat → validé sur connaissement → livraison brousse → lots export → agréage. Volumes en tonnes.'],['Achats quotidien','Tonnes validées (poids net payé) par site de déchargement et par jour de livraison.'],['Tracking brousse','Un camion par ligne, du plus ancien au plus récent. Poids en kilogrammes.']];
+  const noms = ['Suivi achats','Achats quotidien ECORIGINE','Tracking brousse'];
+  const campNom = D.camp ? lotsCampagneNom(D.camp) : 'toutes campagnes';
+  const onglets = noms.map((n,i)=>'<button type="button" onclick="presAchatsOnglet('+i+')" style="'+F+';cursor:pointer;padding:9px 18px;font-size:13px;height:34px;box-sizing:border-box;'+(i===tab?'font-weight:700;color:#0E3B36;background:#fff;border:1px solid #D5DDD9;border-top:3px solid #C8962E;border-bottom:none;border-radius:0 0 8px 8px;margin-top:-1px':'font-weight:600;color:#4D5B57;background:transparent;border:none')+'">'+n+'</button>').join('');
+  return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div style="'+F+';width:min(1220px,96vw);max-height:94vh;background:#0E3B36;border-radius:18px;padding:22px;box-sizing:border-box;display:flex">'
+    + '<div style="flex:1;min-width:0;background:#fff;border-radius:14px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 24px 60px rgba(0,0,0,.35)">'
+    + '<div style="height:44px;flex:none;background:#EEF2F0;border-bottom:1px solid #D5DDD9;display:flex;align-items:center;padding:0 16px;gap:14px"><button type="button" onclick="closeModal()" aria-label="Fermer" style="display:flex;gap:7px;border:none;background:none;padding:0;cursor:pointer"><span style="width:12px;height:12px;border-radius:6px;background:#C3CDC9"></span><span style="width:12px;height:12px;border-radius:6px;background:#C3CDC9"></span><span style="width:12px;height:12px;border-radius:6px;background:#C3CDC9"></span></button><div style="flex:1;text-align:center;font-size:13px;font-weight:600;color:#3B4A46">Suivi des achats ECORIGINE</div><div style="font-size:11px;font-weight:700;letter-spacing:.08em;color:#0E3B36;background:#E1EBE7;border-radius:999px;padding:4px 10px">ORIGEN · '+esc(dateFr(new Date().toISOString().slice(0,10)))+'</div></div>'
+    + '<div style="flex:1;min-height:0;overflow:auto;padding:20px 28px 22px;display:flex;flex-direction:column;gap:16px"><div><div style="font-size:24px;font-weight:800;letter-spacing:-.01em;color:#0E3B36">'+titres[tab][0]+' · Campagne '+esc(campNom)+'</div><div style="font-size:13px;color:#5A6865;margin-top:4px">'+titres[tab][1]+'</div></div>'+corps+'</div>'
+    + '<div style="height:46px;flex:none;background:#EEF2F0;border-top:1px solid #D5DDD9;display:flex;align-items:flex-end;padding:0 20px;gap:4px">'+onglets+'</div></div></div></div>';
+}
+
 function ouvrirGenerationContratsGroupe(){
   const certifiees = state.cooperatives.filter(c=>c.statut!=='Non certifiée')
     .sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'}));
@@ -3850,7 +3989,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-20-242';
+const APP_VERSION = '2026-10-20-243';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -22159,7 +22298,8 @@ function renderAchatsConnaissementPanel(){
   let html = '<div class="panel panel-achats">';
   html += '<div class="panel-head"><h2>Achats par connaissement ('+fmtNum(list.length)+')</h2>'
     + '<button type="button" class="btn" onclick="telechargerRapportLivraisons()" title="Toutes les livraisons de toutes les coopératives et de toutes les campagnes, avec leur statut de déclaration Multitrace / Fairtrace">⬇ Rapport des livraisons (Excel)</button>'
-    + '<button type="button" class="btn" style="margin-left:8px" onclick="livraisonsClientsExporter(\''+escJs((state.campagneFilter && state.campagneFilter!=="all") ? state.campagneFilter : "")+'\')" title="Un classeur Excel : une feuille par client, 9 colonnes du modèle TRACA">⬇ Point des livraisons par client (Excel)</button></div>';
+    + '<button type="button" class="btn" style="margin-left:8px" onclick="livraisonsClientsExporter(\''+escJs((state.campagneFilter && state.campagneFilter!=="all") ? state.campagneFilter : "")+'\')" title="Un classeur Excel : une feuille par client, 9 colonnes du modèle TRACA">⬇ Point des livraisons par client (Excel)</button>'
+    + '<button type="button" class="btn btn-primary" style="margin-left:8px" onclick="ouvrirPresentationAchats()" title="Trois fenêtres : suivi des achats, achats quotidien, tracking brousse">🖼 Présentation des achats</button></div>';
   if (list.length===0){
     html += '<div class="empty">Aucun achat par connaissement pour ce filtre.<br><button class="btn" '+((state.cooperatives.length===0||state.campagnes.length===0)?'disabled title="Crée une coopérative et une campagne d\'abord"':'onclick="openModal(\'achat\')"')+'>+ Achat (connaissement)</button></div></div>';
     return html;
@@ -23881,6 +24021,8 @@ function _renderBrut(){
       + '<button type="button" class="btn btn-primary" onclick="enregistrerNomsComplets()">Enregistrer tout</button>'
       + '</div></div></div>';
   }
+
+  if (state.modal && state.modal.type==='presAchats') html += renderPresAchats();
 
   if (state.modal && state.modal.type==='questionnaireCoops'){
     const lst = qcoCoops(), nbPret = lst.filter(c=>!c.enquete_forms_le && !qcoManques(c).length).length;
