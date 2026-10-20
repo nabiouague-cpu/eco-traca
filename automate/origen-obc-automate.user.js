@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.5
+// @version      0.1.6
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -374,7 +374,7 @@
       if (!connecte()) { e.erreur = 'Connecte-toi à OBC, puis « Continuer ».'; ecrireEtat(e); afficherEtat(); return; }
       for (let garde = 0; garde < 10; garde++) {
         e = lireEtat(); if (!e || e.pause) return;
-        if (e.etape > 7) { e.statut = 'termine'; ecrireEtat(e); afficherEtat(); return; }
+        if (e.etape > 7) { e.statut = 'termine'; e.note = 'Dans ORIGEN, sous cette livraison, clique « déjà saisi » pour la marquer OBC ✓ (n° de bordereau : ' + (e.lot.bordereau && e.lot.bordereau.numero || '') + ').'; ecrireEtat(e); afficherEtat(); return; }
         if (e.statut === 'attente_enregistrement') {
           // le formulaire est rempli : on attend que l'utilisateur enregistre, puis on vérifie toutes les 4 s
           const res = await EXEC[e.etape - 1](e);
