@@ -28,7 +28,7 @@ ETAT = os.environ.get('PESEES_ETAT', '/root/.saigic_pesees_etat.json')
 STOP = os.environ.get('PESEES_STOP', '/root/.saigic_pesees.stop')
 FAILS = os.environ.get('PESEES_FAILS', '/root/.saigic_pesees.fails')
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36'
-VERSION = '5'
+VERSION = '6'
 DRY = '--dry-run' in sys.argv
 UNE = '--une' in sys.argv
 
@@ -160,7 +160,7 @@ def lire_detail(c, pesee_id):
     st, page, _ = c.req('/Pesee/DetailPeseeCCQ/' + str(pesee_id), data=b'', referer=BASE + '/Pesee/ValidationExportateur')
     if st != 200: raise RuntimeError('détail %s : HTTP %s' % (pesee_id, st))
     # découpe la page aux <label> ; pour chaque label, on prend le premier input/select/textarea qui suit
-    out = {}; libelles = []
+    out = {}; libelles = []; brut = {}
     morceaux = re.split(r'(<label\b[^>]*>.*?</label>)', page, flags=re.S | re.I)
     for i in range(1, len(morceaux) - 1, 2):
         lib = norm(morceaux[i]); suite = morceaux[i + 1]
@@ -180,12 +180,13 @@ def lire_detail(c, pesee_id):
             if len(vals) >= 2: break
         val = vals[0] if vals else None
         libelles.append(lib)
+        if lib not in brut and vals: brut[lib] = [(v or '').strip() for v in vals]
         L = lib.upper()
         for motif, cle in CHAMPS:
             if re.search(motif, L) and cle not in out:
                 out[cle] = (val or '').strip()
                 if len(vals) > 1: out[cle + '_2'] = vals[1].strip()
-    out['_libelles'] = libelles
+    out['_libelles'] = libelles; out['_brut'] = brut
     return out
 
 def nombre(v):
@@ -255,7 +256,7 @@ def main():
     for row in liste:
         code = str(row.get('CodePesee') or '').strip(); pid = row.get('Pesee_Id')
         if not code or pid in (None, ''): continue
-        empreinte = json.dumps([row.get('NbSacsAcceptes'), row.get('PoidsNetAccepte'), row.get('ValidationExp'), row.get('Declaration_Id'), row.get('DatePesee')], sort_keys=True, default=str)
+        empreinte = json.dumps([row.get('NbSacsAcceptes'), row.get('PoidsNetAccepte'), row.get('ValidationExp'), row.get('Declaration_Id'), row.get('DatePesee'), VERSION], sort_keys=True, default=str)
         if etat.get(code, {}).get('h') == empreinte and etat[code].get('ok'): continue
         try:
             d = lire_detail(c, pid); nb_detail += 1
@@ -263,7 +264,7 @@ def main():
             log('détail %s : %s' % (code, e)); continue
         if UNE and nb_detail == 1:
             log('libellés lus dans le détail : ' + ' | '.join(d.get('_libelles', [])))
-            log('champs retenus : ' + json.dumps({k: v for k, v in d.items() if k != '_libelles'}, ensure_ascii=False))
+            log('champs retenus : ' + json.dumps({k: v for k, v in d.items() if k not in ('_libelles', '_brut')}, ensure_ascii=False))
         p = {'code_pesee': code, 'pesee_id': pid, 'connaissement': d.get('connaissement', ''), 'code_fourn': d.get('code_fourn', ''),
              'fournisseur': d.get('fournisseur') or row.get('NomFournisseur') or '', 'date_p2': d.get('date_p2') or row.get('DatePesee') or '',
              'sacs_decharges': nombre(d.get('sacs_decharges')), 'sacs_acceptes': nombre(d.get('sacs_acceptes')) if d.get('sacs_acceptes') not in (None, '') else nombre(row.get('NbSacsAcceptes')),
@@ -274,7 +275,7 @@ def main():
              'bareme': nombre(d.get('montant_bareme')), 'montant_bareme': nombre(d.get('montant_bareme_2')),
              'humidite': nombre(d.get('humidite')), 'grade': d.get('grade', ''), 'conformite': d.get('conformite', ''), 'acceptation': d.get('acceptation', ''),
              'transporteur': d.get('transporteur', ''), 'immatriculation': d.get('immatriculation', ''), 'magasin': d.get('magasin', ''),
-             'statut_saigic': row.get('ValidationExp') or '', 'declare_saigic': bool(row.get('Declaration_Id'))}
+             'detail': d.get('_brut') or {}, 'statut_saigic': row.get('ValidationExp') or '', 'declare_saigic': bool(row.get('Declaration_Id'))}
         if not p['connaissement']: log('⚠ %s : pas de n° de connaissement dans le détail (libellés : %s)' % (code, ' | '.join(d.get('_libelles', [])[:30])))
         envoi.append((code, empreinte, p))
         if UNE: break

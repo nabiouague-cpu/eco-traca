@@ -1,14 +1,11 @@
 // ECORIGINE — Edge Function : réception des PESÉES SAIGIC envoyées par le serveur relais (VPS en Côte d'Ivoire).
-// Le VPS ouvre le détail de chaque pesée (Achats > Validation des pesées) et POSTe ici :
-//   { pesees: [ { code_pesee, connaissement, code_fourn, fournisseur, date_p2, sacs_decharges, sacs_acceptes,
-//                 poids_brut, poids_net, poids_refac, poids_net_acc, transporteur, immatriculation, magasin } ] }
-// Pour chaque pesée :
-//   - on retrouve la coopérative par le n° CCC (code fournisseur) ;
-//   - si le connaissement existe déjà dans les achats : on y enregistre sacs acceptés, poids accepté et poids net payé
-//     (sauf si le volume a déjà été déclaré ou si le camion est refoulé) ;
-//   - sinon on crée l'achat (« cacao déchargé ») ; si la coopérative est inconnue, il reste « à identifier »
-//     et se rattachera tout seul dès qu'une coopérative porte ce n° CCC.
-// Secret : en-tête x-relais-secret = RELAIS_SAIGIC_SECRET (le même que reception-saigic). dry_run=true : aucun écrit.
+// Pour chaque pesée : on retrouve la coopérative par le n° CCC ; on enregistre sacs acceptés, poids accepté, poids net payé,
+// TKM réel (F/kg) et barème de référence (bareme_tkm, PAS une commission) ; sinon on crée l'achat (« cacao déchargé »).
+// v9 : on enregistre aussi les résultats d'analyse / contrôle qualité lus sur le détail SAIGIC
+//      (pesee_humidite, pesee_grade, pesee_conformite, pesee_acceptation + pesee_detail = toute la page, libellé -> valeurs).
+// Le type de cacao (RA / FT) vient de la nature indiquée par le SAIGIC, sinon de la certification de la coopérative :
+// c'est lui qui fait apparaître le bouton de déclaration (Multitrace / Fairtrace) dès que le volume est validé.
+// Secret : en-tête x-relais-secret = RELAIS_SAIGIC_SECRET. dry_run=true : aucun écrit.
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
 const rep = (c: unknown, s = 200) => new Response(JSON.stringify(c), { status: s, headers: { 'Content-Type': 'application/json' } });
@@ -24,7 +21,8 @@ const num = (v: unknown): number | null => {
   const n = parseFloat(String(v).replace(/\s/g, '').replace(',', '.'));
   return Number.isFinite(n) ? n : null;
 };
-// « 12/10/2026 12:03:00 » ou « 2026-10-12 ... » -> « 2026-10-12 »
+// Comparaison stable (l'ordre des clés d'un jsonb relu en base peut différer de celui envoyé).
+const stable = (v: unknown): string => JSON.stringify(v ?? null, (_k, x) => (x && typeof x === 'object' && !Array.isArray(x)) ? Object.keys(x).sort().reduce((o: any, k) => { o[k] = (x as any)[k]; return o; }, {}) : x);
 function dateIso(v: unknown): string {
   const s = String(v ?? '').trim();
   let m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
@@ -32,7 +30,7 @@ function dateIso(v: unknown): string {
   m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
   return m ? `${m[1]}-${m[2]}-${m[3]}` : '';
 }
-type Coop = { id: string; nom: string | null; nom_complet: string | null; ccc_num: string | null; fiche_a_completer?: boolean; departement?: string | null };
+type Coop = { id: string; nom: string | null; nom_complet: string | null; ccc_num: string | null; fiche_a_completer?: boolean; departement?: string | null; certifications?: string | null };
 function trouverCoop(code: string, codeFourn: string, fournisseur: string, coops: Coop[]): Coop | null {
   const cf = String(codeFourn || '').trim().toUpperCase();
   let best: Coop | null = null, len = 0;
@@ -49,14 +47,23 @@ function trouverCoop(code: string, codeFourn: string, fournisseur: string, coops
   }
   return null;
 }
+// Type de cacao d'une livraison : nature SAIGIC d'abord, sinon certification de la coopérative ; '' = ordinaire.
+function typeCacao(nature: unknown, coop: Coop | null): string {
+  const n = String(nature || '').toUpperCase();
+  if (n.includes('RAINFOREST')) return 'RA';
+  if (n.includes('FAIRTRADE')) return 'FT';
+  const c = String(coop?.certifications || '').toUpperCase();
+  if (c.includes('RAINFOREST') || c === 'RA') return 'RA';
+  if (c.includes('FAIRTRADE') || c === 'FT') return 'FT';
+  return '';
+}
 
-// Coopérative inconnue : on la crée tout de suite avec ce que le SAIGIC donne (nom, n° CCC, localité, département,
-// nature du cacao), marquée « fiche à compléter » pour qu'ECORIGINE renseigne le reste (contacts, diligence, etc.).
 async function creerCoop(sb: any, coops: Coop[], p: any, dry: boolean, bilan: any): Promise<Coop | null> {
   const nom = String(p.fournisseur || '').trim(); const ccc = String(p.code_fourn || '').trim().toUpperCase();
   if (!nom || !ccc) return null;
   const nature = String(p.nature || '').toUpperCase();
-  const cert = nature.includes('RAINFOREST') ? 'RA' : nature.includes('FAIRTRADE') ? 'FT' : '';
+  // Nom complet de la certification (comme dans le reste d'ORIGEN), jamais le sigle seul.
+  const cert = nature.includes('RAINFOREST') ? 'Rainforest Alliance' : nature.includes('FAIRTRADE') ? 'Fairtrade' : '';
   const c: any = { id: 'coop_saigic_' + ccc, nom, nom_complet: nom, ccc_num: ccc, type: 'cooperative',
     statut: cert ? 'Certifiée' : 'Non certifiée', certifications: cert, ville: String(p.localite || '').trim() || null,
     departement: String(p.departement || '').trim() || null, fiche_a_completer: true, verifiee: false };
@@ -65,7 +72,7 @@ async function creerCoop(sb: any, coops: Coop[], p: any, dry: boolean, bilan: an
     const { error } = await sb.from('cooperatives').upsert(c, { onConflict: 'id', ignoreDuplicates: true });
     if (error) { bilan.erreurs.push('création de ' + nom + ' : ' + error.message); return null; }
   }
-  const nc: Coop = { id: c.id, nom, nom_complet: nom, ccc_num: ccc, fiche_a_completer: true, departement: c.departement }; coops.push(nc); return nc;
+  const nc: Coop = { id: c.id, nom, nom_complet: nom, ccc_num: ccc, fiche_a_completer: true, departement: c.departement, certifications: cert }; coops.push(nc); return nc;
 }
 
 Deno.serve(async (req) => {
@@ -81,12 +88,12 @@ Deno.serve(async (req) => {
     const dry = corps?.dry_run === true;
     const sb = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
 
-    const { data: cb, error: e1 } = await sb.from('cooperatives').select('id, nom, nom_complet, ccc_num, fiche_a_completer, departement');
+    const { data: cb, error: e1 } = await sb.from('cooperatives').select('id, nom, nom_complet, ccc_num, fiche_a_completer, departement, certifications');
     if (e1) throw new Error('coopératives : ' + e1.message);
     const coops = (cb || []) as Coop[];
     const { data: camps } = await sb.from('campagnes').select('id, nom, date_debut, date_fin');
 
-    const bilan = { lues: pesees.length, mises_a_jour: 0, creees: 0, inchangees: 0, verrouillees: 0, sans_connaissement: 0, coop_inconnue: [] as string[], coops_creees: [] as string[], rattachees: 0, erreurs: [] as string[], plan: [] as unknown[] };
+    const bilan = { lues: pesees.length, mises_a_jour: 0, creees: 0, inchangees: 0, verrouillees: 0, analyses_seules: 0, sans_connaissement: 0, coop_inconnue: [] as string[], coops_creees: [] as string[], rattachees: 0, erreurs: [] as string[], plan: [] as unknown[] };
     const vus = new Set<string>();
 
     for (const p of pesees) {
@@ -95,18 +102,27 @@ Deno.serve(async (req) => {
       if (vus.has(code)) continue; vus.add(code);
       let coop = trouverCoop(code, p.code_fourn, p.fournisseur, coops);
       if (!coop) { coop = await creerCoop(sb, coops, p, dry, bilan); }
+      const type = typeCacao(p.nature, coop);
       const sacs = num(p.sacs_acceptes), brut = num(p.poids_net), netPaye = num(p.poids_net_acc);
       const maj: Record<string, unknown> = {
         nombre_sacs_accepte: sacs, poids_brut_accepte: brut, poids_net_produit: netPaye,
         code_pesee: String(p.code_pesee || '').trim() || null,
       };
-      // Onglet « Péréquation » du SAIGIC : TKM (F/kg) et barème (F/kg) entrent dans le montant à payer ; coût transport = TKM × poids.
       const tkm = num(p.tkm), bareme = num(p.bareme), coutTr = num(p.montant_transport);
       if (tkm !== null) maj.tkm = tkm;
       // Le barème (15 F/kg) est le TKM moyen de référence du Conseil, PAS une commission : stocké à part, jamais ajouté au montant payé.
       if (bareme !== null) maj.bareme_tkm = bareme;
       if (coutTr !== null) maj.cout_transport_theorique = coutTr;
-      // Fiche créée depuis le SAIGIC : on complète le département (nom) si on ne l'avait pas encore en clair.
+
+      // Résultats d'analyse / contrôle qualité (détail SAIGIC) : jamais écrasés par du vide.
+      const analyse: Record<string, unknown> = {};
+      const hum = num(p.humidite); if (hum !== null) analyse.pesee_humidite = hum;
+      for (const [src, col] of [['grade', 'pesee_grade'], ['conformite', 'pesee_conformite'], ['acceptation', 'pesee_acceptation']] as const) {
+        const t = String(p[src] || '').trim(); if (t) analyse[col] = t;
+      }
+      if (p.detail && typeof p.detail === 'object' && !Array.isArray(p.detail) && Object.keys(p.detail).length) analyse.pesee_detail = p.detail;
+      const analyseChange = (a: any) => Object.entries(analyse).some(([k, v]) => stable(a[k]) !== stable(v));
+
       const dep = String(p.departement || '').trim();
       if (coop && coop.fiche_a_completer && dep && !/^\d+$/.test(dep) && coop.departement !== dep) {
         if (!dry) await sb.from('cooperatives').update({ departement: dep }).eq('id', coop.id);
@@ -119,12 +135,25 @@ Deno.serve(async (req) => {
 
       if (lignes.length) {
         for (const a of lignes as any[]) {
-          if (a.refoulee || a.declaration_ra_le || a.declaration_ft_le) { bilan.verrouillees++; continue; }
+          if (a.refoulee || a.declaration_ra_le || a.declaration_ft_le) {
+            // Livraison verrouillée (déclarée / refoulée) : les poids ne bougent pas, seule l'analyse est enregistrée.
+            bilan.verrouillees++;
+            if (Object.keys(analyse).length && analyseChange(a)) {
+              bilan.plan.push({ code, action: 'analyse', cooperative: coop?.nom || null });
+              if (!dry) {
+                const { error } = await sb.from('achats').update(analyse).eq('id', a.id);
+                if (error) bilan.erreurs.push(code + ' : ' + error.message); else bilan.analyses_seules++;
+              }
+            }
+            continue;
+          }
+          const typeAManquer = !String(a.type_cacao || '').trim() && !!type;
           const change = Number(a.nombre_sacs_accepte || 0) !== (sacs || 0) || Number(a.poids_brut_accepte || 0) !== (brut || 0)
             || Number(a.poids_net_produit || 0) !== (netPaye || 0) || (a.code_pesee || null) !== maj.code_pesee
             || (tkm !== null && Number(a.tkm || 0) !== tkm) || (bareme !== null && Number(a.bareme_tkm || 0) !== bareme)
-            || (coutTr !== null && Number(a.cout_transport_theorique || 0) !== coutTr);
-          const patch: Record<string, unknown> = { ...maj };
+            || (coutTr !== null && Number(a.cout_transport_theorique || 0) !== coutTr) || typeAManquer || analyseChange(a);
+          const patch: Record<string, unknown> = { ...maj, ...analyse };
+          if (typeAManquer) patch.type_cacao = type;
           if (coop && !a.cooperative_id) patch.cooperative_id = coop.id;
           if (!a.code_fourn && p.code_fourn) patch.code_fourn = String(p.code_fourn).trim();
           if (!change && !(coop && !a.cooperative_id)) { bilan.inchangees++; continue; }
@@ -138,19 +167,18 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // Pas encore d'achat pour ce connaissement : on le crée dans « cacao déchargé ».
       const d = dateIso(p.date_p2) || new Date().toISOString().slice(0, 10);
       const camp = (camps || []).find((c: any) => c.date_debut && c.date_fin && String(c.date_debut) <= d && d <= String(c.date_fin));
       const mois = Number(d.slice(5, 7));
       const nouvel = {
         id: 'a_saigic_' + code, cooperative_id: coop ? coop.id : null, producteur_id: null, date: d,
-        quantite_kg: 0, poids_brut: 0, nombre_sacs: 0, connaissement: code, type_cacao: '',
+        quantite_kg: 0, poids_brut: 0, nombre_sacs: 0, connaissement: code, type_cacao: type,
         campagne_id: camp ? camp.id : null, periode: (mois >= 9 || mois <= 2) ? 'principale' : 'intermediaire',
         nom_transporteur: String(p.transporteur || '').trim() || null, immat_vehicule: String(p.immatriculation || '').trim() || null,
         usine_dechargement: String(p.magasin || '').trim() || null,
         fournisseur_saigic: String(p.fournisseur || '').trim() || null, code_fourn: String(p.code_fourn || '').trim() || null,
         declare_par_coop: false, genere_auto: false,
-        ...maj,
+        ...maj, ...analyse,
       };
       bilan.plan.push({ code, action: 'creer', cooperative: coop?.nom || null });
       if (!coop) bilan.coop_inconnue.push(`${p.fournisseur || '?'} (${p.code_fourn || code.split('-')[0]})`);
@@ -161,7 +189,6 @@ Deno.serve(async (req) => {
       bilan.creees++;
     }
 
-    // Rattache les achats « à identifier » dont la coopérative existe désormais (même n° CCC).
     const { data: orph } = await sb.from('achats').select('id, code_fourn, connaissement, fournisseur_saigic').or('cooperative_id.is.null,cooperative_id.eq.').not('code_fourn', 'is', null);
     for (const o of (orph || []) as any[]) {
       let c = trouverCoop(String(o.connaissement || '').toUpperCase(), o.code_fourn, '', coops);
