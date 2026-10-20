@@ -3697,7 +3697,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-20-236';
+const APP_VERSION = '2026-10-20-237';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7393,8 +7393,16 @@ async function livraisonsClientsExporter(campagneId){
     const cle = ccClefClient(nom); if (!groupes.has(cle)) groupes.set(cle, { nom: connus.get(cle) || nom, achats: [] });
     groupes.get(cle).achats.push(a);
   });
-  const liste = Array.from(groupes.values()).sort((x,y)=>x.nom.localeCompare(y.nom,'fr'));
-  if (sans.length) liste.push({ nom:'Sans client', achats:sans });
+  // Un client livré dans plusieurs usines : une feuille par usine (« CLIENT - USINE ») ; une seule usine : une feuille au nom du client
+  const usineDe = a=>String(a.usine_dechargement||'').trim() || 'Usine non renseignée';
+  const liste = [];
+  const decouper = (nom, tous, sansClient)=>{
+    const parUsine = new Map(); tous.forEach(a=>{ const u = usineDe(a), k = u.toLowerCase(); if (!parUsine.has(k)) parUsine.set(k, { usine:u, achats:[] }); parUsine.get(k).achats.push(a); });
+    const us = Array.from(parUsine.values()).sort((x,y)=>x.usine.localeCompare(y.usine,'fr'));
+    us.forEach(u=>liste.push({ nom: us.length>1 ? nom+' - '+u.usine : nom, client:nom, achats:u.achats, sans:sansClient }));
+  };
+  Array.from(groupes.values()).sort((x,y)=>x.nom.localeCompare(y.nom,'fr')).forEach(g=>decouper(g.nom, g.achats, false));
+  if (sans.length) decouper('Sans client', sans, true);
   if (!liste.length){ showToast('Aucune livraison à exporter pour cette campagne.'); return; }
 
   // Mise en page = modèle TRACA_SAPO : tableau en B4:J, Calibri 10, en-tête orange foncé (accent 2, plus sombre 25 %), colonnes PRODUITS et DATE en vert clair
@@ -7407,7 +7415,7 @@ async function livraisonsClientsExporter(campagneId){
   const nomFeuille = n=>{ let b = String(n).replace(/[\\\/\?\*\[\]:]/g,' ').trim().slice(0,31) || 'Partenaire', k = b, i = 2; while (noms.has(k.toLowerCase())){ k = b.slice(0,28)+' '+i; i++; } noms.add(k.toLowerCase()); return k; };
   const dateXl = iso=>{ const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso||'')); return m ? new Date(Date.UTC(+m[1], +m[2]-1, +m[3])) : null; };
   liste.forEach(g=>{
-    const cle = ccClefClient(g.nom);
+    const cle = ccClefClient(g.client);
     const contrats = (state.contratsClients||[]).filter(c=>ccClefClient(c.client||'')===cle && (!camp || c.campagne_id===camp) && c.statut!=='annule' && c.statut!=='annulé');
     const niveaux = Array.from(new Set(contrats.map(c=>c.niveau_tracabilite).filter(Boolean))), niv = livrNiveauCode(niveaux.length===1 ? niveaux[0] : '');
     const ws = wb.addWorksheet(nomFeuille(g.nom));
