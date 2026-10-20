@@ -4036,7 +4036,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-20-254';
+const APP_VERSION = '2026-10-20-255';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -21706,70 +21706,99 @@ function libelleVerifAchat(a){
     : a.verification_tracabilite==='non_trouve' ? 'Pas de fiche liée' : '';
 }
 function dateExcel(iso){ const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso||'')); return m ? new Date(Date.UTC(+m[1], +m[2]-1, +m[3])) : ''; }
-function construireRapportLivraisons(){
-  const livraisons = state.achats.filter(a=>!a.producteur_id).slice().sort((x,y)=>
-    String(y.date||'').localeCompare(String(x.date||'')) || String(coopById(x.cooperative_id)?.nom||'').localeCompare(String(coopById(y.cooperative_id)?.nom||''),'fr') || String(y.connaissement||'').localeCompare(String(x.connaissement||'')));
-  const nomCamp = id => { const c = state.campagnes.find(x=>x.id===id); return c ? c.nom : ''; };
-  const nombre = v => Number(v)>0 ? Number(v) : '';
-  const decl = (a,k)=>{ if (plateformesDeclaration(a).indexOf(k)<0) return ['Sans objet','','']; const d = dateDeclaration(a,k); if (d) return ['Déclaré', dateExcel(d), a['declaration_'+k+'_par']==='cooperative' ? 'Coopérative' : 'ECORIGINE']; return ['Non déclaré','','']; };
-  const avecFt = livraisons.some(a=>plateformesDeclaration(a).indexOf('ft')>=0);   // colonnes Fairtrace seulement s'il y a des achats Fairtrade
-  const entetes = ['Coopérative','N° CCC','Connaissement','Date','Campagne','Période','Type de cacao','Client','Projet de durabilité',
-    'Sacs déclarés','Poids brut déclaré (kg)','Poids net déclaré (kg)','Sacs acceptés','Poids net livré (kg)','Poids net payé (kg)','Écart payé − déclaré (kg)','Écart (%)',
-    'Avancement','Fiche de traçabilité','Prime de certification (FCFA)','Montant à payer (FCFA)',
-    'Déclaration Multitrace','Date déclaration Multitrace','Déclaré par (Multitrace)',
-    ...(avecFt ? ['Déclaration Fairtrace','Date déclaration Fairtrace','Déclaré par (Fairtrace)'] : []),
-    'Transporteur','Véhicule','Remorque','Chauffeur','Départ','Usine','Distance (km)','TKM réel (F/kg)','Barème Conseil (F/kg)','Péréquation TKM (FCFA, + = le Conseil rembourse)','Payé par','N° de chèque','Banque'];
-  const aoa = [entetes].concat(livraisons.map(a=>{
-    const coop = coopById(a.cooperative_id), etat = etatAchat(a), ec = ecartPoidsAchat(a), ra = decl(a,'ra'), ft = decl(a,'ft');
-    const poidsPese = Number(a.poids_net_produit)>0;
-    const prime = poidsPese ? (tauxPrimeAchat(a)>0 ? calcPrime(a) : 'Taux non renseigné') : 'À déterminer';
-    return [coop?coop.nom:'', coop?(coop.ccc_num||''):'', a.connaissement||'', dateExcel(a.date), nomCamp(a.campagne_id), a.periode ? (a.periode==='principale'?'Principale':'Intermédiaire') : '', a.type_cacao||'', achatClientEffectif(a), a.programme||'',
-      nombre(a.nombre_sacs), nombre(a.poids_brut), nombre(a.quantite_kg), nombre(a.nombre_sacs_accepte), nombre(a.poids_brut_accepte), nombre(a.poids_net_produit),
-      ec ? Math.round(ec.kg) : '', ec ? Math.round(ec.pct*10)/10 : '',
-      etat.label, libelleVerifAchat(a), prime, (function(){ const m = calcMontantPaiement(a); return !m ? 'À déterminer' : m.manque==='prix' ? 'Prix non renseigné' : m.manque==='tkm' ? 'TKM manquant' : m.montant; })(),
-      ra[0], ra[1], ra[2], ...(avecFt ? [ft[0], ft[1], ft[2]] : []),
-      a.nom_transporteur||'', a.immat_vehicule||'', a.immat_remorque||'', a.nom_chauffeur||'', a.lieu_origine||'', a.usine_dechargement||'', nombre(a.distance_km), nombre(a.tkm), nombre(a.bareme_tkm),
-      (Number(a.bareme_tkm)>0 && Number(a.tkm)>0 && poidsPese) ? Math.round((Number(a.tkm)-Number(a.bareme_tkm))*Number(a.poids_net_produit)) : '',
-      clientPayeCoop(a) ? 'Le client' : 'ECORIGINE', a.numero_cheque||'', a.banque||''];
-  }));
-  const ws = XLSX.utils.aoa_to_sheet(aoa, { cellDates:true });
-  ['Date','Date déclaration Multitrace','Date déclaration Fairtrace'].forEach(nom=>{
-    const c = entetes.indexOf(nom); if (c<0) return;
-    for (let r=1; r<aoa.length; r++){ const cell = ws[XLSX.utils.encode_cell({ r, c })]; if (cell && cell.v instanceof Date) cell.z = 'dd/mm/yyyy'; }
+// Rapport des livraisons = feuille « Tracking brousse » du classeur de suivi des achats : mêmes colonnes, même mise en page (Century Gothic 8, en-têtes vert clair).
+// Une ligne par camion pesé à l'usine (le déchargement = la pesée), du plus ancien au plus récent ; les camions refoulés ou pas encore pesés n'y figurent pas.
+function rlDateChargement(a){
+  const d = a.pesee_detail && a.pesee_detail['Date P2'];
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})/.exec(String(Array.isArray(d)?d[0]:(d||'')));
+  return m ? m[3]+'-'+m[2]+'-'+m[1] : String(a.date||'').slice(0,10);
+}
+function rlSite(a){
+  const s = (typeof sachSiteDe==='function') ? sachSiteDe(a.usine_dechargement) : null;
+  const code = s ? String(s.code||'').toUpperCase() : '';
+  const nom = code==='UA10' ? 'SUV' : code==='US26' ? 'IFL SAN PEDRO' : (s && s.nom ? s.nom : String(a.usine_dechargement||'').trim());
+  const ville = s && s.ville ? (/p[eé]dro/i.test(s.ville) ? 'San pedro' : s.ville) : '';
+  return { nom, ville };
+}
+async function construireRapportLivraisons(){
+  const ExcelJS = await qcChargerExcelJS();
+  if (!state.sitesUsinage && typeof supabaseClient!=='undefined' && supabaseClient){
+    const r = await supabaseClient.from('sites_usinage').select('*'); state.sitesUsinage = (r && !r.error) ? (r.data||[]) : [];
+  }
+  const livraisons = state.achats.filter(a=>!a.producteur_id && !a.refoulee && Number(a.poids_net_produit)>0).slice().sort((x,y)=>
+    rlDateChargement(x).localeCompare(rlDateChargement(y)) || String(x.connaissement||'').localeCompare(String(y.connaissement||''),'fr',{numeric:true}));
+  const num = v=>{ const n = Number(v); return n>0 ? n : null; };
+  const camps = Array.from(new Set(livraisons.map(a=>a.campagne_id).filter(Boolean)));
+  const campNom = camps.length===1 ? String((state.campagnes.find(c=>c.id===camps[0])||{}).nom||'') : '';
+  const mC = /(\d{4})\D+(\d{4})/.exec(campNom);
+  const nomFeuille = 'Tracking brousse' + (mC ? ' '+mC[1].slice(2)+'-'+mC[2].slice(2) : '');
+
+  const FONT = 'Century Gothic', NOIR = { argb:'FF000000' }, ROUGE = { argb:'FFFF0000' };
+  const NB = '_-* #,##0_-;\\-* #,##0_-;_-* "-"??_-;_-@_-', NB2 = '_-* #,##0.00_-;\\-* #,##0.00_-;_-* "-"??_-;_-@_-';
+  const fin = { style:'thin', color:NOIR }, moyen = { style:'medium', color:NOIR };
+  const cadre = { top:fin, bottom:fin, left:fin, right:fin };
+  const VERT_CLAIR = 'FFE2EFDA';
+  // [titre, largeur, alignement horizontal des données, format, gras rouge ?]
+  const cols = [['Date de déchargement',14.4,'center','mm-dd-yy'],['Frs principal',14.3,'left'],['Coopérative',21.1,'left'],['Référence camion',11.4,'left'],['N° de connaissement',21,null],
+    ['Type de cacao',16.4,'center',null,'rouge'],['Origine',14.4,'left'],['Port ',8.9,'center',null,'gras'],['usine de déchargement',15.6,null],['Prix barème ',9.4,'center'],
+    ['prime certifié',11.2,null,NB],['commission vendeur (A)',9.6,null,'0.00'],['Comm accordée par le client (B)',14.8,'center','0.00'],['Diff (B-A)',11.9,'center','0.00'],['Nom client ',10.9,'center'],
+    ['transport ',11.9,'center','0.00'],['Prix global',13.7,null,NB2],['Poids brut',13,null,NB],['Réfaction',12.7,null,NB],['Poids net',12.3,'center',NB],['Nombre de sac',16.7,'center'],['Saisie Obc',15.3,'center']];
+  const wb = new ExcelJS.Workbook(); wb.creator = 'ORIGEN · ECORIGINE'; wb.created = new Date();
+  const ws = wb.addWorksheet(nomFeuille, { views:[{ state:'frozen', ySplit:4, topLeftCell:'A5', zoomScale:98 }], properties:{ defaultRowHeight:10.8 } });
+  ws.columns = cols.map(c=>({ width:c[1] }));
+  ws.pageSetup = { orientation:'landscape', paperSize:9, fitToPage:true, fitToWidth:1, fitToHeight:0 };
+  ws.getRow(2).height = 11.4; ws.getRow(4).height = 11.4;
+  cols.forEach((c,i)=>{
+    const L = ws.getCell(3, i+1).address.replace(/\d+/,'');
+    ws.mergeCells(L+'3:'+L+'4');
+    const x = ws.getCell(3, i+1); x.value = c[0];
+    x.font = { name:FONT, size:8, bold:true }; x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:VERT_CLAIR } };
+    x.alignment = { horizontal:'center', vertical:'center', wrapText:true };
+    const gros = (i===8 || i===14 || i===15);   // usine, nom client, transport : cadre épais comme dans le modèle
+    x.border = gros ? { top:moyen, bottom:moyen, left:moyen, right:moyen } : cadre;
+    ws.getCell(4, i+1).border = x.border;
   });
-  ws['!cols'] = entetes.map(h=>({ wch: Math.max(12, Math.min(34, h.length+2)) }));
-  ws['!cols'][0] = { wch:30 }; ws['!cols'][2] = { wch:24 };
-  if (aoa.length>1) ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s:{r:0,c:0}, e:{r:aoa.length-1, c:entetes.length-1} }) };
-  const nbDeclare = k => livraisons.filter(a=>plateformesDeclaration(a).indexOf(k)>=0 && dateDeclaration(a,k)).length;
-  const nbConcerne = k => livraisons.filter(a=>plateformesDeclaration(a).indexOf(k)>=0).length;
-  const somme = f => livraisons.reduce((t,a)=>t+(Number(a[f])||0),0);
-  const infos = [
-    ['Rapport', 'Livraisons (connaissements) — toutes les coopératives'],
-    ['Établi le', new Date().toLocaleDateString('fr-FR')],
-    ['Périmètre', 'Toutes les coopératives et toutes les campagnes (les filtres de l\'écran ne s\'appliquent pas).'],
-    ['Nombre de livraisons', livraisons.length],
-    ['Poids net déclaré total (kg)', Math.round(somme('quantite_kg'))],
-    ['Volume acheté par ECORIGINE = poids net payé total (kg)', Math.round(somme('poids_net_produit'))],
-    ['Déclarations Multitrace (cacao RA)', nbDeclare('ra')+' déclarée(s) sur '+nbConcerne('ra')+' à déclarer'],
-    ...(avecFt ? [['Déclarations Fairtrace (cacao Fairtrade)', nbDeclare('ft')+' déclarée(s) sur '+nbConcerne('ft')+' à déclarer']] : []),
-    [],
-    ['Déclaration'+(avecFt ? ' Multitrace / Fairtrace' : ' Multitrace'), 'La déclaration se fait sur la base du poids net payé à l\'usine : elle n\'est possible qu\'après la pesée (la colonne « Avancement » indique si la livraison attend encore la pesée). « Déclaré » ou « Non déclaré » : statut saisi dans ORIGEN, par ECORIGINE ou par la coopérative depuis son portail (colonne « Déclaré par »). « Sans objet » : ce cacao n\'est pas concerné par cette plateforme (cacao ordinaire, ou type de cacao sans cette certification).'],
-    ['Volume acheté', 'Le volume acheté par ECORIGINE est le POIDS NET PAYÉ à l\'usine (après pesée finale, analyse et réfaction éventuelle) : c\'est lui qui sert au paiement, à la prime, à la déclaration et à la constitution des lots. Le poids net déclaré (connaissement) est le volume acheté par la coopérative à ses producteurs : il ne rentre pas dans les comptes d\'ECORIGINE.'],
-    ['Prime de certification', 'Calculée sur le poids net payé (pesé à l\'usine), jamais sur le poids du connaissement. « À déterminer » tant que l\'usine n\'a rien pesé.'],
-    ['Avancement', 'En attente de pesée → Reçu à l\'usine (pesée saisie) → Paiement enregistré (n° de chèque saisi).'],
-    ['Astuce', 'Utilise les filtres de la première ligne de la feuille « Livraisons » pour isoler une coopérative, une campagne ou les livraisons non déclarées.'],
-  ];
-  const wsInfo = XLSX.utils.aoa_to_sheet(infos); wsInfo['!cols'] = [{ wch:38 }, { wch:120 }];
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Livraisons');
-  XLSX.utils.book_append_sheet(wb, wsInfo, 'Informations');
+  const prem = 6, der = prem + livraisons.length - 1;
+  livraisons.forEach((a,i)=>{
+    const r = prem + i, coop = coopById(a.cooperative_id), info = prefInfoCoop(a.cooperative_id), site = rlSite(a);
+    const par = parametresPaiementPour(a), cert = tauxPrimeAchat(a)>0;
+    const brut = num(a.poids_brut_accepte), net = num(a.poids_net_produit), tkm = num(a.tkm);
+    const t = String(a.type_cacao||'').trim();
+    const dt = dateExcel(rlDateChargement(a));
+    const vals = [ dt||null, info.fournisseur_principal||'', coop?coop.nom:'', a.immat_vehicule||'', a.connaissement||'', t ? (t==='RA'?'RA':t) : 'Ordinaire', a.lieu_origine||'', site.ville||'', site.nom||'',
+      par && Number(par.prix_entree_usine)>0 ? Number(par.prix_entree_usine) : null, tauxPrimeAchat(a)||0, Number(a.commission)||0, Number(info.commission_kg)||0,
+      { formula:'M'+r+'-L'+r, result:(Number(info.commission_kg)||0)-(Number(a.commission)||0) }, achatClientEffectif(a)||'', tkm,
+      { formula:'J'+r+'+P'+r, result:(par&&Number(par.prix_entree_usine)||0)+(tkm||0) }, brut,
+      { formula:'R'+r+'-T'+r, result:(brut||0)-(net||0) }, net, num(a.nombre_sacs_accepte), a.obc_saisi_le ? 'OK' : 'NS' ];
+    vals.forEach((v,k)=>{
+      const c = cols[k], x = ws.getCell(r, k+1); x.value = v;
+      x.font = { name:FONT, size:8, bold:!!c[4], color: c[4]==='rouge' ? ROUGE : NOIR };
+      x.border = cadre;
+      if (c[2]) x.alignment = { horizontal:c[2], vertical: (k>=12&&k<=15)||k===21 ? 'center' : undefined, wrapText: (k>=12&&k<=15)||k===21 ? true : undefined };
+      if (c[3]) x.numFmt = c[3];
+    });
+  });
+  // Ligne TOTAL (ligne 5) : poids brut, réfaction, poids net, nombre de sacs, en rouge gras
+  const tA = ws.getCell('A5'); tA.value = 'TOTAL'; tA.font = { name:FONT, size:8, bold:true, color:NOIR }; tA.alignment = { horizontal:'center', wrapText:true }; tA.border = { left:moyen };
+  [['R',18],['S',19],['T',20],['U',21]].forEach(([L,k])=>{
+    const x = ws.getCell(L+'5');
+    const somme = livraisons.reduce((s,a)=>{ const brut = num(a.poids_brut_accepte)||0, net = num(a.poids_net_produit)||0;
+      return s + (L==='R' ? brut : L==='S' ? brut-net : L==='T' ? net : (num(a.nombre_sacs_accepte)||0)); }, 0);
+    x.value = livraisons.length ? { formula:'SUM('+L+prem+':'+L+der+')', result:somme } : 0;
+    x.font = { name:FONT, size:8, bold:true, color:ROUGE }; x.alignment = { horizontal:'center', wrapText:true }; x.numFmt = NB;
+  });
+  if (livraisons.length){
+    ws.autoFilter = 'A3:V'+der;
+    // N° de connaissement en double : surligné en rouge clair, comme dans le modèle
+    ws.addConditionalFormatting({ ref:'E'+prem+':E'+der, rules:[{ type:'expression', formulae:['COUNTIF($E$'+prem+':$E$'+der+',E'+prem+')>1'], style:{ fill:{ type:'pattern', pattern:'solid', bgColor:{ argb:'FFFFC7CE' } }, font:{ color:{ argb:'FF9C0006' } } } }] });
+  }
   return { wb, nomFichier:'Rapport_livraisons_ECORIGINE_'+new Date().toISOString().slice(0,10)+'.xlsx', nb: livraisons.length };
 }
-function telechargerRapportLivraisons(){
+async function telechargerRapportLivraisons(){
   try{
-    const { wb, nomFichier, nb } = construireRapportLivraisons();
-    if (nb===0){ showToast('Aucune livraison enregistrée : le rapport serait vide.', 'success'); return; }
-    XLSX.writeFile(wb, nomFichier);
+    const { wb, nomFichier, nb } = await construireRapportLivraisons();
+    if (nb===0){ showToast('Aucune livraison pesée : le rapport serait vide.', 'success'); return; }
+    await qcTelechargerClasseur(wb, nomFichier);
     showToast('Rapport téléchargé : '+nomFichier+' ('+nb+' livraison'+(nb>1?'s':'')+').', 'success');
   }catch(e){ showToast('Impossible de générer le rapport : '+(e && e.message ? e.message : e)); }
 }
