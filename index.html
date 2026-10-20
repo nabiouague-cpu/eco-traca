@@ -3364,14 +3364,29 @@ function qcoCoops(){
   return (state.cooperatives||[]).filter(c=>!c.a_classer && (!c.type || c.type==='cooperative') && QCO_CIBLES.indexOf(qcoNorm(c.nom))>=0)
     .sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'}));
 }
-// Délégation CCC : celle enregistrée, sinon la ville de la fiche si c'est l'une des 13 délégations (simple suggestion, modifiable)
+// Délégation CCC : celle enregistrée, sinon une SUGGESTION tirée de la localité / ville / département du siège (liste de correspondance ci-dessous, à corriger au besoin)
+const QCO_DELEG_LOC = {
+  'ABENGOUROU':['ABENGOUROU','EBILASSOKRO','SATIKRAN','AGNIBILEKROU','NIABLE','ZARANOU'],
+  'ABOISSO':['ABOISSO','ADIAKE'],
+  'ABIDJAN':['ABIDJAN','AZITO','YOPOUGON','BINGERVILLE','ANYAMA','GRAND BASSAM'],
+  'AGBOVILLE':['AGBOVILLE','AKOUPE','ADZOPE','YAKASSE ATTOBROU','SIKENSI','RUBINO'],
+  'BONGOUANOU':['BONGOUANOU','M BATTO','ARRAH'],
+  'DALOA':['DALOA','VAVOUA','BOUAFLE','BONON','ZUENOULA','ISSIA','SINFRA','SAIOUA'],
+  'DIVO':['DIVO','HIRE','LAKOTA','GUITRY'],
+  'DUEKOUE':['DUEKOUE','BLOLEQUIN','GUIGLO','BANGOLO','ZOU','KOUIBLY','FACOBLY','TOULEPLEU'],
+  'GAGNOA':['GAGNOA','GUIBEROUA','OUME'],
+  'MAN':['MAN','DANANE','BIANKOUMA','SANTA','MAHAPLEU','ZOUAN HOUNIEN','KON OULE','KOUAN HOULE','SIPILOU'],
+  'SAN-PEDRO':['SAN PEDRO','TABOU','OLODIO','DJOUROUTOU','GRIHIRI','SASSANDRA'],
+  'SOUBRE':['SOUBRE','MEAGUI','BUYO'],
+  'YAKRO':['YAMOUSSOUKRO','YAKRO','TOUMODI']
+};
 function qcoDelegation(c){
   const dec = String(c.delegation_ccc||'').trim(); if (dec) return dec;
-  const ALIAS = { 'YAMOUSSOUKRO':'YAKRO', 'SAN PEDRO':'SAN-PEDRO' };
-  for (const champ of [c.ville, c.siege_social, c.departement]){
-    const n = qcoNorm(champ); if (!n) continue;
-    const hit = QCO_DELEGATIONS.find(d=>qcoNorm(d)===n) || ALIAS[n] || '';
-    if (hit) return hit;
+  const cles = []; Object.keys(QCO_DELEG_LOC).forEach(d=>QCO_DELEG_LOC[d].forEach(k=>cles.push({ d, k:' '+k+' ' })));
+  cles.sort((a,b)=>b.k.length-a.k.length);                                   // le nom le plus précis d'abord
+  for (const champ of [c.siege_social, c.ville, c.departement]){               // la localité du siège d'abord
+    const n = ' '+qcoNorm(champ)+' '; if (n.trim()==='') continue;
+    const hit = cles.find(x=>n.indexOf(x.k)>=0); if (hit) return hit.d;
   }
   return '';
 }
@@ -3835,7 +3850,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-20-239';
+const APP_VERSION = '2026-10-20-240';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
