@@ -3989,7 +3989,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-20-243';
+const APP_VERSION = '2026-10-20-244';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -21822,6 +21822,7 @@ function detailAchatHtml(a, etat){
     + (function(){ const sd = soldeAchat(a); if (clientPayeCoop(a)) return '';
         return (Number(a.poids_net_produit)>0 && (!sd || !sd.complet) ? '<button type="button" class="btn-ghost btn-compact" onclick="ouvrirPaiement(\''+a.id+'\')">'+(sd ? 'Ajouter un paiement' : 'Enregistrer le paiement')+'</button>' : '')
           + (sd ? '<button type="button" class="btn-ghost btn-compact" onclick="genererAttestation(\''+a.id+'\')">Attestation de paiement → à signer</button>' : ''); })()
+    + (Number(a.poids_net_produit)>0 ? '<button type="button" class="btn-ghost btn-compact" onclick="ouvrirBordereauReception(\''+a.id+'\')" title="Bordereau de réception reconstitué depuis ORIGEN (même présentation que l\'ERP OBC), à imprimer ou comparer">Bordereau de réception</button>' : '')
     + (Number(a.poids_net_produit)>0 ? '<button type="button" class="btn-ghost btn-compact" onclick="ouvrirTicketPesee(\''+a.id+'\')" title="Renseigner les informations de la fiche de pesée de l\'usine, puis générer le ticket (modèle Word)">Ticket de pesée (Word)</button>' : '')
     + '<button type="button" class="btn-ghost btn-compact" onclick="openModal(\'achat\','+esc(JSON.stringify(a)).replace(/&#39;/g,"&apos;")+')">Modifier le connaissement</button>'
     + (a.connaissement && !a.producteur_id ? '<button type="button" class="btn-danger-text btn-compact" onclick="supprimerConnaissement(\''+a.id+'\')" title="Retire ce connaissement et son achat pour pouvoir le reproduire, sans toucher aux producteurs ni à la demande">Supprimer le connaissement</button>' : '')
@@ -21837,10 +21838,108 @@ function detailAchatHtml(a, etat){
       + (pdf ? '<button class="btn-ghost btn-compact" style="margin-top:10px;" onclick="telechargerFichierDemande(\''+escJs(pdf.path)+'\',\''+escJs(pdf.nom||'connaissement.pdf')+'\')">⬇ Connaissement (PDF)</button>' : '')
     + '</div>'
     + '<div class="detail-bloc"><h4>Pesée : déclaré et usine</h4>'+pesee+'</div>'
+    + (a.connaissement && (a.pesee_detail || a.code_pesee || Number(a.poids_net_produit)>0) ? '<div class="detail-bloc"><h4>Analyse et contrôle qualité <small>lus sur le SAIGIC</small></h4>'+analyseBlocHtml(a)+'</div>' : '')
     + '<div class="detail-bloc"><h4>Prime et paiement</h4><dl>'+paiement+'</dl>'
       + (base>0 ? '' : '<div class="attente-note">La prime est calculée sur le poids net pesé à l\'usine, pas sur le poids du connaissement : elle sera connue après la pesée.</div>')
     + '</div>'
     + '</div>'+actionsDetail+'</td></tr>';
+}
+// ====================== BORDEREAU DE RECEPTION (même modèle que l'ERP OBC) ======================
+// Reconstitué depuis ORIGEN : connaissement + pesée SAIGIC (détail complet dans achats.pesee_detail) + paramètres de paiement.
+// Sert à vérifier qu'ORIGEN et OBC ont le même niveau d'information avant d'automatiser les saisies dans OBC.
+const BORDEREAU_ENTETE = { nom:'ECORIGINE', adresse:'754 Rue Rachelle Piot - Treichville', bp:'17 BP 749 Abidjan 17', tel:'Tél. : (+225) 27 24 30 70 70', rccm:'RCCM : CI-ABJ-03-2024-M-17082', cc:'CC : 2157554 U' };
+// Valeur d'un libellé de la page « Détail pesée » du SAIGIC (première valeur ; i=1 pour la seconde, ex. montant du transport).
+function pdVal(a, lib, i){ const d = a && a.pesee_detail; if (!d || typeof d!=='object') return ''; const v = d[lib]; if (Array.isArray(v)) return String(v[i||0]==null ? '' : v[i||0]).trim(); return v==null ? '' : String(v).trim(); }
+function pdNum(a, lib, i){ const t = pdVal(a, lib, i).replace(/\s/g,'').replace(',', '.'); if (t==='') return null; const n = Number(t); return isFinite(n) ? n : null; }
+function pdDate(a, lib){ const m = pdVal(a, lib).match(/^(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}):(\d{2}))?/); return m ? { jour:m[1]+'/'+m[2]+'/'+m[3], heure:(m[4] ? m[4]+':'+m[5] : '') } : null; }
+function fmtDec(n, dec){ n = Number(n); if (!isFinite(n)) return ''; const f = n.toFixed(dec==null ? 2 : dec); const [e, d] = f.split('.'); return e.replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + (d ? ','+d : ''); }
+const ANALYSE_CHAMPS = [ ['Humidite','Humidité','%'], ['Grainage','Grainage','/100 g'], ['Mat Etg','Matières étrangères','%'], ['Brisure','Brisures','%'], ['Déchets','Déchets','%'], ['Grabots','Grabots','%'],
+  ['Moisies','Fèves moisies','%'], ['Violettes','Fèves violettes','%'], ['Ardoises','Fèves ardoisées','%'], ['Mitees','Fèves mitées','%'], ['Germees','Fèves germées','%'], ['Plates','Fèves plates','%'], ['Defectueux','Défectueuses','%'] ];
+// Bloc « Analyse / contrôle qualité » du détail d'une livraison (lu sur le SAIGIC par le robot des pesées).
+function analyseBlocHtml(a){
+  if (!a || !a.pesee_detail || typeof a.pesee_detail!=='object'){
+    return (a && (a.pesee_humidite!=null || a.pesee_grade)) ? '<dl>'+(a.pesee_humidite!=null ? '<dt>Humidité</dt><dd>'+esc(fmtDec(a.pesee_humidite,1))+' %</dd>' : '')+(a.pesee_grade ? '<dt>Grade</dt><dd>'+esc(a.pesee_grade)+'</dd>' : '')+'</dl>'
+      : '<div class="vide">Pas encore lue sur le SAIGIC (le robot des pesées la récupère au prochain passage).</div>';
+  }
+  const d1 = pdDate(a,'Date P1'), d2 = pdDate(a,'Date P2'), dA = pdDate(a,'Date Analyse');
+  const conf = pdVal(a,'Conformite'), acc = pdVal(a,'Acceptation'), motif = pdVal(a,'Motif Refoulement');
+  const okConf = /^CONFORME/.test(conf), okAcc = /^NON-REFOUL/.test(acc);
+  let h = '<dl>'
+    + '<dt>Code pesée</dt><dd>'+esc(pdVal(a,'Code Pesee')||a.code_pesee||'')+(pdVal(a,'N° Ticket') ? ' · ticket '+esc(pdVal(a,'N° Ticket')) : '')+(pdVal(a,'CodePont') ? ' · pont '+esc(pdVal(a,'CodePont')) : '')+'</dd>'
+    + (d1 ? '<dt>Pesée 1 (entrée)</dt><dd>'+esc(d1.jour+(d1.heure?' à '+d1.heure:''))+' · '+esc(fmtNum(pdNum(a,'Poids1')))+' kg'+(pdVal(a,'Peseur1') ? ' · '+esc(pdVal(a,'Peseur1')) : '')+'</dd>' : '')
+    + (d2 ? '<dt>Pesée 2 (sortie)</dt><dd>'+esc(d2.jour+(d2.heure?' à '+d2.heure:''))+' · '+esc(fmtNum(pdNum(a,'Poids2')))+' kg'+(pdVal(a,'Peseur2') ? ' · '+esc(pdVal(a,'Peseur2')) : '')+'</dd>' : '')
+    + '<dt>Poids brut / tare sacs</dt><dd>'+esc(fmtNum(pdNum(a,'PdsBrute')))+' kg / '+esc(fmtDec(pdNum(a,'Tare Emb'),0))+' kg'+(pdNum(a,'Tare P.C')>0 ? ' (+ tare pont '+esc(fmtDec(pdNum(a,'Tare P.C'),0))+' kg)' : '')+'</dd>'
+    + '<dt>Sacs</dt><dd>'+esc(pdVal(a,'NSDeclarés'))+' déclarés · '+esc(pdVal(a,'NSDechargé'))+' déchargés · '+esc(pdVal(a,'NSAcceptés'))+' acceptés · '+esc(pdVal(a,'NSRefoulés')||'0')+' refoulés</dd>'
+    + '<dt>Analyse</dt><dd>'+esc(pdVal(a,'Analyse')||'—')+(dA ? ' du '+esc(dA.jour) : '')+(pdVal(a,'Echantillon') ? ' · échantillon '+esc(pdVal(a,'Echantillon')) : '')+(pdVal(a,'CCQ') ? ' · CCQ '+esc(pdVal(a,'CCQ')) : '')+'</dd>'
+    + '<dt>Grade</dt><dd><b>'+esc(pdVal(a,'Grade')||a.pesee_grade||'—')+'</b> · <span style="color:'+(okConf?'var(--ok,#1f7a4d)':'var(--danger,#b42318)')+'">'+esc(conf||'—')+'</span> · <span style="color:'+(okAcc?'var(--ok,#1f7a4d)':'var(--danger,#b42318)')+'">'+esc(acc||'—')+'</span>'+(motif ? '<br><small>Motif : '+esc(motif)+'</small>' : '')+'</dd>'
+    + '</dl><table class="pesee analyse-tbl" style="margin-top:8px;"><tbody>';
+  ANALYSE_CHAMPS.forEach(([cle, lib, u], i)=>{ const v = pdNum(a, cle); if (i%2===0) h += '<tr>'; h += '<th scope="row">'+esc(lib)+'</th><td>'+(v==null ? '<span class="vide">—</span>' : esc(fmtDec(v, u==='%' ? 2 : 0))+' '+u)+'</td>'; if (i%2===1 || i===ANALYSE_CHAMPS.length-1) h += '</tr>'; });
+  h += '</tbody></table>';
+  return h;
+}
+// Données du bordereau, calculées comme OBC les affiche.
+function bordereauReceptionData(a){
+  const coop = coopById(a.cooperative_id) || {}, camp = (state.campagnes||[]).find(c=>c.id===a.campagne_id);
+  const site = (state.sitesUsinage||[]).find(x=>x.code && String(x.code).toUpperCase()===String(a.usine_dechargement||'').toUpperCase());
+  const m = calcMontantPaiement(a) || {};
+  const netPaye = Number(a.poids_net_produit)||0, netLivre = Number(a.poids_brut_accepte)||0;
+  const brut = pdNum(a,'PdsBrute'), tareSacs = pdNum(a,'Tare Emb');
+  const prix = Number(m.prixEntreeUsine)||0, tkm = Number(a.tkm)||0, tauxBic = Number(m.tauxBic)||0, commission = Number(a.commission)||0;
+  const revolving = (a.pref_remb_mode && a.pref_remb_mode!=='aucun') ? (Number(a.pref_remb_montant)||0) : 0;
+  const montantBrut = netPaye*prix, retBic = tauxBic*netPaye, transport = tkm*netPaye, comm = commission*netPaye;
+  const d1 = pdDate(a,'Date P1'), d2 = pdDate(a,'Date P2');
+  const nature = pdVal(a,'Nature').toUpperCase();
+  const typeCacao = a.type_cacao==='RA' || /RAINFOREST/.test(nature) ? 'CACAO RAINFOREST' : a.type_cacao==='FT' || /FAIRTRADE/.test(nature) ? 'CACAO FAIRTRADE' : 'CACAO --';
+  const port = (pdVal(a,'Destination') || (site && site.ville) || '').toUpperCase();
+  return {
+    campagne: camp ? 'CAMP '+libelleCampagneCourt(camp.nom) : '', port, usine: site ? site.nom : (a.usine_dechargement||''),
+    connaissement: a.connaissement||'', dateDechargement: '', dateSaigic: d1 ? d1.jour+(d1.heure ? ' '+d1.heure : '') : (d2 ? d2.jour : ''),
+    dateConnaissement: dateFr(a.date), typeCacao, nature,
+    fournisseur: coop.nom||a.fournisseur_saigic||'', agrement: coop.ccc_num||a.code_fourn||'', origine: pdVal(a,'Departement') || a.lieu_origine || '',
+    localite: pdVal(a,'Localité'), sousPref: pdVal(a,'Sous-Préfecture'),
+    remorque: a.immat_remorque||'', tracteur: a.immat_vehicule||'', transporteur: a.nom_transporteur||'', chauffeur: a.nom_chauffeur||'', codePesee: pdVal(a,'Code Pesee')||a.code_pesee||'',
+    sacsDecharges: pdNum(a,'NSDechargé')!=null ? pdNum(a,'NSDechargé') : (Number(a.nombre_sacs_accepte)||0), sacsAcceptes: Number(a.nombre_sacs_accepte)||0, sacsRefoules: pdNum(a,'NSRefoulés')||0,
+    poidsBrut: brut!=null ? brut : (netLivre + (tareSacs||0)), poidsSacs: tareSacs||0, netLivre, refaction: Math.max(0, netLivre-netPaye), netPaye,
+    prix, montantBrut, tauxBic, retBic, revolving, revolvingKg: netPaye>0 ? revolving/netPaye : 0, commission, comm, tkm, transport,
+    net: montantBrut - retBic - revolving + comm + transport, manque: m.manque||null,
+  };
+}
+function bordereauReceptionHTML(b){
+  const L = (lib, val)=>'<div class="l"><span>'+esc(lib)+' :</span><b>'+esc(val==null?'':String(val))+'</b></div>';
+  const R = (lib, taux, mont, neg)=>'<tr><td>'+esc(lib)+' :</td><td class="u">F.CFA/Kg</td><td class="n">'+fmtDec(taux,2)+'</td><td class="n">'+(neg&&mont>0?'- ':'')+fmtDec(mont,2)+'</td></tr>';
+  return '<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><title>Bordereau de réception '+esc(b.connaissement)+'</title>'
+    + '<style>@page{size:A4;margin:14mm}body{font-family:Arial,Helvetica,sans-serif;font-size:11pt;color:#000;margin:0;padding:18px 24px}'
+    + '.ent{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px}.ent .t{font-weight:700;font-size:14pt;text-align:center;flex:1;padding-top:6px}.ent .t small{display:block;font-size:12pt;margin-top:4px}.ent .soc{text-align:right;font-size:9pt;line-height:1.4;min-width:200px}.ent .soc b{font-size:11pt}'
+    + '.blk{margin:10px 0 0 70px;line-height:1.7}.l{display:flex;gap:10px}.l span{width:180px;display:inline-block}.cols{display:flex;gap:30px;margin-top:22px;line-height:1.7}.cols>div{flex:1}.cols .l span{width:190px}'
+    + '.poids{margin-top:26px;line-height:2}.poids .l span{width:230px}.poids .l b{min-width:110px;text-align:right}'
+    + 'table{border-collapse:collapse;width:100%;margin-top:30px}th,td{padding:5px 8px}th{border-bottom:1px solid #000;font-weight:400;text-align:center;font-size:10pt}.n{text-align:right}.u{text-align:center}'
+    + '.tot td{font-weight:700;border-top:1px solid #000;padding-top:10px}.sig{display:flex;justify-content:space-between;margin-top:60px;font-weight:700;font-size:10pt}.ordre{margin-top:34px}'
+    + '.bar{position:fixed;top:0;left:0;right:0;background:#1f3b2d;color:#fff;padding:8px 16px;display:flex;gap:12px;align-items:center;font-size:10pt}.bar button{font:inherit;padding:6px 12px;border:0;border-radius:6px;background:#d9a441;color:#1f1f1f;font-weight:700;cursor:pointer}'
+    + '.note{margin-top:14px;font-size:8.5pt;color:#555}@media print{.bar,.note{display:none}body{padding:0}}body.avecbar{padding-top:56px}</style></head><body class="avecbar">'
+    + '<div class="bar"><button onclick="window.print()">🖨 Imprimer / Enregistrer en PDF</button><span>Bordereau reconstitué par ORIGEN depuis le connaissement, la pesée SAIGIC et les paramètres de paiement — à comparer au bordereau OBC.</span></div>'
+    + '<div class="ent"><div style="width:200px"></div><div class="t">BORDEREAU DE RECEPTION<small>CACAO BROUSSE</small></div><div class="soc"><b>'+esc(BORDEREAU_ENTETE.nom)+'</b><br>'+esc(BORDEREAU_ENTETE.adresse)+'<br>'+esc(BORDEREAU_ENTETE.bp)+'<br>'+esc(BORDEREAU_ENTETE.tel)+'<br>'+esc(BORDEREAU_ENTETE.rccm)+'<br>'+esc(BORDEREAU_ENTETE.cc)+'</div></div>'
+    + '<div class="blk">'+L('CAMPAGNE', b.campagne)+L('PORT', b.port)+L('USINE', b.usine)+L('N°CONNAISSEMENT', b.connaissement)+L('DATE DECHARGEMENT', b.dateDechargement || '____ / ____ / ________')+L('TYPE CACAO', b.typeCacao)+'</div>'
+    + '<div class="cols"><div>'+L('FOURNISSEUR PRINC.', b.fournisseur)+L('SOUS FOURNISSEUR', b.fournisseur)+L('N°AGREMENT CCC', b.agrement)+L('N°REMORQUE', b.remorque)+L('DATE CONNAISSEMENT', b.dateConnaissement)+'</div>'
+    + '<div>'+L('ORIGINE', b.origine)+L('SACS DECHARGES', fmtDec(b.sacsDecharges,2))+L('SACS ACCEPTES', fmtDec(b.sacsAcceptes,2))+L('SACS REFOULES', fmtDec(b.sacsRefoules,2))+L('N° PESEE', b.codePesee)+'</div></div>'
+    + '<div class="poids">'+L('POIDS BRUT ACCEPTE (Kg)', fmtDec(b.poidsBrut,2))+L('POIDS SACS ACCEPTES (Kg)', fmtDec(b.poidsSacs,2))+L('POIDS NET LIVRE (Kg)', fmtDec(b.netLivre,2))+L('REFACTION (Kg)', fmtDec(b.refaction,2))+L('POIDS NET PAYE (Kg)', fmtDec(b.netPaye,2))+'</div>'
+    + '<table><thead><tr><th>Libellés</th><th>Poids Net Payé (Kg)</th><th>Prix Net (CFA/Kg)</th><th>Montant Brut à Payer (F.CFA)</th></tr></thead><tbody>'
+    + '<tr><td></td><td class="n">'+fmtDec(b.netPaye,2)+'</td><td class="n">'+fmtDec(b.prix,2)+'</td><td class="n">'+fmtDec(b.montantBrut,2)+'</td></tr></tbody></table>'
+    + '<table style="margin-top:18px"><tbody>'+R('Retenue BIC', b.tauxBic, b.retBic, true)+R('Retenue Mandat', 0, 0)+R('Retenue Mise en compte', 0, 0)+R('Retenue Revolving', b.revolvingKg, b.revolving, true)+R('Retenue Avance', 0, 0)+R('Commission Vendeur', b.commission, b.comm)+R('Transport', b.tkm, b.transport)
+    + '<tr class="tot"><td colspan="2">MONTANT NET A PAYER :</td><td class="u">F.CFA</td><td class="n">'+fmtDec(b.net,2)+'</td></tr></tbody></table>'
+    + '<div class="ordre">Veuillez payer à l\'ordre de : <b style="margin-left:30px">'+esc(b.fournisseur)+'</b></div>'
+    + '<div class="sig"><span>ADMINISTRATEUR GENERAL</span><span>VISA BENEFICIAIRE</span></div>'
+    + '<div class="note">Transport : '+esc(b.transporteur)+(b.chauffeur ? ' / '+esc(b.chauffeur) : '')+' · tracteur '+esc(b.tracteur)+' · remorque '+esc(b.remorque)+(b.localite ? ' · localité '+esc(b.localite) : '')+(b.sousPref ? ' · s/p '+esc(b.sousPref) : '')+'. Date du connaissement : '+esc(b.dateConnaissement)+(b.dateSaigic ? ' ; pesée enregistrée au SAIGIC le '+esc(b.dateSaigic)+' (la date réelle de déchargement n\'est pas dans ORIGEN)' : '')+'.</div>'
+    + '</body></html>';
+}
+function ouvrirBordereauReception(achatId){
+  const a = (state.achats||[]).find(x=>x.id===achatId);
+  if (!a){ showToast('Livraison introuvable.'); return; }
+  if (!(Number(a.poids_net_produit)>0)){ showToast('Le poids net payé n\'est pas encore connu : le bordereau se fait après la pesée à l\'usine.'); return; }
+  const b = bordereauReceptionData(a);
+  if (b.manque==='prix'){ showToast('Renseigne d\'abord le prix d\'entrée usine de la campagne (paramètres de paiement).'); return; }
+  const f = window.open('', '_blank');
+  if (!f){ showToast('Le navigateur a bloqué l\'ouverture — autorise les fenêtres pop-up pour afficher le bordereau.'); return; }
+  f.document.open(); f.document.write(bordereauReceptionHTML(b)); f.document.close();
 }
 // ====================== TICKET DE PESEE (bordereau de réception de cacao) ======================
 // Modèle Word fourni (modeles/ticket_de_pesee.docx). Chaque intitulé reste à sa place ; les valeurs sont écrites alignées les unes sous les autres (textes à
