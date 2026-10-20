@@ -3332,6 +3332,142 @@ async function enregistrerNomsComplets(){
   }
 }
 
+// ============================================================
+// Questionnaire coopératives (Forms) : la fiche de chaque coopérative répond au formulaire d'enquête (15 questions) ;
+// l'automate Tampermonkey (le même que pour CARGILL) le saisit et l'envoie coopérative par coopérative.
+// ============================================================
+const QCO_DELEGATIONS = ['ABENGOUROU','ABIDJAN','ABOISSO','AGBOVILLE','BONGOUANOU','DALOA','DIVO','DUEKOUE','GAGNOA','MAN','SAN-PEDRO','SOUBRE','YAKRO'];
+const QCO_QUESTIONS = [
+  { cle:'nom_complet', court:'Nom complet', libelle:'Nom Complet de la Coopérative' },
+  { cle:'nom_abrege', court:'Nom abrégé', libelle:'Nom abrégé de la Coopérative' },
+  { cle:'adresse_postale', court:'Adresse postale', libelle:'Adresse Postale de la Coopérative' },
+  { cle:'adresse_geo', court:'Adresse géographique', libelle:'Adresse géographique de la Coopérative' },
+  { cle:'gps', court:'GPS du siège', libelle:'Coordonnées GPS du Bureau Central de la Coopérative' },
+  { cle:'pca', court:'Nom du PCA / DG', libelle:'Nom et Prénoms du Président du Conseil d\'Administration (PCA) ou du Directeur Général de la coopérative' },
+  { cle:'tel_pca', court:'Tél. du 1er responsable', libelle:'Numéro de téléphone du Premier Responsable' },
+  { cle:'dir', court:'Directeur / Gérant', libelle:'Nom et Prénoms du Directeur ou Gérant de la Coopérative' },
+  { cle:'tel_dir', court:'Tél. du directeur / gérant', libelle:'Numéro de téléphone du Directeur ou Gérant de la Coopérative' },
+  { cle:'email', court:'Email', libelle:'Email adresse de la Coopérative' },
+  { cle:'rccm', court:'N° RCCM', libelle:'N° d\'enregistrement légal de la coopérative (N° RCCM)' },
+  { cle:'cnps', court:'N° CNPS', libelle:'N° d\'enregistrement à la CNPS de la coopérative (N° CNPS)' },
+  { cle:'dfe', court:'N° DFE', libelle:'N° d\'enregistrement fiscal (N° DFE)' },
+  { cle:'ccc', court:'N° CCC', libelle:'N° d\'enregistrement CCC valide (Code CCC)' },
+  { cle:'delegation', court:'Délégation CCC', libelle:'Nom de la Délégation Régionale CCC' }
+];
+const QCO_LIEN_CLE = 'origen_lien_forms_enquete_coop';
+function qcoLien(){ try{ return localStorage.getItem(QCO_LIEN_CLE) || ''; }catch(e){ return ''; } }
+function qcoLienMaj(v){ try{ if (String(v||'').trim()) localStorage.setItem(QCO_LIEN_CLE, String(v).trim()); else localStorage.removeItem(QCO_LIEN_CLE); }catch(e){} }
+function qcoNorm(s){ return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toUpperCase().replace(/[^A-Z0-9]+/g,' ').trim(); }
+function qcoCoops(){
+  return (state.cooperatives||[]).filter(c=>!c.a_classer && (!c.type || c.type==='cooperative'))
+    .sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'}));
+}
+// Délégation CCC : celle enregistrée, sinon la ville de la fiche si c'est l'une des 13 délégations (simple suggestion, modifiable)
+function qcoDelegation(c){
+  const dec = String(c.delegation_ccc||'').trim(); if (dec) return dec;
+  const ALIAS = { 'YAMOUSSOUKRO':'YAKRO', 'SAN PEDRO':'SAN-PEDRO' };
+  for (const champ of [c.ville, c.siege_social, c.departement]){
+    const n = qcoNorm(champ); if (!n) continue;
+    const hit = QCO_DELEGATIONS.find(d=>qcoNorm(d)===n) || ALIAS[n] || '';
+    if (hit) return hit;
+  }
+  return '';
+}
+function qcoValeurs(c){
+  const t = s=>String(s==null?'':s).trim(), tel = s=>String(s==null?'':s).replace(/[^\d+]/g,'');
+  const loc = t(c.siege_social), ville = t(c.ville);
+  return {
+    nom_complet: t(c.nom_complet) || t(c.nom), nom_abrege: t(c.nom), adresse_postale: t(c.adresse_postale),
+    adresse_geo: [loc, ville && qcoNorm(ville)!==qcoNorm(loc) ? ville : ''].filter(Boolean).join(', '),
+    gps: t(c.siege_gps), pca: t(c.representant_legal_nom), tel_pca: tel(c.representant_legal_contact),
+    dir: t(c.contact_nom) || t(c.adg_nom), tel_dir: tel(c.contact_contact) || tel(c.adg_contact),
+    email: t(c.email1) || t(c.contact_email) || t(c.email2), rccm: t(c.rccm), cnps: t(c.cnps_num), dfe: t(c.dfe_num), ccc: t(c.ccc_num), delegation: qcoDelegation(c)
+  };
+}
+function qcoManques(c){ const v = qcoValeurs(c); return QCO_QUESTIONS.filter(q=>!v[q.cle]).map(q=>q.court); }
+function ouvrirQuestionnaireCoops(){
+  if (!qcoCoops().length){ showToast('Aucune coopérative enregistrée.'); return; }
+  state.modal = { type:'questionnaireCoops', payload:{} }; render();
+}
+function qcoEtatHtml(c){
+  if (c.enquete_forms_le) return '<span class="badge ok">Saisi le '+esc(dateFr(String(c.enquete_forms_le).slice(0,10)))+'</span>';
+  const m = qcoManques(c);
+  return m.length ? '<span style="color:var(--danger);font-size:11px">Manque : '+esc(m.join(', '))+'</span>' : '<span class="badge ok">Prêt</span>';
+}
+async function qcoSauver(id, champ, valeur){
+  const c = coopById(id); if (!c) return;
+  const v = String(valeur==null?'':valeur).trim();
+  if (String(c[champ]||'') === v) return;
+  const { error } = await supabaseClient.from('cooperatives').update({ [champ]: v || null }).eq('id', id);
+  if (error){ showToast('Échec de l\'enregistrement : '+error.message); return; }
+  c[champ] = v || null;
+  const cel = document.getElementById('qco_etat_'+id); if (cel) cel.innerHTML = qcoEtatHtml(c);
+}
+function qcoLot(ids){
+  return { origen_forms_lot:true, cooperative:'Questionnaire coopératives', demande_id:'questionnaire-cooperatives', lien: qcoLien(),
+    questions: QCO_QUESTIONS.map(q=>({ cle:q.cle, libelle:q.libelle, type:'texte' })),
+    reponses: ids.map(id=>{ const c = coopById(id), v = qcoValeurs(c), valeurs = {}; Object.keys(v).forEach(k=>{ if (v[k]) valeurs[k] = v[k]; }); return { id, nom:c.nom, valeurs }; }) };
+}
+async function qcoCopierLot(){
+  const ids = qcoCoops().filter(c=>{ const e = document.getElementById('qco_sel_'+c.id); return e && e.checked && !qcoManques(c).length; }).map(c=>c.id);
+  if (!ids.length){ showToast('Coche au moins une coopérative « Prête » (aucune information manquante).'); return; }
+  await qcCopierTexte(JSON.stringify(qcoLot(ids)), 'Lot de '+ids.length+' coopérative'+(ids.length>1?'s':''));
+}
+async function qcoCollerResultat(){
+  const txt = prompt('Colle ici le résultat copié depuis l\'automate (bouton « Copier le résultat » sur la page Forms) :');
+  if (txt === null) return;
+  if (!txt.trim()){ showToast('Rien n\'a été collé : clique d\'abord « Copier le résultat » dans l\'automate, puis reviens ici et colle (Ctrl+V).', 'error'); return; }
+  let res; try{ res = JSON.parse(txt); }catch(e){ showToast('Résultat illisible : recopie-le depuis l\'automate.', 'error'); return; }
+  if (!res || !res.origen_forms_resultat || !Array.isArray(res.faits) || !res.faits.length){ showToast('Ce texte n\'est pas un résultat de l\'automate contenant des envois.', 'error'); return; }
+  const ids = res.faits.filter(id=>coopById(id)), quand = new Date().toISOString();
+  if (!ids.length){ showToast('Aucune coopérative reconnue dans ce résultat.', 'error'); return; }
+  const { error } = await supabaseClient.from('cooperatives').update({ enquete_forms_le: quand }).in('id', ids);
+  if (error){ showToast('Échec de l\'enregistrement : '+error.message); return; }
+  ids.forEach(id=>{ const c = coopById(id); if (c) c.enquete_forms_le = quand; });
+  const nbErr = Array.isArray(res.erreurs) ? res.erreurs.length : 0;
+  showToast(ids.length+' coopérative'+(ids.length>1?'s':'')+' marquée'+(ids.length>1?'s':'')+' saisie'+(ids.length>1?'s':'')+' dans Forms.'+(nbErr ? ' '+nbErr+' en erreur dans l\'automate : à reprendre à la main.' : ''), 'success');
+  render();
+}
+// Coordonnées du siège = coordonnées de la LOCALITÉ du siège (OpenStreetMap / Nominatim, 1 requête par seconde) : à vérifier avec le lien « voir ».
+async function qcoChercherGps(){
+  const cibles = qcoCoops().filter(c=>!String(c.siege_gps||'').trim() && (String(c.siege_social||'').trim() || String(c.ville||'').trim()));
+  if (!cibles.length){ showToast('Toutes les coopératives ont déjà des coordonnées (ou n\'ont ni localité ni ville).'); return; }
+  let ok = 0, ko = [];
+  for (let i=0;i<cibles.length;i++){
+    const c = cibles[i], loc = String(c.siege_social||'').trim(), ville = String(c.ville||'').trim();
+    const nomLoc = (loc && !/^\s*(BP|B\.P)\b/i.test(loc)) ? loc : ville;
+    showToast('Recherche des coordonnées ('+(i+1)+'/'+cibles.length+') : '+nomLoc+'…');
+    try{
+      const q = [nomLoc, (ville && qcoNorm(ville)!==qcoNorm(nomLoc)) ? ville : '', 'Côte d\'Ivoire'].filter(Boolean).join(', ');
+      const r = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=ci&accept-language=fr&q='+encodeURIComponent(q));
+      const j = await r.json();
+      if (j && j[0]){ await qcoSauver(c.id, 'siege_gps', (+j[0].lat).toFixed(5)+', '+(+j[0].lon).toFixed(5)); ok++; const e = document.getElementById('qco_gps_'+c.id); if (e) e.value = c.siege_gps||''; }
+      else ko.push(c.nom);
+    }catch(e){ ko.push(c.nom); }
+    await new Promise(res=>setTimeout(res, 1100));
+  }
+  showToast(ok+' coordonnée'+(ok>1?'s':'')+' trouvée'+(ok>1?'s':'')+'.'+(ko.length ? ' Introuvables : '+ko.join(', ')+' — à saisir à la main.' : '')+' Vérifie-les avec « voir ».', ok ? 'success' : undefined);
+  render();
+}
+function qcoLigneHtml(c){
+  const v = qcoValeurs(c), saisi = !!c.enquete_forms_le, pret = !qcoManques(c).length;
+  const inp = (champ, val, w, ph)=>'<input type="text" value="'+esc(val)+'" placeholder="'+esc(ph||'')+'" style="width:'+w+'px;font-size:12px" onchange="qcoSauver(\''+qcJs(c.id)+'\',\''+champ+'\',this.value)">';
+  const gps = String(c.siege_gps||'').trim(), m = /^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/.exec(gps);
+  return '<tr style="border-top:1px solid var(--border)">'
+    + '<td><input type="checkbox" id="qco_sel_'+esc(c.id)+'"'+(pret && !saisi ? ' checked' : '')+(pret ? '' : ' disabled')+'></td>'
+    + '<td style="font-weight:600;white-space:nowrap">'+esc(c.nom)+'</td>'
+    + '<td>'+inp('adresse_postale', c.adresse_postale||'', 120, 'BP …')+'</td>'
+    + '<td>'+inp('contact_nom', c.contact_nom||c.adg_nom||'', 140, 'Nom et prénoms')+'</td>'
+    + '<td>'+inp('contact_contact', c.contact_contact||c.adg_contact||'', 100, '07…')+'</td>'
+    + '<td>'+inp('cnps_num', c.cnps_num||'', 100)+'</td>'
+    + '<td>'+inp('dfe_num', c.dfe_num||'', 100)+'</td>'
+    + '<td style="white-space:nowrap"><input type="text" id="qco_gps_'+esc(c.id)+'" value="'+esc(gps)+'" placeholder="5.12345, -6.12345" style="width:150px;font-size:12px" onchange="qcoSauver(\''+qcJs(c.id)+'\',\'siege_gps\',this.value)">'
+      + (m ? ' <a href="https://www.openstreetmap.org/?mlat='+m[1]+'&mlon='+m[2]+'#map=13/'+m[1]+'/'+m[2]+'" target="_blank" rel="noopener" style="font-size:11px">voir</a>' : '')+'</td>'
+    + '<td><select style="font-size:12px" onchange="qcoSauver(\''+qcJs(c.id)+'\',\'delegation_ccc\',this.value)"><option value="">—</option>'
+      + QCO_DELEGATIONS.map(d=>'<option value="'+d+'"'+(v.delegation===d?' selected':'')+'>'+d+'</option>').join('')+'</select></td>'
+    + '<td id="qco_etat_'+esc(c.id)+'">'+qcoEtatHtml(c)+'</td></tr>';
+}
+
 function ouvrirGenerationContratsGroupe(){
   const certifiees = state.cooperatives.filter(c=>c.statut!=='Non certifiée')
     .sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'}));
@@ -3697,7 +3833,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-20-237';
+const APP_VERSION = '2026-10-20-238';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -20658,6 +20794,7 @@ function renderCooperativesTab(){
       + '<button class="btn btn-primary" onclick="ouvrirEnvoiDocuments()">📎 Envoyer des documents</button>'
       + (nCertifieesTotal>0 ? '<button class="btn btn-primary" onclick="ouvrirGenerationContratsGroupe()">Générer des contrats en masse</button>' : '')
       + '<button class="btn" onclick="ouvrirCompletionNomsComplets()">Compléter les noms complets</button>'
+      + '<button class="btn" onclick="ouvrirQuestionnaireCoops()" title="Réponses du formulaire d\'enquête coopératives, saisies par l\'automate">📝 Questionnaire coopératives (Forms)</button>'
       + '<button class="btn" onclick="exporterFichesCooperatives()">⬇ Télécharger les fiches (Excel)</button>'
       + '</div>';
     html += renderCertLecture();
@@ -23725,6 +23862,26 @@ function _renderBrut(){
       + '<div class="actions" style="margin-top:16px;">'
       + '<button type="button" class="btn" onclick="closeModal()">Annuler</button>'
       + '<button type="button" class="btn btn-primary" onclick="enregistrerNomsComplets()">Enregistrer tout</button>'
+      + '</div></div></div>';
+  }
+
+  if (state.modal && state.modal.type==='questionnaireCoops'){
+    const lst = qcoCoops(), nbPret = lst.filter(c=>!c.enquete_forms_le && !qcoManques(c).length).length;
+    html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal wide" style="max-width:1280px">'
+      + '<h3>Questionnaire coopératives (Forms)</h3>'
+      + '<div class="hint" style="margin-bottom:10px">Les 15 réponses viennent de la fiche de chaque coopérative. Complète ici ce qui manque (adresse postale, directeur ou gérant, CNPS, DFE, GPS, délégation) : chaque champ est enregistré dès que tu quittes la case. Les autres informations (PCA, téléphone, RCCM, email, CCC) se modifient dans la fiche de la coopérative (« Modifier »). Le GPS du siège est celui de la localité du siège.</div>'
+      + '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">'
+      + '<input type="text" id="qco_lien" value="'+esc(qcoLien())+'" placeholder="Lien du formulaire Forms (facultatif, sert à l\'automate pour enchaîner)" style="flex:1;min-width:260px;font-size:12px" onchange="qcoLienMaj(this.value)">'
+      + '<button type="button" class="btn" onclick="qcoChercherGps()">📍 Chercher les GPS manquants</button></div>'
+      + '<div style="max-height:430px;overflow:auto;border:1px solid var(--border);border-radius:8px">'
+      + '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="font-size:11px;text-transform:uppercase;color:var(--ink-faint);text-align:left;position:sticky;top:0;background:var(--surface,#fff)">'
+      + ['','Coopérative','Adresse postale','Directeur / Gérant','Tél. directeur','N° CNPS','N° DFE','GPS du siège','Délégation CCC','État'].map(h=>'<th style="padding:8px 6px">'+h+'</th>').join('')
+      + '</tr></thead><tbody>'+lst.map(qcoLigneHtml).join('')+'</tbody></table></div>'
+      + '<div class="hint" style="margin:10px 0">Automate : déjà installé pour CARGILL (Tampermonkey). Ouvre le formulaire, colle le lot dans le panneau « ORIGEN → Forms », clique Démarrer, puis « Copier le résultat » et reviens coller ici.</div>'
+      + '<div class="actions">'
+      + '<button type="button" class="btn" onclick="closeModal()">Fermer</button>'
+      + '<button type="button" class="btn" onclick="qcoCollerResultat()">Coller le résultat de l\'automate</button>'
+      + '<button type="button" class="btn btn-primary" onclick="qcoCopierLot()">Copier le lot pour l\'automate ('+nbPret+' prête'+(nbPret>1?'s':'')+')</button>'
       + '</div></div></div>';
   }
 
