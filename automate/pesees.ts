@@ -124,6 +124,9 @@ Deno.serve(async (req) => {
       const analyseChange = (a: any) => Object.entries(analyse).some(([k, v]) => stable(a[k]) !== stable(v));
 
       const dep = String(p.departement || '').trim();
+      // Origine du cacao : localité de la pesée (sinon sous-préfecture, sinon département) — même règle que la page détail du connaissement ;
+      // ne remplit que si l'achat n'a pas encore d'origine (une saisie à la main n'est jamais écrasée).
+      const origine = String(p.localite || '').trim() || String((p.detail || {})['Sous-Préfecture']?.[0] || '').trim() || dep;
       if (coop && coop.fiche_a_completer && dep && !/^\d+$/.test(dep) && coop.departement !== dep) {
         if (!dry) await sb.from('cooperatives').update({ departement: dep }).eq('id', coop.id);
         coop.departement = dep;
@@ -154,9 +157,11 @@ Deno.serve(async (req) => {
             || (coutTr !== null && Number(a.cout_transport_theorique || 0) !== coutTr) || typeAManquer || analyseChange(a);
           const patch: Record<string, unknown> = { ...maj, ...analyse };
           if (typeAManquer) patch.type_cacao = type;
+          const origineAManquer = !String(a.lieu_origine || '').trim() && !!origine;
+          if (origineAManquer) patch.lieu_origine = origine;
           if (coop && !a.cooperative_id) patch.cooperative_id = coop.id;
           if (!a.code_fourn && p.code_fourn) patch.code_fourn = String(p.code_fourn).trim();
-          if (!change && !(coop && !a.cooperative_id)) { bilan.inchangees++; continue; }
+          if (!change && !origineAManquer && !(coop && !a.cooperative_id)) { bilan.inchangees++; continue; }
           bilan.plan.push({ code, action: 'maj', cooperative: coop?.nom || null });
           if (!dry) {
             const { error } = await sb.from('achats').update(patch).eq('id', a.id);
@@ -175,7 +180,7 @@ Deno.serve(async (req) => {
         quantite_kg: 0, poids_brut: 0, nombre_sacs: 0, connaissement: code, type_cacao: type,
         campagne_id: camp ? camp.id : null, periode: (mois >= 9 || mois <= 2) ? 'principale' : 'intermediaire',
         nom_transporteur: String(p.transporteur || '').trim() || null, immat_vehicule: String(p.immatriculation || '').trim() || null,
-        usine_dechargement: String(p.magasin || '').trim() || null,
+        usine_dechargement: String(p.magasin || '').trim() || null, lieu_origine: origine || null,
         fournisseur_saigic: String(p.fournisseur || '').trim() || null, code_fourn: String(p.code_fourn || '').trim() || null,
         declare_par_coop: false, genere_auto: false,
         ...maj, ...analyse,
