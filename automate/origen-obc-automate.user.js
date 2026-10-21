@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.23
+// @version      0.1.24
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.23';
+  const VERSION = '0.1.24';
   const CLE = 'origen_obc_etat';
   const ENTITE = '1';                 // ECORIGINE
   const ATTENTE_MAX = 20000;
@@ -26,6 +26,7 @@
   const N = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim();
   const PLAQUE = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
+  const numV = (v) => num(v).replace('.', ','); // OBC calcule avec la virgule française : PU saisis en « 2,5 »
   const num = (v) => { const t = String(v == null ? '' : v).trim().replace(/\s/g, '').replace(',', '.'); if (t === '') return ''; const n = Number(t); return isFinite(n) ? String(n) : ''; };
   const isoDate = (fr) => { const m = String(fr || '').match(/^(\d{2})\/(\d{2})\/(\d{4})/); return m ? m[3] + '-' + m[2] + '-' + m[1] : ''; };
   const $ = () => window.jQuery;
@@ -399,10 +400,10 @@
     await setSelectTexte(q('#txtpesee_brousse_idAdd'), lot.pesee.code, 'Pesée brousse');
     await dormir(1500);
     setInput(q('#txtbordereau_reception_dateAdd'), isoDate(b.date)); setInput(q('#txtbordereau_reception_numeroAdd'), b.numero);
-    setInput(q('#txtbordereau_reception_pu_commoditeAdd'), num(b.pu_commodite)); setInput(q('#txtbordereau_reception_retenue_pu_bicAdd'), num(b.pu_bic));
+    setInput(q('#txtbordereau_reception_pu_commoditeAdd'), numV(b.pu_commodite)); setInput(q('#txtbordereau_reception_retenue_pu_bicAdd'), numV(b.pu_bic));
     setInput(q('#txtbordereau_reception_retenue_pu_mandatAdd'), '0'); setInput(q('#txtbordereau_reception_retenue_pu_miseencompteAdd'), '0');
-    setInput(q('#txtbordereau_reception_retenue_pu_revolvingAdd'), num(b.pu_revolving || 0)); setInput(q('#txtbordereau_reception_retenue_pu_avanceAdd'), '0');
-    setInput(q('#txtbordereau_reception_gain_pu_commissionAdd'), num(b.pu_commission || 0)); setInput(q('#txtbordereau_reception_gain_pu_transportAdd'), num(b.pu_transport));
+    setInput(q('#txtbordereau_reception_retenue_pu_revolvingAdd'), numV(b.pu_revolving || 0)); setInput(q('#txtbordereau_reception_retenue_pu_avanceAdd'), '0');
+    setInput(q('#txtbordereau_reception_gain_pu_commissionAdd'), numV(b.pu_commission || 0)); setInput(q('#txtbordereau_reception_gain_pu_transportAdd'), numV(b.pu_transport));
     // Comptabilisation (livraison produit, facturation) : valeurs par défaut d'OBC, on n'y touche JAMAIS.
     await dormir(1200);
     { const m = await reappliquer(f, 800); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
@@ -417,10 +418,14 @@
     const toutBon = () => CHAMPS.every(([s, k]) => bon(lire(s), att[k]));
     let tentatives = 0;
     for (; tentatives < 4; tentatives++) {
-      const puEl = q('#txtbordereau_reception_pu_commoditeAdd'); if (puEl && Number(num(puEl.value)) !== pu) setInput(puEl, num(b.pu_commodite));
+      const puEl = q('#txtbordereau_reception_pu_commoditeAdd'); if (puEl && Number(num(puEl.value)) !== pu) setInput(puEl, numV(b.pu_commodite));
       PUS.forEach((k) => { const el = q('#txtbordereau_reception_' + k + 'Add'); if (el) { el.dispatchEvent(new Event('focusout', { bubbles: true })); try { el.focus(); el.blur(); } catch (er) { /* ignoré */ } } });
       await dormir(700);
       if (toutBon()) break;
+    }
+    if (!toutBon()) { // repli : si la virgule n'a pas donné le bon résultat, on essaie le point
+      [['retenue_pu_bic', 'pu_bic'], ['retenue_pu_revolving', 'pu_revolving'], ['gain_pu_commission', 'pu_commission'], ['gain_pu_transport', 'pu_transport']].forEach(([id, k]) => { const el = q('#txtbordereau_reception_' + id + 'Add'); if (el) setInput(el, num(b[k] || 0)); });
+      await dormir(800);
     }
     // Si OBC n'a pas calculé une case (montant, retenue, net), on y écrit nous-mêmes la valeur d'ORIGEN, dans la case ET dans son affichage.
     const corriges = [];
