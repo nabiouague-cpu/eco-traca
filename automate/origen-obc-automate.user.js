@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.18
+// @version      0.1.19
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.18';
+  const VERSION = '0.1.19';
   const CLE = 'origen_obc_etat';
   const ENTITE = '1';                 // ECORIGINE
   const ATTENTE_MAX = 20000;
@@ -370,6 +370,8 @@
     await dormir(1500);
     setInput(q('#txtpesee_brousse_dateAdd'), isoDate(p.date || c.date)); setInput(q('#txtpesee_brousse_numeroAdd'), p.code);
     setInput(q('#txtpesee_brousse_poids_entreeAdd'), num(p.poids_entree)); setInput(q('#txtpesee_brousse_poids_sortieAdd'), num(p.poids_sortie));
+    if (p.date_entree) setInput(q('#txtpesee_brousse_date_entreeAdd'), p.date_entree); if (p.date_sortie) setInput(q('#txtpesee_brousse_date_sortieAdd'), p.date_sortie);
+    if (p.pont) { setInput(q('#txtpesee_brousse_pont_entreeAdd'), p.pont); setInput(q('#txtpesee_brousse_pont_sortieAdd'), p.pont); }
     // rubriques qualité : celles qu'OBC connaît pour le cacao
     const rubs = await getJson('/AppMethods1/LoadAgroRubriquesQualiteByCommoditeId?CommoditeId=2');
     const paires = []; (p.qualite || []).forEach((qv) => { const r = rubs.find((x) => { const a = N(x.Text).replace(/\s*\[.*$/, ''), b = N(qv.rubrique); return a === b || a.startsWith(b) || b.startsWith(a); }); if (r && qv.valeur != null && !paires.some((x) => x.id === r.Value)) paires.push({ id: r.Value, valeur: num(qv.valeur), lib: r.Text }); });
