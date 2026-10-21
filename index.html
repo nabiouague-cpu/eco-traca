@@ -4380,7 +4380,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-21-266';
+const APP_VERSION = '2026-10-21-267';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -25794,6 +25794,32 @@ function qcVueAdminHtml(){
   html += qcPanneauHtml(d, qcProducteursDe(d), {});
   return html;
 }
+
+// Anti double-clic : un clic sur un bouton qui lance une opération (fonction asynchrone) ne part qu'UNE fois ; les clics suivants sont ignorés
+// tant que la première opération n'est pas terminée (évite deux attestations, deux paiements, deux envois…).
+(function protegerClicsAsync(){
+  const AF = (async function(){}).constructor, enCours = new Map();
+  Object.getOwnPropertyNames(window).forEach(function(nom){
+    let f; try{ f = window[nom]; }catch(_e){ return; }
+    if (typeof f!=='function' || f.constructor!==AF || f.__garde) return;
+    const g = function(){
+      const ev = window.event, args = arguments;
+      if (!ev || ev.type!=='click' || !ev.isTrusted) return f.apply(this, args);   // appels internes : jamais bloqués
+      let cle; try{ cle = nom+'|'+JSON.stringify(Array.prototype.slice.call(args)); }catch(_e){ cle = nom; }
+      const dep = enCours.get(cle);
+      if (dep && Date.now()-dep < 90000) return Promise.resolve();                  // même demande déjà en cours : ignorée
+      enCours.set(cle, Date.now());
+      const b = ev.target && ev.target.closest ? ev.target.closest('button,a,[onclick]') : null;
+      const avant = b ? { o:b.style.opacity, p:b.style.pointerEvents } : null;
+      if (b){ b.style.opacity = '.55'; b.style.pointerEvents = 'none'; b.setAttribute('aria-busy','true'); }
+      const fin = function(){ enCours.delete(cle); if (b){ b.style.opacity = avant.o; b.style.pointerEvents = avant.p; b.removeAttribute('aria-busy'); } };
+      let p; try{ p = f.apply(this, args); }catch(e){ fin(); throw e; }
+      return Promise.resolve(p).then(function(v){ fin(); return v; }, function(e){ fin(); throw e; });
+    };
+    g.__garde = true;
+    try{ Object.defineProperty(g, 'name', { value:nom }); window[nom] = g; }catch(_e){ /* non modifiable : laissé tel quel */ }
+  });
+})();
 
 initAuth();
 </script>
