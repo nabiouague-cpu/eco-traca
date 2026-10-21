@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.17
+// @version      0.1.18
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.17';
+  const VERSION = '0.1.18';
   const CLE = 'origen_obc_etat';
   const ENTITE = '1';                 // ECORIGINE
   const ATTENTE_MAX = 20000;
@@ -107,7 +107,7 @@
   function optionParTexte(sel, test) { if (!sel) return null; const f = test instanceof RegExp ? (t) => test.test(t) : typeof test === 'function' ? (t) => test(N(t)) : (t) => N(t).includes(N(test)); return [...sel.options].find((o) => o.value !== '' && f(o.text)) || null; }
   const exact = (v) => { const n = N(v); return (t) => t === n; };
   async function attendreOption(sel, test) { return attendre(() => optionParTexte(sel, test), ATTENTE_MAX, 300); }
-  function setInput(el, v) { if (!el) return; el.value = v == null ? '' : String(v); el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); el.dispatchEvent(new Event('focusout', { bubbles: true })); /* OBC recalcule poids brut, net, sacs manquants… quand on quitte le champ */ }
+  function setInput(el, v) { if (!el) return; el.value = v == null ? '' : String(v); el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); el.dispatchEvent(new Event('focusout', { bubbles: true })); try { if (el.type !== 'hidden' && !el.readOnly && !el.disabled) { el.focus(); el.blur(); } } catch (e) { /* ignoré */ } /* OBC recalcule poids brut, net, sacs manquants… quand on quitte le champ */ }
   // Redessine les listes à choix d'OBC (elles remplissent leur valeur sans toujours rafraîchir l'affichage).
   function rafraichirListes(form) { const jq = $(); if (!jq || !jq.fn || !jq.fn.selectpicker || !form) return; [...form.querySelectorAll('select')].forEach((s) => { try { jq(s).selectpicker('refresh'); } catch (e) { /* liste non initialisée */ } }); }
   function setSelect(el, value) {
@@ -378,8 +378,10 @@
       const sel = q('#txtcommodite_rubriques_qualite_idAdd' + i); if (!sel) break;
       await attendreOption(sel, /./); setSelect(sel, paires[i].id); setInput(q('#txtcommodite_rubriques_qualite_valeurAdd' + i), paires[i].valeur);
     }
+    // Réfaction (retenue de poids pour qualité) : celle du SAIGIC ; à défaut brut − tare − net payé attendu.
+    const refac = Number(p.refaction) > 0 ? Number(p.refaction) : Math.max(0, Math.round(((Number(num(p.poids_entree)) - Number(num(p.poids_sortie))) - Number(num(p.tare_sacs)) - (Number(p.poids_net_paye_attendu) || 0)) * 100) / 100);
     setInput(q('#txtpesee_brousse_sacs_dechargesAdd'), p.sacs_decharges != null ? p.sacs_decharges : p.sacs_acceptes); setInput(q('#txtpesee_brousse_sacs_acceptesAdd'), p.sacs_acceptes);
-    setInput(q('#txtpesee_brousse_tare_sacs_acceptesAdd'), num(p.tare_sacs)); setInput(q('#txtpesee_brousse_tare_palettesAdd'), '0'); setInput(q('#txtpesee_brousse_poids_refactionAdd'), '0');
+    setInput(q('#txtpesee_brousse_tare_sacs_acceptesAdd'), num(p.tare_sacs)); setInput(q('#txtpesee_brousse_tare_palettesAdd'), '0'); setInput(q('#txtpesee_brousse_poids_refactionAdd'), String(refac));
     if (p.classement) await setSelectTexte(q('#txtqualite_idAdd'), exact(p.classement), 'Classement', p.classement);
     ['poids_entree', 'poids_sortie', 'sacs_decharges', 'sacs_acceptes', 'tare_sacs_acceptes', 'tare_palettes', 'poids_refaction'].forEach((k) => { const el = q('#txtpesee_brousse_' + k + 'Add'); if (el) el.dispatchEvent(new Event('focusout', { bubbles: true })); });
     { const m = await reappliquer(f); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
