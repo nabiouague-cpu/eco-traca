@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.25
+// @version      0.1.26
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.25';
+  const VERSION = '0.1.26';
   const CLE = 'origen_obc_etat';
   const ENTITE = '1';                 // ECORIGINE
   const ATTENTE_MAX = 20000;
@@ -413,8 +413,10 @@
     const att = { brut: r2(netPaye * pu), bic: r2(netPaye * puN('pu_bic')), revolving: r2(Number(b.montant_revolving) || 0), commission: r2(netPaye * puN('pu_commission')), transport: r2(netPaye * puN('pu_transport')), net: b.net_attendu == null ? null : r2(b.net_attendu) };
     const CHAMPS = [['montant_commodite', 'brut', 'Montant brut'], ['retenue_montant_bic', 'bic', 'Retenue BIC'], ['retenue_montant_revolving', 'revolving', 'Retenue revolving'], ['gain_montant_commission', 'commission', 'Commission'], ['gain_montant_transport', 'transport', 'Transport'], ['montant_net', 'net', 'Net à payer']];
     const PUS = ['pu_commodite', 'retenue_pu_bic', 'retenue_pu_mandat', 'retenue_pu_miseencompte', 'retenue_pu_revolving', 'retenue_pu_avance', 'gain_pu_commission', 'gain_pu_transport'];
-    const bon = (v, w) => w == null || (isFinite(v) && Math.abs(v - w) < 1);
-    const toutBon = () => CHAMPS.every(([s, k]) => bon(lire(s), att[k]));
+    // revolving et net : au centime près (le revolving doit être EXACTEMENT le montant de l'avance retenue, ex. 20 000 000) ; les autres cases : à 1 FCFA près
+    const bon = (v, w, tol) => w == null || (isFinite(v) && Math.abs(v - w) < (tol || 1));
+    const TOL = { revolving: 0.005, net: 0.005 };
+    const toutBon = () => CHAMPS.every(([s, k]) => bon(lire(s), att[k], TOL[k]));
     let tentatives = 0;
     for (; tentatives < 4; tentatives++) {
       const puEl = q('#txtbordereau_reception_pu_commoditeAdd'); if (puEl && Number(num(puEl.value)) !== pu) setInput(puEl, num(b.pu_commodite));
@@ -425,7 +427,7 @@
     // Si OBC n'a pas calculé une case (montant, retenue, net), on y écrit nous-mêmes la valeur d'ORIGEN, dans la case ET dans son affichage.
     const corriges = [];
     CHAMPS.forEach(([s, k, nom]) => {
-      const w = att[k]; if (w == null || bon(lire(s), w)) return;
+      const w = att[k]; if (w == null || bon(lire(s), w, TOL[k])) return;
       const el = q('#txtbordereau_reception_' + s + 'Add'), lb = q('#lblbordereau_reception_' + s + 'Add');
       if (el) { const virg = /,/.test(el.value || ''); el.value = virg ? String(w).replace('.', ',') : String(w); ['input', 'change'].forEach((ev) => el.dispatchEvent(new Event(ev, { bubbles: true }))); }
       if (lb) lb.textContent = w.toLocaleString('fr-FR', { maximumFractionDigits: 2 });
