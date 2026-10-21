@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.12
+// @version      0.1.13
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -294,7 +294,8 @@
     const prod = await attendreOption(q('#txtproducteur_idAdd0'), /./); if (!prod) throw new Error('Aucun producteur proposé pour cette coopérative');
     const modele = await ligneModele(e);
     const prodModele = modele && [...q('#txtproducteur_idAdd0').options].find((o) => o.value === modele.producteur);
-    setSelect(q('#txtproducteur_idAdd0'), prodModele ? prodModele.value : prod.value);
+    const prodId = e.ids.producteur_id && [...q('#txtproducteur_idAdd0').options].find((x) => x.value === String(e.ids.producteur_id));
+    setSelect(q('#txtproducteur_idAdd0'), prodModele ? prodModele.value : prodId ? prodId.value : prod.value);
     const parc = await attendre(() => optionParTexte(q('#txtproducteur_parcelle_idAdd0'), /./), 8000);
     const parcModele = prodModele && modele.parcelle && [...q('#txtproducteur_parcelle_idAdd0').options].find((o) => o.value === modele.parcelle);
     if (parcModele) setSelect(q('#txtproducteur_parcelle_idAdd0'), parcModele.value); else if (parc) setSelect(q('#txtproducteur_parcelle_idAdd0'), parc.value);
