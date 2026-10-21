@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.13
+// @version      0.1.14
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,6 +14,7 @@
 
 (function () {
   'use strict';
+  const VERSION = '0.1.14';
   const CLE = 'origen_obc_etat';
   const ENTITE = '1';                 // ECORIGINE
   const ATTENTE_MAX = 20000;
@@ -42,7 +43,7 @@
     panneau = document.createElement('div');
     panneau.id = 'origen-obc';
     panneau.style.cssText = 'position:fixed;top:60px;right:12px;z-index:2147483647;width:360px;background:#fff;border:1px solid #cfd8d4;border-radius:12px;box-shadow:0 10px 30px rgba(14,59,54,.18);font:13px/1.45 Arial,Helvetica,sans-serif;color:#1e2b29;';
-    panneau.innerHTML = '<div style="background:#0E3B36;color:#fff;padding:10px 14px;border-radius:12px 12px 0 0;font-weight:700;display:flex;justify-content:space-between;align-items:center;cursor:move;" id="oo-tete"><span>ORIGEN → OBC</span><span id="oo-ferme" style="cursor:pointer;opacity:.8;">✕</span></div>'
+    panneau.innerHTML = '<div style="background:#0E3B36;color:#fff;padding:10px 14px;border-radius:12px 12px 0 0;font-weight:700;display:flex;justify-content:space-between;align-items:center;cursor:move;" id="oo-tete"><span>ORIGEN → OBC <small style="font-weight:400;opacity:.75">v' + VERSION + '</small></span><span id="oo-ferme" style="cursor:pointer;opacity:.8;">✕</span></div>'
       + '<div style="padding:12px 14px;">'
       + '<div id="oo-etat" style="margin-bottom:10px;white-space:pre-wrap;max-height:260px;overflow:auto;"></div>'
       + '<textarea id="oo-lot" placeholder="Colle ici le lot copié depuis ORIGEN (bouton « Saisir dans OBC »)" style="width:100%;box-sizing:border-box;height:60px;border:1px solid #cfd8d4;border-radius:8px;padding:6px;font:12px monospace;"></textarea>'
