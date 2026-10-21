@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.19
+// @version      0.1.20
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.19';
+  const VERSION = '0.1.20';
   const CLE = 'origen_obc_etat';
   const ENTITE = '1';                 // ECORIGINE
   const ATTENTE_MAX = 20000;
@@ -408,9 +408,24 @@
     if (nat2 && !nat2.value) await setSelectTexte(nat2, /Fournitures Li\w+\s*-\s*602000/i, 'Nature (facturation)');
     await dormir(1200);
     { const m = await reappliquer(f, 800); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
-    const net = [...f.querySelectorAll('input')].find((i) => /net_a_payer|netapayer/i.test(i.name + i.id));
-    let verif = '';
-    if (net && b.net_attendu != null) { const v = Number(String(net.value).replace(/\s/g, '').replace(',', '.')); verif = isFinite(v) && Math.abs(v - b.net_attendu) < 1 ? ' ✓ Net à payer OBC = ORIGEN (' + v.toLocaleString('fr-FR') + ').' : ' ⚠ Net à payer OBC ' + net.value + ' ≠ ORIGEN ' + b.net_attendu.toLocaleString('fr-FR') + ' : vérifie avant d\'enregistrer.'; }
+    // Le prix est celui d'ORIGEN (campagne) : on le FORCE, puis on vérifie les calculs d'OBC (montant brut, retenue BIC, net à payer) et on recommence si OBC n'a pas recalculé.
+    const lire = (suffixe) => { const el = q('#txtbordereau_reception_' + suffixe + 'Add'), lb = q('#lblbordereau_reception_' + suffixe + 'Add'); const brut = el && el.value !== '' ? el.value : (lb ? lb.textContent : ''); const v = Number(String(brut).replace(/[\s\u00a0\u202f]/g, '').replace(',', '.')); return isFinite(v) ? v : NaN; };
+    const netPaye = Number(lot.pesee.poids_net_paye_attendu) || 0, pu = Number(num(b.pu_commodite)) || 0;
+    const att = { brut: Math.round(netPaye * pu * 100) / 100, bic: Math.round(netPaye * (Number(num(b.pu_bic)) || 0) * 100) / 100, net: b.net_attendu };
+    const PUS = ['pu_commodite', 'retenue_pu_bic', 'retenue_pu_mandat', 'retenue_pu_miseencompte', 'retenue_pu_revolving', 'retenue_pu_avance', 'gain_pu_commission', 'gain_pu_transport'];
+    const bon = (v, w) => w == null || (isFinite(v) && Math.abs(v - w) < 1);
+    let tentatives = 0;
+    for (; tentatives < 4; tentatives++) {
+      const puEl = q('#txtbordereau_reception_pu_commoditeAdd'); if (puEl && Number(num(puEl.value)) !== pu) setInput(puEl, num(b.pu_commodite));
+      PUS.forEach((k) => { const el = q('#txtbordereau_reception_' + k + 'Add'); if (el) { el.dispatchEvent(new Event('focusout', { bubbles: true })); try { el.focus(); el.blur(); } catch (er) { /* ignoré */ } } });
+      await dormir(700);
+      if (bon(lire('montant_commodite'), att.brut) && bon(lire('retenue_montant_bic'), att.bic) && bon(lire('montant_net'), att.net)) break;
+    }
+    const vb = lire('montant_commodite'), vn = lire('montant_net');
+    const fr = (x) => isFinite(x) ? x.toLocaleString('fr-FR') : '?';
+    const verif = bon(vb, att.brut) && bon(lire('retenue_montant_bic'), att.bic) && bon(vn, att.net)
+      ? ' ✓ Calculs OBC vérifiés = ORIGEN : brut ' + fr(vb) + ' (' + netPaye.toLocaleString('fr-FR') + ' kg × ' + pu + '), net à payer ' + fr(vn) + '.'
+      : ' ⚠ Calculs OBC ≠ ORIGEN : brut ' + fr(vb) + ' (attendu ' + fr(att.brut) + '), net à payer ' + fr(vn) + ' (attendu ' + fr(att.net) + ') : ne pas enregistrer avant vérification.';
     e.note = 'Bordereau ' + b.numero + ' : PU ' + b.pu_commodite + ', BIC ' + b.pu_bic + ', transport ' + b.pu_transport + (b.montant_revolving ? ', revolving ' + b.montant_revolving : '') + '.' + verif; return 'rempli';
   }
   const EXEC = [etapeCooperative, etapeTransporteur, etapeProducteur, etapeBrousse, etapeLivraison, etapePesee, etapeBordereau];
