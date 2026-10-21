@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.29
+// @version      0.1.30
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.29';
+  const VERSION = '0.1.30';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const ENTITE = '1';                 // ECORIGINE
@@ -57,7 +57,16 @@
       + '</div></div>';
     document.body.appendChild(panneau);
     zoneTexte = panneau.querySelector('#oo-lot'); zoneEtat = panneau.querySelector('#oo-etat');
-    panneau.querySelector('#oo-ferme').onclick = () => { panneau.style.display = 'none'; };
+    // Onglet « ORIGEN » toujours visible : « × » réduit seulement le panneau, un clic sur l'onglet le rouvre (un double-clic le remet à sa place d'origine).
+    const onglet = document.createElement('div');
+    onglet.id = 'origen-obc-onglet'; onglet.textContent = '🤖 ORIGEN → OBC'; onglet.title = 'Ouvrir l\'automate (double-clic : remettre à sa place)';
+    onglet.style.cssText = 'position:fixed;right:0;bottom:120px;z-index:2147483646;background:#0E3B36;color:#fff;padding:8px 12px;border-radius:10px 0 0 10px;font:700 12px Arial,Helvetica,sans-serif;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.25);display:none;';
+    document.body.appendChild(onglet);
+    const ranger = () => { panneau.style.display = 'none'; onglet.style.display = 'block'; };
+    const rouvrir = () => { panneau.style.display = ''; onglet.style.display = 'none'; const r = panneau.getBoundingClientRect(); if (r.right < 80 || r.left > innerWidth - 80 || r.top < 0 || r.top > innerHeight - 40) { panneau.style.left = 'auto'; panneau.style.right = '12px'; panneau.style.top = '60px'; } };
+    onglet.onclick = rouvrir;
+    onglet.ondblclick = () => { rouvrir(); panneau.style.left = 'auto'; panneau.style.right = '12px'; panneau.style.top = '60px'; };
+    panneau.querySelector('#oo-ferme').onclick = ranger;
     panneau.querySelector('#oo-demarrer').onclick = demarrer;
     panneau.querySelector('#oo-continuer').onclick = () => { const e = lireEtat(); if (!e) return; e.pause = false; e.erreur = null; if (e.statut === 'attente_enregistrement') e.statut = 'verifier'; ecrireEtat(e); boucle(); };
     panneau.querySelector('#oo-pause').onclick = () => { const e = lireEtat(); if (!e) return; e.pause = !e.pause; ecrireEtat(e); afficherEtat(); if (!e.pause) boucle(); };
@@ -66,7 +75,7 @@
     // déplaçable
     let dx = 0, dy = 0, drag = false; const tete = panneau.querySelector('#oo-tete');
     tete.onmousedown = (ev) => { drag = true; dx = ev.clientX - panneau.offsetLeft; dy = ev.clientY - panneau.offsetTop; ev.preventDefault(); };
-    document.addEventListener('mousemove', (ev) => { if (!drag) return; panneau.style.left = (ev.clientX - dx) + 'px'; panneau.style.top = (ev.clientY - dy) + 'px'; panneau.style.right = 'auto'; });
+    document.addEventListener('mousemove', (ev) => { if (!drag) return; panneau.style.left = Math.max(0, Math.min(innerWidth - 120, ev.clientX - dx)) + 'px'; panneau.style.top = Math.max(0, Math.min(innerHeight - 40, ev.clientY - dy)) + 'px'; panneau.style.right = 'auto'; });
     document.addEventListener('mouseup', () => { drag = false; });
     afficherEtat();
   }
