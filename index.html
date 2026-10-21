@@ -3535,8 +3535,8 @@ function qcoLigneHtml(c){
 // Présentation des achats : trois « fenêtres » (feuilles) calculées en direct depuis ORIGEN,
 // sur le modèle du classeur Suivi achats : Suivi achats / Achats quotidien / Tracking brousse.
 // ============================================================
-function ouvrirPresentationAchats(){ state.presAchatsTab = 0; state.modal = { type:'presAchats', payload:{} }; render(); }
-function presAchatsOnglet(i){ state.presAchatsTab = i; render(); }
+function ouvrirPresentationAchats(){ state.presAchatsTab = 0; state.modal = { type:'presAchats', payload:{} }; render(); chargerPrevisions().then(()=>{ if (state.modal && state.modal.type==='presAchats' && state.presAchatsTab===3) render(); }); }
+function presAchatsOnglet(i){ state.presAchatsTab = i; render(); if (i===3) chargerPrevisions().then(()=>{ if (state.modal && state.modal.type==='presAchats' && state.presAchatsTab===3) render(); }); }
 function presAchatsDonnees(){
   const camp = (state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : null;
   const dansCamp = x=>!camp || x.campagne_id===camp;
@@ -3591,6 +3591,157 @@ function presAchatsDonnees(){
   const camions = tous.slice().sort((x,y)=>String(x.date||'').localeCompare(String(y.date||'')) || String(x.connaissement||'').localeCompare(String(y.connaissement||''),'fr',{numeric:true}));
   return { camp, achats, refoules, groupes, total, sites, jours:Array.from(jours.values()).sort((x,y)=>x.d.localeCompare(y.d)), objCert, objOrd, camions, pese, netKg, livKg, certifie };
 }
+// ---------- Présentation des achats, onglet « Prévisions » : livraisons prévues à la main (coopérative x type x jour de la semaine) et besoin de trésorerie
+const PREV_JOURS = ['Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi','Dimanche'];
+function previsionLundi(iso){ const d = new Date((iso||new Date().toISOString().slice(0,10))+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()-((d.getUTCDay()+6)%7)); return d.toISOString().slice(0,10); }
+function previsionDecaler(iso,n){ const d = new Date(iso+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()+n); return d.toISOString().slice(0,10); }
+function previsionSemaine(){ return state.previsionSemaine || (state.previsionSemaine = previsionLundi()); }
+function previsionLignes(){ const sem = previsionSemaine(); return (state.previsions||[]).filter(r=>r.semaine_debut===sem).sort((a,b)=>String(a.created_at||'').localeCompare(String(b.created_at||''))); }
+function previsionParams(){
+  const sem = previsionSemaine(), L = (state.previsionsSemaines||[]);
+  const cette = L.find(x=>x.semaine_debut===sem);
+  if (cette) return { prix:Number(cette.prix_kg)||0, dispo:Number(cette.treso_disponible)||0 };
+  const avant = L.filter(x=>x.semaine_debut<sem).sort((a,b)=>b.semaine_debut.localeCompare(a.semaine_debut))[0];
+  return { prix: avant ? Number(avant.prix_kg)||1315 : 1315, dispo:0 };
+}
+async function chargerPrevisions(){
+  if (!supabaseClient) return;
+  const [p, s] = await Promise.all([ supabaseClient.from('previsions_livraisons').select('*'), supabaseClient.from('previsions_semaines').select('*') ]);
+  state.previsions = (p && !p.error) ? (p.data||[]) : (state.previsions||[]);
+  state.previsionsSemaines = (s && !s.error) ? (s.data||[]) : (state.previsionsSemaines||[]);
+}
+function previsionClientDe(coopId){
+  const c = coopById(coopId);
+  if (c && c.client) return String(c.client).trim();
+  const a = (state.achats||[]).find(x=>x.cooperative_id===coopId && achatClientEffectif(x));
+  return a ? achatClientEffectif(a) : 'Non affecté';
+}
+function previsionTotauxHtml(){
+  const lignes = previsionLignes(), P = previsionParams();
+  const G = 'minmax(0,2fr) 76px repeat(7,minmax(0,1fr)) 86px 34px';
+  const T = v=>v>0 ? (Math.round(v*10)/10).toLocaleString('fr-FR',{ maximumFractionDigits:1 }) : '<span style="color:#A6B1AD">—</span>';
+  const F = v=>v>0 ? Math.round(v).toLocaleString('fr-FR') : '<span style="color:#A6B1AD">—</span>';
+  const jour = (r,j)=>Number(r['j'+j])||0;
+  const ord = [1,2,3,4,5,6,7].map(j=>lignes.filter(r=>r.type_cacao!=='RA').reduce((s,r)=>s+jour(r,j),0));
+  const ra = [1,2,3,4,5,6,7].map(j=>lignes.filter(r=>r.type_cacao==='RA').reduce((s,r)=>s+jour(r,j),0));
+  const tot = ord.map((v,i)=>v+ra[i]);
+  const treso = tot.map(t=>t*1000*P.prix);
+  const sm = a=>a.reduce((s,v)=>s+v,0), totTreso = sm(treso), aMettre = Math.max(0, totTreso-P.dispo);
+  const ligne = (lab, vals, fmt, tt, st)=>'<div style="display:grid;grid-template-columns:'+G+';column-gap:6px;align-items:center;padding:0 14px;height:34px;box-sizing:border-box;border-bottom:1px solid #E3E9E6;font-size:12.5px;'+(st||'')+'"><div style="grid-column:1 / span 2;font-weight:700">'+lab+'</div>'+vals.map(v=>'<div style="text-align:center">'+fmt(v)+'</div>').join('')+'<div style="text-align:center;font-weight:800">'+fmt(tt)+'</div><div></div></div>';
+  let h = '<div>'
+    + ligne('Cacao ordinaire (A)', ord, T, sm(ord), '')
+    + ligne('Cacao RA (B)', ra, T, sm(ra), '')
+    + ligne('Total cacao (t)', tot, T, sm(tot), 'background:rgba(230,240,236,.7);color:#0E3B36;font-weight:800;')
+    + ligne('Besoin de trésorerie (FCFA)', treso, F, totTreso, 'background:rgba(255,241,214,.7);color:#6B4600;')
+    + '</div>';
+  const tuile = (lab,val,sub,bg,fg)=>'<div style="border-radius:12px;background:'+bg+';padding:12px 16px"><div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:'+fg+'">'+lab+'</div><div style="font-size:24px;font-weight:800;color:'+fg+';margin-top:2px">'+val+'</div><div style="font-size:12px;color:'+fg+';opacity:.8;margin-top:2px">'+sub+'</div></div>';
+  const tuiles = '<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px">'
+    + tuile('Livraisons prévues', (Math.round(sm(tot)*10)/10).toLocaleString('fr-FR')+' t', lignes.length+' ligne'+(lignes.length>1?'s':''), '#fff', '#0E3B36').replace('border-radius:12px;background:#fff','border-radius:12px;border:1px solid #D5DDD9;background:#fff')
+    + tuile('Besoin total', Math.round(totTreso).toLocaleString('fr-FR')+' F', 'à '+P.prix.toLocaleString('fr-FR')+' F / kg', '#E6F0EC', '#0E3B36')
+    + tuile('Déjà disponible', Math.round(P.dispo).toLocaleString('fr-FR')+' F', 'trésorerie en caisse', '#F2F5F4', '#4D5B57')
+    + tuile('À mettre à disposition', Math.round(aMettre).toLocaleString('fr-FR')+' F', 'besoin − disponible', '#FFF1D6', '#8A5A00')+'</div>';
+  // Par client : reste à acheter (contrat − validé) et prévision de la semaine
+  const D = presAchatsDonnees(), parClient = new Map();
+  const ent = nom=>{ const k = ccClefClient(nom); if (!parClient.has(k)) parClient.set(k, { nom, reste:0, prev:0 }); return parClient.get(k); };
+  D.groupes.forEach(g=>g.lignes.forEach(l=>{ ent(l.nom).reste += Math.max(0, l.a-l.b); }));
+  lignes.forEach(r=>{ const e = ent(previsionClientDe(r.cooperative_id)); e.prev += sm([1,2,3,4,5,6,7].map(j=>jour(r,j)))*1000; });
+  const GC = 'minmax(0,1.6fr) repeat(3,minmax(0,1fr))';
+  const hc = '<div style="display:grid;grid-template-columns:'+GC+';column-gap:8px;align-items:center;background:rgba(14,59,54,.82);color:#fff;padding:0 14px;height:40px;box-sizing:border-box;font-size:11.5px;font-weight:700;text-align:center"><div style="text-align:left">Client</div><div>Reste à acheter (t)</div><div>Prévision semaine (t)</div><div>Reste après prévision (t)</div></div>';
+  const kgT = kg=>T(kg/1000);
+  const lc = Array.from(parClient.values()).filter(e=>e.reste>0||e.prev>0).sort((a,b)=>a.nom.localeCompare(b.nom,'fr')).map(e=>'<div style="display:grid;grid-template-columns:'+GC+';column-gap:8px;align-items:center;padding:0 14px;height:34px;box-sizing:border-box;border-bottom:1px solid #E3E9E6;font-size:12.5px;text-align:center"><div style="text-align:left;font-weight:700">'+esc(e.nom)+'</div><div>'+kgT(e.reste)+'</div><div style="font-weight:700">'+kgT(e.prev)+'</div><div style="font-weight:800">'+kgT(Math.max(0,e.reste-e.prev))+'</div></div>').join('');
+  return tuiles
+    + '<div style="border:1px solid #D5DDD9;border-radius:12px;overflow:hidden;margin-top:14px">'+h+'</div>'
+    + '<div style="border:1px solid #D5DDD9;border-radius:12px;overflow:hidden;margin-top:14px">'+hc+(lc||'<div style="padding:14px;color:#5A6865;font-size:13px">Aucun volume à afficher.</div>')+'</div>';
+}
+function previsionRafraichirTotaux(){ const el = document.getElementById('prev-totaux'); if (el) el.innerHTML = previsionTotauxHtml(); }
+function previsionsPresHtml(){
+  const sem = previsionSemaine(), fin = previsionDecaler(sem,6), P = previsionParams(), lignes = previsionLignes();
+  const aujour = previsionLundi();
+  const G = 'minmax(0,2fr) 76px repeat(7,minmax(0,1fr)) 86px 34px';
+  const inp = 'width:100%;box-sizing:border-box;height:28px;text-align:center;font:inherit;font-size:12.5px;border:1px solid #D5DDD9;border-radius:6px;background:#fff;color:#14231F;padding:0 2px';
+  const nav = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
+    + '<button type="button" class="btn-ghost btn-compact" onclick="previsionNav(-7)">◀</button>'
+    + '<div style="font-size:15px;font-weight:800;color:#0E3B36;min-width:280px;text-align:center">Semaine du '+esc(dateFr(sem).slice(0,5))+' au '+esc(dateFr(fin))+'</div>'
+    + '<button type="button" class="btn-ghost btn-compact" onclick="previsionNav(7)">▶</button>'
+    + (sem!==aujour ? '<button type="button" class="btn-ghost btn-compact" onclick="previsionNav(0)">Cette semaine</button>' : '')
+    + '<div style="flex:1"></div>'
+    + '<label style="font-size:12.5px;font-weight:700;color:#4D5B57;display:flex;align-items:center;gap:6px">Prix moyen (F/kg)<input type="number" min="0" step="1" value="'+P.prix+'" onchange="previsionParam(\'prix_kg\',this.value)" style="'+inp+';width:80px"></label>'
+    + '<label style="font-size:12.5px;font-weight:700;color:#4D5B57;display:flex;align-items:center;gap:6px">Déjà disponible (F)<input type="number" min="0" step="1000" value="'+P.dispo+'" onchange="previsionParam(\'treso_disponible\',this.value)" style="'+inp+';width:130px"></label></div>';
+  const ent = '<div style="display:grid;grid-template-columns:'+G+';column-gap:6px;align-items:center;background:rgba(14,59,54,.82);color:#fff;padding:0 14px;height:46px;box-sizing:border-box;font-size:11.5px;font-weight:700;text-align:center"><div style="text-align:left">Coopérative</div><div>Type</div>'
+    + PREV_JOURS.map((j,i)=>'<div style="line-height:1.2">'+j+'<br><span style="font-weight:600;opacity:.8">'+esc(dateFr(previsionDecaler(sem,i)).slice(0,5))+'</span></div>').join('')+'<div>Total (t)</div><div></div></div>';
+  const lg = lignes.map(r=>{
+    const c = coopById(r.cooperative_id), tot = [1,2,3,4,5,6,7].reduce((s,j)=>s+(Number(r['j'+j])||0),0);
+    return '<div style="display:grid;grid-template-columns:'+G+';column-gap:6px;align-items:center;padding:0 14px;height:40px;box-sizing:border-box;border-bottom:1px solid #E3E9E6;font-size:12.5px">'
+      + '<div style="font-weight:700;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">'+esc(c?c.nom:r.cooperative_id)+'</div>'
+      + '<select onchange="previsionType(\''+r.id+'\',this.value)" style="'+inp+'"><option value="Ordinaire"'+(r.type_cacao!=='RA'?' selected':'')+'>Ord.</option><option value="RA"'+(r.type_cacao==='RA'?' selected':'')+'>RA</option></select>'
+      + [1,2,3,4,5,6,7].map(j=>'<input type="number" min="0" step="0.1" value="'+(r['j'+j]==null?'':r['j'+j])+'" onchange="previsionSaisir(\''+r.id+'\','+j+',this.value)" style="'+inp+'">').join('')
+      + '<div id="prev-tot-'+r.id+'" style="text-align:center;font-weight:800">'+(tot>0?(Math.round(tot*10)/10).toLocaleString('fr-FR'):'<span style="color:#A6B1AD">—</span>')+'</div>'
+      + '<button type="button" onclick="previsionRetirer(\''+r.id+'\')" title="Retirer cette ligne" style="border:none;background:none;color:#B42318;cursor:pointer;font-size:16px;padding:0">✕</button></div>';
+  }).join('');
+  const deja = new Set(lignes.map(r=>r.cooperative_id));
+  const coops = (state.cooperatives||[]).filter(c=>!c.a_classer).slice().sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{ sensitivity:'base' }));
+  const ajout = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 14px;background:#F7F9F8">'
+    + '<select id="prev_coop" style="'+inp+';width:260px;text-align:left"><option value="">Choisir une coopérative…</option>'+coops.map(c=>'<option value="'+esc(c.id)+'">'+esc(c.nom)+(deja.has(c.id)?' (déjà ajoutée)':'')+'</option>').join('')+'</select>'
+    + '<select id="prev_type" style="'+inp+';width:90px"><option value="Ordinaire">Ordinaire</option><option value="RA">RA</option></select>'
+    + '<button type="button" class="btn-primary btn-compact" onclick="previsionAjouter()">Ajouter</button>'
+    + (lignes.length===0 ? '<button type="button" class="btn-ghost btn-compact" onclick="previsionReprendre()">Reprendre les coopératives de la semaine précédente</button>' : '')
+    + '</div>';
+  return nav + '<div style="border:1px solid #D5DDD9;border-radius:12px;overflow:hidden">'+ent+(lg||'<div style="padding:16px 14px;color:#5A6865;font-size:13px">Aucune livraison prévue cette semaine. Ajoute une coopérative ci-dessous, puis saisis les tonnes par jour.</div>')+ajout+'</div>'
+    + '<div id="prev-totaux">'+previsionTotauxHtml()+'</div>';
+}
+function previsionNav(n){ state.previsionSemaine = n===0 ? previsionLundi() : previsionDecaler(previsionSemaine(), n); render(); }
+async function previsionAjouter(){
+  const coop = (document.getElementById('prev_coop')||{}).value, type = (document.getElementById('prev_type')||{}).value||'Ordinaire';
+  if (!coop){ showToast('Choisis une coopérative.'); return; }
+  const ligne = { id:genId('prev'), semaine_debut:previsionSemaine(), cooperative_id:coop, type_cacao:type };
+  const { data, error } = await supabaseClient.from('previsions_livraisons').insert(ligne).select().single();
+  if (error){ showToast('Échec : '+error.message); return; }
+  (state.previsions = state.previsions||[]).push(data||ligne); render();
+}
+async function previsionReprendre(){
+  const sem = previsionSemaine(), avant = previsionDecaler(sem,-7);
+  const src = (state.previsions||[]).filter(r=>r.semaine_debut===avant);
+  if (!src.length){ showToast('Aucune ligne la semaine précédente.'); return; }
+  const lignes = src.map(r=>({ id:genId('prev'), semaine_debut:sem, cooperative_id:r.cooperative_id, type_cacao:r.type_cacao }));
+  const { data, error } = await supabaseClient.from('previsions_livraisons').insert(lignes).select();
+  if (error){ showToast('Échec : '+error.message); return; }
+  state.previsions = (state.previsions||[]).concat(data||lignes); render();
+}
+async function previsionSaisir(id,j,val){
+  const r = (state.previsions||[]).find(x=>x.id===id); if (!r) return;
+  const n = String(val).trim()==='' ? null : Math.max(0, Number(String(val).replace(',','.')));
+  r['j'+j] = (n==null || isNaN(n)) ? null : n;
+  const tot = [1,2,3,4,5,6,7].reduce((s,k)=>s+(Number(r['j'+k])||0),0), el = document.getElementById('prev-tot-'+id);
+  if (el) el.innerHTML = tot>0 ? (Math.round(tot*10)/10).toLocaleString('fr-FR') : '<span style="color:#A6B1AD">—</span>';
+  previsionRafraichirTotaux();
+  const { error } = await supabaseClient.from('previsions_livraisons').update({ ['j'+j]: r['j'+j] }).eq('id', id);
+  if (error) showToast('Enregistrement impossible : '+error.message);
+}
+async function previsionType(id,val){
+  const r = (state.previsions||[]).find(x=>x.id===id); if (!r) return;
+  r.type_cacao = val==='RA' ? 'RA' : 'Ordinaire'; previsionRafraichirTotaux();
+  const { error } = await supabaseClient.from('previsions_livraisons').update({ type_cacao:r.type_cacao }).eq('id', id);
+  if (error) showToast('Enregistrement impossible : '+error.message);
+}
+function previsionRetirer(id){
+  const r = (state.previsions||[]).find(x=>x.id===id); if (!r) return;
+  const c = coopById(r.cooperative_id);
+  askConfirm('Retirer « '+(c?c.nom:'cette ligne')+' » des prévisions de la semaine ?', async()=>{
+    const { error } = await supabaseClient.from('previsions_livraisons').delete().eq('id', id);
+    if (error){ showToast('Échec : '+error.message); return; }
+    state.previsions = state.previsions.filter(x=>x.id!==id); render();
+  });
+}
+async function previsionParam(champ,val){
+  const n = Math.max(0, Number(String(val).replace(',','.'))||0), sem = previsionSemaine(), P = previsionParams();
+  const ligne = { semaine_debut:sem, prix_kg:P.prix, treso_disponible:P.dispo, updated_at:new Date().toISOString() };
+  ligne[champ] = n;
+  const { error } = await supabaseClient.from('previsions_semaines').upsert(ligne, { onConflict:'semaine_debut' });
+  if (error){ showToast('Enregistrement impossible : '+error.message); return; }
+  const L = (state.previsionsSemaines = state.previsionsSemaines||[]), i = L.findIndex(x=>x.semaine_debut===sem);
+  if (i>=0) L[i] = ligne; else L.push(ligne);
+  render();
+}
 function renderPresAchats(){
   const D = presAchatsDonnees(), tab = state.presAchatsTab||0;
   const T = kg=>(kg/1000).toLocaleString('fr-FR',{ minimumFractionDigits:1, maximumFractionDigits:1 });
@@ -3637,6 +3788,8 @@ function renderPresAchats(){
     const dates = D.jours.map(j=>'<div style="flex:1;min-width:0;text-align:center;font-size:11px;font-weight:600;color:#4D5B57">'+esc(dateFr(j.d).slice(0,5))+'</div>').join('');
     const graphe = '<div style="flex:1;min-width:300px;border:1px solid #D5DDD9;border-radius:12px;padding:14px 18px 12px;display:flex;flex-direction:column"><div style="font-size:14px;font-weight:800;color:#0E3B36">Achats par jour de livraison</div><div style="font-size:12px;color:#5A6865;margin-top:2px">Tonnes</div><div style="display:flex;align-items:flex-end;gap:10px;height:270px;margin-top:14px;border-bottom:2px solid #0E3B36;padding:0 4px">'+colonnes+'</div><div style="display:flex;gap:10px;padding:0 4px;margin-top:6px">'+dates+'</div><div style="display:flex;gap:18px;margin-top:14px;font-size:12px;color:#4D5B57;flex-wrap:wrap"><div style="display:flex;align-items:center;gap:6px"><span style="width:12px;height:12px;border-radius:3px;background:#0E3B36"></span>Validé (poids net payé)</div><div style="display:flex;align-items:center;gap:6px"><span style="width:12px;height:12px;border-radius:3px;background:#F0C56A"></span>Arrivé, pas encore pesé</div></div></div>';
     corps += '<div style="display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap">'+tableau+graphe+'</div>';
+  } else if (tab===3){
+    corps += previsionsPresHtml();
   } else {
     const G3 = '52px minmax(0,1.5fr) minmax(0,1fr) minmax(0,1.5fr) 42px minmax(0,1fr) minmax(0,1.3fr) 62px 56px 76px 84px 74px';
     const ok = D.camions.filter(a=>!a.refoulee);
@@ -3664,8 +3817,8 @@ function renderPresAchats(){
     }).join('');
     corps += '<div style="border:1px solid #D5DDD9;border-radius:12px;overflow:hidden"><div>'+ent+tot+lignes+'</div></div>';
   }
-  const titres = [['Suivi achats','Contrat → validé sur connaissement → livraison brousse → lots export → agréage. Volumes en tonnes.'],['Achats quotidien','Tonnes validées (poids net payé) par site de déchargement et par jour de livraison.'],['Tracking brousse','Un camion par ligne, du plus ancien au plus récent. Poids en kilogrammes.']];
-  const noms = ['Suivi achats','Achats quotidien ECORIGINE','Tracking brousse'];
+  const titres = [['Suivi achats','Contrat → validé sur connaissement → livraison brousse → lots export → agréage. Volumes en tonnes.'],['Achats quotidien','Tonnes validées (poids net payé) par site de déchargement et par jour de livraison.'],['Tracking brousse','Un camion par ligne, du plus ancien au plus récent. Poids en kilogrammes.'],['Prévisions','Livraisons prévues par coopérative et par jour (saisie à la main), et trésorerie à mettre à disposition.']];
+  const noms = ['Suivi achats','Achats quotidien ECORIGINE','Tracking brousse','Prévisions'];
   const campNom = D.camp ? lotsCampagneNom(D.camp) : 'toutes campagnes';
   const onglets = noms.map((n,i)=>'<button type="button" onclick="presAchatsOnglet('+i+')" style="'+F+';cursor:pointer;padding:9px 18px;font-size:13px;height:34px;box-sizing:border-box;'+(i===tab?'font-weight:700;color:#0E3B36;background:#fff;border:1px solid #D5DDD9;border-top:3px solid #C8962E;border-bottom:none;border-radius:0 0 8px 8px;margin-top:-1px':'font-weight:600;color:#4D5B57;background:transparent;border:none')+'">'+n+'</button>').join('');
   return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div style="'+F+';width:min(1600px,98vw);max-height:97vh;background:#0E3B36;border-radius:18px;padding:16px;box-sizing:border-box;display:flex">'
@@ -4040,7 +4193,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-21-259';
+const APP_VERSION = '2026-10-21-260';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
