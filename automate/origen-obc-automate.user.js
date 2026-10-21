@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.22
+// @version      0.1.23
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.22';
+  const VERSION = '0.1.23';
   const CLE = 'origen_obc_etat';
   const ENTITE = '1';                 // ECORIGINE
   const ATTENTE_MAX = 20000;
@@ -409,21 +409,34 @@
     // Le prix est celui d'ORIGEN (campagne) : on le FORCE, puis on vérifie les calculs d'OBC (montant brut, retenue BIC, net à payer) et on recommence si OBC n'a pas recalculé.
     const lire = (suffixe) => { const el = q('#txtbordereau_reception_' + suffixe + 'Add'), lb = q('#lblbordereau_reception_' + suffixe + 'Add'); const brut = el && el.value !== '' ? el.value : (lb ? lb.textContent : ''); const v = Number(String(brut).replace(/[\s\u00a0\u202f]/g, '').replace(',', '.')); return isFinite(v) ? v : NaN; };
     const netPaye = Number(lot.pesee.poids_net_paye_attendu) || 0, pu = Number(num(b.pu_commodite)) || 0;
-    const att = { brut: Math.round(netPaye * pu * 100) / 100, bic: Math.round(netPaye * (Number(num(b.pu_bic)) || 0) * 100) / 100, net: b.net_attendu };
+    const r2 = (x) => Math.round(x * 100) / 100, puN = (k) => Number(num(b[k] || 0)) || 0;
+    const att = { brut: r2(netPaye * pu), bic: r2(netPaye * puN('pu_bic')), revolving: r2(Number(b.montant_revolving) || 0), commission: r2(netPaye * puN('pu_commission')), transport: r2(netPaye * puN('pu_transport')), net: b.net_attendu == null ? null : r2(b.net_attendu) };
+    const CHAMPS = [['montant_commodite', 'brut', 'Montant brut'], ['retenue_montant_bic', 'bic', 'Retenue BIC'], ['retenue_montant_revolving', 'revolving', 'Retenue revolving'], ['gain_montant_commission', 'commission', 'Commission'], ['gain_montant_transport', 'transport', 'Transport'], ['montant_net', 'net', 'Net à payer']];
     const PUS = ['pu_commodite', 'retenue_pu_bic', 'retenue_pu_mandat', 'retenue_pu_miseencompte', 'retenue_pu_revolving', 'retenue_pu_avance', 'gain_pu_commission', 'gain_pu_transport'];
     const bon = (v, w) => w == null || (isFinite(v) && Math.abs(v - w) < 1);
+    const toutBon = () => CHAMPS.every(([s, k]) => bon(lire(s), att[k]));
     let tentatives = 0;
     for (; tentatives < 4; tentatives++) {
       const puEl = q('#txtbordereau_reception_pu_commoditeAdd'); if (puEl && Number(num(puEl.value)) !== pu) setInput(puEl, num(b.pu_commodite));
       PUS.forEach((k) => { const el = q('#txtbordereau_reception_' + k + 'Add'); if (el) { el.dispatchEvent(new Event('focusout', { bubbles: true })); try { el.focus(); el.blur(); } catch (er) { /* ignoré */ } } });
       await dormir(700);
-      if (bon(lire('montant_commodite'), att.brut) && bon(lire('retenue_montant_bic'), att.bic) && bon(lire('montant_net'), att.net)) break;
+      if (toutBon()) break;
     }
-    const vb = lire('montant_commodite'), vn = lire('montant_net');
+    // Si OBC n'a pas calculé une case (montant, retenue, net), on y écrit nous-mêmes la valeur d'ORIGEN, dans la case ET dans son affichage.
+    const corriges = [];
+    CHAMPS.forEach(([s, k, nom]) => {
+      const w = att[k]; if (w == null || bon(lire(s), w)) return;
+      const el = q('#txtbordereau_reception_' + s + 'Add'), lb = q('#lblbordereau_reception_' + s + 'Add');
+      if (el) { const virg = /,/.test(el.value || ''); el.value = virg ? String(w).replace('.', ',') : String(w); ['input', 'change'].forEach((ev) => el.dispatchEvent(new Event(ev, { bubbles: true }))); }
+      if (lb) lb.textContent = w.toLocaleString('fr-FR', { maximumFractionDigits: 2 });
+      corriges.push(nom);
+    });
+    if (corriges.length) { journal(e, 'Cases forcées avec la valeur ORIGEN : ' + corriges.join(', ')); await dormir(300); }
     const fr = (x) => isFinite(x) ? x.toLocaleString('fr-FR') : '?';
-    const verif = bon(vb, att.brut) && bon(lire('retenue_montant_bic'), att.bic) && bon(vn, att.net)
-      ? ' ✓ Calculs OBC vérifiés = ORIGEN : brut ' + fr(vb) + ' (' + netPaye.toLocaleString('fr-FR') + ' kg × ' + pu + '), net à payer ' + fr(vn) + '.'
-      : ' ⚠ Calculs OBC ≠ ORIGEN : brut ' + fr(vb) + ' (attendu ' + fr(att.brut) + '), net à payer ' + fr(vn) + ' (attendu ' + fr(att.net) + ') : ne pas enregistrer avant vérification.';
+    const vb = lire('montant_commodite'), vn = lire('montant_net');
+    const verif = toutBon()
+      ? ' ✓ Cases vérifiées = ORIGEN : brut ' + fr(vb) + ' (' + netPaye.toLocaleString('fr-FR') + ' kg × ' + pu + '), BIC ' + fr(lire('retenue_montant_bic')) + ', revolving ' + fr(lire('retenue_montant_revolving')) + ', net à payer ' + fr(vn) + '.' + (corriges.length ? ' (OBC n\'avait pas calculé : ' + corriges.join(', ') + ' — valeurs saisies par le robot.)' : '')
+      : ' ⚠ Cases ≠ ORIGEN : brut ' + fr(vb) + ' (attendu ' + fr(att.brut) + '), revolving ' + fr(lire('retenue_montant_revolving')) + ' (attendu ' + fr(att.revolving) + '), net à payer ' + fr(vn) + ' (attendu ' + fr(att.net) + ') : ne pas enregistrer avant vérification.';
     e.note = 'Bordereau ' + b.numero + ' : PU ' + b.pu_commodite + ', BIC ' + b.pu_bic + ', transport ' + b.pu_transport + (b.montant_revolving ? ', revolving ' + b.montant_revolving : '') + '.' + verif; return 'rempli';
   }
   const EXEC = [etapeCooperative, etapeTransporteur, etapeProducteur, etapeBrousse, etapeLivraison, etapePesee, etapeBordereau];
