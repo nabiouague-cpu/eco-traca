@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.16
+// @version      0.1.17
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.16';
+  const VERSION = '0.1.17';
   const CLE = 'origen_obc_etat';
   const ENTITE = '1';                 // ECORIGINE
   const ATTENTE_MAX = 20000;
@@ -107,7 +107,9 @@
   function optionParTexte(sel, test) { if (!sel) return null; const f = test instanceof RegExp ? (t) => test.test(t) : typeof test === 'function' ? (t) => test(N(t)) : (t) => N(t).includes(N(test)); return [...sel.options].find((o) => o.value !== '' && f(o.text)) || null; }
   const exact = (v) => { const n = N(v); return (t) => t === n; };
   async function attendreOption(sel, test) { return attendre(() => optionParTexte(sel, test), ATTENTE_MAX, 300); }
-  function setInput(el, v) { if (!el) return; el.value = v == null ? '' : String(v); el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }
+  function setInput(el, v) { if (!el) return; el.value = v == null ? '' : String(v); el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); el.dispatchEvent(new Event('focusout', { bubbles: true })); /* OBC recalcule poids brut, net, sacs manquants… quand on quitte le champ */ }
+  // Redessine les listes à choix d'OBC (elles remplissent leur valeur sans toujours rafraîchir l'affichage).
+  function rafraichirListes(form) { const jq = $(); if (!jq || !jq.fn || !jq.fn.selectpicker || !form) return; [...form.querySelectorAll('select')].forEach((s) => { try { jq(s).selectpicker('refresh'); } catch (e) { /* liste non initialisée */ } }); }
   function setSelect(el, value) {
     if (!el) return false;
     const v = String(value);
@@ -124,12 +126,14 @@
   // Réapplique les valeurs voulues sur les listes du formulaire après un délai (si OBC les a réinitialisées) ; renvoie ce qui manque encore.
   async function reappliquer(form, ms) {
     let manques = [];
+    rafraichirListes(form);
     for (let passe = 0; passe < 3; passe++) {
       await dormir(ms || 1500); manques = [];
       [...form.querySelectorAll('select[data-origen-val]')].forEach((el) => { const v = el.dataset.origenVal; if (el.value !== v) { if (!setSelect(el, v)) manques.push(el.id); } });
     }
     await dormir(600);
     [...form.querySelectorAll('select[data-origen-val]')].forEach((el) => { if (el.value !== el.dataset.origenVal && !manques.includes(el.id)) manques.push(el.id); });
+    rafraichirListes(form);
     return manques;
   }
   async function setSelectTexte(el, test, libelle, affiche) { const o = await attendreOption(el, test); if (!o) throw new Error(libelle + ' : « ' + (affiche || (test instanceof RegExp ? test.source : typeof test === 'function' ? '?' : test)) + ' » non reconnu dans la liste OBC'); setSelect(el, o.value); return o; }
@@ -350,6 +354,7 @@
     await setSelectTexte(q('#txtusine_idAdd'), new RegExp('-\\s*' + c.usine_code + '\\s*$', 'i'), 'Usine');
     setInput(q('#txtconnaissement_usine_nb_sacs_chargeAdd'), c.sacs_declares); setInput(q('#txtconnaissement_usine_nb_sacs_receptionneAdd'), c.sacs_declares);
     setInput(q('#txtconnaissement_usine_poids_brut_chargeAdd'), c.poids_brut_declare || ''); setInput(q('#txtconnaissement_usine_poids_refactionAdd'), '0');
+    ['nb_sacs_charge', 'poids_brut_charge'].forEach((k) => { const el = q('#txtconnaissement_usine_' + k + 'Add'); if (el) el.dispatchEvent(new Event('focusout', { bubbles: true })); });
     { const m = await reappliquer(f); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
     e.note = 'Livraison ' + c.numero + ' : ' + c.sacs_declares + ' sacs, brut déclaré ' + (c.poids_brut_declare || '?') + ', TKM ' + c.tkm + ', usine ' + c.usine_code + '.'; return 'rempli';
   }
@@ -376,6 +381,7 @@
     setInput(q('#txtpesee_brousse_sacs_dechargesAdd'), p.sacs_decharges != null ? p.sacs_decharges : p.sacs_acceptes); setInput(q('#txtpesee_brousse_sacs_acceptesAdd'), p.sacs_acceptes);
     setInput(q('#txtpesee_brousse_tare_sacs_acceptesAdd'), num(p.tare_sacs)); setInput(q('#txtpesee_brousse_tare_palettesAdd'), '0'); setInput(q('#txtpesee_brousse_poids_refactionAdd'), '0');
     if (p.classement) await setSelectTexte(q('#txtqualite_idAdd'), exact(p.classement), 'Classement', p.classement);
+    ['poids_entree', 'poids_sortie', 'sacs_decharges', 'sacs_acceptes', 'tare_sacs_acceptes', 'tare_palettes', 'poids_refaction'].forEach((k) => { const el = q('#txtpesee_brousse_' + k + 'Add'); if (el) el.dispatchEvent(new Event('focusout', { bubbles: true })); });
     { const m = await reappliquer(f); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
     e.note = 'Pesée ' + p.code + ' : entrée ' + p.poids_entree + ' / sortie ' + p.poids_sortie + ', ' + paires.length + ' rubriques qualité, ' + p.classement + '. Poids net payé attendu : ' + p.poids_net_paye_attendu + '.'; return 'rempli';
   }
