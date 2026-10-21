@@ -4277,6 +4277,13 @@ function showToast(message, type){
   }
 }
 function dismissToast(){ state.toast = null; retirerToast(); }
+// Plus jamais d'échec silencieux : une erreur inattendue du programme s'affiche dans la fenêtre d'erreur (au lieu de ne rien faire).
+(function(){
+  let dernier = '', t0 = 0;
+  function signaler(msg){ msg = String(msg||'').replace(/^Uncaught\s*(\w*Error:)?\s*/,'').trim(); if (!msg || /ResizeObserver|Script error|Load failed|NetworkError|Failed to fetch/i.test(msg)) return; if (msg===dernier && Date.now()-t0<3000) return; dernier = msg; t0 = Date.now(); try{ showToast('Une erreur inattendue a bloqué l\'action : '+msg+'\n\nRecharge la page (F5) puis réessaie. Si ça se reproduit, copie ce message et envoie-le.'); }catch(_e){ /* rien de plus à faire */ } }
+  window.addEventListener('error', function(ev){ const f = String(ev.filename||''); if (f && f.indexOf(location.origin)!==0) return; signaler(ev.message); });
+  window.addEventListener('unhandledrejection', function(ev){ const r = ev.reason; if (r && r.message) signaler(r.message); });
+})();
 const COLLAPSE_THRESHOLD = 10;
 // La liste des producteurs (tableau de bord et fiche d'une cooperative) s'affiche D'EMBLEE : pas de clic sur « Derouler ».
 function sectionParDefautOuverte(key){ return key==='producteurs' || String(key).indexOf('coopdash-prod-')===0; }
@@ -4373,7 +4380,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-21-264';
+const APP_VERSION = '2026-10-21-265';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -21571,7 +21578,7 @@ async function enregistrerPaiementConnaissement(){
   if (ctxR){ rMode = fv('pa_remb_mode') || 'aucun'; rMont = rMode==='aucun' ? 0 : Math.round(Number(fv('pa_remb_montant'))||0); }
   if (rMont<0) return refuse('Montant de remboursement invalide.', 'pa_remb_montant');
   if (rMode!=='aucun' && !(rMont>0)) return refuse('Indique le montant remboursé.', 'pa_remb_montant');
-  if (rMont>ctxR.reste && ctxR) return refuse('Le remboursement dépasse le reste dû sur le préfinancement ('+fmtNum(ctxR.reste)+' FCFA).', 'pa_remb_montant');
+  if (ctxR && rMont>ctxR.reste) return refuse('Le remboursement dépasse le reste dû sur le préfinancement ('+fmtNum(ctxR.reste)+' FCFA).', 'pa_remb_montant');
   if (!(paye>0) && !(rMont>0)) return refuse('Indique le montant payé.', 'pa_montant_paye');
   if (deja+paye+rMont>aPayer) return refuse('Le paiement et le remboursement dépassent le montant restant à payer ('+fmtNum(Math.max(0,aPayer-deja))+' FCFA).', 'pa_montant_paye');
   if (false) return refuse('Le montant payé dépasse le montant restant à payer ('+fmtNum(Math.max(0,aPayer-deja))+' FCFA).', 'pa_montant_paye');
