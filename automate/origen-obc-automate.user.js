@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.20
+// @version      0.1.21
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.20';
+  const VERSION = '0.1.21';
   const CLE = 'origen_obc_etat';
   const ENTITE = '1';                 // ECORIGINE
   const ATTENTE_MAX = 20000;
@@ -403,9 +403,7 @@
     setInput(q('#txtbordereau_reception_retenue_pu_mandatAdd'), '0'); setInput(q('#txtbordereau_reception_retenue_pu_miseencompteAdd'), '0');
     setInput(q('#txtbordereau_reception_retenue_pu_revolvingAdd'), num(b.pu_revolving || 0)); setInput(q('#txtbordereau_reception_retenue_pu_avanceAdd'), '0');
     setInput(q('#txtbordereau_reception_gain_pu_commissionAdd'), num(b.pu_commission || 0)); setInput(q('#txtbordereau_reception_gain_pu_transportAdd'), num(b.pu_transport));
-    const nat1 = q('#txtnature_prestation_id_livraison_produitAdd'), nat2 = q('#txtnature_prestation_id_facturationAdd');
-    if (nat1 && !nat1.value) await setSelectTexte(nat1, /STOCK BROUSSE\s*-\s*321110000/i, 'Nature (livraison produit)');
-    if (nat2 && !nat2.value) await setSelectTexte(nat2, /Fournitures Li\w+\s*-\s*602000/i, 'Nature (facturation)');
+    // Comptabilisation (livraison produit, facturation) : valeurs par défaut d'OBC, on n'y touche JAMAIS.
     await dormir(1200);
     { const m = await reappliquer(f, 800); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
     // Le prix est celui d'ORIGEN (campagne) : on le FORCE, puis on vérifie les calculs d'OBC (montant brut, retenue BIC, net à payer) et on recommence si OBC n'a pas recalculé.
