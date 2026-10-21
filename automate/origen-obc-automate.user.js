@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.10
+// @version      0.1.11
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -252,7 +252,7 @@
     setSelect(q('#txtcommodite_idAdd0'), '2'); setInput(q('#txtproducteur_parcelle_codeAdd0'), 'P001');
     setInput(q('#txtparcelle_superficie_totaleAdd0'), '1'); setInput(q('#txtparcelle_superficie_commoditeAdd0'), '1'); setInput(q('#txtparcelle_production_potentielleAdd0'), '500');
     const manques = await reappliquer(f); if (manques.length) throw new Error('Liste non prise en compte par OBC : ' + manques.join(', '));
-    e.note = 'Producteur ' + p.nom + ' ' + p.prenoms + (p.pca ? ' (PCA de la coopérative).' : p.fictif ? ' (nom neutre : ni PCA ni producteur dans ORIGEN).' : '.'); return 'rempli';
+    e.note = 'Producteur ' + p.nom + ' ' + p.prenoms + (p.pca ? ' (PCA de la coopérative).' : p.chauffeur ? ' (PCA non renseigné : nom du chauffeur).' : p.fictif ? ' (nom neutre : ni PCA ni producteur dans ORIGEN).' : '.'); return 'rempli';
   }
   // Existence : les pages « Historique » d'OBC acceptent un filtre exact dans l'adresse ; la colonne 4 porte le numéro.
   async function existeDans(page, filtre, colonne, valeur) { if (!filtre) return null; const doc = await getHtml(page + '?filter=' + encodeURIComponent(filtre) + '&pageSize=100'); return lignesTable(doc).find((l) => N(l.c[colonne]) === N(valeur)) || null; }

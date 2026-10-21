@@ -4380,7 +4380,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-21-268';
+const APP_VERSION = '2026-10-21-269';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -22367,10 +22367,11 @@ function obcLot(a){
   const nature = pdVal(a,'Nature').toUpperCase();
   const certif = a.type_cacao==='RA' || /RAINFOREST/.test(nature) ? 'RAINFOREST' : a.type_cacao==='FT' || /FAIRTRADE/.test(nature) ? 'FAIRTRADE' : '';
   const brutDecl = Number(a.poids_brut)>0 ? Number(a.poids_brut) : null;
-  // Producteur saisi dans OBC = le PCA de la coopérative (représentant légal). À défaut : ADG, responsable, puis premier producteur du registre.
-  const pca = String(coop.representant_legal_nom||coop.adg_nom||coop.responsable_nom||'').trim();
-  const prod = pca ? null : (state.producteurs||[]).find(p=>p.cooperative_id===a.cooperative_id && String(p.nom||'').trim());
-  const nomProd = pca ? pca.split(/\s+/) : prod ? String(prod.nom).trim().split(/\s+/) : null;
+  // Producteur saisi dans OBC = le PCA de la coopérative (représentant légal). Si le PCA n'est pas renseigné : le nom du chauffeur du camion.
+  // En dernier recours : le premier producteur du registre, sinon un nom neutre.
+  const pca = String(coop.representant_legal_nom||'').trim(), chauffeur = String(a.nom_chauffeur||'').trim();
+  const prod = (pca || chauffeur) ? null : (state.producteurs||[]).find(p=>p.cooperative_id===a.cooperative_id && String(p.nom||'').trim());
+  const nomProd = pca ? pca.split(/\s+/) : chauffeur ? chauffeur.split(/\s+/) : prod ? String(prod.nom).trim().split(/\s+/) : null;
   const tel = (v)=>String(v||'').replace(/\D/g,'');
   return {
     origen_obc_lot: true, version: 1, achat_id: a.id, genere_le: new Date().toISOString(),
@@ -22382,7 +22383,7 @@ function obcLot(a){
     transporteur: { nom: String(a.nom_transporteur||'').trim(), immat_vehicule: String(a.immat_vehicule||'').trim(), immat_remorque: String(a.immat_remorque||'').trim(), chauffeur: String(a.nom_chauffeur||'').trim() },
     // Producteur : obligatoire dans OBC mais sans enjeu — le PCA de la coopérative, sinon le premier producteur du registre ORIGEN, sinon un nom neutre.
     producteur: { nom: nomProd ? nomProd[0] : 'PRODUCTEUR', prenoms: nomProd ? nomProd.slice(1).join(' ') || '-' : String(coop.nom||a.fournisseur_saigic||'').toUpperCase(),
-      matricule_ccc: prod ? (prod.matricule_ccc||'') : '', code: prod ? (prod.code||'') : '', localite: (prod && prod.village_district) || coop.ville || pdVal(a,'Localité') || '', pca: !!pca, fictif: !pca && !prod },
+      matricule_ccc: prod ? (prod.matricule_ccc||'') : '', code: prod ? (prod.code||'') : '', localite: (prod && prod.village_district) || coop.ville || pdVal(a,'Localité') || '', pca: !!pca, chauffeur: !pca && !!chauffeur, fictif: !pca && !chauffeur && !prod },
     connaissement: { numero: a.connaissement||'', date: dateFr(a.date)||'', commodite: 'CACAO', type_commodite: certif ? 'CERTIFICATION' : 'CONVENTIONNEL', certification: certif,
       sacs_declares: Number(a.nombre_sacs)||0, poids_brut_declare: brutDecl, poids_net_declare: Number(a.quantite_kg)||0,
       origine: pdVal(a,'Departement') || a.lieu_origine || '', tkm: Number(a.tkm)||0, destination: (pdVal(a,'Destination') || (site && site.ville) || '').toUpperCase(),
