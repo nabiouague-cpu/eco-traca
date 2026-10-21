@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.8
+// @version      0.1.9
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -262,8 +262,8 @@
   // Le filtre du bordereau ne porte que sur son propre numéro : on filtre sur le n° CCC (préfixe) et on vérifie la colonne du connaissement.
   const existeBordereau = (e) => existeDans('/AgroAchatBordereauReception/Index', String(e.lot.connaissement.numero || '').split('-')[0], 8, e.lot.connaissement.numero);
 
-  // Ligne modèle : si la coopérative a déjà un connaissement brousse dans OBC, on reprend la ligne de détail la plus récente
-  // (producteur, parcelle, nombre de sacs, poids, n° de reçu) pour saisir exactement les mêmes informations.
+  // Ligne modèle : si la coopérative a déjà un connaissement brousse dans OBC, on regarde sa ligne de détail la plus récente
+  // pour reprendre le même producteur et la même parcelle (le reste de la ligne est propre à la livraison en cours).
   async function ligneModele(e) {
     try {
       if (!e.ids.fournisseur_id) return null;
@@ -299,9 +299,11 @@
     const parcModele = prodModele && modele.parcelle && [...q('#txtproducteur_parcelle_idAdd0').options].find((o) => o.value === modele.parcelle);
     if (parcModele) setSelect(q('#txtproducteur_parcelle_idAdd0'), parcModele.value); else if (parc) setSelect(q('#txtproducteur_parcelle_idAdd0'), parc.value);
     const d = c.detail_arbitraire || {}, repris = !!prodModele;
-    setInput(q('#txtdate_achatAdd0'), isoDate(d.date_achat || c.date)); setInput(q('#txtnumero_recu_achatAdd0'), repris && modele.recu ? modele.recu : d.numero_recu || '001');
-    setInput(q('#txtlivraison_nb_sacsAdd0'), repris ? modele.sacs || 1 : d.sacs || 1); setInput(q('#txtlivraison_poids_netAdd0'), repris ? modele.poids : d.poids_net || 56); setInput(q('#txtlivraison_prix_unitaireAdd0'), num(c.prix_bord_champ));
-    if (repris) journal(e, 'Ligne reprise de ' + modele.numero + ' : même producteur, même parcelle, ' + modele.sacs + ' sac, ' + modele.poids + ' kg');
+    // Producteur et parcelle : repris à l'identique. Le reste de la ligne (date, reçu, sacs, poids) est propre à CETTE livraison.
+    const sacsL = Number(c.sacs_declares) > 0 ? c.sacs_declares : (d.sacs || 1), poidsL = Number(c.poids_net_declare) > 0 ? c.poids_net_declare : (d.poids_net || 56);
+    setInput(q('#txtdate_achatAdd0'), isoDate(d.date_achat || c.date)); setInput(q('#txtnumero_recu_achatAdd0'), d.numero_recu || '001');
+    setInput(q('#txtlivraison_nb_sacsAdd0'), sacsL); setInput(q('#txtlivraison_poids_netAdd0'), poidsL); setInput(q('#txtlivraison_prix_unitaireAdd0'), num(c.prix_bord_champ));
+    if (repris) journal(e, 'Producteur et parcelle repris de ' + modele.numero + ' ; sacs et poids de cette livraison (' + sacsL + ' sacs, ' + poidsL + ' kg)');
     { const m = await reappliquer(f); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
     e.note = 'Connaissement ' + c.numero + ' (' + c.type_commodite + (c.certification ? ' ' + c.certification : '') + '), prix bord champ ' + c.prix_bord_champ + '.'; return 'rempli';
   }
