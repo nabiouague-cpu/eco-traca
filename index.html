@@ -4380,7 +4380,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-21-265';
+const APP_VERSION = '2026-10-21-266';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -21578,9 +21578,8 @@ async function enregistrerPaiementConnaissement(){
   if (ctxR){ rMode = fv('pa_remb_mode') || 'aucun'; rMont = rMode==='aucun' ? 0 : Math.round(Number(fv('pa_remb_montant'))||0); }
   if (rMont<0) return refuse('Montant de remboursement invalide.', 'pa_remb_montant');
   if (rMode!=='aucun' && !(rMont>0)) return refuse('Indique le montant remboursé.', 'pa_remb_montant');
-  if (ctxR && rMont>ctxR.reste) return refuse('Le remboursement dépasse le reste dû sur le préfinancement ('+fmtNum(ctxR.reste)+' FCFA).', 'pa_remb_montant');
+  // Un préfinancement ou un paiement déjà reçu ne bloque jamais l'enregistrement : on prévient seulement après coup.
   if (!(paye>0) && !(rMont>0)) return refuse('Indique le montant payé.', 'pa_montant_paye');
-  if (deja+paye+rMont>aPayer) return refuse('Le paiement et le remboursement dépassent le montant restant à payer ('+fmtNum(Math.max(0,aPayer-deja))+' FCFA).', 'pa_montant_paye');
   if (false) return refuse('Le montant payé dépasse le montant restant à payer ('+fmtNum(Math.max(0,aPayer-deja))+' FCFA).', 'pa_montant_paye');
   const sansCheque = !(paye>0);
   if (!sansCheque){
@@ -21606,7 +21605,7 @@ async function enregistrerPaiementConnaissement(){
   if (ctxR){ a.pref_remb_mode = rMode; a.pref_remb_montant = rMont||null; }
   const sd = soldeAchat(a);
   closeModal();
-  showToast('Paiement enregistré : '+(sansCheque ? 'remboursement du préfinancement '+fmtNum(rMont)+' FCFA' : 'chèque n° '+cheque)+(rMont>0&&!sansCheque ? ' + remboursement '+fmtNum(rMont)+' FCFA' : '')+(sd && !sd.complet ? ' · reste '+fmtNum(sd.reste)+' FCFA à payer.' : ' · livraison soldée.'), 'success');
+  showToast('Paiement enregistré : '+(sansCheque ? 'remboursement du préfinancement '+fmtNum(rMont)+' FCFA' : 'chèque n° '+cheque)+(rMont>0&&!sansCheque ? ' + remboursement '+fmtNum(rMont)+' FCFA' : '')+(sd && !sd.complet ? ' · reste '+fmtNum(sd.reste)+' FCFA à payer.' : ' · livraison soldée.')+((deja+paye+rMont>aPayer || (ctxR && rMont>ctxR.reste)) ? ' ⚠ Total payé supérieur au montant à payer : à vérifier.' : ''), (deja+paye+rMont>aPayer || (ctxR && rMont>ctxR.reste)) ? 'error' : 'success');
 }
 
 // ---- Attestation de paiement (Word) : une attestation par cooperative et par campagne, CUMULATIVE (une ligne par cheque) ----
