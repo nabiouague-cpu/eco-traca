@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.6
+// @version      0.1.7
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
+// @match        https://www.onpointsunrise.com/*
 // @updateURL    https://nabiouague-cpu.github.io/eco-traca/automate/origen-obc-automate.user.js
 // @downloadURL  https://nabiouague-cpu.github.io/eco-traca/automate/origen-obc-automate.user.js
 // @run-at       document-idle
