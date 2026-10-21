@@ -4380,7 +4380,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-21-273';
+const APP_VERSION = '2026-10-21-274';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -21538,6 +21538,16 @@ function majNotePaiement(){
   else if (ap>0 && pa>0 && deja+pa<ap){ n.textContent = 'Paiement partiel : il restera '+fmtNum(ap-deja-pa)+' FCFA à payer. Tu pourras ajouter un autre paiement (chèque) plus tard ; l\'attestation indiquera ce qui a été payé.'; n.style.display = 'block'; }
   else n.style.display = 'none';
 }
+// Retenue revolving prévue sur le bordereau : si le paiement est déjà enregistré on reprend son remboursement ; sinon, l'avance revolving
+// « valeur totale du poids net livré » de la coopérative est retenue dans la limite du reste dû et du net à payer (même règle que le formulaire de paiement).
+function revolvingPourBordereau(a, aPayerAvant){
+  if (a.pref_remb_mode) return a.pref_remb_mode!=='aucun' ? (Number(a.pref_remb_montant)||0) : 0;
+  const prefs = (state.prefinancements||[]).filter(p=>p.cooperative_id===a.cooperative_id && p.type_avance==='revolving' && /total/i.test(p.mode_remboursement||'total') && (!a.campagne_id || p.campagne_id===a.campagne_id));
+  if (!prefs.length) return 0;
+  const A = prefs.reduce((s,p)=>s+(Number(p.montant)||0),0);
+  const deja = (state.achats||[]).filter(x=>x.id!==a.id && x.cooperative_id===a.cooperative_id && (!a.campagne_id || x.campagne_id===a.campagne_id)).reduce((s,x)=>s+(Number(x.pref_remb_montant)||0),0);
+  return Math.max(0, Math.min(A-deja, Math.round(aPayerAvant)));
+}
 // Remboursement du prefinancement au moment du paiement d'une livraison : tout le financement (dans la limite du montant a payer) ou une partie.
 function prefRembContexte(a){
   if (!a || !a.cooperative_id) return null;
@@ -22395,9 +22405,9 @@ function obcLot(a){
       tare_sacs: pdNum(a,'Tare Emb')||0, refaction: pdNum(a,'PdsRefac')||0, classement: obcGrade(pdVal(a,'Grade')||a.pesee_grade), poids_net_paye_attendu: Number(a.poids_net_produit)||0,
       qualite: OBC_QUALITE.map(([cle, rub])=>({ rubrique: rub, valeur: pdNum(a, cle) })).filter(q=>q.valeur!=null) },
     // Bordereau : ce qu'OBC demande à la main ; le net attendu sert au robot pour vérifier le calcul d'OBC avant d'enregistrer.
-    bordereau: (function(){ const m = calcMontantPaiement(a) || {}; const rev = (a.pref_remb_mode && a.pref_remb_mode!=='aucun') ? (Number(a.pref_remb_montant)||0) : 0; const net = Number(a.poids_net_produit)||0;
+    bordereau: (function(){ const m = calcMontantPaiement(a) || {}; const net = Number(a.poids_net_produit)||0; const rev = revolvingPourBordereau(a, ((Number(m.prixEntreeUsine)||0) - (Number(m.tauxBic)||0) + (Number(a.commission)||0) + (Number(a.tkm)||0)) * net);
       return { numero: String(a.connaissement||'').replace(/^(\S+?-\d{4})-\d+-(\d+)$/, '$1-$2'), date: dateFr(a.date)||'', pu_commodite: Number(m.prixEntreeUsine)||0, pu_bic: Number(m.tauxBic)||0,
-        pu_revolving: net>0 ? Math.round(rev/net*10000)/10000 : 0, montant_revolving: rev, pu_commission: Number(a.commission)||0, pu_transport: Number(a.tkm)||0,
+        pu_revolving: net>0 ? Math.round(rev/net*1000000)/1000000 : 0, montant_revolving: rev, pu_commission: Number(a.commission)||0, pu_transport: Number(a.tkm)||0,
         net_attendu: net>0 ? Math.round(((Number(m.prixEntreeUsine)||0) + (Number(a.tkm)||0) + (Number(a.commission)||0)) * net * 100 - (Number(m.tauxBic)||0) * net * 100) / 100 - rev : null }; })(),
   };
 }
@@ -22477,8 +22487,8 @@ function bordereauReceptionData(a){
   const netPaye = Number(a.poids_net_produit)||0, netLivre = Number(a.poids_brut_accepte)||0;
   const brut = pdNum(a,'PdsBrute'), tareSacs = pdNum(a,'Tare Emb');
   const prix = Number(m.prixEntreeUsine)||0, tkm = Number(a.tkm)||0, tauxBic = Number(m.tauxBic)||0, commission = Number(a.commission)||0;
-  const revolving = (a.pref_remb_mode && a.pref_remb_mode!=='aucun') ? (Number(a.pref_remb_montant)||0) : 0;
   const montantBrut = netPaye*prix, retBic = tauxBic*netPaye, transport = tkm*netPaye, comm = commission*netPaye;
+  const revolving = revolvingPourBordereau(a, montantBrut - retBic + comm + transport);
   const d1 = pdDate(a,'Date P1'), d2 = pdDate(a,'Date P2');
   const nature = pdVal(a,'Nature').toUpperCase();
   const typeCacao = a.type_cacao==='RA' || /RAINFOREST/.test(nature) ? 'CACAO RAINFOREST' : a.type_cacao==='FT' || /FAIRTRADE/.test(nature) ? 'CACAO FAIRTRADE' : 'CACAO --';

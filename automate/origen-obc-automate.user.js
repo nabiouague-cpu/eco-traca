@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.21
+// @version      0.1.22
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.21';
+  const VERSION = '0.1.22';
   const CLE = 'origen_obc_etat';
   const ENTITE = '1';                 // ECORIGINE
   const ATTENTE_MAX = 20000;
@@ -83,7 +83,7 @@
     if (e.erreur) message = '<div style="color:#B3261E;margin-top:8px;">⚠ ' + e.erreur + '</div>';
     else if (e.pause) message = '<div style="color:#8a6d00;margin-top:8px;">⏸ En pause.</div>';
     else if (e.statut === 'attente_enregistrement') message = '<div style="color:#0E3B36;margin-top:8px;background:#fff6d6;padding:6px 8px;border-radius:8px;">✎ Formulaire rempli : <b>vérifie, puis clique « Enregistrer » dans OBC</b>. Le robot vérifie l\'enregistrement et enchaîne tout seul. ' + (e.note || '') + '</div>';
-    else if (e.statut === 'termine') message = '<div style="color:#1f7a4d;margin-top:8px;font-weight:700;">✓ Les 7 étapes sont faites. ' + (e.note || '') + '</div>';
+    else if (e.statut === 'termine') message = '<div style="color:#1f7a4d;margin-top:8px;font-weight:700;">✓ Les 7 étapes sont faites. ' + (e.note || '') + '</div>' + (e.urlImpression ? '<div style="margin-top:6px;"><a href="' + e.urlImpression + '" target="_blank" style="color:#0E3B36;font-weight:700;">🖨 Imprimer le bordereau OBC</a></div>' : '');
     else if (e.note) message = '<div style="color:#5b6b68;margin-top:8px;">' + e.note + '</div>';
     zoneEtat.innerHTML = tete + lignes.join('<br>') + message + (e.journal && e.journal.length ? '<div style="color:#5b6b68;margin-top:6px;font-size:11px;">' + e.journal[e.journal.length - 1] + '</div>' : '');
   }
@@ -438,7 +438,7 @@
       if (!connecte()) { e.erreur = 'Connecte-toi à OBC, puis « Continuer ».'; ecrireEtat(e); afficherEtat(); return; }
       for (let garde = 0; garde < 10; garde++) {
         e = lireEtat(); if (!e || e.pause) return;
-        if (e.etape > 7) { e.statut = 'termine'; e.note = 'Dans ORIGEN, sous cette livraison, clique « déjà saisi » pour la marquer OBC ✓ (n° de bordereau : ' + (e.lot.bordereau && e.lot.bordereau.numero || '') + ').'; ecrireEtat(e); afficherEtat(); return; }
+        if (e.etape > 7) { try { const r = await existeBordereau(e); const lien = r && r.tr && r.tr.querySelector('a[href*="RptAgroAchatBordereauReceptionViewer"]'); if (lien) e.urlImpression = lien.getAttribute('href'); } catch (er) { /* lien facultatif */ } e.statut = 'termine'; e.note = 'Dans ORIGEN, sous cette livraison, clique « déjà saisi » pour la marquer OBC ✓ (n° de bordereau : ' + (e.lot.bordereau && e.lot.bordereau.numero || '') + ').'; ecrireEtat(e); afficherEtat(); return; }
         if (e.statut === 'attente_enregistrement') {
           // le formulaire est rempli : on attend que l'utilisateur enregistre, puis on vérifie toutes les 4 s
           let res;
