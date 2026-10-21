@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.26
+// @version      0.1.27
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.26';
+  const VERSION = '0.1.27';
   const CLE = 'origen_obc_etat';
   const ENTITE = '1';                 // ECORIGINE
   const ATTENTE_MAX = 20000;
@@ -429,7 +429,7 @@
     CHAMPS.forEach(([s, k, nom]) => {
       const w = att[k]; if (w == null || bon(lire(s), w, TOL[k])) return;
       const el = q('#txtbordereau_reception_' + s + 'Add'), lb = q('#lblbordereau_reception_' + s + 'Add');
-      if (el) { const virg = /,/.test(el.value || ''); el.value = virg ? String(w).replace('.', ',') : String(w); ['input', 'change'].forEach((ev) => el.dispatchEvent(new Event(ev, { bubbles: true }))); }
+      if (el) { const virg = !/\./.test(el.value || ''); /* OBC stocke ses montants avec la virgule (59577,50) */ el.value = virg ? String(w).replace('.', ',') : String(w); ['input', 'change'].forEach((ev) => el.dispatchEvent(new Event(ev, { bubbles: true }))); }
       if (lb) lb.textContent = w.toLocaleString('fr-FR', { maximumFractionDigits: 2 });
       corriges.push(nom);
     });
