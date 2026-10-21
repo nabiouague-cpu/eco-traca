@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.7
+// @version      0.1.8
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -262,6 +262,20 @@
   // Le filtre du bordereau ne porte que sur son propre numéro : on filtre sur le n° CCC (préfixe) et on vérifie la colonne du connaissement.
   const existeBordereau = (e) => existeDans('/AgroAchatBordereauReception/Index', String(e.lot.connaissement.numero || '').split('-')[0], 8, e.lot.connaissement.numero);
 
+  // Ligne modèle : si la coopérative a déjà un connaissement brousse dans OBC, on reprend la ligne de détail la plus récente
+  // (producteur, parcelle, nombre de sacs, poids, n° de reçu) pour saisir exactement les mêmes informations.
+  async function ligneModele(e) {
+    try {
+      if (!e.ids.fournisseur_id) return null;
+      const doc = await getHtml('/AgroAchatConnaissementBrousse/Index?id_entite=' + ENTITE + '&campagne_id=&id_fournisseur=' + encodeURIComponent(e.ids.fournisseur_id) + '&commodite_id=&type_commodite_id=&certification_id=&date_debut_operation=&date_fin_operation=&filter=&pageSize=100');
+      const l = lignesTable(doc).find((x) => N(x.c[4]) !== N(e.lot.connaissement.numero) && x.tr.querySelector('a[href*="/Edit/"]'));
+      if (!l) return null;
+      const ed = await getHtml(l.tr.querySelector('a[href*="/Edit/"]').getAttribute('href'));
+      const val = (id) => { const el = ed.getElementById(id); if (!el) return ''; if (el.tagName === 'SELECT') { const o = el.querySelector('option[selected]') || el.options[el.selectedIndex]; return o ? o.value : ''; } return el.value || ''; };
+      const m = { numero: l.c[4], producteur: val('txtproducteur_idEdit0'), parcelle: val('txtproducteur_parcelle_idEdit0'), recu: val('txtnumero_recu_achatAdd0') || val('txtnumero_recu_achatEdit0'), sacs: val('txtlivraison_nb_sacsEdit0'), poids: val('txtlivraison_poids_netEdit0') };
+      return m.producteur && m.poids ? m : null;
+    } catch (err) { return null; }
+  }
   async function etapeBrousse(e) {
     const lot = e.lot;
     if (!e.ids.campagne_id) e.ids.campagne_id = await campagneId(lot);
@@ -278,11 +292,16 @@
     if (!setSelect(q('#txtid_fournisseurAdd'), e.ids.fournisseur_id)) throw new Error('Coopérative (id ' + e.ids.fournisseur_id + ') absente de la liste Fournisseur du connaissement');
     await listeStable(q('#txtproducteur_idAdd0'));
     const prod = await attendreOption(q('#txtproducteur_idAdd0'), /./); if (!prod) throw new Error('Aucun producteur proposé pour cette coopérative');
-    setSelect(q('#txtproducteur_idAdd0'), prod.value);
-    const parc = await attendre(() => optionParTexte(q('#txtproducteur_parcelle_idAdd0'), /./), 8000); if (parc) setSelect(q('#txtproducteur_parcelle_idAdd0'), parc.value);
-    const d = c.detail_arbitraire || {};
-    setInput(q('#txtdate_achatAdd0'), isoDate(d.date_achat || c.date)); setInput(q('#txtnumero_recu_achatAdd0'), d.numero_recu || '001');
-    setInput(q('#txtlivraison_nb_sacsAdd0'), d.sacs || 1); setInput(q('#txtlivraison_poids_netAdd0'), d.poids_net || 56); setInput(q('#txtlivraison_prix_unitaireAdd0'), num(c.prix_bord_champ));
+    const modele = await ligneModele(e);
+    const prodModele = modele && [...q('#txtproducteur_idAdd0').options].find((o) => o.value === modele.producteur);
+    setSelect(q('#txtproducteur_idAdd0'), prodModele ? prodModele.value : prod.value);
+    const parc = await attendre(() => optionParTexte(q('#txtproducteur_parcelle_idAdd0'), /./), 8000);
+    const parcModele = prodModele && modele.parcelle && [...q('#txtproducteur_parcelle_idAdd0').options].find((o) => o.value === modele.parcelle);
+    if (parcModele) setSelect(q('#txtproducteur_parcelle_idAdd0'), parcModele.value); else if (parc) setSelect(q('#txtproducteur_parcelle_idAdd0'), parc.value);
+    const d = c.detail_arbitraire || {}, repris = !!prodModele;
+    setInput(q('#txtdate_achatAdd0'), isoDate(d.date_achat || c.date)); setInput(q('#txtnumero_recu_achatAdd0'), repris && modele.recu ? modele.recu : d.numero_recu || '001');
+    setInput(q('#txtlivraison_nb_sacsAdd0'), repris ? modele.sacs || 1 : d.sacs || 1); setInput(q('#txtlivraison_poids_netAdd0'), repris ? modele.poids : d.poids_net || 56); setInput(q('#txtlivraison_prix_unitaireAdd0'), num(c.prix_bord_champ));
+    if (repris) journal(e, 'Ligne reprise de ' + modele.numero + ' : même producteur, même parcelle, ' + modele.sacs + ' sac, ' + modele.poids + ' kg');
     { const m = await reappliquer(f); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
     e.note = 'Connaissement ' + c.numero + ' (' + c.type_commodite + (c.certification ? ' ' + c.certification : '') + '), prix bord champ ' + c.prix_bord_champ + '.'; return 'rempli';
   }
