@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.15
+// @version      0.1.16
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.15';
+  const VERSION = '0.1.16';
   const CLE = 'origen_obc_etat';
   const ENTITE = '1';                 // ECORIGINE
   const ATTENTE_MAX = 20000;
@@ -328,6 +328,15 @@
     await setSelectTexte(q('#txtcampagne_recolte_idAdd'), new RegExp('^' + lot.campagne.recolte, 'i'), 'Récolte');
     await setSelectTexte(q('#txtconnaissement_brousse_idAdd'), c.numero, 'Connaissement brousse');
     await dormir(1500);
+    // OBC remplit normalement commodité, type, certification et fournisseur à partir du connaissement brousse, mais pas toujours
+    // (ou sans rafraîchir l'affichage) : on les renseigne nous-mêmes, comme dans le connaissement brousse.
+    { const cm = q('#txtcommodite_idAdd'); if (cm) await setSelectTexte(cm, /^CACAO/i, 'Commodité');
+      await dormir(600); await listeStable(q('#txttype_commodite_idAdd'));
+      await setSelectTexte(q('#txttype_commodite_idAdd'), new RegExp('^' + c.type_commodite, 'i'), 'Type commodité');
+      if (c.certification) await setSelectTexte(q('#txtcertification_idAdd'), new RegExp('^' + c.certification, 'i'), 'Certification');
+      if (e.ids.fournisseur_id && !setSelect(q('#txtid_fournisseurAdd'), e.ids.fournisseur_id)) throw new Error('Coopérative (id ' + e.ids.fournisseur_id + ') absente de la liste Fournisseur des données livraison');
+      await dormir(800);
+      const cb = q('#txtconnaissement_brousse_idAdd'); if (cb && !cb.value) { await setSelectTexte(cb, c.numero, 'Connaissement brousse'); await dormir(1200); } }
     setInput(q('#txtconnaissement_usine_dateAdd'), isoDate(c.date));
     if (!q('#txtconnaissement_usine_numeroAdd').value) setInput(q('#txtconnaissement_usine_numeroAdd'), c.numero);
     await setSelectTexte(q('#txtorigine_idAdd'), exact(c.origine), 'Origine', c.origine);
