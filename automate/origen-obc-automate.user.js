@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.14
+// @version      0.1.15
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.14';
+  const VERSION = '0.1.15';
   const CLE = 'origen_obc_etat';
   const ENTITE = '1';                 // ECORIGINE
   const ATTENTE_MAX = 20000;
@@ -256,7 +256,7 @@
     e.note = 'Producteur ' + p.nom + ' ' + p.prenoms + (p.pca ? ' (PCA de la coopérative).' : p.chauffeur ? ' (PCA non renseigné : nom du chauffeur).' : p.fictif ? ' (nom neutre : ni PCA ni producteur dans ORIGEN).' : '.'); return 'rempli';
   }
   // Existence : les pages « Historique » d'OBC acceptent un filtre exact dans l'adresse ; la colonne 4 porte le numéro.
-  async function existeDans(page, filtre, colonne, valeur) { if (!filtre) return null; const doc = await getHtml(page + '?filter=' + encodeURIComponent(filtre) + '&pageSize=100'); return lignesTable(doc).find((l) => N(l.c[colonne]) === N(valeur)) || null; }
+  async function existeDans(page, filtre, colonne, valeur) { if (!filtre) return null; let doc; try { doc = await getHtml(page + '?filter=' + encodeURIComponent(filtre) + '&pageSize=100'); } catch (err) { if (/HTTP 500/.test(String(err && err.message))) return { c: [], illisible: true }; throw err; /* OBC plante à l'affichage d'une ligne : elle est donc bien enregistrée */ } return lignesTable(doc).find((l) => N(l.c[colonne]) === N(valeur)) || null; }
   const existeBrousse = (e) => existeDans('/AgroAchatConnaissementBrousse/Index', e.lot.connaissement.numero, 4, e.lot.connaissement.numero);
   const existeUsine = (e) => existeDans('/AgroAchatConnaissementUsine/Index', e.lot.connaissement.numero, 4, e.lot.connaissement.numero);
   const existePesee = (e) => existeDans('/AgroAchatPeseeBrousse/Index', e.lot.pesee.code, 4, e.lot.pesee.code);
@@ -295,12 +295,20 @@
     const prod = await attendreOption(q('#txtproducteur_idAdd0'), /./); if (!prod) throw new Error('Aucun producteur proposé pour cette coopérative');
     const modele = await ligneModele(e);
     const prodModele = modele && [...q('#txtproducteur_idAdd0').options].find((o) => o.value === modele.producteur);
-    const prodId = e.ids.producteur_id && [...q('#txtproducteur_idAdd0').options].find((x) => x.value === String(e.ids.producteur_id));
-    setSelect(q('#txtproducteur_idAdd0'), prodModele ? prodModele.value : prodId ? prodId.value : prod.value);
-    const parc = await attendre(() => optionParTexte(q('#txtproducteur_parcelle_idAdd0'), /./), 8000);
-    const parcModele = prodModele && modele.parcelle && [...q('#txtproducteur_parcelle_idAdd0').options].find((o) => o.value === modele.parcelle);
-    if (parcModele) setSelect(q('#txtproducteur_parcelle_idAdd0'), parcModele.value); else if (parc) setSelect(q('#txtproducteur_parcelle_idAdd0'), parc.value);
-    const d = c.detail_arbitraire || {}, repris = !!prodModele;
+    // OBC plante à l'affichage de la liste des connaissements si la parcelle n'a pas de code (libellé « - CACAO ») :
+    // on retient le premier producteur (modèle, étape 3, puis les autres) dont une parcelle porte un code.
+    const selProd = q('#txtproducteur_idAdd0'), selParc = q('#txtproducteur_parcelle_idAdd0');
+    const candidats = [...new Set([prodModele && prodModele.value, e.ids.producteur_id && String(e.ids.producteur_id), prod.value].concat([...selProd.options].map((o) => o.value)).filter(Boolean))].filter((v) => [...selProd.options].some((o) => o.value === v)).slice(0, 8);
+    let prodRetenu = null, parcRetenue = null;
+    for (const v of candidats) {
+      setSelect(selProd, v); await dormir(1500);
+      const ok = await attendre(() => [...selParc.options].find((o) => o.value !== '' && !/^\s*-/.test(o.text)), 4000, 300);
+      if (ok) { prodRetenu = v; parcRetenue = (modele && v === modele.producteur && [...selParc.options].find((o) => o.value === modele.parcelle && !/^\s*-/.test(o.text))) || ok; break; }
+    }
+    if (!prodRetenu) throw new Error('Aucun producteur de cette coopérative n\'a de parcelle avec un code : OBC ne saurait pas afficher le connaissement. Ajoute une parcelle (ex. P001) à un producteur, puis « Continuer ».');
+    setSelect(selParc, parcRetenue.value);
+    e.ids.producteur_id = prodRetenu;
+    const d = c.detail_arbitraire || {}, repris = !!prodModele && prodRetenu === prodModele.value;
     // Producteur et parcelle : repris à l'identique. Le reste de la ligne (date, reçu, sacs, poids) est propre à CETTE livraison.
     const sacsL = Number(c.sacs_declares) > 0 ? c.sacs_declares : (d.sacs || 1), poidsL = Number(c.poids_net_declare) > 0 ? c.poids_net_declare : (d.poids_net || 56);
     setInput(q('#txtdate_achatAdd0'), isoDate(d.date_achat || c.date)); setInput(q('#txtnumero_recu_achatAdd0'), d.numero_recu || '001');
@@ -401,7 +409,10 @@
         if (e.etape > 7) { e.statut = 'termine'; e.note = 'Dans ORIGEN, sous cette livraison, clique « déjà saisi » pour la marquer OBC ✓ (n° de bordereau : ' + (e.lot.bordereau && e.lot.bordereau.numero || '') + ').'; ecrireEtat(e); afficherEtat(); return; }
         if (e.statut === 'attente_enregistrement') {
           // le formulaire est rempli : on attend que l'utilisateur enregistre, puis on vérifie toutes les 4 s
-          const res = await EXEC[e.etape - 1](e);
+          let res;
+          try { res = await EXEC[e.etape - 1](e); }
+          catch (err) { e.erreur = ETAPES[e.etape - 1] + ' (vérification) : ' + (err && err.message ? err.message : String(err)); ecrireEtat(e); afficherEtat(); setTimeout(boucle, 8000); return; }
+          if (e.erreur) { e.erreur = null; }
           if (res === 'suivant') { e.statut = 'a_faire'; e.note = ''; e.etape++; ecrireEtat(e); afficherEtat(); continue; }
           ecrireEtat(e); afficherEtat(); setTimeout(boucle, 4000); return;
         }
