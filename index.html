@@ -4380,7 +4380,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-22-282';
+const APP_VERSION = '2026-10-22-283';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7926,7 +7926,7 @@ function achatClientsConnus(campagneId){
 function achatClientSelectHtml(a){
   if (a.producteur_id) return '';
   const coop = coopById(a.cooperative_id);
-  const defaut = (!a.client && coop && coop.client) ? String(coop.client).trim() : '';
+  const defaut = !a.client ? (achatClientParUsine(a) || ((coop && coop.client) ? String(coop.client).trim() : '')) : '';
   const clients = achatClientsConnus(null);
   const valeurActuelle = a.client ? (clients.find(c=>ccClefClient(c)===ccClefClient(a.client)) || a.client) : '';
   // Une seule ligne par client ; le projet de durabilité (Ferrero, Mars…) se choisit dans une petite fenêtre
@@ -7994,8 +7994,17 @@ async function coopPasserEnDiligenceExterne(a, client){
   Object.assign(coop, maj);
 }
 // Effectif d'un connaissement pour un client : son attribution explicite, sinon le client par défaut de sa coopérative.
+// Client déduit de l'usine de déchargement : contrat de l'usine (ex. IPSC → ACT, TOUTON USINE → TOUTON). « ACT-CARGILL » = contrat ACT
+// (Cargill est le client final) : on garde ACT, comme dans les attributions déjà faites. Vide si l'usine est inconnue ou sans contrat.
+function achatClientParUsine(a){
+  const site = (typeof sachSiteDe==='function') ? sachSiteDe(a && a.usine_dechargement) : null;
+  const c = site && site.contrat ? String(site.contrat).trim() : '';
+  return c ? c.split('-')[0].trim().toUpperCase() : '';
+}
 function achatClientEffectif(a){
   if (a.client) return String(a.client).trim();
+  const parUsine = achatClientParUsine(a);
+  if (parUsine) return parUsine;
   const coop = coopById(a.cooperative_id);
   return coop && coop.client ? String(coop.client).trim() : '';
 }
@@ -11025,6 +11034,8 @@ async function loadAll(silencieux){
       supabaseClient.from('acheteur_fournisseurs').select('*'),
     ]);
     state.acheteurFournisseurs = (acheteurFournisseursResult && !acheteurFournisseursResult.error) ? (acheteurFournisseursResult.data || []) : [];
+    // Usines de déchargement (petite table) : nécessaires dès le démarrage, car le client d'une livraison se déduit du contrat de son usine.
+    try{ const rs = await supabaseClient.from('sites_usinage').select('*'); if (rs && !rs.error) state.sitesUsinage = rs.data||[]; }catch(e){ console.warn('sites_usinage', e); }
     state.producteurs = producteurs;
     state.achats = achats;
     state.docCheck = docCheck;
