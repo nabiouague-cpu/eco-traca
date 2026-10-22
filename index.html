@@ -4380,7 +4380,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-22-284';
+const APP_VERSION = '2026-10-22-285';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8045,14 +8045,27 @@ function renderLivraisonsClients(campagneId){
           if (sans.length) lig.push('<div><span>→ sans projet</span><b style="color:var(--warn)">'+fmtKg(kgLivre(sans))+'</b><small>'+fmtNum(sans.length)+' à préciser</small></div>');
           return '<div class="sa-lignes" style="margin-top:4px;padding-top:6px;border-top:1px dashed var(--border)">'+lig.join('')+'</div>';
         })()
+      + (function(){
+          const m = new Map();
+          g.achats.forEach(a=>{ const x = livrExecutantDe(a); const k = x ? x.cle : '—'; if (!m.has(k)) m.set(k, { x, n:0, kg:0 }); const e = m.get(k); e.n++; e.kg += Number(a.poids_net_produit)||0; });
+          if (!Array.from(m.values()).some(e=>e.x && e.x.traitant)) return '';
+          const lig = Array.from(m.values()).sort((u,v)=>v.kg-u.kg).map(e=>'<div><span>'+(e.x ? '<b>'+esc(e.x.traitant||'—')+'</b> · '+esc(e.x.usine)+(e.x.statut && !/^ok$/i.test(e.x.statut) ? ' <i>('+esc(e.x.statut)+')</i>' : '') : 'Usine non renseignée')+'</span><b>'+fmtKg(e.kg)+'</b><small>'+fmtNum(e.n)+' connaissement'+(e.n>1?'s':'')+'</small></div>').join('');
+          return '<div class="sa-lignes" style="margin-top:4px;padding-top:6px;border-top:1px dashed var(--border)"><div class="hint" style="margin:0 0 2px">Exécution du contrat (traitant · usine)</div>'+lig+'</div>';
+        })()
       + (pct!=null ? '<div class="sa-barre"><i style="width:'+Math.min(pct,100)+'%"></i></div>' : '')
       + '<div style="margin-top:8px"><button class="btn-ghost btn-compact" onclick="livrClientsBasculer(\''+escJs(g.cle)+'\')">'+(ouvert?'Masquer les connaissements':'Voir les connaissements')+'</button></div>'
-      + (ouvert ? '<div class="livr-tbl"><table class="tbl-fiches"><thead><tr><th>Date</th><th>Connaissement</th><th>Coopérative</th><th class="num">Net payé</th></tr></thead><tbody>'
-          + g.achats.slice().sort((x,y)=>String(y.date).localeCompare(String(x.date))).map(a=>'<tr><td>'+esc(dateFr(a.date)||'')+'</td><td>'+esc(a.connaissement||'')+(a.programme?' <span class="hint" style="margin:0">→ '+esc(a.programme)+'</span>':'')+(a.client?'':' <span class="hint" style="margin:0">(défaut coop.)</span>')+'</td><td>'+esc((coopById(a.cooperative_id)||{}).nom||a.fournisseur_saigic||'—')+'</td><td class="num">'+(Number(a.poids_net_produit)>0?fmtNum(a.poids_net_produit):'—')+'</td></tr>').join('')
+      + (ouvert ? '<div class="livr-tbl"><table class="tbl-fiches"><thead><tr><th>Date</th><th>Connaissement</th><th>Coopérative</th><th>Traitant · usine</th><th class="num">Net payé</th></tr></thead><tbody>'
+          + g.achats.slice().sort((x,y)=>String(y.date).localeCompare(String(x.date))).map(a=>'<tr><td>'+esc(dateFr(a.date)||'')+'</td><td>'+esc(a.connaissement||'')+(a.programme?' <span class="hint" style="margin:0">→ '+esc(a.programme)+'</span>':'')+(a.client?'':' <span class="hint" style="margin:0">(défaut coop.)</span>')+'</td><td>'+esc((coopById(a.cooperative_id)||{}).nom||a.fournisseur_saigic||'—')+'</td><td>'+(function(){ const x = livrExecutantDe(a); return x ? esc((x.traitant?x.traitant+' · ':'')+x.usine) : esc(a.usine_dechargement||'—'); })()+'</td><td class="num">'+(Number(a.poids_net_produit)>0?fmtNum(a.poids_net_produit):'—')+'</td></tr>').join('')
           + '</tbody></table></div>' : '')
       + '</div>';
   });
   return html + '</div>';
+}
+// Qui exécute le contrat du client : le traitant de l'usine de déchargement (ex. ACT → Awahus à IPSC, Sitapa à SITAPA, M Bobby Vo à SICOCOA…).
+function livrExecutantDe(a){
+  const site = (typeof sachSiteDe==='function') ? sachSiteDe(a.usine_dechargement) : null;
+  if (!site) return null;
+  return { cle: site.code, traitant: site.traitant||'', usine: site.nom+' ('+site.code+')', statut: site.statut||'' };
 }
 function livrClientsBasculer(client){ state.livrClientsOuverts = state.livrClientsOuverts || {}; state.livrClientsOuverts[client] = !state.livrClientsOuverts[client]; render(); }
 
