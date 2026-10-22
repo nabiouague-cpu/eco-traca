@@ -6,6 +6,8 @@
 // Le type de cacao (RA / FT) vient de la nature indiquée par le SAIGIC, sinon de la certification de la coopérative :
 // c'est lui qui fait apparaître le bouton de déclaration (Multitrace / Fairtrace) dès que le volume est validé.
 // v11 : poids brut déclaré du connaissement (liste SAIGIC) recopié sur l'achat quand il manque.
+// v12 : poids net et nombre de sacs DÉCLARÉS du connaissement (liste SAIGIC) recopiés sur l'achat quand ils manquent (quantité à 0),
+//       même si le connaissement a été vu avant d'être rapproché d'une coopérative (colonnes poids_net / nb_sacs de saigic_connaissements_vus).
 // Secret : en-tête x-relais-secret = RELAIS_SAIGIC_SECRET. dry_run=true : aucun écrit.
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
@@ -137,10 +139,12 @@ Deno.serve(async (req) => {
       if (e2) { bilan.erreurs.push(code + ' : ' + e2.message); continue; }
       const lignes = (ex || []).filter((a: any) => !a.producteur_id);
       // Poids brut DÉCLARÉ du connaissement (lu sur la liste SAIGIC par le robot des connaissements) : OBC le demande sur les données de livraison.
-      let brutDeclare: number | null = null;
-      if (!lignes.length || lignes.some((a: any) => !(Number(a.poids_brut) > 0))) {
-        const { data: vu } = await sb.from('saigic_connaissements_vus').select('donnees').eq('code_connaissement', code).maybeSingle();
+      let brutDeclare: number | null = null, netDeclare: number | null = null, sacsDeclares: number | null = null;
+      if (!lignes.length || lignes.some((a: any) => !(Number(a.poids_brut) > 0) || !(Number(a.quantite_kg) > 0) || !(Number(a.nombre_sacs) > 0))) {
+        const { data: vu } = await sb.from('saigic_connaissements_vus').select('donnees, poids_net, nb_sacs').eq('code_connaissement', code).maybeSingle();
         brutDeclare = num((vu as any)?.donnees?.poids_brut_charg);
+        netDeclare = num((vu as any)?.donnees?.poids_net_charg) ?? num((vu as any)?.poids_net);
+        sacsDeclares = num((vu as any)?.donnees?.Nbre_sac_charg) ?? num((vu as any)?.nb_sacs);
       }
 
       if (lignes.length) {
@@ -168,9 +172,13 @@ Deno.serve(async (req) => {
           if (origineAManquer) patch.lieu_origine = origine;
           const brutAManquer = !(Number(a.poids_brut) > 0) && brutDeclare !== null && brutDeclare > 0;
           if (brutAManquer) patch.poids_brut = brutDeclare;
+          const netAManquer = !(Number(a.quantite_kg) > 0) && netDeclare !== null && netDeclare > 0;
+          if (netAManquer) patch.quantite_kg = Math.round(netDeclare as number);
+          const sacsAManquer = !(Number(a.nombre_sacs) > 0) && sacsDeclares !== null && sacsDeclares > 0;
+          if (sacsAManquer) patch.nombre_sacs = Math.round(sacsDeclares as number);
           if (coop && !a.cooperative_id) patch.cooperative_id = coop.id;
           if (!a.code_fourn && p.code_fourn) patch.code_fourn = String(p.code_fourn).trim();
-          if (!change && !origineAManquer && !brutAManquer && !(coop && !a.cooperative_id)) { bilan.inchangees++; continue; }
+          if (!change && !origineAManquer && !brutAManquer && !netAManquer && !sacsAManquer && !(coop && !a.cooperative_id)) { bilan.inchangees++; continue; }
           bilan.plan.push({ code, action: 'maj', cooperative: coop?.nom || null });
           if (!dry) {
             const { error } = await sb.from('achats').update(patch).eq('id', a.id);
@@ -186,7 +194,7 @@ Deno.serve(async (req) => {
       const mois = Number(d.slice(5, 7));
       const nouvel = {
         id: 'a_saigic_' + code, cooperative_id: coop ? coop.id : null, producteur_id: null, date: d,
-        quantite_kg: 0, poids_brut: brutDeclare && brutDeclare > 0 ? brutDeclare : 0, nombre_sacs: 0, connaissement: code, type_cacao: type,
+        quantite_kg: netDeclare && netDeclare > 0 ? Math.round(netDeclare) : 0, poids_brut: brutDeclare && brutDeclare > 0 ? brutDeclare : 0, nombre_sacs: sacsDeclares && sacsDeclares > 0 ? Math.round(sacsDeclares) : 0, connaissement: code, type_cacao: type,
         campagne_id: camp ? camp.id : null, periode: (mois >= 9 || mois <= 2) ? 'principale' : 'intermediaire',
         nom_transporteur: String(p.transporteur || '').trim() || null, immat_vehicule: String(p.immatriculation || '').trim() || null,
         usine_dechargement: String(p.magasin || '').trim() || null, lieu_origine: origine || null,
