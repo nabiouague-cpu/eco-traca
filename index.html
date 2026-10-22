@@ -4380,7 +4380,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-21-279';
+const APP_VERSION = '2026-10-22-280';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -9681,10 +9681,59 @@ function saigicDateIso(txt){
 }
 // ===== Nouvelles coopératives à classer (créées d'office quand un connaissement d'une coopérative inconnue est vu sur le SAIGIC) =====
 function coopsAClasser(){ return (state.cooperatives||[]).filter(c=>c.a_classer); }
+// ===== Coopératives retirées : on peut les rétablir (fiche + connaissements en attente) =====
+async function chargerCccIgnores(){
+  if (state.cccIgnoresCharge) return; state.cccIgnoresCharge = true;
+  const r = await supabaseClient.from('saigic_ccc_ignores').select('*').order('retire_le', { ascending:false });
+  state.cccIgnores = r.error ? [] : (r.data||[]);
+  if ((state.cccIgnores||[]).length) render();
+}
+function coopsRetireesHtml(){
+  if (!state.cccIgnoresCharge){ chargerCccIgnores(); return ''; }
+  const l = state.cccIgnores||[]; if (!l.length) return '';
+  return '<div class="achats-note" style="margin:0 0 14px;background:#F6F6F6;border:1px solid #bbb;color:#333">'
+    + '<div style="font-weight:700;margin-bottom:2px">↩ '+l.length+' coopérative'+(l.length>1?'s':'')+' retirée'+(l.length>1?'s':'')+' — le robot ne les recrée pas</div>'
+    + '<table class="tbl-fiches" style="background:#fff"><thead><tr><th>Coopérative</th><th>N° CCC</th><th>Retirée le</th><th></th></tr></thead><tbody>'
+    + l.map(c=>'<tr><td><b>'+esc(c.nom||'')+'</b></td><td>'+esc(c.code_ccc)+'</td><td>'+esc(String(c.retire_le||'').slice(0,16).replace('T',' '))+'</td>'
+      + '<td><button class="btn btn-primary btn-compact" onclick="coopRetablir(\''+escJs(c.code_ccc)+'\')">Rétablir</button></td></tr>').join('')
+    + '</tbody></table></div>';
+}
+async function coopRetablir(ccc){
+  const ig = (state.cccIgnores||[]).find(x=>x.code_ccc===ccc); if (!ig) return;
+  try{
+    const id = 'coop_saigic_'+ccc;
+    const vus = await supabaseClient.from('saigic_connaissements_vus').select('*').like('code_connaissement', ccc+'-%');
+    if (vus.error) throw vus.error;
+    const lignes = vus.data||[];
+    const dep = (lignes.find(v=>v.donnees && v.donnees.departement)||{donnees:{}}).donnees.departement || null;
+    const sp = (lignes.find(v=>v.donnees && v.donnees.sous_prefecture)||{donnees:{}}).donnees.sous_prefecture || null;
+    const coop = { id, nom:ig.nom||ccc, nom_complet:ig.nom||ccc, ccc_num:ccc, type:'cooperative', statut:'Non certifiée', certifications:'', fiche_a_completer:true, trace_par_ecorigine:false, verifiee:false, a_classer:true, ville:sp, departement:dep };
+    let r = await supabaseClient.from('cooperatives').upsert(coop, { onConflict:'id', ignoreDuplicates:true }); if (r.error) throw r.error;
+    r = await supabaseClient.from('saigic_ccc_ignores').delete().eq('code_ccc', ccc); if (r.error) throw r.error;
+    const v = (x,k)=>{ const s = String((x.donnees||{})[k]==null ? '' : (x.donnees||{})[k]).trim(); return s && s.toLowerCase()!=='null' ? s : null; };
+    const achats = [];
+    for (const x of lignes){
+      if ((x.donnees||{}).connais_annule && ['1','true','oui'].includes(String(x.donnees.connais_annule).toLowerCase())) continue;
+      const iso = saigicDateIso(x.date_connaissement) || new Date().toISOString().slice(0,10), mois = Number(iso.slice(5,7));
+      const camp = (state.campagnes||[]).find(c=>c.date_debut && c.date_fin && String(c.date_debut)<=iso && iso<=String(c.date_fin));
+      achats.push({ id:'a_saigic_'+x.code_connaissement, cooperative_id:id, producteur_id:null, date:iso, quantite_kg:Math.round(Number(x.poids_net)||0), poids_brut:0, nombre_sacs:Math.round(Number(x.nb_sacs)||0),
+        connaissement:x.code_connaissement, type_cacao:'', campagne_id:camp ? camp.id : null, periode:(mois>=9||mois<=2) ? 'principale' : 'intermediaire', usine_dechargement:v(x,'mag_dest'),
+        fournisseur_saigic:x.fournisseur_saigic||null, code_fourn:ccc, nom_transporteur:v(x,'Nom_Transp'), immat_vehicule:v(x,'Mat_transp'), immat_remorque:v(x,'immat_remorq'), nom_chauffeur:v(x,'Nom_chauf_transp'),
+        lieu_origine:v(x,'departement')||v(x,'sous_prefecture'), declare_par_coop:false, genere_auto:false });
+    }
+    if (achats.length){ r = await supabaseClient.from('achats').upsert(achats, { onConflict:'id', ignoreDuplicates:true }).select(); if (r.error) throw r.error;
+      (r.data||[]).forEach(a=>{ if (!state.achats.some(z=>z.id===a.id)) state.achats.push(a); }); }
+    if (lignes.length) await supabaseClient.from('saigic_connaissements_vus').update({ cooperative_id:id, trace_le:null }).like('code_connaissement', ccc+'-%');
+    if (!(state.cooperatives||[]).some(c=>c.id===id)) state.cooperatives.push(coop);
+    state.cccIgnores = (state.cccIgnores||[]).filter(x=>x.code_ccc!==ccc);
+    showToast((ig.nom||ccc)+' rétablie'+(achats.length ? ' avec '+achats.length+' connaissement'+(achats.length>1?'s':'')+' en attente' : '')+' : à classer.', 'success'); render();
+  }catch(e){ showToast('Rétablissement impossible : '+(e && e.message ? e.message : e)); }
+}
 function coopsAClasserHtml(){
-  const l = coopsAClasser(); if (!l.length) return '';
+  const ret = coopsRetireesHtml();
+  const l = coopsAClasser(); if (!l.length) return ret;
   const vol = c => (state.saigicATracer||[]).filter(v=>{ const k = saigicCoopDeCode(v); return k && k.id===c.id; });
-  return '<div class="achats-note" style="margin:0 0 14px;background:#EAF3FB;border:1px solid #2F6DB5;color:#14365C">'
+  return ret + '<div class="achats-note" style="margin:0 0 14px;background:#EAF3FB;border:1px solid #2F6DB5;color:#14365C">'
     + '<div style="font-weight:700;margin-bottom:2px">🆕 '+l.length+' nouvelle'+(l.length>1?'s':'')+' coopérative'+(l.length>1?'s':'')+' ajoutée'+(l.length>1?'s':'')+' automatiquement — à classer</div>'
     + '<div class="hint" style="margin:0 0 8px">Créée d\'office à partir d\'un connaissement du SAIGIC. Dis où elle va : dans notre base, chez un de nos clients, ou son volume est tracé sur une autre coopérative.</div>'
     + '<table class="tbl-fiches" style="background:#fff"><thead><tr><th>Coopérative</th><th>N° CCC</th><th class="num">Volume vu</th><th>Classer</th></tr></thead><tbody>'
