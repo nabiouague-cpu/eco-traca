@@ -8,6 +8,8 @@
 // v11 : poids brut déclaré du connaissement (liste SAIGIC) recopié sur l'achat quand il manque.
 // v12 : poids net et nombre de sacs DÉCLARÉS du connaissement (liste SAIGIC) recopiés sur l'achat quand ils manquent (quantité à 0),
 //       même si le connaissement a été vu avant d'être rapproché d'une coopérative (colonnes poids_net / nb_sacs de saigic_connaissements_vus).
+// v13 : usine de déchargement (magasin de la pesée) recopiée sur l'achat quand elle manque, et client de l'achat = contrat de l'usine
+//       (table sites_usinage) quand aucun client n'est attribué. Une attribution faite à la main n'est jamais écrasée.
 // Secret : en-tête x-relais-secret = RELAIS_SAIGIC_SECRET. dry_run=true : aucun écrit.
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
@@ -95,6 +97,14 @@ Deno.serve(async (req) => {
     if (e1) throw new Error('coopératives : ' + e1.message);
     const coops = (cb || []) as Coop[];
     const { data: camps } = await sb.from('campagnes').select('id, nom, date_debut, date_fin');
+    const { data: sitesU } = await sb.from('sites_usinage').select('code, nom, contrat, actif');
+    // Contrat de l'usine d'après le texte du magasin (« US51 IPSC » -> contrat du site US51).
+    const contratDe = (texte: unknown): string => {
+      const u = String(texte ?? '').toUpperCase().trim(); if (!u) return '';
+      const L = ((sitesU || []) as any[]).filter((x) => x.actif !== false);
+      const s = L.find((x) => x.code && u.startsWith(String(x.code).toUpperCase())) || L.find((x) => x.nom && u.includes(String(x.nom).toUpperCase()));
+      return s && s.contrat ? String(s.contrat).trim().toUpperCase() : '';
+    };
 
     const bilan = { lues: pesees.length, mises_a_jour: 0, creees: 0, inchangees: 0, verrouillees: 0, analyses_seules: 0, sans_connaissement: 0, coop_inconnue: [] as string[], coops_creees: [] as string[], rattachees: 0, erreurs: [] as string[], plan: [] as unknown[] };
     const vus = new Set<string>();
@@ -172,13 +182,19 @@ Deno.serve(async (req) => {
           if (origineAManquer) patch.lieu_origine = origine;
           const brutAManquer = !(Number(a.poids_brut) > 0) && brutDeclare !== null && brutDeclare > 0;
           if (brutAManquer) patch.poids_brut = brutDeclare;
+          const magasin = String(p.magasin || '').trim();
+          const usineAManquer = !String(a.usine_dechargement || '').trim() && !!magasin;
+          if (usineAManquer) patch.usine_dechargement = magasin;
+          const clientDefaut = !String(a.client || '').trim() ? contratDe(String(a.usine_dechargement || '').trim() || magasin) : '';
+          const clientAManquer = !!clientDefaut;
+          if (clientAManquer) patch.client = clientDefaut;
           const netAManquer = !(Number(a.quantite_kg) > 0) && netDeclare !== null && netDeclare > 0;
           if (netAManquer) patch.quantite_kg = Math.round(netDeclare as number);
           const sacsAManquer = !(Number(a.nombre_sacs) > 0) && sacsDeclares !== null && sacsDeclares > 0;
           if (sacsAManquer) patch.nombre_sacs = Math.round(sacsDeclares as number);
           if (coop && !a.cooperative_id) patch.cooperative_id = coop.id;
           if (!a.code_fourn && p.code_fourn) patch.code_fourn = String(p.code_fourn).trim();
-          if (!change && !origineAManquer && !brutAManquer && !netAManquer && !sacsAManquer && !(coop && !a.cooperative_id)) { bilan.inchangees++; continue; }
+          if (!change && !origineAManquer && !brutAManquer && !netAManquer && !sacsAManquer && !usineAManquer && !clientAManquer && !(coop && !a.cooperative_id)) { bilan.inchangees++; continue; }
           bilan.plan.push({ code, action: 'maj', cooperative: coop?.nom || null });
           if (!dry) {
             const { error } = await sb.from('achats').update(patch).eq('id', a.id);
@@ -199,6 +215,7 @@ Deno.serve(async (req) => {
         nom_transporteur: String(p.transporteur || '').trim() || null, immat_vehicule: String(p.immatriculation || '').trim() || null,
         usine_dechargement: String(p.magasin || '').trim() || null, lieu_origine: origine || null,
         fournisseur_saigic: String(p.fournisseur || '').trim() || null, code_fourn: String(p.code_fourn || '').trim() || null,
+        client: contratDe(p.magasin) || null,
         declare_par_coop: false, genere_auto: false,
         ...maj, ...analyse,
       };
