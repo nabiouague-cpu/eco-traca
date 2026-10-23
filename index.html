@@ -3618,7 +3618,8 @@ function presAchatsDonnees(){
       const dernier = i===arr.length-1;
       const b = dernier ? reste : Math.min(reste, x.a), att = i===0 ? resteAtt : 0;
       reste -= b; if (i===0) resteAtt = 0;
-      const ligne = { nom:g.nom, a:x.a, b, c:b+att, d:i===0?g.lots:0, e:i===0?g.agrees:0, att, nAtt:i===0?nAtt:0 };
+      // b = VALIDÉ SUR CONNAISSEMENT = pesé + camions arrivés pas encore pesés (comme le classeur commercial) ; c = LIVRAISON BROUSSE = pesé (poids net payé) ; b − c = en attente de pesée.
+      const ligne = { nom:g.nom, a:x.a, b:b+att, c:b, d:i===0?g.lots:0, e:i===0?g.agrees:0, att, nAtt:i===0?nAtt:0 };
       groupes.find(z=>z.code===x.p).lignes.push(ligne);
     });
   });
@@ -3935,7 +3936,7 @@ function renderPresAchats(){
   if (tab===0){
     const G1 = 'minmax(220px,1.4fr) 120px 150px 140px 120px 120px 140px 160px 1.2fr';
     const entete = '<div style="display:grid;grid-template-columns:'+G1+';align-items:end;background:rgba(14,59,54,.82);color:#fff;padding:14px 22px;column-gap:8px;height:66px;box-sizing:border-box"><div style="font-size:14px;font-weight:700">Client</div>'
-      + [['a','Volume contrat'],['b','Validé sur connaissement'],['c','Livraison brousse'],['d','Lots export'],['e','En agréage'],['f = a − b','Reste à acheter'],['c − b','En attente de pesée']].map(x=>'<div style="text-align:center;font-size:12.5px;font-weight:600;line-height:1.25">'+x[1]+'<br><span style="color:#E3C16F;font-weight:800">'+x[0]+'</span></div>').join('')
+      + [['a','Volume contrat'],['b','Validé sur connaissement'],['c','Livraison brousse'],['d','Lots export'],['e','En agréage'],['f = a − b','Reste à acheter'],['b − c','En attente de pesée']].map(x=>'<div style="text-align:center;font-size:12.5px;font-weight:600;line-height:1.25">'+x[1]+'<br><span style="color:#E3C16F;font-weight:800">'+x[0]+'</span></div>').join('')
       + '<div style="font-size:12.5px;font-weight:600;text-align:center;line-height:1.25">Avancement<br><span style="color:#E3C16F;font-weight:800">b ÷ a</span></div></div>';
     const cellules = l=>[l.a,l.b,l.c,l.d,l.e,Math.max(0,l.a-l.b),l.att].map(v=>'<div style="text-align:center">'+Tz(v)+'</div>').join('');
     const ligne = (nom,l,st)=>'<div style="display:grid;grid-template-columns:'+G1+';align-items:center;column-gap:8px;padding:0 22px;height:46px;box-sizing:border-box;border-bottom:1px solid #E3E9E6;font-size:15px;'+(st==='sous'?'background:rgba(230,240,236,.7);color:#0E3B36;font-weight:800':st==='tot'?'background:rgba(14,59,54,.82);color:#fff;font-weight:800;font-size:16px':'background:#fff;font-weight:500')+'"><div style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-weight:700">'+esc(nom)+'</div>'+cellules(l)+barre(l.b,l.a, st==='tot'?'rgba(255,255,255,.18)':st==='sous'?'#C9D9D3':'#E1EBE7', st==='tot'?'#E3C16F':'rgba(14,59,54,.75)')+'</div>';
@@ -4380,7 +4381,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-22-285';
+const APP_VERSION = '2026-10-23-286';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7651,8 +7652,12 @@ const CC_SUFFIXES_JURIDIQUES = ['sas','sasu','sa','sarl','eurl','ltd','llc','inc
 function ccClefClient(nom){
   const mots = qcNormaliserTexte(nom).split(' ').filter(Boolean);
   while (mots.length>1 && CC_SUFFIXES_JURIDIQUES.includes(mots[mots.length-1])) mots.pop();
+  // Tout ce qui commence par « ACT » (ACT, ACT-CARGILL, ACT INTERNATIONAL…) est UN SEUL client : ACT. Le détail (Cargill, traitant, usine) reste visible dans « Exécution du contrat ».
+  if (mots.length && mots[0]==='act') return 'act';
   return mots.join(' ');
 }
+// Nom affiché d'un client : « ACT-CARGILL » et consorts s'affichent « ACT ».
+function clientCanonique(nom){ const n = String(nom||'').trim(); return n && ccClefClient(n)==='act' ? 'ACT' : n; }
 // Clients deja connus de l'application (contrats, CV, suivi achats, logos), deduplique comme dans le
 // regroupement de l'ecran "Contrats clients" : meme logique de cle normalisee, meme nom court retenu
 // pour les variantes avec/sans suffixe juridique. Sert a proposer une liste deroulante plutot qu'un champ
@@ -7994,7 +7999,7 @@ async function coopPasserEnDiligenceExterne(a, client){
   Object.assign(coop, maj);
 }
 // Effectif d'un connaissement pour un client : son attribution explicite, sinon le client par défaut de sa coopérative.
-// Client déduit de l'usine de déchargement : contrat de l'usine tel quel (ex. IPSC → ACT, TOUTON USINE → TOUTON, SITAPA et SUV → ACT-CARGILL).
+// Client déduit de l'usine de déchargement : contrat de l'usine (ex. IPSC → ACT, TOUTON USINE → TOUTON, SITAPA et SUV → ACT-CARGILL, regroupé sous ACT par achatClientEffectif).
 // Vide si l'usine est inconnue ou sans contrat.
 function achatClientParUsine(a){
   const site = (typeof sachSiteDe==='function') ? sachSiteDe(a && a.usine_dechargement) : null;
@@ -8002,11 +8007,11 @@ function achatClientParUsine(a){
   return c ? c.toUpperCase() : '';
 }
 function achatClientEffectif(a){
-  if (a.client) return String(a.client).trim();
+  if (a.client) return clientCanonique(a.client);
   const parUsine = achatClientParUsine(a);
-  if (parUsine) return parUsine;
+  if (parUsine) return clientCanonique(parUsine);
   const coop = coopById(a.cooperative_id);
-  return coop && coop.client ? String(coop.client).trim() : '';
+  return coop && coop.client ? clientCanonique(coop.client) : '';
 }
 // ---- Tableau de bord « livraison aux clients », calculé depuis les pesées attribuées ----
 function renderLivraisonsClients(campagneId){
@@ -8266,7 +8271,7 @@ function renderAchatsClientsDashboard(){
   lignes.forEach(L=>{
     const ouv = !!(state.pipeOuverts && state.pipeOuverts[L.g.k]);
     const badge = '<span style="display:inline-block;background:'+L.etat.c+';color:#fff;border-radius:12px;padding:2px 10px;font-size:11.5px;font-weight:600;white-space:nowrap">'+L.etat.t+'</span>';
-    const ecart = avecExcel ? (L.g.excel.length ? (function(){ const dC = L.exContrat-L.contrat, dV = L.exValide-L.achete; return '<div style="font-size:11.5px;line-height:1.3">contrat '+pipeTonnes(L.exContrat)+(Math.abs(dC)>=100?' <span style="color:var(--warn)">('+(dC>0?'+':'−')+pipeTonnes(Math.abs(dC))+')</span>':'')+'<br>validé '+pipeTonnes(L.exValide)+(Math.abs(dV)>=100?' <span style="color:var(--warn)">('+(dV>0?'+':'−')+pipeTonnes(Math.abs(dV))+')</span>':'')+'</div>'; })() : '—') : '';
+    const ecart = avecExcel ? (L.g.excel.length ? (function(){ const dC = L.exContrat-L.contrat, dV = L.exValide-(L.achete+L.attenteKg); return '<div style="font-size:11.5px;line-height:1.3">contrat '+pipeTonnes(L.exContrat)+(Math.abs(dC)>=100?' <span style="color:var(--warn)">('+(dC>0?'+':'−')+pipeTonnes(Math.abs(dC))+')</span>':'')+'<br>validé '+pipeTonnes(L.exValide)+(Math.abs(dV)>=100?' <span style="color:var(--warn)">('+(dV>0?'+':'−')+pipeTonnes(Math.abs(dV))+')</span>':'')+'</div>'; })() : '—') : '';
     html += '<tr class="pref-ligne'+(ouv?' ouvert':'')+'">'
       + '<td style="cursor:pointer;" onclick="pipeBasculer(\''+escJs(L.g.k)+'\')" title="Afficher / masquer le détail"><span class="chev" style="margin-right:4px;">▸</span><b>'+esc(L.g.client)+'</b></td>'
       + '<td>'+(L.periodes.length ? esc(L.periodes.join(', ')) : '—')+'</td>'
@@ -22253,7 +22258,7 @@ async function construireRapportLivraisons(){
   D.groupes.forEach(g=>{
     const m = lignesCli[g.code]; if (!m) return;
     g.lignes.forEach(l=>{ const r = m[ccClefClient(l.nom)]; if (!r) return;
-      val[r].D += t3(l.c); val[r].E += t3(l.b); val[r].F += t3(l.d); val[r].G += t3(l.e); });
+      val[r].D += t3(l.b); val[r].E += t3(l.c); val[r].F += t3(l.d); val[r].G += t3(l.e); });
   });
   const r3 = x=>Math.round(x*1000)/1000;
   toutes.forEach(r=>{
