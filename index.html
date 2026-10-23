@@ -4386,7 +4386,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-23-287';
+const APP_VERSION = '2026-10-23-288';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8091,7 +8091,7 @@ function livrProduit(a, niv){
 function livrStatutDecl(a){
   const pf = plateformesDeclaration(a);
   if (!pf.length) return { txt:'Sans objet', date:'', code:'na' };
-  if (!declarable(a)) return { txt:'À peser', date:'', code:'pesee' };
+  if (!declarable(a)) return { txt: Number(a.poids_net_produit)>0 ? 'En attente d\u2019acceptation' : 'À peser', date:'', code:'pesee' };
   const sig = l=>l.map(k=>PLATEFORMES_DECLARATION[k].sigle).join('+');
   const faits = pf.filter(k=>dateDeclaration(a,k)), manque = pf.filter(k=>!dateDeclaration(a,k));
   const dates = faits.map(k=>dateFr(dateDeclaration(a,k))).join(' / ');
@@ -22092,7 +22092,15 @@ function plateformesDeclaration(a){
 }
 function dateDeclaration(a, k){ return a['declaration_'+k+'_le'] || null; }
 // La declaration se fait sur le POIDS NET PAYE a l'usine : impossible tant que l'usine n'a pas pese.
-function declarable(a){ return Number(a.poids_net_produit)>0; }
+// Un camion ne se déclare (Multitrace / Fairtrace) qu'une fois PESÉ ET ACCEPTÉ à l'usine : acceptation SAIGIC « NON-REFOULE » (contrôle qualité), jamais un camion refoulé.
+// Sans détail de pesée (pesée saisie à la main), seul le poids net payé compte.
+function accepteUsine(a){
+  if (!a || a.refoulee) return false;
+  if (!a.pesee_detail || typeof a.pesee_detail!=='object') return true;
+  return /^NON-REFOUL/i.test(pdVal(a,'Acceptation'));
+}
+function declarable(a){ return Number(a.poids_net_produit)>0 && accepteUsine(a); }
+const MSG_DECL_NON_ACCEPTE = "La déclaration n'est possible qu'une fois le camion pesé ET accepté à l'usine (non refoulé) : le poids net payé n'est pas encore confirmé.";
 // Une fois le volume DECLARE (sur Multitrace et/ou Fairtrace), la pesee de l'usine est VERROUILLEE : le volume declare doit rester celui du poids net paye.
 // Pour la corriger, on retire d'abord la declaration (la pesee redevient alors modifiable).
 // Echeance de declaration sur Multitrace (cacao RA) : dernier jour du trimestre civil de livraison + 14 jours (livraison en octobre -> 14 janvier).
@@ -22131,7 +22139,7 @@ function celluleDeclarationHtml(a, avecNom){
 function ouvrirDeclaration(achatId, k){
   const a = state.achats.find(x=>x.id===achatId);
   if (!a || !PLATEFORMES_DECLARATION[k]) return;
-  if (!dateDeclaration(a,k) && !declarable(a)){ showToast('La déclaration n\'est possible qu\'après la pesée à l\'usine : le poids net payé n\'est pas encore connu.'); return; }
+  if (!dateDeclaration(a,k) && !declarable(a)){ showToast(MSG_DECL_NON_ACCEPTE); return; }
   state.modal = { type:'declarationPortail', payload:{ achatId, plateforme:k } };
   render();
 }
@@ -22150,7 +22158,7 @@ async function enregistrerDeclaration(){
   const oui = fvRadio('decl_statut')==='oui', date = fv('decl_date');
   const erreur = (m)=>{ const e = document.getElementById('decl-erreur'); if (e){ e.textContent = m; e.style.display = 'block'; } };
   if (oui){
-    if (!declarable(a)) return erreur('Le poids net payé n\'est pas encore connu : la déclaration n\'est possible qu\'après la pesée de l\'usine.');
+    if (!declarable(a)) return erreur(MSG_DECL_NON_ACCEPTE);
     if (!date) return erreur('Indique la date de déclaration.');
     if (date > new Date().toISOString().slice(0,10)) return erreur('La date de déclaration ne peut pas être dans le futur.');
   }
