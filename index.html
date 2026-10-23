@@ -4386,7 +4386,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-23-288';
+const APP_VERSION = '2026-10-23-289';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8527,13 +8527,70 @@ async function cvRelierAuxContrats(){
   }
   return nb;
 }
+// Télécharge l'« État des CV » au format du modèle ECORIGINE (modeles/etat_cv_26-27.xlsx), à jour des données d'ORIGEN :
+// volume, période, prix CAF de référence, prix CAF, fret, surveillance de chaque CV ; « Prix FOB client en € » = prix du contrat
+// rattaché au CV (€/t tel quel ; autre devise convertie). Les formules du modèle (soutien, assurance, freinte, FOB, écart) sont conservées
+// et recalculées à l'ouverture. Un CV absent du modèle est ajouté en bas ; un CV du modèle absent d'ORIGEN reste tel quel.
+async function cvTelechargerEtat(){
+  try{
+    const ExcelJS = await qcChargerExcelJS();
+    const rep = await fetch('modeles/etat_cv_26-27.xlsx?v='+encodeURIComponent(APP_VERSION), { cache:'no-cache' });
+    if (!rep.ok) throw new Error('modèle introuvable (HTTP '+rep.status+')');
+    const wb = new ExcelJS.Workbook(); await wb.xlsx.load(await rep.arrayBuffer());
+    wb.calcProperties = Object.assign({}, wb.calcProperties, { fullCalcOnLoad:true });
+    wb.creator = 'ORIGEN · ECORIGINE'; wb.modified = new Date();
+    wb.worksheets.forEach(w=>w.eachRow({ includeEmpty:false }, row=>row.eachCell({ includeEmpty:false }, c=>{
+      const v = c.value; if (v && typeof v==='object' && ('formula' in v || 'sharedFormula' in v) && 'result' in v){ const n = Object.assign({}, v); delete n.result; c.value = n; }
+    })));
+    const ws = wb.worksheets.find(w=>qcNormaliserTexte(w.name).indexOf('etat cv')===0) || wb.worksheets[0];
+    const campagneId = (state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : null;
+    const cvs = (state.cvVentes||[]).filter(c=>!campagneId || c.campagne_id===campagneId);
+    const ligneDe = new Map(); let derniere = 7;
+    for (let r=8; r<=ws.rowCount; r++){ const n = String(ws.getCell('D'+r).value||'').trim(); if (n){ ligneDe.set(n, r); derniere = r; } }
+    const TAUX = 0.655957;                                  // FCFA/kg pour 1 €/t (cellule B2 du modèle)
+    const codePeriode = t=>{ const m = String(t||'').match(/^(OD|JM)\s*\d{2}(\d{2})$/i); return m ? m[1].toUpperCase()+m[2] : String(t||''); };
+    const prixEurT = c=>{
+      if (!c || !(Number(c.prix_valeur)>0)) return null;
+      if ((c.prix_devise||'EUR/T')==='EUR/T') return Number(c.prix_valeur);
+      const f = cvPrixContratFcfaKg(c); return f!=null ? Math.round(f/TAUX*100)/100 : null;
+    };
+    const tri = cvs.slice().sort((a,b)=>String(a.numero_cv).localeCompare(String(b.numero_cv),'fr',{numeric:true}));
+    let ajoutees = 0, avecPrix = 0, sansContrat = 0;
+    tri.forEach(cv=>{
+      let r = ligneDe.get(String(cv.numero_cv||'').trim());
+      if (!r){
+        r = ++derniere; ligneDe.set(String(cv.numero_cv), r); ajoutees++;
+        'CDEFGHIJKLMNOPQRST'.split('').forEach(L=>{ ws.getCell(L+r).style = ws.getCell(L+(r-1)).style; });
+        ws.getCell('D'+r).value = cv.numero_cv; ws.getCell('C'+r).value = cv.client||''; ws.getCell('J'+r).value = 'Soutien';
+        ws.getCell('I'+r).value = { formula:'+G'+r+'-H'+r }; ws.getCell('M'+r).value = { formula:'H'+r+'*$M$7' }; ws.getCell('N'+r).value = { formula:'H'+r+'*$N$7' };
+        ws.getCell('O'+r).value = { formula:'SUM(K'+r+':N'+r+')' }; ws.getCell('P'+r).value = { formula:'H'+r+'-O'+r }; ws.getCell('Q'+r).value = { formula:'M'+r+'+P'+r };
+        ws.getCell('S'+r).value = { formula:'R'+r+'*$B$2' }; ws.getCell('T'+r).value = { formula:'S'+r+'-Q'+r };
+      }
+      if (cv.volume_kg!=null && cv.volume_kg!=='') ws.getCell('E'+r).value = Number(cv.volume_kg);
+      if (cv.periode_embarquement) ws.getCell('F'+r).value = codePeriode(cv.periode_embarquement);
+      if (cv.prix_caf_ref_fcfa_kg!=null && cv.prix_caf_ref_fcfa_kg!=='') ws.getCell('G'+r).value = Number(cv.prix_caf_ref_fcfa_kg);
+      if (cv.prix_caf_fcfa_kg!=null && cv.prix_caf_fcfa_kg!=='') ws.getCell('H'+r).value = Number(cv.prix_caf_fcfa_kg);
+      if (cv.fret_fcfa_kg!=null && cv.fret_fcfa_kg!=='') ws.getCell('K'+r).value = Number(cv.fret_fcfa_kg);
+      if (cv.surveillance_fcfa_kg!=null && cv.surveillance_fcfa_kg!=='') ws.getCell('L'+r).value = Number(cv.surveillance_fcfa_kg);
+      const contrat = cv.contrat_client_id ? contratClientParId(cv.contrat_client_id) : null;
+      const p = prixEurT(contrat);
+      ws.getCell('R'+r).value = p;
+      if (p!=null) avecPrix++; else sansContrat++;
+    });
+    if (ajoutees) ws.getCell('E7').value = { formula:'SUM(E8:E'+derniere+')' };
+    await qcTelechargerClasseur(wb, 'ETAT_CV_26-27.xlsx');
+    showToast('État des CV téléchargé : '+tri.length+' CV, prix FOB client repris pour '+avecPrix+(sansContrat?' ('+sansContrat+' sans contrat rattaché : prix à renseigner)':'')+'.', 'success');
+  }catch(e){ showToast('Impossible de générer l\'état des CV : '+(e && e.message ? e.message : e)); }
+}
 async function cvImporterExcel(input){
   const fichier = input.files && input.files[0]; if (!fichier) return;
   if (typeof XLSX === 'undefined'){ showToast('La bibliothèque Excel ne s\'est pas chargée (connexion internet requise).'); return; }
   let wb;
   try{ wb = XLSX.read(await fichier.arrayBuffer(), { type:'array', cellDates:true }); }
   catch(e){ showToast('Fichier illisible : '+e.message, 'error'); return; }
-  const nomFeuille = wb.SheetNames.find(n=>qcNormaliserTexte(n)==='recap') || wb.SheetNames[0];
+  // Feuille lue : « ETAT CV… » visible (la plus à jour dans le modèle fourni), sinon « Récap », sinon la première.
+  const feuillesVisibles = wb.SheetNames.filter((n,i)=>!(wb.Workbook && wb.Workbook.Sheets && wb.Workbook.Sheets[i] && wb.Workbook.Sheets[i].Hidden));
+  const nomFeuille = feuillesVisibles.find(n=>qcNormaliserTexte(n).indexOf('etat cv')===0) || wb.SheetNames.find(n=>qcNormaliserTexte(n)==='recap') || wb.SheetNames[0];
   const aoa = XLSX.utils.sheet_to_json(wb.Sheets[nomFeuille], { header:1, defval:'' });
   if (!aoa.length){ showToast('Le fichier est vide.', 'error'); return; }
   // Campagne deduite du titre ("... 2026-2027 ...") si une campagne de ce nom existe deja, sinon celle filtree a l'ecran.
@@ -8650,6 +8707,7 @@ function renderCvVentes(){
   let html = '<div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">'
     + '<button class="btn btn-primary" onclick="cvOuvrir()">+ Nouveau CV</button>'
     + '<button class="btn" onclick="cvChoisirFichierExcel()">⭱ Importer l\'état des CV (Excel)</button>'
+    + '<button class="btn" onclick="cvTelechargerEtat()" title="Le fichier « État des CV » (modèle ECORIGINE) à jour : CV, prix CAF, soutien, et prix FOB client en € repris des contrats rattachés">⭳ Télécharger l\'état des CV (Excel)</button>'
     + '<input type="file" id="cv-import-excel" accept=".xlsx,.xls,.csv" style="display:none" onchange="cvImporterExcel(this)">'
     + '<button class="btn" onclick="cvChoisirFichierContratsPdf()">⭱ Importer des contrats FOB (PDF)</button>'
     + '<input type="file" id="cv-import-contrats-pdf" accept=".pdf" style="display:none" onchange="cvImporterContratsPdf(this)">'
