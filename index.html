@@ -4386,7 +4386,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-25-294';
+const APP_VERSION = '2026-10-25-295';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -9906,9 +9906,11 @@ function saigicATracerHtml(){
     + liste.map(v=>{ const c = saigicCoopDeCode(v);
         return '<tr><td><b>'+esc(v.code_connaissement)+'</b></td><td>'+(c ? esc(c.nom) : '<span class="badge warn">Inconnue</span> '+esc(v.fournisseur_saigic||''))+'</td>'
           + '<td class="num">'+(Number(v.poids_net)>0 ? fmtKg(v.poids_net) : '—')+'</td><td class="num">'+(Number(v.nb_sacs)>0 ? fmtNum(v.nb_sacs) : '—')+'</td><td>'+esc(String(v.date_connaissement||'').slice(0,10))+'</td>'
-          + '<td style="white-space:nowrap">'+(c && c.a_classer ? '<span class="badge warn">À classer ↑</span> ' : '')+(c && c.a_classer ? '' : c && c.trace_sur_autre_coop
+          + '<td style="white-space:nowrap">'+(c && c.a_classer ? '<span class="badge warn">À classer ↑</span> ' : '')
+          + (c && c.trace_sur_autre_coop
               ? '<button class="btn btn-primary btn-compact" title="Coopérative d\'origine : le volume sera tracé sur une autre coopérative" onclick="saigicTracerSurAutre(\''+escJs(v.id)+'\')">Tracer sur une autre coopérative</button> '
-              : '<button class="btn btn-primary btn-compact" onclick="saigicTracerVolume(\''+escJs(v.id)+'\')">Tracer ce volume</button> ')
+              : (c && c.a_classer ? '' : '<button class="btn btn-primary btn-compact" onclick="saigicTracerVolume(\''+escJs(v.id)+'\')">Tracer ce volume</button> ')
+                + '<button class="btn-ghost btn-compact" title="Passerelle : utilise ce déchargement pour tracer le volume sur une autre coopérative (même si celle-ci n\'est pas classée ni tracée)" onclick="saigicTracerSurAutre(\''+escJs(v.id)+'\')">Tracer sur une autre coopérative</button> ')
           + '<button class="btn-ghost btn-compact" title="Retire cette alerte sans rien tracer" onclick="saigicIgnorerATracer(\''+escJs(v.id)+'\')">Ignorer</button></td></tr>'; }).join('')
     + '</tbody></table></div>';
 }
@@ -9946,8 +9948,20 @@ async function saigicTracerVolume(vuId){
     volume: Math.round(Number(v.poids_net)||0) || '', sacs: Math.round(Number(v.nb_sacs)||0) || '', dateDebut: d0.toISOString().slice(0,10), dateFin: fin, srcCle:'vu:'+v.id, code: v.code_connaissement });
 }
 // Coopérative d'origine A (volume tracé sur une autre coopérative B) : ouvre « Tracer un volume » en mode transfert, volume pré-rempli.
-function saigicTracerSurAutre(vuId){
+async function saigicTracerSurAutre(vuId){
   const v = (state.saigicATracer||[]).find(x=>x.id===vuId); if (!v) return;
+  // Coopérative d'origine inconnue dans ORIGEN : fiche minimale créée d'après le SAIGIC (ni classée, ni tracée par ECORIGINE), pour pouvoir la choisir comme origine.
+  if (!saigicCoopDeCode(v)){
+    try{
+      const ccc = String(v.code_connaissement||'').split('-')[0].toUpperCase();
+      const nom = String(v.fournisseur_saigic||ccc).trim();
+      const nouv = { id:'coop_saigic_'+ccc, nom, nom_complet:nom, ccc_num:ccc, type:'cooperative', statut:'Non certifiée', certifications:'', fiche_a_completer:true, trace_par_ecorigine:false, trace_sur_autre_coop:true, verifiee:false, a_classer:false };
+      const { error } = await supabaseClient.from('cooperatives').upsert(nouv, { onConflict:'id' });
+      if (error) throw error;
+      if (!coopById(nouv.id)) state.cooperatives.push(nouv);
+      await supabaseClient.from('saigic_connaissements_vus').update({ cooperative_id: nouv.id }).eq('id', v.id); v.cooperative_id = nouv.id;
+    }catch(e){ showToast('Coopérative d\'origine non préparée : '+(e.message||e)); return; }
+  }
   { const kA = saigicCoopDeCode(v); openModal('tracerVolumeDirecte', Object.assign({ mode:'transfert', coopId:'', origCoopId:kA?kA.id:'', srcCle:'vu:'+v.id }, ocTvPrefillOrigine(v))); }
 }
 function ocTvPrefillOrigine(v){
