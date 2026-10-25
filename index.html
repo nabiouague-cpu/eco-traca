@@ -4386,7 +4386,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-25-293';
+const APP_VERSION = '2026-10-25-294';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -20682,6 +20682,16 @@ window.addEventListener('message', async ev=>{
     const { error } = await supabaseClient.from('cartes_coop').update({ corrections:m.corrections, updated_at:new Date().toISOString() }).eq('id', x.id);
     if (error){ showToast('Corrections non enregistrées : '+error.message); return; }
     x.corrections = m.corrections; showToast('Corrections enregistrées. Clique sur « Produire la carte finale ».', 'success');
+  } else if (m.type==='origen-cadrage'){
+    // « Cadrage de la carte » : nouvelle zone cartographiée (ou retour au cadrage automatique) ; les corrections sont gardées et la carte est régénérée
+    const emp = Array.isArray(m.emprise) && m.emprise.length===4 && m.emprise.every(v=>isFinite(Number(v))) ? m.emprise.map(Number) : null;
+    const options = Object.assign({}, x.options||{}, { emprise:emp, cadrage_editeur:!!emp });
+    const maj = { options, statut:'demandee', erreur:null, updated_at:new Date().toISOString() };
+    if (m.corrections) maj.corrections = m.corrections;
+    const { error } = await supabaseClient.from('cartes_coop').update(maj).eq('id', x.id).eq('statut','terminee');
+    if (error){ showToast('Cadrage non enregistré : '+error.message); return; }
+    Object.assign(x, maj); carteLancerRobot(); carteFermerEditeur();
+    showToast(emp ? 'Cadrage appliqué : la carte est régénérée (quelques minutes).' : 'Cadrage automatique rétabli : la carte est régénérée (quelques minutes).', 'success'); render();
   }
 });
 async function carteRegenerer(){
