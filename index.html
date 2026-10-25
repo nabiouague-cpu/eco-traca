@@ -4386,7 +4386,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-23-289';
+const APP_VERSION = '2026-10-25-290';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -9764,14 +9764,27 @@ function connVeille(){
   }, 120000);
 }
 
+// Usine en loco-magasin (colonne sites_usinage.tracabilite_externe) : la traçabilité est gérée hors ECORIGINE, donc ni « à classer » ni « volume à tracer » ; le volume reste compté.
+function usineTracabiliteExterne(u){
+  u = String(u||'').trim().toUpperCase(); if (!u) return false;
+  const S = state.sitesUsinage||[];
+  const site = S.find(x=>x.code && u.indexOf(String(x.code).toUpperCase())===0) || S.find(x=>x.nom && u.indexOf(String(x.nom).toUpperCase())>=0);
+  return !!(site && site.tracabilite_externe);
+}
 function saigicATracerListe(){
-  return (state.saigicATracer||[]).filter(v=>{ const c = saigicCoopDeCode(v); return !(c && c.diligence_externe); });
+  return (state.saigicATracer||[]).filter(v=>{ const c = saigicCoopDeCode(v); if (c && c.diligence_externe) return false;
+    return !usineTracabiliteExterne(v.mag_dest || (v.donnees && v.donnees.mag_dest)); });
 }
 function saigicDateIso(txt){
   const m = /^(\d{2})\/(\d{2})\/(\d{4})/.exec(String(txt||'')); return m ? m[3]+'-'+m[2]+'-'+m[1] : '';
 }
 // ===== Nouvelles coopératives à classer (créées d'office quand un connaissement d'une coopérative inconnue est vu sur le SAIGIC) =====
-function coopsAClasser(){ return (state.cooperatives||[]).filter(c=>c.a_classer); }
+function coopToutEnLocoMagasin(c){
+  const us = (state.achats||[]).filter(a=>a.cooperative_id===c.id && !a.producteur_id && a.usine_dechargement).map(a=>a.usine_dechargement)
+    .concat((state.saigicATracer||[]).filter(v=>{ const k = saigicCoopDeCode(v); return k && k.id===c.id; }).map(v=>v.mag_dest || (v.donnees && v.donnees.mag_dest)).filter(Boolean));
+  return us.length>0 && us.every(usineTracabiliteExterne);
+}
+function coopsAClasser(){ return (state.cooperatives||[]).filter(c=>c.a_classer && !coopToutEnLocoMagasin(c)); }
 // ===== Coopératives retirées : on peut les rétablir (fiche + connaissements en attente) =====
 async function chargerCccIgnores(){
   if (state.cccIgnoresCharge) return; state.cccIgnoresCharge = true;
