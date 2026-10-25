@@ -4386,7 +4386,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-25-292';
+const APP_VERSION = '2026-10-25-293';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -18727,9 +18727,22 @@ function renderCartesTab(){
   }).join('') + '</div>';
   return h + '</div>';
 }
+// Type de carte : RA (Rainforest Alliance, par défaut), FT (Fairtrade) ou ORD (ordinaire). Seul le type RA porte un code RA sur la carte.
+function carteCertifDeCoop(c){
+  if (!c) return 'RA';
+  if (/fair|^ft\b/i.test(String(c.certifications||''))) return 'FT';
+  if (c.statut==='Non certifiée') return 'ORD';
+  return 'RA';
+}
+function carteCertifChange(v){
+  if (state.modal && state.modal.payload) state.modal.payload.certification = v;
+  const b = document.getElementById('carte-bloc-code-ra'), i = document.querySelector('#modal-fields [name=carte_code_ra]');
+  if (b) b.style.display = (v==='RA') ? '' : 'none';
+  if (i && v!=='RA') i.value = '';
+}
 function ouvrirCarteCoop(coopId){
   const c = coopId ? coopById(coopId) : null;
-  openModal('carteCoop', { coopId:c?c.id:'', nom:c?c.nom:'', titre:c?'CARTE DES EXPLOITATIONS DE LA COOPÉRATIVE '+String(c.nom||'').toUpperCase():'', code_ra:c?(c.identifiant_certification||''):'', date_maj:new Date().toISOString().slice(0,10) });
+  openModal('carteCoop', { coopId:c?c.id:'', certification:carteCertifDeCoop(c), nom:c?c.nom:'', titre:c?'CARTE DES EXPLOITATIONS DE LA COOPÉRATIVE '+String(c.nom||'').toUpperCase():'', code_ra:c?(c.identifiant_certification||''):'', date_maj:new Date().toISOString().slice(0,10) });
 }
 function carteCoopParNom(nom){
   const n = String(nom||'').trim().toLowerCase(); if (!n) return null;
@@ -18739,7 +18752,11 @@ function carteNomSaisi(valeur){
   const t = document.querySelector('#modal-fields [name=carte_titre]'), r = document.querySelector('#modal-fields [name=carte_code_ra]');
   const nom = String(valeur||'').trim(), c = carteCoopParNom(nom);
   if (t) t.value = nom ? 'CARTE DES EXPLOITATIONS DE LA COOPÉRATIVE '+nom.toUpperCase() : '';
-  if (r && c && c.identifiant_certification) r.value = c.identifiant_certification;
+  if (c){
+    const v = carteCertifDeCoop(c), sel = document.querySelector('#modal-fields [name=carte_certification]');
+    if (sel){ sel.value = v; carteCertifChange(v); }
+    if (r && v==='RA' && c.identifiant_certification) r.value = c.identifiant_certification;
+  }
 }
 // ===== Analyse déforestation — étape 1 : préparer les polygones (KML / KMZ / GPX / GeoJSON / shapefile -> un seul GeoJSON pour Whisp) =====
 async function chargerDefo(){
@@ -20562,7 +20579,9 @@ function carteModalsHtml(){
   return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:520px"><h3>Nouvelle carte de localisation</h3><div id="modal-fields">'
     + '<label class="field">Nom de la coopérative <span class="hint" style="margin:0">(tape le nom, ou choisis-en une déjà dans ORIGEN)</span><input type="text" name="carte_coop" list="carte-coops" value="'+esc(p.nom||'')+'" placeholder="Ex. SCOOPA" autocomplete="off" oninput="carteNomSaisi(this.value)"><datalist id="carte-coops">'+opts+'</datalist></label>'
     + '<label class="field">Titre de la carte<input type="text" name="carte_titre" value="'+esc(p.titre)+'"></label>'
-    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><label class="field">Code RA<input type="text" name="carte_code_ra" value="'+esc(p.code_ra)+'" placeholder="RA_…"></label>'
+    + '<label class="field">Type de carte <span class="hint" style="margin:0">(certification de la coopérative)</span><select name="carte_certification" onchange="carteCertifChange(this.value)">'
+      + [['RA','Rainforest Alliance'],['FT','Fairtrade'],['ORD','Ordinaire (non certifiée)']].map(o=>'<option value="'+o[0]+'"'+((p.certification||'RA')===o[0]?' selected':'')+'>'+o[1]+'</option>').join('')+'</select></label>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><label class="field" id="carte-bloc-code-ra" style="'+((p.certification||'RA')==='RA'?'':'display:none')+'">Code RA<input type="text" name="carte_code_ra" value="'+esc(p.code_ra)+'" placeholder="RA_…"></label>'
     + '<label class="field">Date de mise à jour<input type="date" name="carte_date_maj" value="'+esc(p.date_maj)+'"></label></div>'
     + '<label class="field">Polygones des parcelles <span class="hint" style="margin:0">(.zip du shapefile, ou .geojson)</span><input type="file" id="carte-fichier-poly" accept=".zip,.geojson,.json"></label>'
     + '<label class="field">Localités de la coopérative <span class="hint" style="margin:0">(modèle Excel rempli)</span><input type="file" id="carte-fichier-loc" accept=".xlsx,.xls"></label>'
@@ -20602,12 +20621,13 @@ async function carteEnvoyer(){
     if (!isFinite(nomsTaille) || nomsTaille < 5 || nomsTaille > 16){ carteErreurForm('Taille des noms de localités : un nombre entre 5 et 16 (points).'); return; }
   }
   const centroide = !!(document.getElementById('carte-centroide')||{}).checked;
+  const certif = (fv('carte_certification')||'RA');
   const btn = document.getElementById('carte-envoyer'); if (btn){ btn.disabled = true; btn.textContent = 'Envoi…'; }
   const id = genId('cm'), nets = s=>String(s).normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^A-Za-z0-9._-]+/g,'_');
   const base = 'cartes/'+(pl.coopId||'libre')+'/'+id+'/';
-  const ligne = { id, cooperative_id:pl.coopId||null, cooperative_nom:(coopConnue?coopConnue.nom:nomCoop), theme:'classique', titre:(fv('carte_titre')||'').trim()||null, code_ra:(fv('carte_code_ra')||'').trim()||null, date_maj:fv('carte_date_maj')||null,
+  const ligne = { id, cooperative_id:pl.coopId||null, cooperative_nom:(coopConnue?coopConnue.nom:nomCoop), theme:'classique', titre:(fv('carte_titre')||'').trim()||null, code_ra:(certif==='RA' ? (fv('carte_code_ra')||'').trim() : '')||null, date_maj:fv('carte_date_maj')||null,
     polygones_path:base+'polygones_'+nets(poly.name), polygones_nom:poly.name, localites_path:base+'localites_'+nets(loc.name), localites_nom:loc.name,
-    options:{ auteur:auteurL, emprise, noms_taille:nomsTaille, centroide_habitat:centroide }, statut:'demandee', demande_par:(state.session&&state.session.user&&state.session.user.email)||null };
+    options:{ auteur:auteurL, emprise, noms_taille:nomsTaille, centroide_habitat:centroide, certification:certif }, statut:'demandee', demande_par:(state.session&&state.session.user&&state.session.user.email)||null };
   try {
     let r = await supabaseClient.storage.from('documents-coop').upload(ligne.polygones_path, poly, { upsert:true }); if (r.error) throw r.error;
     r = await supabaseClient.storage.from('documents-coop').upload(ligne.localites_path, loc, { upsert:true }); if (r.error) throw r.error;
