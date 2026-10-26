@@ -4386,7 +4386,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-26-301';
+const APP_VERSION = '2026-10-26-302';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8155,6 +8155,50 @@ async function livraisonsClientsExporter(campagneId){
   });
   await qcTelechargerClasseur(wb, 'Point_livraisons_clients_'+String(campNom).replace(/[^A-Za-z0-9]+/g,'_')+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
   showToast('Point des livraisons téléchargé ('+liste.length+' feuille'+(liste.length>1?'s':'')+').', 'success');
+}
+
+// ---- Livraisons d'une coopérative (ou de toutes) : UN seul tableau, au modèle TRACA (mêmes couleurs, mêmes colonnes), sans découpage par client ----
+// Suit le filtre de l'écran : une coopérative choisie = ses seules livraisons ; « toutes les coopératives » = toutes les livraisons, avec poids et statut de déclaration RA / FT.
+async function livraisonsCoopExporter(){
+  let ExcelJS; try{ ExcelJS = await qcChargerExcelJS(); }catch(e){ showToast('Impossible de préparer le classeur : '+e.message, 'error'); return; }
+  const coopId = state.coopFilter && state.coopFilter!=='all' ? state.coopFilter : null, coop = coopId ? coopById(coopId) : null;
+  const camp = state.campagneFilter && state.campagneFilter!=='all' ? state.campagneFilter : null, campNom = camp ? lotsCampagneNom(camp) : 'toutes campagnes';
+  const achats = (state.achats||[]).filter(a=>!a.producteur_id && !a.refoulee && (!coopId || a.cooperative_id===coopId) && (!camp || a.campagne_id===camp));
+  if (!achats.length){ showToast('Aucune livraison à exporter'+(coop ? ' pour '+coop.nom : '')+'.'); return; }
+  const nomCoop = a=>{ const c = coopById(a.cooperative_id); return c ? c.nom : ''; };
+  const tri = achats.slice().sort((x,y)=>nomCoop(x).localeCompare(nomCoop(y),'fr') || String(x.date||'').localeCompare(String(y.date||'')) || String(x.connaissement||'').localeCompare(String(y.connaissement||''),'fr',{numeric:true}));
+  const nivCache = new Map();
+  const nivDe = a=>{ const cl = achatClientEffectif(a) || '', cle = ccClefClient(cl); if (nivCache.has(cle)) return nivCache.get(cle);
+    const nv = Array.from(new Set((state.contratsClients||[]).filter(c=>ccClefClient(c.client||'')===cle && (!camp || c.campagne_id===camp) && c.statut!=='annule' && c.statut!=='annulé').map(c=>c.niveau_tracabilite).filter(Boolean)));
+    const r = livrNiveauCode(nv.length===1 ? nv[0] : ''); nivCache.set(cle, r); return r; };
+  const ENTETE = 'FFC55A11', VERT = 'FFCCFFCC', NOIR = { argb:'FF000000' };
+  const bord = { style:'thin', color:NOIR }, cadre = { top:bord, bottom:bord, left:bord, right:bord };
+  const NB = '#,##0_ ;[Red]\\-#,##0\\ ';
+  const cols = [['COOPERATIVES',26],['PRODUITS',15.44],['DATE LIVRAISON',14.89],['N° CONNAISSEMENT',22.66],['Immatriculation du véhicule',15.66],['Immatriculation de la remorque',15.66],['N° SACS',13],['POIDS ACCEPTE',15.11],['POIDS NET PAYÉ',15.11],['STATUT DÉCLARATION',24],['DATE DÉCLARATION',17]];
+  const dateXl = iso=>{ const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso||'')); return m ? new Date(Date.UTC(+m[1], +m[2]-1, +m[3])) : null; };
+  const wb = new ExcelJS.Workbook(); wb.creator = 'ORIGEN · ECORIGINE'; wb.created = new Date();
+  const ws = wb.addWorksheet(coop ? String(coop.nom).replace(/[\\\/\?\*\[\]:]/g,' ').trim().slice(0,31) || 'Livraisons' : 'Livraisons');
+  ws.columns = [{ width:9 }].concat(cols.map(c=>({ width:c[1] })));
+  const h = ws.getRow(4); h.height = 27.6;
+  cols.forEach((c,i)=>{ const x = h.getCell(i+2); x.value = c[0]; x.font = { name:'Calibri', size:10, bold:true, color:{ argb:'FFFFFFFF' } }; x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:ENTETE } }; x.alignment = { horizontal:'center', vertical:'middle', wrapText:true }; x.border = cadre; });
+  ws.getCell('B2').value = (coop ? 'Livraisons de '+coop.nom : 'Livraisons de toutes les coopératives')+' · '+campNom+' · '+tri.length+' connaissement'+(tri.length>1?'s':'')+' · édité le '+dateFr(new Date().toISOString().slice(0,10));
+  ws.getCell('B2').font = { name:'Calibri', size:10, bold:true };
+  tri.forEach((a,i)=>{
+    const sd = livrStatutDecl(a), acc = Number(a.poids_brut_accepte)||0, net = Number(a.poids_net_produit)||0, sacs = Number(a.nombre_sacs)||0;
+    const v = [ nomCoop(a), livrProduit(a, nivDe(a)), dateXl(a.date), a.connaissement||'', a.immat_vehicule||'', a.immat_remorque||'', sacs||null, acc||null, net||null, sd.txt, sd.date||'' ];
+    const row = ws.getRow(5+i);
+    v.forEach((val,k)=>{ const x = row.getCell(k+2); x.value = val; x.border = cadre; x.font = { name:'Calibri', size:10 };
+      x.alignment = k===0 ? { horizontal:'left' } : { horizontal:'right', indent:1 };
+      if (k===1 || k===2) x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:VERT } };
+      if (k===2) x.numFmt = 'mm-dd-yy'; if (k>=6 && k<=8) x.numFmt = NB; });
+  });
+  const fin = 4 + tri.length, tot = ws.getRow(fin+1);
+  [[6],[7],[8]].forEach(([k])=>{ const x = tot.getCell(k+2); x.value = { formula:'SUM('+String.fromCharCode(66+k)+'5:'+String.fromCharCode(66+k)+fin+')' }; x.font = { name:'Calibri', size:10, bold:true }; x.numFmt = NB; x.border = cadre; });
+  tot.getCell(2).value = 'TOTAL'; tot.getCell(2).font = { name:'Calibri', size:10, bold:true };
+  ws.autoFilter = { from:{ row:4, column:2 }, to:{ row:fin, column:12 } };
+  ws.views = [{ state:'frozen', ySplit:4 }];
+  await qcTelechargerClasseur(wb, 'Livraisons_'+(coop ? String(coop.nom) : 'toutes_cooperatives').replace(/[^A-Za-z0-9]+/g,'_')+'_'+String(campNom).replace(/[^A-Za-z0-9]+/g,'_')+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
+  showToast('Livraisons téléchargées : '+tri.length+' connaissement'+(tri.length>1?'s':'')+(coop ? ' ('+coop.nom+')' : ' (toutes les coopératives)')+'.', 'success');
 }
 
 // ---- Suivi achats par client : UN tableau, une ligne par client, les colonnes dans l'ordre de la chaine ----
@@ -23885,6 +23929,7 @@ function renderAchatsConnaissementPanel(){
   let html = '<div class="panel panel-achats">';
   html += '<div class="panel-head"><h2>Achats par connaissement ('+fmtNum(list.length)+')</h2>'
     + '<button type="button" class="btn" onclick="telechargerRapportLivraisons()" title="Toutes les livraisons de toutes les coopératives et de toutes les campagnes, avec leur statut de déclaration Multitrace / Fairtrace">⬇ Rapport des livraisons (Excel)</button>'
+    + '<button type="button" class="btn" style="margin-left:8px" onclick="livraisonsCoopExporter()" title="Un seul tableau au modèle TRACA : les livraisons de la coopérative choisie, ou de toutes les coopératives si aucune n\'est choisie, avec poids et statut de déclaration RA / FT">⬇ '+(state.coopFilter && state.coopFilter!=='all' ? 'Livraisons de cette coopérative' : 'Livraisons de toutes les coopératives')+' (Excel)</button>'
     + '<button type="button" class="btn" style="margin-left:8px" onclick="livraisonsClientsExporter(\''+escJs((state.campagneFilter && state.campagneFilter!=="all") ? state.campagneFilter : "")+'\')" title="Un classeur Excel : une feuille par client, 9 colonnes du modèle TRACA">⬇ Point des livraisons par client (Excel)</button>'
     + '<button type="button" class="btn btn-primary" style="margin-left:8px" onclick="ouvrirPresentationAchats()" title="Quatre fenêtres : suivi des achats, achats quotidien, tracking brousse, prévisions">🖼 Présentation des achats</button>'
     + '<button type="button" class="btn" style="margin-left:8px" onclick="ouvrirPrevisionsEditeur()" title="Saisir les coopératives qui peuvent livrer, le volume et le jour">✏ Prévisions de la semaine</button></div>';
