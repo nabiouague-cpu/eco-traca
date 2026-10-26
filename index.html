@@ -4391,7 +4391,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-26-306';
+const APP_VERSION = '2026-10-26-307';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5951,8 +5951,8 @@ function ocNotifications(){
   const nDem = (state.demandesCoop||[]).filter(d=>d.statut==='acceptee').length;
   if (nDem) items.push({ ic:'📨', titre:'Demandes acceptées à traiter', detail:nDem+' demande(s) de coopératives validées à prendre en charge', nb:nDem, niveau:'info', action:"ocAllerOnglet('demandes')" });
   const nATracer = saigicATracerListe().length;
-  if (nATracer) items.push({ ic:'📦', titre:'Volumes à tracer', detail:nATracer+' connaissement(s) vu(s) sur le SAIGIC, à tracer par toi', nb:nATracer, niveau:'warn', action:"ocAllerOnglet('tracage')" });
-  { const nDoss = ocDossiersTotalATracer(); if (nDoss) items.push({ ic:'📁', titre:'Dossiers de traçabilité', detail:nDoss+' connaissement(s) déchargé(s) chez nous, à tracer (avec simulation)', nb:nDoss, niveau:'warn', action:"ocAllerOnglet('dossiers')" }); }
+  if (nATracer) items.push({ ic:'📦', titre:'Volumes à tracer', detail:nATracer+' connaissement(s) vu(s) sur le SAIGIC, à tracer par toi', nb:nATracer, niveau:'warn', action:"ocAllerTracage('atracer')" });
+  { const nDoss = ocDossiersTotalATracer(); if (nDoss) items.push({ ic:'📁', titre:'Dossiers de traçabilité', detail:nDoss+' connaissement(s) déchargé(s) chez nous, à tracer (avec simulation)', nb:nDoss, niveau:'warn', action:"ocAllerTracage('dossiers')" }); }
   const nFiches = (typeof fichesEnAttenteAchat==='function') ? fichesEnAttenteAchat().length : 0;
   if (nFiches) items.push({ ic:'📄', titre:'Fiches sans achat enregistré', detail:nFiches+' fiche(s) de traçabilité envoyée(s) sans achat correspondant', nb:nFiches, niveau:'warn', action:"ocAllerAchats('tous')" });
   const nPesee = connaissements.filter(a=>etatAchat(a).cle==='attente').length;
@@ -6068,7 +6068,7 @@ function ocAllerProducteur(id){
 })();
 // ---- Barre laterale v2 ----
 const SIDEBAR_GROUPES = [
-  { titre:'Pilotage',       items:[ ['dashboard','ICON_DASHBOARD','Tableau de bord'], ['tracage','ICON_TRACAGE','Traçage de volume'], ['dossiers','ICON_DOSSIERS','Dossiers de traçabilité'] ] },
+  { titre:'Pilotage',       items:[ ['dashboard','ICON_DASHBOARD','Tableau de bord'], ['tracage','ICON_TRACAGE','Traçage de volume'] ] },
   { titre:'Opérations',     items:[ ['cooperatives','ICON_COOPS','Coopératives'], ['demandes','ICON_DEMANDES','Demandes coopératives'], ['lots','ICON_LOTS','Lots & export'], ['prefinancements','ICON_PREFI','Préfinancements'], ['sacherie','ICON_SACH','Sacherie'] ] },
   { titre:'Conformité',     items:[ ['conformite','ICON_CONFORMITE','Conformité & documents'], ['basedonnees','ICON_BASEDONNEES','Base de données coop.'], ['cartes','ICON_CARTE','Cartes & déforestation'] ] },
   { titre:'Administration', items:[ ['acces','ICON_ACCES','Accès coopératives'], ['stockage','ICON_STOCKAGE','Stockage'], ['sauvegardes','ICON_SAUVEGARDES','Sauvegardes'] ] },
@@ -9902,7 +9902,7 @@ function lotsModalsHtml(){
     let corps;
     if (!D) corps = '<div class="hint">Aucun connaissement au format CCC-année-saison-numéro pour cette coopérative.</div>';
     else {
-      const badge = st=>({ trace:'<span class="badge ok">✔ Tracé</span>', simule:'<span class="badge" style="background:#E8F0FB;color:#1F4E8C">◔ Simulé</span>', atracer:'<span class="badge warn" style="font-weight:700">⏳ À tracer</span>', asimuler:'<span class="hint" style="margin:0">à simuler</span>' }[st]);
+      const badge = st=>({ trace:'<span class="badge ok">✔ Tracé</span>', simule:'<span class="badge" style="background:#E8F0FB;color:#1F4E8C">◔ Simulé</span>', atracer:'<span class="badge warn" style="font-weight:700">⏳ À tracer</span>', autre:'<span class="hint" style="margin:0" title="Déchargé dans une autre usine : pas de traçabilité de notre côté pour l\'instant">Autre usine</span>', asimuler:'<span class="hint" style="margin:0">à simuler</span>' }[st]);
       const rows = []; let i = 0;
       while (i<D.lignes.length){
         const l = D.lignes[i];
@@ -10358,13 +10358,15 @@ async function coopRetirerConfirme(id){
   state.saigicATracer = (state.saigicATracer||[]).filter(v=>v.cooperative_id!==id);
   showToast(c.nom+' retirée : le robot ne la recréera plus.', 'success'); render();
 }
+function coopClasserFermeN(){ try{ return Number(localStorage.getItem('origen_classer_ferme')||0); }catch(e){ return 0; } }
+function coopClasserFermer(){ try{ localStorage.setItem('origen_classer_ferme', String(coopsAClasser().length)); }catch(e){} render(); }
 function coopClasserBanniereHtml(){
-  const n = coopsAClasser().length; if (!n) return '';
+  const n = coopsAClasser().length; if (!n || n<=coopClasserFermeN()) return '';
   return '<div class="conn-banniere" style="border-color:#2F6DB5;background:#EAF3FB;color:#14365C"><div class="cb-tete" style="margin:0;cursor:default"><span>🆕 '+n+' nouvelle'+(n>1?'s':'')+' coopérative'+(n>1?'s':'')+' à classer ('+coopsAClasser().slice(0,3).map(c=>esc(c.nom)).join(', ')+(n>3?'…':'')+')</span>'
-    + '<button class="btn btn-primary btn-compact" onclick="state.coopDashboardId=null;state.tab=\'tracage\';render()">Classer</button></div></div>';
+    + '<span class="cb-droite"><button class="btn btn-primary btn-compact" onclick="ocAllerTracage(\'classer\')">Classer</button><button class="btn-ghost btn-compact" title="Fermer sans rien faire : on la retrouve dans Traçage de volume › Coopératives à classer" onclick="coopClasserFermer()">✕ Fermer</button></span></div></div>';
 }
-function saigicATracerHtml(){
-  const cl = coopsAClasserHtml();
+function saigicATracerHtml(sansClasser){
+  const cl = sansClasser ? '' : coopsAClasserHtml();
   const liste = saigicATracerListe(); if (!liste.length) return cl;
   return cl + '<div class="achats-note" style="margin:0 0 14px;background:#FFF6E0;border:1px solid #E0B000;color:#5c4300">'
     + '<div style="font-weight:700;margin-bottom:6px">📦 '+liste.length+' volume'+(liste.length>1?'s':'')+' à tracer — connaissement'+(liste.length>1?'s':'')+' vu'+(liste.length>1?'s':'')+' sur le SAIGIC</div>'
@@ -10611,8 +10613,7 @@ function renderTracageDirect(tr){
     + '<div class="panel-head trc-entete"><div><h2>Traçage de volume — pour la coopérative elle-même</h2>'
     + '<p>Le volume est réparti entre les producteurs de la coopérative. La coopérative nous transmet elle-même son connaissement et son ticket de pesée : ORIGEN ne génère aucun de ces deux documents (la pesée validée à l\'usine est lue automatiquement sur le SAIGIC).</p></div>'
     + '<div class="trc-actions">'+ocTracageBoutonAnnuler(tr)+'<button type="button" class="btn" onclick="ocTracageNouveau()">Nouveau traçage</button>'
-    + '<button type="button" class="btn-danger-text" onclick="supprimerTracage()" title="Retire les achats producteurs de ce traçage (le connaissement de la coopérative n\'est pas touché)">Supprimer ce traçage</button></div></div>'
-    + saigicATracerHtml();
+    + '<button type="button" class="btn-danger-text" onclick="supprimerTracage()" title="Retire les achats producteurs de ce traçage (le connaissement de la coopérative n\'est pas touché)">Supprimer ce traçage</button></div></div>';
   html += '<div class="trc-resume">'
     + '<div><div class="k">Coopérative</div><div class="v txt" title="'+esc(coop?coop.nom:'')+'">'+esc(coop?coop.nom:tr.coopId)+'</div><div class="s">'+esc(camp?camp.nom:'Campagne —')+'</div></div>'
     + '<div><div class="k">Volume tracé</div><div class="v">'+fmtKg(tr.volumeKg)+'</div><div class="s">'+esc(String(tr.nbSacs))+' sacs · '+producteurs.length+' producteur(s)</div></div>'
@@ -10651,7 +10652,27 @@ function renderTracageDirect(tr){
     + '<div class="pied">'+pill(3)+'</div></div>';
   return html + '</div></div>';
 }
+// Onglet « Traçage de volume » : un seul endroit pour les dossiers par coopérative, les volumes à tracer, les coopératives à classer et la chaîne de traçage.
+// Chaque rubrique s'ouvre en un clic et se referme en recliquant dessus.
+function ocTracageSousDefaut(){ return ocTracageCourant() ? 'tracer' : 'dossiers'; }
+function ocTracageSousActif(){ return state.tracageSous===undefined ? ocTracageSousDefaut() : state.tracageSous; }
+function ocTracageSous(k){ state.tracageSous = (ocTracageSousActif()===k) ? '' : k; render(); }
+function ocAllerTracage(k){ ocFermerSurcouches(); state.recherche = null; state.coopDashboardId = null; state.tab = 'tracage'; state.tracageSous = k; render(); }
 function renderTracageTab(){
+  const actif = ocTracageSousActif(), tr = ocTracageCourant();
+  const nDoss = ocDossiersTotalATracer(), nVus = saigicATracerListe().length, nCl = coopsAClasser().length;
+  const onglets = [['dossiers','📁 Dossiers de traçabilité', nDoss], ['atracer','📦 Volumes à tracer', nVus], ['classer','🆕 Coopératives à classer', nCl], ['tracer','⛓ Tracer un volume'+(tr ? ' (en cours)' : ''), 0]];
+  let html = '<div class="panel" style="padding-bottom:6px"><div class="panel-head"><div><h2>Traçage de volume</h2><p style="margin:2px 0 0;color:var(--ink-soft);font-size:13px">Tout ce qui concerne la traçabilité au même endroit. Clique sur une rubrique pour l\'ouvrir, reclique dessus pour la refermer.</p></div></div>'
+    + '<div class="oc-subtabs" style="margin:10px 0 4px">'
+    + onglets.map(([id,l,n])=>'<button class="'+(actif===id?'active':'')+'" onclick="ocTracageSous(\''+id+'\')">'+l+(n>0 ? ' <span class="nav-badge" style="position:static;display:inline-block;margin-left:4px">'+n+'</span>' : '')+'</button>').join('')
+    + '</div></div>';
+  if (actif==='dossiers') html += renderDossiersTab();
+  else if (actif==='atracer'){ const h = saigicATracerHtml(true); html += '<div class="panel">'+(h || '<div class="hint" style="padding:6px 0">Aucun volume à tracer pour le moment. 🎉</div>')+'</div>'; }
+  else if (actif==='classer'){ const h = coopsAClasserHtml(); html += '<div class="panel">'+(h || '<div class="hint" style="padding:6px 0">Aucune coopérative à classer.</div>')+'</div>'; }
+  else if (actif==='tracer') html += renderTracageEtapes();
+  return html;
+}
+function renderTracageEtapes(){
   const tr = ocTracageCourant();
   if (tr && tr.mode==='direct') return renderTracageDirect(tr);
   const coop = tr ? coopById(tr.coopId) : null;
@@ -10673,9 +10694,7 @@ function renderTracageTab(){
     + (tr ? ocTracageBoutonAnnuler(tr)+'<button type="button" class="btn" onclick="ocTracageNouveau()" title="Oublie la chaîne en cours (rien n\'est supprimé en base) pour en commencer une nouvelle">Nouveau traçage</button>'
           + '<button type="button" class="btn-danger-text" onclick="supprimerTracage()" title="Retire les achats producteurs du traçage et le connaissement lié, pour tout reproduire">Supprimer ce traçage</button>' : '')
     + '</div></div>'
-    + saigicATracerHtml()
-    + ocDossiersBanniereHtml()
-    + '<div style="margin:0 0 14px"><button class="btn" title="Simule, camion par camion, la traçabilité d\'une coopérative en tenant compte des connaissements livrés ailleurs (numéros manquants)" onclick="ocSimOuvrir()">🧮 Simulation de traçabilité par séquence de connaissements</button></div>';
+    ;
 
   if (!tr){
     html += '<div class="trc-progress">'
@@ -12060,7 +12079,7 @@ function ocSimGroupes(coopId){
     if (!m.has(c.cle)) m.set(c.cle, { cle:c.cle, camions:[], max:0 });
     const g = m.get(c.cle), kg = Number(a.quantite_kg)||Number(a.poids_net_produit)||0;
     if (g.camions.some(x=>x.seq===c.seq)) return;
-    g.camions.push({ seq:c.seq, code:String(a.connaissement).trim(), kg, iso:String(a.date||'').slice(0,10), camp:a.campagne_id||'' }); g.max = Math.max(g.max, c.seq);
+    g.camions.push({ seq:c.seq, code:String(a.connaissement).trim(), kg, iso:String(a.date||'').slice(0,10), camp:a.campagne_id||'', usine:a.usine_dechargement||'' }); g.max = Math.max(g.max, c.seq);
   });
   return Array.from(m.values()).sort((a,b)=>b.cle.localeCompare(a.cle));
 }
@@ -12233,11 +12252,12 @@ function ocDossierDonnees(coopId, cle){
   const lignes = [];
   for (let seq=1; seq<=g.max; seq++){
     const c = nous.get(seq), code = c ? c.code : g.cle+'-'+seq;
-    const st = c ? (nParCode.has(code) ? 'trace' : (sim.has(seq) ? 'simule' : 'atracer')) : (sim.has(seq) ? 'simule' : 'asimuler');
-    lignes.push({ seq, code, nous:!!c, kg:c ? c.kg : 0, iso:c ? c.iso : '', st, nProd: c ? (nParCode.get(code)||0) : (sim.has(seq) ? (sim.get(seq).alloc||[]).length : 0) });
+    const awa = c ? ocAwahusSite({ usine_dechargement:c.usine }) : false;
+    const st = c ? (nParCode.has(code) ? 'trace' : (sim.has(seq) ? 'simule' : (awa ? 'atracer' : 'autre'))) : (sim.has(seq) ? 'simule' : 'asimuler');
+    lignes.push({ seq, code, nous:!!c, awa, usine: c ? c.usine : '', kg:c ? c.kg : 0, iso:c ? c.iso : '', st, nProd: c ? (nParCode.get(code)||0) : (sim.has(seq) ? (sim.get(seq).alloc||[]).length : 0) });
   }
   const ours = lignes.filter(l=>l.nous);
-  return { g, campId, lignes, groupes:gs, nNous:ours.length, nTrace:ours.filter(l=>l.st==='trace').length, nSimule:ours.filter(l=>l.st==='simule').length, nATracer:ours.filter(l=>l.st==='atracer').length };
+  return { g, campId, lignes, groupes:gs, nNous:ours.length, nTrace:ours.filter(l=>l.st==='trace').length, nSimule:ours.filter(l=>l.st==='simule').length, nATracer:ours.filter(l=>l.st==='atracer').length, nAutre:ours.filter(l=>l.st==='autre').length };
 }
 // Toutes les coopératives qui ont au moins un connaissement chez nous (au format CCC-année-saison-n°) : le dossier vaut pour tout le monde,
 // car une coopérative qui livre chez nous peut aussi livrer ailleurs puis revenir.
@@ -12250,38 +12270,47 @@ function ocDossiersListe(){
     const gs = ocSimGroupes(c.id); if (!gs.length) return;
     const d = gs.map(g=>ocDossierDonnees(c.id, g.cle)).filter(Boolean); if (!d.length) return;
     const usines = Array.from(new Set((state.achats||[]).filter(a=>a.cooperative_id===c.id && !a.producteur_id && !a.refoulee && a.connaissement && a.usine_dechargement).map(a=>{ const st = sachSiteDe(a.usine_dechargement); return st ? st.nom : String(a.usine_dechargement).trim(); })));
-    liste.push({ c, nNous:d.reduce((t,x)=>t+x.nNous,0), nTrace:d.reduce((t,x)=>t+x.nTrace,0), nSimule:d.reduce((t,x)=>t+x.nSimule,0), nATracer:d.reduce((t,x)=>t+x.nATracer,0), usines,
+    liste.push({ c, nAutre:d.reduce((t,x)=>t+x.nAutre,0), nNous:d.reduce((t,x)=>t+x.nNous,0), nTrace:d.reduce((t,x)=>t+x.nTrace,0), nSimule:d.reduce((t,x)=>t+x.nSimule,0), nATracer:d.reduce((t,x)=>t+x.nATracer,0), usines,
       awahus:(state.achats||[]).some(a=>a.cooperative_id===c.id && !a.producteur_id && !a.refoulee && a.connaissement && ocAwahusSite(a)),
       nProd:(state.producteurs||[]).filter(p=>p.cooperative_id===c.id && p.farm_id).length });
   });
   liste.sort((a,b)=>b.nATracer-a.nATracer || String(a.c.nom).localeCompare(String(b.c.nom),'fr'));
   _dossCache = { cle, liste }; return liste;
 }
-function ocDossiersTotalATracer(){ return ocDossiersListe().reduce((t,x)=>t+x.nATracer,0); }
+function ocDossiersTotalATracer(){ return ocDossiersListe().filter(x=>x.awahus).reduce((t,x)=>t+x.nATracer,0); }
 function ocDossiersFiltre(f){ state.dossiersFiltre = f; render(); }
+function ocDossiersAutresBascule(){ state.dossiersAutresOuvert = !state.dossiersAutresOuvert; render(); }
 function renderDossiersTab(){
   const L = ocDossiersListe(), filtre = state.dossiersFiltre || 'tous';
-  const tot = k=>L.reduce((t,x)=>t+x[k],0), nA = tot('nATracer');
-  const vue = filtre==='atracer' ? L.filter(x=>x.nATracer>0) : L;
+  const A = L.filter(x=>x.awahus), B = L.filter(x=>!x.awahus);
+  const tot = k=>A.reduce((t,x)=>t+x[k],0), nA = tot('nATracer');
+  const vue = filtre==='atracer' ? A.filter(x=>x.nATracer>0) : A;
   const puce = (n, lib, couleur)=>'<div style="flex:1;min-width:130px;background:#fff;border:1px solid var(--border);border-radius:12px;padding:12px 14px"><div style="font-size:26px;font-weight:700;color:'+couleur+'">'+fmtNum(n)+'</div><div class="hint" style="margin:0">'+lib+'</div></div>';
   let html = '<div class="panel"><div class="panel-head"><div><h2>📁 Dossiers de traçabilité</h2>'
-    + '<p style="margin:2px 0 0;color:var(--ink-soft);font-size:13px;max-width:780px">Un dossier par coopérative, pour toutes les coopératives qui déchargent chez nous : tous les n° de connaissement de sa série (1 à N), ce qui est tracé, simulé (livré ailleurs ou pas encore tracé) ou à tracer. Quand un connaissement est tracé avec la simulation, les numéros précédents sont simulés d\'abord pour adapter le tracé à ce qu\'il reste.</p></div></div>'
-    + '<div style="display:flex;gap:10px;flex-wrap:wrap;margin:14px 0">'
-    + puce(L.length, 'coopérative'+(L.length>1?'s':'')+' avec dossier', 'var(--ink)') + puce(tot('nNous'), 'connaissements chez nous', 'var(--ink)') + puce(tot('nTrace'), 'tracés', '#1e8449') + puce(tot('nSimule'), 'simulés', '#1F4E8C') + puce(nA, 'à tracer', nA ? '#b36b00' : '#1e8449') + '</div>'
-    + '<div style="display:flex;gap:8px;margin:0 0 12px"><button class="'+(filtre==='tous'?'btn btn-primary':'btn')+' btn-compact" onclick="ocDossiersFiltre(\'tous\')">Toutes les coopératives ('+L.length+')</button><button class="'+(filtre==='atracer'?'btn btn-primary':'btn')+' btn-compact" onclick="ocDossiersFiltre(\'atracer\')">À tracer seulement ('+L.filter(x=>x.nATracer>0).length+')</button></div>';
-  if (!vue.length) return html + '<div class="hint">'+(filtre==='atracer' ? 'Plus aucun connaissement à tracer. 🎉' : 'Aucune coopérative n\'a encore de connaissement au format CCC-année-saison-numéro.')+'</div></div>';
-  html += '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th>Coopérative</th><th>N° CCC</th><th>Usine(s)</th><th class="num">Producteurs</th><th class="num">Chez nous</th><th class="num">Tracés</th><th class="num">Simulés</th><th class="num">Reste à tracer</th><th></th></tr></thead><tbody>'
-    + vue.map(x=>'<tr><td><b>'+esc(x.c.nom)+'</b>'+(x.awahus ? ' <span class="badge" title="Livre aussi chez Awahus">Awahus</span>' : '')+'</td><td>'+esc(x.c.ccc_num||'—')+'</td><td class="hint">'+esc(x.usines.join(', ')||'—')+'</td>'
+    + '<p style="margin:2px 0 0;color:var(--ink-soft);font-size:13px;max-width:800px">Un dossier par coopérative : tous les n° de sa série (1 à N), ce qui est tracé, simulé (livré ailleurs ou pas encore tracé) ou à tracer. « Tracer avec la simulation » simule d\'abord les numéros précédents pour adapter le tracé à ce qu\'il reste. Ce qui s\'applique à une coopérative vaut pour toutes : une coopérative qui livre chez nous peut aussi livrer ailleurs puis revenir.</p></div>'
+    + '<div class="trc-actions"><button class="btn" title="Simule, camion par camion, la traçabilité d\'une coopérative en tenant compte des connaissements livrés ailleurs (numéros manquants)" onclick="ocSimOuvrir()">🧮 Simulation libre</button></div></div>'
+    + '<div style="margin:12px 0 6px;font-weight:700;font-size:14px;color:#14402a">🟢 À tracer par nous — Awahus (IPSC)</div>'
+    + '<div style="display:flex;gap:10px;flex-wrap:wrap;margin:0 0 12px">'
+    + puce(A.length, 'coopérative'+(A.length>1?'s':''), 'var(--ink)') + puce(tot('nNous'), 'connaissements chez nous', 'var(--ink)') + puce(tot('nTrace'), 'tracés', '#1e8449') + puce(tot('nSimule'), 'simulés', '#1F4E8C') + puce(nA, 'à tracer', nA ? '#b36b00' : '#1e8449') + '</div>'
+    + '<div style="display:flex;gap:8px;margin:0 0 12px"><button class="'+(filtre==='tous'?'btn btn-primary':'btn')+' btn-compact" onclick="ocDossiersFiltre(\'tous\')">Toutes ('+A.length+')</button><button class="'+(filtre==='atracer'?'btn btn-primary':'btn')+' btn-compact" onclick="ocDossiersFiltre(\'atracer\')">À tracer seulement ('+A.filter(x=>x.nATracer>0).length+')</button></div>';
+  if (!vue.length) html += '<div class="hint" style="margin-bottom:14px">'+(filtre==='atracer' ? 'Plus aucun connaissement Awahus à tracer. 🎉' : 'Aucune coopérative n\'a encore de connaissement déchargé chez Awahus.')+'</div>';
+  else html += '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th>Coopérative</th><th>N° CCC</th><th>Usine(s)</th><th class="num">Producteurs</th><th class="num">Chez nous</th><th class="num">Tracés</th><th class="num">Simulés</th><th class="num">Reste à tracer</th><th></th></tr></thead><tbody>'
+    + vue.map(x=>'<tr><td><b>'+esc(x.c.nom)+'</b></td><td>'+esc(x.c.ccc_num||'—')+'</td><td class="hint">'+esc(x.usines.join(', ')||'—')+'</td>'
       + '<td class="num">'+(x.nProd ? fmtNum(x.nProd) : '<span class="badge warn" title="Base producteurs non importée : traçabilité impossible">aucun</span>')+'</td><td class="num">'+x.nNous+'</td><td class="num">'+x.nTrace+'</td><td class="num">'+x.nSimule+'</td>'
       + '<td class="num">'+(x.nATracer ? '<span class="badge warn" style="font-weight:700;font-size:13px">'+x.nATracer+' à tracer</span>' : '<span class="badge ok">à jour</span>')+'</td>'
       + '<td><button class="btn btn-primary btn-compact" onclick="ocDossierOuvrir(\''+escJs(x.c.id)+'\')">Ouvrir le dossier</button></td></tr>').join('')
-    + '</tbody></table></div></div>';
-  return html;
-}
-// Bandeau dans l'onglet Traçage : renvoie vers les dossiers.
-function ocDossiersBanniereHtml(){
-  const n = ocDossiersTotalATracer(); if (!n) return '';
-  return '<div class="achats-note" style="margin:0 0 14px;background:#EEF6F0;border:1px solid #6BA583;color:#14402a;display:flex;align-items:center;gap:12px;flex-wrap:wrap"><div style="flex:1;min-width:240px"><b>📁 '+n+' connaissement'+(n>1?'s':'')+' à tracer dans les dossiers des coopératives</b><div class="hint" style="margin:0">Chaque coopérative a son dossier (tracé, simulé, à tracer).</div></div><button class="btn btn-primary btn-compact" onclick="setTab(\'dossiers\')">Ouvrir les dossiers</button></div>';
+    + '</tbody></table></div>';
+  // Autres usines : séparées, repliées, sans compteur (pas encore décidé si nous gérons leur traçabilité)
+  const ouvertB = !!state.dossiersAutresOuvert;
+  html += '<div style="margin:18px 0 6px;display:flex;align-items:center;gap:10px;flex-wrap:wrap"><span style="font-weight:700;font-size:14px;color:#555">⚪ Autres usines — traçabilité pas encore décidée ('+B.length+' coopérative'+(B.length>1?'s':'')+')</span>'
+    + '<button class="btn-ghost btn-compact" onclick="ocDossiersAutresBascule()">'+(ouvertB ? 'Masquer' : 'Afficher')+'</button></div>'
+    + '<div class="hint" style="margin:0 0 8px">Ces connaissements sont déchargés dans d\'autres usines : on ne sait pas encore si nous en gérerons la traçabilité. Ils ne sont pas comptés dans « à tracer ».</div>';
+  if (ouvertB){
+    html += B.length ? '<div class="achats-defile" style="opacity:.85"><table class="tbl-fiches tbl-dense"><thead><tr><th>Coopérative</th><th>N° CCC</th><th>Usine(s)</th><th class="num">Producteurs</th><th class="num">Chez nous</th><th class="num">Tracés</th><th></th></tr></thead><tbody>'
+      + B.map(x=>'<tr><td>'+esc(x.c.nom)+'</td><td>'+esc(x.c.ccc_num||'—')+'</td><td class="hint">'+esc(x.usines.join(', ')||'—')+'</td><td class="num">'+(x.nProd ? fmtNum(x.nProd) : '—')+'</td><td class="num">'+x.nNous+'</td><td class="num">'+x.nTrace+'</td><td><button class="btn-ghost btn-compact" onclick="ocDossierOuvrir(\''+escJs(x.c.id)+'\')">Voir</button></td></tr>').join('')
+      + '</tbody></table></div>' : '<div class="hint">Aucune.</div>';
+  }
+  return html + '</div>';
 }
 function ocDossierOuvrir(coopId){ const gs = ocSimGroupes(coopId); state.modal = { type:'ocDossier', payload:{ coopId, cle: gs.length ? gs[0].cle : '' } }; render(); }
 function ocDossierSerie(cle){ const pl = state.modal && state.modal.type==='ocDossier' ? state.modal.payload : null; if (!pl) return; pl.cle = cle; render(); }
@@ -12511,6 +12540,7 @@ async function submitTracerVolumeDirecte(){
       { const cs = ocSimAnalyseCode(itSrc.code); if (cs) await ocSimSupprimer(coopId, campagneId, cs.cle, cs.seq); }
     }
     if (state.tab!=='tracage') state.tab = 'tracage';
+    state.tracageSous = 'tracer';
 
     // 4) telechargement de la fiche
     ocTelechargerBlob(fiche.blob, fiche.nomFichier);
@@ -24740,7 +24770,7 @@ function _renderBrut(){
     })
   ).length;
   let html = '<div class="app-shell">'
-    + ocSidebarHtml(dashActive, { demandes: nbDemandesRestantes, conformite: nbCoopsIncompletes, dossiers: ocDossiersTotalATracer() })
+    + ocSidebarHtml(dashActive, { demandes: nbDemandesRestantes, conformite: nbCoopsIncompletes, tracage: ocDossiersTotalATracer() + saigicATracerListe().length })
     + '<div class="main-area">';
 
   html += '<div class="top-utility">'
@@ -24804,7 +24834,6 @@ function _renderBrut(){
     else if (state.tab==='basedonnees') html += renderBaseDonneesTab();
     else if (state.tab==='stockage') html += renderStockageTab();
     else if (state.tab==='tracage') html += renderTracageTab();
-    else if (state.tab==='dossiers') html += renderDossiersTab();
     else if (state.tab==='lots') html += renderLotsTab();
     else if (state.tab==='prefinancements') html += renderPrefinancementsTab();
     else if (state.tab==='sacherie') html += renderSacherieTab();
