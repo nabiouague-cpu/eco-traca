@@ -4386,7 +4386,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-25-295';
+const APP_VERSION = '2026-10-26-296';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8778,19 +8778,22 @@ function renderLotsUsinage(){
     + '<button class="btn btn-primary" onclick="lotUsinageOuvrir()">+ Nouveau lot d\'usinage</button>'
     + '<button class="btn" onclick="lotsUsinageChoisirFichier()">⭱ Importer le rapport d\'usinage (Excel)</button>'
     + '<input type="file" id="lu-import-excel" accept=".xlsx,.xls,.csv" style="display:none" onchange="lotsUsinageImporterExcel(this)">'
+    + '<button class="btn" title="Lots produits chez un usinier sans rapport d\'usinage : tableau qui indique l\'entrepôt de stockage de chaque lot" onclick="lotsTransfertChoisirFichier()">⭱ Importer un tableau de transfert (Excel)</button>'
+    + '<input type="file" id="lu-import-transfert" accept=".xlsx,.xls,.csv" style="display:none" onchange="lotsTransfertImporter(this)">'
+    + ((lots||[]).some(l=>l.origine==='transfert') ? '<button class="btn" onclick="lotsPoidsEntrepotOuvrir()">⚖ Saisir les poids réels (entrepôt)</button><button class="btn" onclick="lotsTransfertExporter()">⭳ Exporter le tableau de transfert</button>' : '')
     + (lots.length ? '<button class="btn-danger-text" onclick="lotsUsinageSupprimerTout()">Tout supprimer</button>' : '')
     + '<span class="hint" style="margin:0">'+recus.length+' livraison'+(recus.length>1?'s':'')+' reçue'+(recus.length>1?'s':'')+' à l\'usine · <b>'+fmtKg(dispo)+'</b> pas encore affectés à un lot</span></div>'
     + '<div class="hint" style="margin:-6px 0 14px">Le rapport d\'usinage reprend les numéros déjà attribués par les séries de numérotation : le client de chaque lot importé est retrouvé automatiquement à partir de son numéro.</div>';
   html += renderLotsRepartitionClients(campagneId);
   if (!lots.length) return html + '<div class="hint">Aucun lot d\'usinage. Crée le premier, ou importe le rapport d\'usinage de l\'usinier.</div>';
-  html += '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th>N° lot</th><th>Campagne</th><th>Client</th><th>Période</th><th>Site</th><th>Type</th><th>Niveau</th><th>Livraisons</th><th>Entrée</th><th>Sortie</th><th>Dispo. export</th><th>Statut</th><th></th></tr></thead><tbody>';
+  html += '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th>N° lot</th><th>Campagne</th><th>Client</th><th>Période</th><th>Site</th><th>Entrepôt</th><th>Type</th><th>Niveau</th><th>Livraisons</th><th>Entrée</th><th>Sortie</th><th>Dispo. export</th><th>Statut</th><th></th></tr></thead><tbody>';
   lots.forEach(l=>{
     const compo = lotsUsinageCompo(l.id), entree = lotsUsinageEntree(l), sortie = lotsUsinageSortie(l), solde = lotsUsinageSoldeExport(l);
-    html += '<tr><td><b>'+esc(l.numero)+'</b></td><td>'+esc(lotsCampagneNom(l.campagne_id)||'—')+'</td><td>'+(l.client?esc(l.client):'—')+'</td><td>'+esc((dateFr(l.date_debut)||'—')+(l.date_fin?' → '+dateFr(l.date_fin):''))+'</td><td>'+esc(l.site||'—')+'</td><td>'+esc(l.type_cacao||'—')+'</td><td>'+esc(l.niveau_tracabilite||'—')+'</td>'
-      + '<td>'+compo.length+'</td><td>'+fmtKg(entree)+'</td><td>'+fmtKg(sortie)+(Number(l.poids_sortie_kg)>0 && entree>0 ? ' <span class="hint" style="margin:0">('+Math.round((sortie/entree)*1000)/10+' %)</span>' : '')+'</td><td>'+fmtKg(solde)+'</td><td>'+lotsBadge(LOTS_STATUTS_USINAGE, l.statut)+'</td>'
-      + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="lotUsinageComposer(\''+esc(l.id)+'\')">Composer</button> <button class="btn-ghost btn-compact" onclick="lotUsinageOuvrir(\''+esc(l.id)+'\')">Modifier</button> <button class="btn-ghost btn-compact" onclick="lotUsinageBasculer(\''+esc(l.id)+'\')">'+(l.statut==='clos'?'Rouvrir':'Clore')+'</button> <button class="btn-danger-text btn-compact" onclick="lotUsinageSupprimer(\''+esc(l.id)+'\')">Supprimer</button></td></tr>';
+    html += '<tr><td><b>'+esc(l.numero)+'</b>'+(l.origine==='transfert' ? ' <span class="badge" title="Lot importé d\'un tableau de transfert">transfert</span>' : '')+'</td><td>'+esc(lotsCampagneNom(l.campagne_id)||'—')+'</td><td>'+(l.client?esc(l.client):'—')+'</td><td>'+esc((dateFr(l.date_debut)||'—')+(l.date_fin?' → '+dateFr(l.date_fin):''))+'</td><td>'+esc(l.site||'—')+'</td><td>'+(l.entrepot ? esc(l.entrepot)+(l.ville_entrepot?' <span class="hint" style="margin:0">'+esc(l.ville_entrepot)+'</span>':'') : '—')+'</td><td>'+esc(l.type_cacao||'—')+'</td><td>'+esc(l.niveau_tracabilite||'—')+'</td>'
+      + '<td>'+(l.origine==='transfert' ? '<span class="hint" style="margin:0" title="Usinage hors ECORIGINE : pas de rapport d\'usinage, donc pas de composition">—</span>' : compo.length)+'</td><td>'+(l.origine==='transfert' ? '—' : fmtKg(entree))+'</td><td>'+fmtKg(sortie)+(l.origine==='transfert' ? (Number(l.poids_entrepot_kg)>0 ? ' <span class="badge ok" title="Poids pesé à l\'entrée de l\'entrepôt">⚖ pesé</span>' : ' <span class="badge warn" title="Poids du tableau de transfert, à remplacer par la pesée à l\'entrepôt">théorique</span>') : (Number(l.poids_sortie_kg)>0 && entree>0 ? ' <span class="hint" style="margin:0">('+Math.round((sortie/entree)*1000)/10+' %)</span>' : ''))+'</td><td>'+fmtKg(solde)+'</td><td>'+lotsBadge(LOTS_STATUTS_USINAGE, l.statut)+'</td>'
+      + '<td style="white-space:nowrap">'+(l.origine==='transfert' ? '<button class="btn-ghost btn-compact" onclick="lotsPoidsEntrepotOuvrir(\''+esc(l.id)+'\')">Poids réel</button> ' : '')+'<button class="btn-ghost btn-compact" onclick="lotUsinageComposer(\''+esc(l.id)+'\')">Composer</button> <button class="btn-ghost btn-compact" onclick="lotUsinageOuvrir(\''+esc(l.id)+'\')">Modifier</button> <button class="btn-ghost btn-compact" onclick="lotUsinageBasculer(\''+esc(l.id)+'\')">'+(l.statut==='clos'?'Rouvrir':'Clore')+'</button> <button class="btn-danger-text btn-compact" onclick="lotUsinageSupprimer(\''+esc(l.id)+'\')">Supprimer</button></td></tr>';
     if (compo.length){
-      html += '<tr class="lots-detail"><td colspan="13"><div class="lots-compo">'+compo.map(c=>{ const a = lotsAchatParId(c.achat_id); return '<span class="lots-puce">'+esc(a ? lotsTexteAchat(a) : c.achat_id)+' — <b>'+fmtKg(c.poids_kg)+'</b></span>'; }).join('')+'</div></td></tr>';
+      html += '<tr class="lots-detail"><td colspan="14"><div class="lots-compo">'+compo.map(c=>{ const a = lotsAchatParId(c.achat_id); return '<span class="lots-puce">'+esc(a ? lotsTexteAchat(a) : c.achat_id)+' — <b>'+fmtKg(c.poids_kg)+'</b></span>'; }).join('')+'</div></td></tr>';
     }
   });
   return html + '</tbody></table></div>';
@@ -9276,6 +9279,153 @@ async function lotsUsinageImportValider(){
     showToast(aImporter.length+' lot(s) importé(s)'+(nonRattaches?' · '+nonRattaches+' non rattaché(s) à un client (numéro hors des séries connues)':'')+(pl.modele&&pl.composer ? ' · composition automatique : '+nCompo+' lot(s)'+(nSansCompo?', '+nSansCompo+' sans camion retrouvé':'') : '')+'.', 'success');
   }catch(e){ showToast('Échec : '+e.message); }
 }
+// ---- Tableau de transfert : lots produits chez un usinier SANS rapport d'usinage (pas de visibilité sur la traçabilité) ----
+// Le tableau (celui qu'on envoie aux entrepôts : lots, projet, marque, usine, entrepôt de stockage, ville, poids théorique) crée les
+// lots d'usinage ; les poids sont théoriques (ex. 25 025 kg) jusqu'à la pesée à l'entrée de l'entrepôt, saisie dans « Poids réels ».
+function lotsTransfertChoisirFichier(){ const i = document.getElementById('lu-import-transfert'); if (i){ i.value=''; i.click(); } }
+function lotsTransfertPoids(v){
+  if (typeof v==='number') return isFinite(v) ? v : null;
+  let t = String(v==null?'':v).replace(/[\s\u00a0\u202f]/g,'');
+  if (!t) return null;
+  if (/^\d+,\d{1,2}$/.test(t)) t = t.replace(',','.'); else t = t.replace(/,/g,'');
+  const n = parseFloat(t.replace(/[^\d.\-]/g,'')); return isFinite(n) ? n : null;
+}
+function lotsTransfertCampagneId(txt){
+  const n = qcNormaliserTexte(txt); if (!n) return '';
+  const c = (state.campagnes||[]).find(x=>qcNormaliserTexte(x.nom)===n); return c ? c.id : '';
+}
+function lotsTransfertSiteDe(txt){
+  const n = qcNormaliserTexte(txt); if (!n) return null;
+  return (state.sitesUsinage||[]).find(x=>qcNormaliserTexte(x.nom)===n || qcNormaliserTexte(x.code)===n)
+      || (state.sitesUsinage||[]).find(x=>{ const m = qcNormaliserTexte(x.nom); return m && (m.includes(n) || n.includes(m)); }) || null;
+}
+async function lotsTransfertImporter(input){
+  const fichier = input.files && input.files[0]; if (!fichier) return;
+  if (typeof XLSX === 'undefined'){ showToast('La bibliothèque Excel ne s\'est pas chargée (connexion internet requise).'); return; }
+  let wb;
+  try{ wb = XLSX.read(await fichier.arrayBuffer(), { type:'array', cellDates:true }); }
+  catch(e){ showToast('Fichier illisible : '+e.message, 'error'); return; }
+  if (!state.lotsCharges) await chargerLots();
+  const aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header:1, defval:'' });
+  let ligneEntetes = -1;
+  for (let i=0; i<Math.min(30, aoa.length); i++){
+    const e = (aoa[i]||[]).map(qcNormaliserTexte);
+    if (e.some(x=>x==='lots'||x==='lot'||x.startsWith('lot ')) && e.some(x=>x.includes('poids'))){ ligneEntetes = i; break; }
+  }
+  if (ligneEntetes<0){ showToast('Tableau non reconnu : il faut au moins les colonnes « Lots » et « Poids ».', 'error'); return; }
+  const E = (aoa[ligneEntetes]||[]).map(qcNormaliserTexte);
+  const col = (...mots)=>E.findIndex(e=>mots.some(m=>e===m||e.includes(m)));
+  const c = { lot: E.findIndex(e=>e==='lots'||e==='lot'||e.startsWith('lot ')), projet:col('projet'), marque:col('marque'), camp:col('campagne'), periode:col('periode'),
+    usine:col('usine'), entrepot:col('entrepot'), ville:col('ville'), poids:col('poids') };
+  const g = (row,i)=> i>=0 ? row[i] : '';
+  const campFiltre = (state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : '';
+  const lignes = [];
+  for (let i=ligneEntetes+1; i<aoa.length; i++){
+    const row = aoa[i]; if (!row) continue;
+    const numero = String(g(row,c.lot)==null?'':g(row,c.lot)).trim().replace(/\.0+$/,''); if (!numero || !/\d/.test(numero)) continue;
+    const campagne_id = lotsTransfertCampagneId(g(row,c.camp)) || campFiltre;
+    const projet = String(g(row,c.projet)||'').trim();
+    const type = LOTS_TYPES_CACAO.find(t=>qcNormaliserTexte(t)===qcNormaliserTexte(projet)) || null;
+    const site = lotsTransfertSiteDe(g(row,c.usine));
+    const serie = campagne_id ? lotsSerieParNumero(campagne_id, numero) : null;
+    const exist = (state.lotsUsinage||[]).find(l=>l.campagne_id===campagne_id && String(l.numero).trim()===numero) || null;
+    lignes.push({ numero, campagne_id, projet, marque:String(g(row,c.marque)||'').trim(), periode:String(g(row,c.periode)||'').trim(),
+      usine:String(g(row,c.usine)||'').trim(), site_code: site ? site.code : null, site: site ? site.nom : (String(g(row,c.usine)||'').trim()||null),
+      entrepot:String(g(row,c.entrepot)||'').trim(), ville:String(g(row,c.ville)||'').trim(), poids: lotsTransfertPoids(g(row,c.poids)),
+      serie_id: serie ? serie.id : null, client: serie ? (serie.client||null) : null, programme: serie ? (serie.programme||null) : null,
+      contrat_client_id: serie ? (serie.contrat_client_id||null) : null, niveau_tracabilite: serie ? (serie.niveau_tracabilite||null) : null,
+      type_cacao: type || (serie ? serie.type_cacao : null), existantId: exist ? exist.id : null, inclure:true });
+  }
+  if (!lignes.length){ showToast('Aucun lot reconnu dans ce tableau.', 'error'); return; }
+  if (lignes.some(l=>!l.campagne_id)){ showToast('Campagne non reconnue dans le tableau : choisis d\'abord une campagne (en haut de la page).', 'error'); return; }
+  state.modal = { type:'lotsTransfertImport', payload:{ lignes, nomFichier:fichier.name } };
+  render();
+}
+function lotsTransfertCocher(i, v){
+  const pl = state.modal && state.modal.type==='lotsTransfertImport' ? state.modal.payload : null; if (!pl) return;
+  pl.lignes[i].inclure = v;
+  const btn = document.getElementById('lt-import-btn'); if (btn){ const n = pl.lignes.filter(l=>l.inclure).length; btn.textContent = 'Importer '+n+' lot'+(n>1?'s':''); }
+}
+function lotsTransfertSerieChange(i, serieId){
+  const pl = state.modal && state.modal.type==='lotsTransfertImport' ? state.modal.payload : null; if (!pl) return;
+  const l = pl.lignes[i], sr = serieId ? lotsSerieParId(serieId) : null;
+  l.serie_id = sr ? sr.id : null; l.client = sr ? (sr.client||null) : null; l.programme = sr ? (sr.programme||null) : null; l.contrat_client_id = sr ? (sr.contrat_client_id||null) : null;
+  l.niveau_tracabilite = sr ? (sr.niveau_tracabilite||null) : null;
+  if (!LOTS_TYPES_CACAO.find(t=>qcNormaliserTexte(t)===qcNormaliserTexte(l.projet))) l.type_cacao = sr ? sr.type_cacao : null;
+  const el = document.getElementById('lt-client-'+i); if (el) el.textContent = l.client || (l.serie_id ? '— générique —' : '—');
+}
+async function lotsTransfertValider(){
+  const pl = state.modal && state.modal.type==='lotsTransfertImport' ? state.modal.payload : null; if (!pl) return;
+  const retenus = pl.lignes.filter(l=>l.inclure); if (!retenus.length){ showToast('Aucun lot coché.'); return; }
+  const maintenant = new Date().toISOString(); let nNouv = 0, nMaj = 0;
+  try{
+    const nouveaux = retenus.filter(l=>!l.existantId).map(l=>({ id:genId('lu'), numero:l.numero, campagne_id:l.campagne_id, client:l.client||null, site:l.site||null, site_code:l.site_code||null,
+      type_cacao:l.type_cacao||null, niveau_tracabilite:l.niveau_tracabilite||null, programme:l.programme||null, contrat_client_id:l.contrat_client_id||null, serie_id:l.serie_id||null,
+      poids_sortie_kg:l.poids||null, statut:'ouvert', updated_at:maintenant, origine:'transfert', marque:l.marque||null, entrepot:l.entrepot||null, ville_entrepot:l.ville||null,
+      periode_execution:l.periode||null, poids_theorique_kg:l.poids||null }));
+    if (nouveaux.length){ const { error } = await supabaseClient.from('lots_usinage').insert(nouveaux); if (error) throw error; nNouv = nouveaux.length; }
+    for (const l of retenus.filter(x=>x.existantId)){
+      const ex = lotUsinageParId(l.existantId) || {};
+      const maj = { marque:l.marque||null, entrepot:l.entrepot||null, ville_entrepot:l.ville||null, periode_execution:l.periode||null, poids_theorique_kg:l.poids||null, updated_at:maintenant };
+      if (!(Number(ex.poids_sortie_kg)>0) && l.poids) maj.poids_sortie_kg = l.poids;       // un poids déjà connu n'est jamais écrasé
+      if (!ex.site_code && l.site_code){ maj.site_code = l.site_code; maj.site = l.site; }
+      const { error } = await supabaseClient.from('lots_usinage').update(maj).eq('id', l.existantId); if (error) throw error; nMaj++;
+    }
+    await chargerLots(); closeModal(); render();
+    showToast((nNouv ? nNouv+' lot(s) créé(s)' : '')+(nNouv&&nMaj?' · ':'')+(nMaj ? nMaj+' lot(s) existant(s) mis à jour (entrepôt, poids théorique)' : '')+'. Les poids sont théoriques : saisis les poids réels à la pesée (⚖).', 'success');
+  }catch(e){ showToast('Échec : '+e.message); }
+}
+// Saisie des poids réels pesés à l'entrée de l'entrepôt (un lot précis ou tous les lots de transfert)
+function lotsPoidsEntrepotOuvrir(lotId){
+  const lots = (state.lotsUsinage||[]).filter(l=>l.origine==='transfert' && (!lotId || l.id===lotId));
+  if (!lots.length){ showToast('Aucun lot de transfert.'); return; }
+  const saisies = {}; lots.forEach(l=>{ saisies[l.id] = Number(l.poids_entrepot_kg)>0 ? String(l.poids_entrepot_kg) : ''; });
+  state.modal = { type:'lotsPoidsEntrepot', payload:{ lotId:lotId||'', saisies, date:new Date().toISOString().slice(0,10), entrepot:'' } };
+  render();
+}
+function lotsPoidsEntrepotLots(pl){
+  return (state.lotsUsinage||[]).filter(l=>l.origine==='transfert' && (!pl.lotId || l.id===pl.lotId) && (!pl.entrepot || (l.entrepot||'')===pl.entrepot))
+    .slice().sort((a,b)=>String(a.numero).localeCompare(String(b.numero),'fr',{numeric:true}));
+}
+function lotsPoidsEntrepotSaisir(id, v){
+  const pl = state.modal && state.modal.type==='lotsPoidsEntrepot' ? state.modal.payload : null; if (!pl) return;
+  pl.saisies[id] = v;
+  const l = lotUsinageParId(id), th = Number(l && l.poids_theorique_kg)||0, r = Number(v)||0, el = document.getElementById('lpe-ecart-'+id);
+  if (el) el.textContent = (r>0 && th>0) ? ((r-th>0?'+':'')+fmtNum(r-th)+' kg') : '—';
+}
+async function lotsPoidsEntrepotValider(){
+  const pl = state.modal && state.modal.type==='lotsPoidsEntrepot' ? state.modal.payload : null; if (!pl) return;
+  const date = (document.getElementById('lpe-date')||{}).value || pl.date; let n = 0;
+  try{
+    for (const l of lotsPoidsEntrepotLots(pl)){
+      const nouveau = Number(pl.saisies[l.id])||0, ancien = Number(l.poids_entrepot_kg)||0;
+      if (nouveau===ancien) continue;
+      const th = Number(l.poids_theorique_kg)||null;
+      const maj = nouveau>0 ? { poids_entrepot_kg:nouveau, poids_sortie_kg:nouveau, date_pesee_entrepot: (ancien>0 && l.date_pesee_entrepot) ? l.date_pesee_entrepot : date, updated_at:new Date().toISOString() }
+                            : { poids_entrepot_kg:null, poids_sortie_kg:th, date_pesee_entrepot:null, updated_at:new Date().toISOString() };
+      const { error } = await supabaseClient.from('lots_usinage').update(maj).eq('id', l.id); if (error) throw error; n++;
+    }
+    await chargerLots(); closeModal(); render();
+    showToast(n ? n+' poids mis à jour : le tableau et les totaux utilisent maintenant les poids pesés.' : 'Aucun changement.', n?'success':undefined);
+  }catch(e){ showToast('Échec : '+e.message); }
+}
+// Tableau de transfert mis à jour (même présentation que celui envoyé aux entrepôts) avec le poids pesé et l'écart
+function lotsTransfertExporter(){
+  if (typeof XLSX === 'undefined'){ showToast('La bibliothèque Excel ne s\'est pas chargée (connexion internet requise).'); return; }
+  const campagneId = (state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : '';
+  const lots = (state.lotsUsinage||[]).filter(l=>l.origine==='transfert' && (!campagneId || l.campagne_id===campagneId))
+    .slice().sort((a,b)=>String(a.numero).localeCompare(String(b.numero),'fr',{numeric:true}));
+  if (!lots.length){ showToast('Aucun lot de transfert à exporter.'); return; }
+  const aoa = [['No.','Lots','Projet','Marque','Campagne','Période d\'exécution','USINE','Entrepôts Stockage','Ville','Poids théorique (kg)','Poids réel pesé (kg)','Écart (kg)','Date de pesée']];
+  lots.forEach((l,i)=>{ const th = Number(l.poids_theorique_kg)||null, r = Number(l.poids_entrepot_kg)||null;
+    aoa.push([i+1, Number(l.numero)||l.numero, l.type_cacao||'', l.marque||'', lotsCampagneNom(l.campagne_id), l.periode_execution||'', l.site||'', l.entrepot||'', l.ville_entrepot||'', th, r, (r&&th)?r-th:'', l.date_pesee_entrepot?dateFr(l.date_pesee_entrepot):'']); });
+  const n = aoa.length; aoa.push(['','','','','','','','','Total', {f:'SUM(J2:J'+n+')'}, {f:'SUM(K2:K'+n+')'}, '', '']);
+  const ws = XLSX.utils.aoa_to_sheet(aoa.map(r=>r.map(c=>(c && typeof c==='object' && c.f) ? { t:'n', f:c.f } : c)));
+  ws['!cols'] = [6,8,8,12,10,20,12,18,12,18,18,12,14].map(w=>({ wch:w }));
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Tableau de transfert');
+  XLSX.writeFile(wb, 'Tableau_de_transfert_'+new Date().toISOString().slice(0,10)+'.xlsx');
+}
+
 // ---- Lots d'usinage : fiche, composition, statut, suppression ----
 function lotUsinageOuvrir(id){
   const l = id ? lotUsinageParId(id) : null;
@@ -9324,6 +9474,14 @@ async function lotUsinageEnregistrer(){
   const pl = state.modal && state.modal.type==='lotUsinage' ? state.modal.payload : null; if (!pl) return;
   const numero = fv('lot_numero').trim(); if (!numero){ showToast('Indique le numéro du lot.'); return; }
   const ligne = { numero, campagne_id: fv('lot_campagne')||null, client: fv('lot_client')||null, site: (fv('lot_site') && fv('lot_site')!=='__autre') ? lotsSiteNom(fv('lot_site')) : (pl.site||null), site_code: (fv('lot_site') && fv('lot_site')!=='__autre') ? fv('lot_site') : (pl.site_code||null), programme: (document.querySelector('[name="lot_programme"]') ? (fv('lot_programme')||null) : (pl.programme||null)), type_cacao: pl.type_cacao||fv('lot_type')||null, niveau_tracabilite: pl.niveau_tracabilite||fv('lot_niveau')||null, date_production: fv('lot_date_prod')||null, serie_id: pl.serie_id||null, date_debut: fv('lot_date_debut')||null, date_fin: fv('lot_date_fin')||null, poids_sortie_kg: Number(fv('lot_sortie'))||null, notes: fv('lot_notes').trim()||null, updated_at: new Date().toISOString() };
+  if (pl.origine==='transfert'){
+    ligne.entrepot = fv('lot_entrepot').trim()||null; ligne.ville_entrepot = fv('lot_ville_entrepot').trim()||null;
+    ligne.poids_theorique_kg = Number(fv('lot_poids_theorique'))||null;
+    const reel = Number(fv('lot_poids_entrepot'))||null;
+    ligne.poids_entrepot_kg = reel; if (reel && !pl.poids_entrepot_kg) ligne.date_pesee_entrepot = new Date().toISOString().slice(0,10);
+    if (!reel) ligne.date_pesee_entrepot = null;
+    ligne.poids_sortie_kg = reel || ligne.poids_theorique_kg || ligne.poids_sortie_kg;    // le poids pesé remplace le poids théorique
+  }
   try{
     if (pl.id){ const { error } = await supabaseClient.from('lots_usinage').update(ligne).eq('id', pl.id); if (error) throw error; }
     else { ligne.id = genId('lu'); ligne.statut = 'ouvert'; const { error } = await supabaseClient.from('lots_usinage').insert(ligne); if (error) throw error; }
@@ -9333,7 +9491,7 @@ async function lotUsinageEnregistrer(){
 async function lotUsinageBasculer(id){
   const l = lotUsinageParId(id); if (!l) return;
   const nouveau = l.statut==='clos' ? 'ouvert' : 'clos';
-  if (nouveau==='clos' && !lotsUsinageCompo(id).length){ showToast('Compose le lot avant de le clore.'); return; }
+  if (nouveau==='clos' && l.origine!=='transfert' && !lotsUsinageCompo(id).length){ showToast('Compose le lot avant de le clore.'); return; }
   const { error } = await supabaseClient.from('lots_usinage').update({ statut: nouveau, updated_at: new Date().toISOString() }).eq('id', id);
   if (error){ showToast('Échec : '+error.message); return; }
   await chargerLots(); render();
@@ -9506,6 +9664,10 @@ function lotsModalsHtml(){
       + serieInfo
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Début d\'usinage<input type="date" name="lot_date_debut" value="'+esc(pl.date_debut||'')+'"></label><label class="field">Fin d\'usinage<input type="date" name="lot_date_fin" value="'+esc(pl.date_fin||'')+'"></label></div>'
       + '<label class="field">Poids de sortie après usinage (kg)<input type="number" name="lot_sortie" value="'+esc(pl.poids_sortie_kg||'')+'" placeholder="vide = poids d\'entrée"></label>'
+      + (pl.origine==='transfert'
+          ? '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Entrepôt de stockage<input type="text" name="lot_entrepot" value="'+esc(pl.entrepot||'')+'"></label><label class="field">Ville de l\'entrepôt<input type="text" name="lot_ville_entrepot" value="'+esc(pl.ville_entrepot||'')+'"></label></div>'
+            + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Poids théorique (kg)<input type="number" name="lot_poids_theorique" value="'+esc(pl.poids_theorique_kg||'')+'"></label><label class="field">Poids réel pesé à l\'entrepôt (kg)<input type="number" name="lot_poids_entrepot" value="'+esc(pl.poids_entrepot_kg||'')+'" placeholder="à saisir à la pesée"></label></div>'
+          : '')
       + '<label class="field">Notes<textarea name="lot_notes" rows="2">'+esc(pl.notes||'')+'</textarea></label>'
       + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="lotUsinageEnregistrer()">Enregistrer</button></div></div></div>';
   }
@@ -9525,6 +9687,37 @@ function lotsModalsHtml(){
           + '</tr>').join('')
       + '</tbody></table></div>'+lotsUsineBlocModele(pl)+'</div>'
       + '<div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" id="lu-import-btn-valider" onclick="lotsUsinageImportValider()">Importer '+nbCoches+' lot'+(nbCoches>1?'s':'')+'</button></div></div></div>';
+  }
+  if (m.type==='lotsTransfertImport'){
+    const pl = m.payload, nb = pl.lignes.filter(l=>l.inclure).length, nMaj = pl.lignes.filter(l=>l.existantId).length, nSans = pl.lignes.filter(l=>!l.serie_id).length;
+    const tot = pl.lignes.filter(l=>l.inclure).reduce((t,l)=>t+(l.poids||0),0);
+    return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal xl"><h3>Importer un tableau de transfert</h3>'
+      + '<div class="hint" style="margin-bottom:10px">Fichier : <b>'+esc(pl.nomFichier)+'</b> — '+pl.lignes.length+' lot(s), '+fmtKg(pl.lignes.reduce((t,l)=>t+(l.poids||0),0))+' <b>théoriques</b>. Ces lots ont été produits sans rapport d\'usinage : aucune composition, ni traçabilité visible. Les poids réels se saisissent ensuite à la pesée de l\'entrepôt (⚖).'
+      + (nMaj ? ' <b>'+nMaj+'</b> lot(s) existe(nt) déjà : seuls l\'entrepôt, la marque, la période et le poids théorique sont mis à jour (un poids déjà connu n\'est jamais écrasé).' : '')
+      + (nSans ? ' '+nSans+' numéro(s) hors des séries connues : client à rattacher à la main si besoin.' : '')+'</div>'
+      + '<div id="modal-fields"><div class="achats-defile" style="max-height:52vh;overflow:auto"><table class="tbl-fiches"><thead><tr><th></th><th>N° lot</th><th>Projet</th><th>Marque</th><th>Usine</th><th>Entrepôt</th><th>Ville</th><th class="num">Poids théorique</th><th>Série / client</th></tr></thead><tbody>'
+      + pl.lignes.map((l,i)=>'<tr><td><input type="checkbox" '+(l.inclure?'checked':'')+' onchange="lotsTransfertCocher('+i+', this.checked)"></td>'
+          + '<td><b>'+esc(l.numero)+'</b>'+(l.existantId?' <span class="badge warn">existant : mise à jour</span>':'')+'</td><td>'+esc(l.projet||'—')+'</td><td>'+esc(l.marque||'—')+'</td>'
+          + '<td>'+esc(l.usine||'—')+(l.site_code ? ' <span class="hint" style="margin:0">'+esc(l.site_code)+'</span>' : '')+'</td><td>'+esc(l.entrepot||'—')+'</td><td>'+esc(l.ville||'—')+'</td><td class="num">'+(l.poids?fmtNum(l.poids):'—')+'</td>'
+          + '<td><select onchange="lotsTransfertSerieChange('+i+', this.value)">'+lotsSeriesOptionsPourImport(l.campagne_id, l.serie_id)+'</select> <span id="lt-client-'+i+'" class="hint" style="margin:0">'+esc(l.client||(l.serie_id?'— générique —':'—'))+'</span></td></tr>').join('')
+      + '</tbody></table></div><div class="hint" style="margin-top:8px">Total coché : <b>'+fmtKg(tot)+'</b> (théorique)</div></div>'
+      + '<div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" id="lt-import-btn" onclick="lotsTransfertValider()">Importer '+nb+' lot'+(nb>1?'s':'')+'</button></div></div></div>';
+  }
+  if (m.type==='lotsPoidsEntrepot'){
+    const pl = m.payload, lots = lotsPoidsEntrepotLots(pl);
+    const entrepots = Array.from(new Set((state.lotsUsinage||[]).filter(l=>l.origine==='transfert').map(l=>l.entrepot||'').filter(Boolean))).sort();
+    const th = lots.reduce((t,l)=>t+(Number(l.poids_theorique_kg)||0),0);
+    return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal xl"><h3>Poids réels pesés à l\'entrepôt</h3>'
+      + '<div class="hint" style="margin-bottom:10px">Saisis le poids pesé à l\'entrée de l\'entrepôt pour chaque lot : il remplace le poids théorique dans le tableau des lots et dans les totaux. Laisse vide un lot pas encore pesé (le poids théorique reste utilisé).</div>'
+      + '<div id="modal-fields"><div style="display:flex;gap:12px;flex-wrap:wrap;align-items:end;margin-bottom:10px"><label class="field" style="margin:0">Date de pesée<input type="date" id="lpe-date" value="'+esc(pl.date)+'"></label>'
+      + (!pl.lotId && entrepots.length>1 ? '<label class="field" style="margin:0">Entrepôt<select onchange="state.modal.payload.entrepot=this.value;render()"><option value="">Tous</option>'+entrepots.map(e=>'<option value="'+esc(e)+'"'+(pl.entrepot===e?' selected':'')+'>'+esc(e)+'</option>').join('')+'</select></label>' : '')+'</div>'
+      + '<div class="achats-defile" style="max-height:52vh;overflow:auto"><table class="tbl-fiches"><thead><tr><th>N° lot</th><th>Entrepôt</th><th class="num">Poids théorique</th><th>Poids pesé (kg)</th><th>Écart</th></tr></thead><tbody>'
+      + lots.map(l=>{ const t = Number(l.poids_theorique_kg)||0, r = Number(pl.saisies[l.id])||0;
+          return '<tr><td><b>'+esc(l.numero)+'</b></td><td>'+esc(l.entrepot||'—')+'</td><td class="num">'+(t?fmtNum(t):'—')+'</td>'
+            + '<td><input type="number" step="1" min="0" value="'+esc(pl.saisies[l.id]||'')+'" oninput="lotsPoidsEntrepotSaisir(\''+esc(l.id)+'\', this.value)" style="width:130px"></td>'
+            + '<td id="lpe-ecart-'+esc(l.id)+'">'+((r>0&&t>0) ? ((r-t>0?'+':'')+fmtNum(r-t)+' kg') : '—')+'</td></tr>'; }).join('')
+      + '</tbody></table></div><div class="hint" style="margin-top:8px">'+lots.length+' lot(s) · poids théorique '+fmtKg(th)+'</div></div>'
+      + '<div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="lotsPoidsEntrepotValider()">Enregistrer les poids</button></div></div></div>';
   }
   if (m.type==='lotUsinageCompo'){
     const pl = m.payload, lot = lotUsinageParId(pl.lotId); if (!lot) return '';
