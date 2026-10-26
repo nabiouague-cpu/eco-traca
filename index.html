@@ -4386,7 +4386,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-26-296';
+const APP_VERSION = '2026-10-26-297';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -9335,11 +9335,19 @@ async function lotsTransfertImporter(input){
       serie_id: serie ? serie.id : null, client: serie ? (serie.client||null) : null, programme: serie ? (serie.programme||null) : null,
       contrat_client_id: serie ? (serie.contrat_client_id||null) : null, niveau_tracabilite: serie ? (serie.niveau_tracabilite||null) : null,
       type_cacao: type || (serie ? serie.type_cacao : null), existantId: exist ? exist.id : null, inclure:true });
+    const dl = lignes[lignes.length-1]; if (!dl.contrat_client_id) dl.contrat_client_id = lotsTransfertContrat(dl.client, dl.campagne_id, dl.type_cacao);
   }
   if (!lignes.length){ showToast('Aucun lot reconnu dans ce tableau.', 'error'); return; }
   if (lignes.some(l=>!l.campagne_id)){ showToast('Campagne non reconnue dans le tableau : choisis d\'abord une campagne (en haut de la page).', 'error'); return; }
   state.modal = { type:'lotsTransfertImport', payload:{ lignes, nomFichier:fichier.name } };
   render();
+}
+// Contrat du client pour la campagne (rattache le lot au contrat ACT) : seulement s'il n'y en a qu'un, ou un seul du bon type de cacao.
+function lotsTransfertContrat(client, campagneId, type){
+  if (!client) return null;
+  const l = contratsClientParNomEtCampagne(client, campagneId) || [];
+  if (l.length===1) return l[0].id;
+  const m = l.filter(c=>c.type_cacao===type); return m.length===1 ? m[0].id : null;
 }
 function lotsTransfertCocher(i, v){
   const pl = state.modal && state.modal.type==='lotsTransfertImport' ? state.modal.payload : null; if (!pl) return;
@@ -9352,6 +9360,7 @@ function lotsTransfertSerieChange(i, serieId){
   l.serie_id = sr ? sr.id : null; l.client = sr ? (sr.client||null) : null; l.programme = sr ? (sr.programme||null) : null; l.contrat_client_id = sr ? (sr.contrat_client_id||null) : null;
   l.niveau_tracabilite = sr ? (sr.niveau_tracabilite||null) : null;
   if (!LOTS_TYPES_CACAO.find(t=>qcNormaliserTexte(t)===qcNormaliserTexte(l.projet))) l.type_cacao = sr ? sr.type_cacao : null;
+  if (!l.contrat_client_id) l.contrat_client_id = lotsTransfertContrat(l.client, l.campagne_id, l.type_cacao);
   const el = document.getElementById('lt-client-'+i); if (el) el.textContent = l.client || (l.serie_id ? '— générique —' : '—');
 }
 async function lotsTransfertValider(){
