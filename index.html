@@ -4396,7 +4396,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-27-318';
+const APP_VERSION = '2026-10-27-319';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -23250,8 +23250,15 @@ function ouvrirPaiement(achatId, paiementId){
   const sd = soldeAchat(a);
   if (!paiementId && sd && sd.complet){ showToast('Cette livraison est entièrement payée. Pour corriger un chèque, utilise « Modifier » dans le détail du connaissement.'); return; }
   state.modal = { type:'paiementConnaissement', payload:{ achatId, paiementId: paiementId||null } }; render();
+  setTimeout(()=>{ if (document.getElementById('pa-remb')) majRembPaiement(); }, 0);   // retenue du préfinancement proposée d'emblée
 }
-function remplirChampPaiement(nom, valeur){ const e = document.querySelector('[name="'+nom+'"]'); if (e && !e.readOnly){ e.value = valeur; majNotePaiement(); } }
+// Un préfinancement revolving « valeur totale du poids net livré » encore à rembourser : la retenue est proposée par défaut sur un nouveau paiement
+// (même règle que le bordereau). Elle reste modifiable : « Aucun » ou « Une partie ».
+function prefRembParDefaut(a){
+  const ctx = prefRembContexte(a); if (!ctx || !(ctx.reste>0)) return false;
+  return (state.prefinancements||[]).some(p=>p.cooperative_id===a.cooperative_id && p.type_avance==='revolving' && /total/i.test(p.mode_remboursement||'total') && (!a.campagne_id || p.campagne_id===a.campagne_id));
+}
+function remplirChampPaiement(nom, valeur){ const e = document.querySelector('[name="'+nom+'"]'); if (e && !e.readOnly){ e.value = valeur; majNotePaiement(); if (nom==='pa_montant_a_payer') majRembPaiement(); } }
 function payerLeResteChamp(){
   const n = document.getElementById('pa-note'), deja = Number(n && n.getAttribute('data-deja'))||0, ap = Math.round(Number((document.querySelector('[name="pa_montant_a_payer"]')||{}).value)||0);
   if (!(ap>0)){ showToast('Indique d\'abord le montant à payer.'); return; }
@@ -25802,14 +25809,14 @@ function _renderBrut(){
         + '</dl></fieldset>'
         + ((m && m.manque && !fixe) ? '<div class="error-banner" style="margin-top:10px;"><span>Le montant à payer ne peut pas être calculé automatiquement ('+(m.manque==='prix' ? 'prix d\'entrée usine à renseigner pour cette campagne' : 'TKM du connaissement à compléter')+'). Saisis-le ci-dessous.</span></div>' : '')
         + '<fieldset style="margin-top:12px;"><legend>À renseigner</legend>'
-        + '<label class="field">Montant à payer (FCFA)<input type="number" step="1" min="0" name="pa_montant_a_payer" value="'+esc(aPayerDef)+'"'+(fixe ? ' readonly' : '')+' oninput="majNotePaiement()"></label>'
+        + '<label class="field">Montant à payer (FCFA)<input type="number" step="1" min="0" name="pa_montant_a_payer" value="'+esc(aPayerDef)+'"'+(fixe ? ' readonly' : '')+' oninput="majNotePaiement();majRembPaiement()"></label>'
         + (m && m.montant!==null && !fixe && !edit ? '<span class="hint">Calculé par ORIGEN : (('+fmtNum(m.prixEntreeUsine)+' + '+fmtNum(m.tkm)+' TKM + '+fmtNum(m.commission)+' commission) × '+fmtNum(m.poids)+' kg) − '+fmtNum(m.retenueBic)+' retenue BIC = <b>'+fmtNum(m.montant)+' FCFA</b> <button type="button" class="lien-param" onclick="remplirChampPaiement(\'pa_montant_a_payer\','+m.montant+')">Utiliser ce montant</button></span>' : '')
         + '<label class="field">Montant payé par ce chèque (FCFA)<input type="number" step="1" min="0" name="pa_montant_paye" value="'+esc(payeDef)+'" oninput="majNotePaiement()"></label>'
         + '<span class="hint">Pour payer tout ce qui reste : <button type="button" class="lien-param" onclick="payerLeResteChamp()">Payer le reste</button></span>'
         + '<div class="pa-note" id="pa-note" data-deja="'+deja+'" style="display:none;"></div>'
         + (function(){
             const ctx = prefRembContexte(a); if (!ctx) return '';
-            const mode = a.pref_remb_mode || 'aucun', mt = Number(a.pref_remb_montant)||0;
+            const mode = a.pref_remb_mode || ((!edit && prefRembParDefaut(a)) ? 'total' : 'aucun'), mt = Number(a.pref_remb_montant)||0;
             return '<fieldset style="margin-top:12px;" id="pa-remb" data-reste="'+ctx.reste+'"><legend>Remboursement du préfinancement</legend>'
               + '<span class="hint">Reste dû sur le préfinancement de cette coopérative : <b>'+fmtNum(ctx.reste)+' FCFA</b>. Le montant remboursé est retenu sur ce paiement (il n\'est pas payé par chèque).</span>'
               + '<label class="field">Modalité<select name="pa_remb_mode" onchange="majRembPaiement()">'
