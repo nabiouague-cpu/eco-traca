@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.45
+// @version      0.1.46
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.45';
+  const VERSION = '0.1.46';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const ENTITE = '1';                 // ECORIGINE
@@ -302,9 +302,9 @@
     setEntite(q('#txtid_entiteAdd'));
     setInput(q('#txtnom_fournisseurAdd'), c.sigle); setInput(q('#txtcode_fournisseurAdd'), c.sigle); // modèle CAEZ COOP-CA : dénomination = code = sigle
     setSelect(q('#txtmode_reglement_fournisseurAdd'), '2'); setSelect(q('#txtsecteur_fournisseurAdd'), '1');
-    setInput(q('#txtville_fournisseurAdd'), c.ville); // modèle : ni DFE, ni RCCM, ni agrément, ni téléphone/e-mail du fournisseur
+    setInput(q('#txtville_fournisseurAdd'), c.ville); // modèle : ni DFE, ni RCCM, ni téléphone/e-mail du fournisseur
     setInput(q('#txtadresse_postale_fournisseurAdd'), c.adresse_postale || ('BP ' + (c.ville || ''))); setInput(q('#txtadresse_geographique_fournisseurAdd'), c.siege);
-    setRadio('txttype_fournisseur_agroAdd2');
+    setRadio('txttype_fournisseur_agroAdd2'); setInput(q('#txtnumero_agrement_ccc_fournisseur_agroAdd'), c.ccc); // code CCC demandé en plus du modèle
     // Gros traitant rattaché : le traitant du site de déchargement du lot dans ORIGEN (Awahus, Sitapa, M Bobby Vo, Coops Touton, Coops Sucden ; « Coops Ecorigine » = coopératives en propre, aucun gros traitant),
     // retrouvé par son nom dans la liste des gros traitants d'OBC. Aucun rattachement n'est inventé : sans correspondance, la liste reste vide.
     e.note = ''; let traitantNote = '';
