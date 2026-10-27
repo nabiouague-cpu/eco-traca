@@ -4416,7 +4416,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-27-347';
+const APP_VERSION = '2026-10-27-348';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -24415,7 +24415,7 @@ function setSobcPeriode(k, v){ state[k] = v || ''; render(); }
 function bordereauxGroupesListe(){
   const du = state.sobcDu || '', au = state.sobcAu || '', tout = !!state.sobcInclureNonSaisis;
   return (state.achats||[]).filter(a=>!a.producteur_id && a.connaissement && !a.refoulee && Number(a.poids_net_produit)>0
-      && (tout || a.obc_saisi_le) && (!du || String(a.date||'')>=du) && (!au || String(a.date||'')<=au))
+      && !a.bordereau_groupe_le && (tout || a.obc_saisi_le) && (!du || String(a.date||'')>=du) && (!au || String(a.date||'')<=au))
     .sort((x,y)=> String(x.connaissement).localeCompare(String(y.connaissement), 'fr', { numeric:true }));
 }
 async function ouvrirBordereauxGroupes(){
@@ -24428,6 +24428,11 @@ async function ouvrirBordereauxGroupes(){
   const f = window.open('', '_blank');
   if (!f){ showToast('Le navigateur a bloqué l\'ouverture — autorise les fenêtres pop-up pour afficher les bordereaux.'); return; }
   f.document.open(); f.document.write(bordereauReceptionHTML(bs)); f.document.close();
+  // Ces déchargements sont désormais « partis en groupe » : ils ne peuvent plus être regroupés, seulement téléchargés un par un.
+  const pris = liste.filter(a=>sans.indexOf(a.connaissement)<0), quand = new Date().toISOString(), gid = 'G'+quand.slice(0,16).replace(/\D/g,'');
+  const { error } = await supabaseClient.from('achats').update({ bordereau_groupe_le: quand, bordereau_groupe_id: gid }).in('id', pris.map(a=>a.id));
+  if (error) showToast('Bordereaux ouverts, mais la mémorisation du groupe a échoué : '+error.message);
+  else { pris.forEach(a=>{ a.bordereau_groupe_le = quand; a.bordereau_groupe_id = gid; }); showToast(pris.length+' bordereau(x) téléchargé(s) en groupe : ils ne seront plus proposés en groupe (téléchargement individuel seulement).', 'success'); render(); }
   if (sans.length) showToast(sans.length+' bordereau(x) ignoré(s) : prix d\'entrée usine manquant ('+sans.slice(0,3).join(', ')+(sans.length>3 ? '…' : '')+').');
 }
 async function ouvrirBordereauReception(achatId){
@@ -24919,7 +24924,7 @@ function renderSaisieObcTab(){
       + '<td class="num">'+(Number(a.poids_net_produit)>0 ? fmtNum(a.poids_net_produit) : '<span class="vide">—</span>')+'</td>'
       + '<td class="num">'+celluleMontantCacaoHtml(a)+'</td>'
       + '<td><span class="badge '+x.cls+'" title="'+esc(x.aide)+'">'+(x.cle==='saisi' ? '' : 'Non saisi · ')+esc(x.label)+(x.cle==='saisi' && a.obc_bordereau_numero ? ' · bord. '+esc(a.obc_bordereau_numero) : '')+'</span></td>'
-      + '<td class="sobc-act">'+(Number(a.poids_net_produit)>0 ? '<button type="button" class="btn-ghost btn-compact" onclick="ouvrirBordereauReception(\''+a.id+'\')" title="Ouvre le bordereau de réception (même modèle que celui d\'OBC) : clique « Imprimer / Enregistrer en PDF » pour le télécharger">🧾 Bordereau</button>' : '')+(x.cle==='saisi'
+      + '<td class="sobc-act">'+(Number(a.poids_net_produit)>0 ? '<button type="button" class="btn-ghost btn-compact" onclick="ouvrirBordereauReception(\''+a.id+'\')" title="Ouvre le bordereau de réception (même modèle que celui d\'OBC) : clique « Imprimer / Enregistrer en PDF » pour le télécharger'+(a.bordereau_groupe_le ? ' — déjà téléchargé en groupe le '+(dateFr(String(a.bordereau_groupe_le).slice(0,10))||'')+' (téléchargement individuel uniquement)' : '')+'">🧾 Bordereau'+(a.bordereau_groupe_le ? ' ✓' : '')+'</button>' : '')+(x.cle==='saisi'
         ? '<button type="button" class="act-lien" onclick="obcMarquer(\''+a.id+'\', false)" title="Retirer la marque « saisi dans OBC »">annuler</button>'
         : '<button type="button" class="act-btn act-obc" onclick="obcCopierLot(\''+a.id+'\')" title="Copie le lot pour l\'automate OBC (Chrome)"><span class="act-ico">🤖</span>Saisir dans OBC</button> <button type="button" class="act-lien" onclick="obcMarquer(\''+a.id+'\', true)" title="Marquer ce connaissement comme déjà saisi dans OBC">déjà saisi</button>')+'</td></tr>';
   });
