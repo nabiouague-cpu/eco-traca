@@ -4396,7 +4396,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-27-328';
+const APP_VERSION = '2026-10-27-329';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -23177,6 +23177,20 @@ function calcMontantUsinier(a){
   const loco = Number(site.prix_loco_fcfa_kg)||0, sac = Number(site.cout_sacherie_fcfa_kg)||0, prix = Math.round((loco-sac)*1000)/1000, poids = Number(a.poids_agl_kg)||0;
   return { traitant: site.traitant || site.nom, loco, sac, prix, poids, montant: (prix>0 && poids>0) ? Math.round(prix*poids) : null };
 }
+// Loco-magasin : les coopératives ne sont pas payées par ECORIGINE, mais OBC reçoit quand même les prix du cacao (paramètres de paiement) :
+// on les affiche ici pour vérifier ce qui est saisi dans OBC (prix bord champ du connaissement brousse, puis prix d'entrée usine, TKM, commission, BIC du bordereau).
+function blocPrixCacaoObc(a, dl){
+  const par = parametresPaiementPour(a), m = calcMontantPaiement(a), pbc = Number(par && par.prix_bord_champ)||0;
+  const vide = t=>'<span class="vide">'+t+'</span>', f = (v,u)=> v>0 ? fmtNum(v)+' '+u : vide('Non renseigné');
+  const sepr = '<div class="hint" style="margin:6px 0 2px;font-weight:600">Prix du cacao saisis dans OBC <span class="vide">(vérification — pas de paiement aux coopératives)</span></div>';
+  return sepr
+    + dl('Prix bord champ (connaissement brousse)', f(pbc,'FCFA/kg'))
+    + dl('Prix d\'entrée usine (bordereau)', f(Number(par && par.prix_entree_usine)||0,'FCFA/kg'))
+    + dl('TKM', f(Number(a.tkm)||0,'FCFA/kg'))
+    + (Number(a.commission)>0 ? dl('Commission', fmtNum(a.commission)+' FCFA/kg') : '')
+    + dl('Retenue BIC', (m && m.tauxBic>0) ? fmtNum(m.tauxBic)+' FCFA/kg · '+fmtNum(m.retenueBic)+' FCFA' : vide('Aucune'))
+    + dl('Montant du cacao selon OBC', (m && m.montant!==null) ? '<b>'+fmtNum(m.montant)+' FCFA</b> <span class="vide">(avant retenue revolving)</span>' : vide(m ? (m.manque==='prix' ? 'Prix d\'entrée usine à renseigner' : 'TKM à compléter') : 'En attente de la pesée'));
+}
 function infoBulleUsinier(U){
   return 'Loco-magasin : '+fmtNum(U.loco)+' − '+fmtNum(U.sac)+' sacherie = '+fmtNum(U.prix)+' FCFA/kg × '+fmtNum(U.poids)+' kg (poids AGL) = '+fmtNum(U.montant)+' FCFA, à payer à '+U.traitant+' (pas aux coopératives)';
 }
@@ -24117,7 +24131,7 @@ function detailAchatHtml(a, etat){
           + dl('Prix loco-magasin', U.loco>0 ? fmtNum(U.loco)+' FCFA/kg' : '<span class="vide">Non renseigné</span>')
           + dl('Coût de la sacherie', U.sac>0 ? '− '+fmtNum(U.sac)+' FCFA/kg' : '<span class="vide">Aucun</span>')
           + dl('Prix de facturation', U.prix>0 ? '<b>'+fmtNum(U.prix)+' FCFA/kg</b>' : '<span class="vide">À déterminer</span>')
-          + dl('Montant à payer à '+esc(U.traitant), U.montant!==null ? '<b>'+fmtNum(U.montant)+' FCFA</b>' : '<span class="vide">En attente du poids AGL</span>');
+          + dl('Montant à payer à '+esc(U.traitant), U.montant!==null ? '<b>'+fmtNum(U.montant)+' FCFA</b>' : '<span class="vide">En attente du poids AGL</span>') + blocPrixCacaoObc(a, dl);
         const m = calcMontantPaiement(a); if (!m) return dl(clientPayeCoop(a) ? 'Montant du cacao' : 'Montant à payer', '<span class="vide">À déterminer</span>');
         return dl('Prix d\'entrée usine', m.prixEntreeUsine>0 ? fmtNum(m.prixEntreeUsine)+' FCFA/kg' : '<span class="vide">Non renseigné</span>')
           + dl('TKM', m.tkm>0 ? fmtNum(m.tkm)+' FCFA/kg' : '<span class="vide">Non renseigné</span>')
