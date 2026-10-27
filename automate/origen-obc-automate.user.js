@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.2.8
+// @version      0.2.9
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.2.8';
+  const VERSION = '0.2.9';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -127,7 +127,7 @@
     panneau = document.createElement('div');
     panneau.id = 'origen-obc';
     panneau.style.cssText = 'position:fixed;top:60px;right:12px;z-index:2147483647;width:360px;background:#fff;border:1px solid #cfd8d4;border-radius:12px;box-shadow:0 10px 30px rgba(14,59,54,.18);font:13px/1.45 Arial,Helvetica,sans-serif;color:#1e2b29;';
-    panneau.innerHTML = '<div style="background:#0E3B36;color:#fff;padding:10px 14px;border-radius:12px 12px 0 0;font-weight:700;display:flex;justify-content:space-between;align-items:center;cursor:move;" id="oo-tete"><span>ORIGEN → OBC <small style="font-weight:400;opacity:.75">v' + VERSION + '</small></span><span id="oo-ferme" style="cursor:pointer;opacity:.8;">✕</span></div>'
+    panneau.innerHTML = '<div style="background:#0E3B36;color:#fff;padding:10px 14px;border-radius:12px 12px 0 0;font-weight:700;display:flex;justify-content:space-between;align-items:center;cursor:move;" id="oo-tete"><span>🤖 Noah 1 · ORIGEN → OBC <small style="font-weight:400;opacity:.75">v' + VERSION + '</small></span><span id="oo-ferme" style="cursor:pointer;opacity:.8;">✕</span></div>'
       + '<div style="padding:12px 14px;">'
       + '<div id="oo-etat" style="margin-bottom:10px;white-space:pre-wrap;max-height:260px;overflow:auto;"></div>'
       + '<div id="oo-version" style="display:none;background:#fdecea;border:1px solid #B3261E;border-radius:8px;padding:6px 8px;margin-bottom:8px;font-size:12px;"></div>'
@@ -149,7 +149,7 @@
     zoneTexte = panneau.querySelector('#oo-lot'); zoneEtat = panneau.querySelector('#oo-etat');
     // Onglet « ORIGEN » toujours visible : « × » réduit seulement le panneau, un clic sur l'onglet le rouvre (un double-clic le remet à sa place d'origine).
     const onglet = document.createElement('div');
-    onglet.id = 'origen-obc-onglet'; onglet.textContent = '🤖 ORIGEN → OBC'; onglet.title = 'Ouvrir l\'automate (double-clic : remettre à sa place)';
+    onglet.id = 'origen-obc-onglet'; onglet.textContent = '🤖 Noah 1'; onglet.title = 'Ouvrir l\'automate (double-clic : remettre à sa place)';
     onglet.style.cssText = 'position:fixed;right:0;bottom:120px;z-index:2147483646;background:#0E3B36;color:#fff;padding:8px 12px;border-radius:10px 0 0 10px;font:700 12px Arial,Helvetica,sans-serif;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.25);display:none;';
     document.body.appendChild(onglet);
     const ranger = () => { panneau.style.display = 'none'; onglet.style.display = 'block'; };
@@ -350,7 +350,7 @@
     return 'rempli';
   }
   // Gros traitants à créer dans OBC s'ils y manquent. Un nouveau code est donné même si l'entreprise existe déjà comme simple fournisseur (TOU002 TOUTON NEGOCE CI, SUC002 SUCDEN-CI : ces comptes restent intacts).
-  const GROS_TRAITANTS = [{ cle: 'BOBBY VO', code: 'BOBB001', nom: 'BOBBY VO' }, { cle: 'SUCDEN', code: 'SUCD001', nom: 'SUCDEN' }, { cle: 'TOUTON', code: 'TOUT001', nom: 'TOUTON NEGOCE CI' }];
+  const GROS_TRAITANTS = [{ cle: 'BOBBY VO', code: 'BOBB001', nom: 'BOBBY VO' }, { cle: 'SUCDEN', code: 'SUCD001', nom: 'SUCDEN' }, { cle: 'TOUTON', code: 'TOUT001', nom: 'TOUTON' }];
   function grosTraitantCible(lot) {
     const c = lot.cooperative; if (c.coop_propre) return null;
     for (const cand of (c.gros_traitants || [])) { const n = N(cand); const g = GROS_TRAITANTS.find((x) => n.includes(x.cle)); if (g) return g; }
