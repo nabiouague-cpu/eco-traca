@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.43
+// @version      0.1.44
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.43';
+  const VERSION = '0.1.44';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const ENTITE = '1';                 // ECORIGINE
@@ -366,7 +366,7 @@
     if (!setSelect(q('#txtid_fournisseurAdd'), e.ids.fournisseur_id)) throw new Error('Coopérative (id ' + e.ids.fournisseur_id + ') introuvable dans la liste du producteur');
     setInput(q('#txtproducteur_date_adhesionAdd'), isoDate(lot.connaissement.date));
     setSelect(q('#txtcommodite_idAdd0'), '2'); setInput(q('#txtproducteur_parcelle_codeAdd0'), 'P001');
-    setInput(q('#txtparcelle_superficie_totaleAdd0'), '1'); setInput(q('#txtparcelle_superficie_commoditeAdd0'), '1'); setInput(q('#txtparcelle_production_potentielleAdd0'), '500');
+    setInput(q('#txtparcelle_superficie_totaleAdd0'), '1'); setInput(q('#txtparcelle_superficie_commoditeAdd0'), '1'); setInput(q('#txtparcelle_production_potentielleAdd0'), '1000');
     const manques = await reappliquer(f); if (manques.length) throw new Error('Liste non prise en compte par OBC : ' + manques.join(', '));
     e.note = 'Producteur ' + p.nom + ' ' + p.prenoms + (p.pca ? ' (PCA de la coopérative).' : p.chauffeur ? ' (PCA non renseigné : nom du chauffeur).' : p.fictif ? ' (nom neutre : ni PCA ni producteur dans ORIGEN).' : '.'); return 'rempli';
   }
@@ -431,7 +431,7 @@
     e.ids.producteur_id = prodRetenu;
     const d = c.detail_arbitraire || {}, repris = !!prodModele && prodRetenu === prodModele.value;
     // Producteur et parcelle : repris à l'identique. Le reste de la ligne (date, reçu, sacs, poids) est propre à CETTE livraison.
-    const sacsL = Number(c.sacs_declares) > 0 ? c.sacs_declares : (d.sacs || 1), poidsL = Number(c.poids_net_declare) > 0 ? c.poids_net_declare : (d.poids_net || 56);
+    const sacsL = 1, poidsL = 20; // règle d'OBC (Nabi) : un seul producteur, qui livre 1 sac de 20 kg ; les vrais poids sont dans Données livraison / Pesée
     setInput(q('#txtdate_achatAdd0'), isoDate(d.date_achat || c.date)); setInput(q('#txtnumero_recu_achatAdd0'), d.numero_recu || '001');
     setInput(q('#txtlivraison_nb_sacsAdd0'), sacsL); setInput(q('#txtlivraison_poids_netAdd0'), poidsL); setInput(q('#txtlivraison_prix_unitaireAdd0'), num(c.prix_bord_champ));
     if (repris) journal(e, 'Producteur et parcelle repris de ' + modele.numero + ' ; sacs et poids de cette livraison (' + sacsL + ' sacs, ' + poidsL + ' kg)');
