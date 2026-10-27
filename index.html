@@ -4393,7 +4393,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-27-309';
+const APP_VERSION = '2026-10-27-310';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5710,6 +5710,61 @@ async function preparerFichierPourZip(nom, blob, alleger){
   return { donnees:blob, gain:0, allege:false };
 }
 
+// ====================== EXPORT MULTI-COOPÉRATIVES : un dossier précis (ex. Fiches de traçabilité) pour plusieurs coopératives en un seul ZIP ======================
+function exportMultiLivre(coopId){ return (state.achats||[]).some(a=>a.cooperative_id===coopId && !a.producteur_id && !a.refoulee && a.connaissement); }
+function exportMultiDonnees(cle){
+  return (state.cooperatives||[]).filter(c=>!c.a_classer).map(c=>{ const d = fichiersParTypePourCoop(c.id)[cle]; return { c, n:d ? d.fichiers.length : 0, livre:exportMultiLivre(c.id) }; })
+    .sort((a,b)=>String(a.c.nom||'').localeCompare(String(b.c.nom||''),'fr',{sensitivity:'base'}));
+}
+function exportMultiAuto(cle){ return exportMultiDonnees(cle).filter(x=>x.livre && x.n>0).map(x=>x.c.id); }
+function exportMultiOuvrir(){
+  const cle = 'product_movements';
+  state.modal = { type:'exportMulti', payload:{ cle, sel:exportMultiAuto(cle) } }; render();
+}
+function exportMultiDossier(cle){ const pl = state.modal && state.modal.type==='exportMulti' ? state.modal.payload : null; if (!pl) return; pl.cle = cle; pl.sel = exportMultiAuto(cle); render(); }
+function exportMultiPreset(mode){
+  const pl = state.modal && state.modal.type==='exportMulti' ? state.modal.payload : null; if (!pl) return;
+  const D = exportMultiDonnees(pl.cle);
+  pl.sel = mode==='auto' ? D.filter(x=>x.livre && x.n>0).map(x=>x.c.id) : mode==='tous' ? D.filter(x=>x.n>0).map(x=>x.c.id) : [];
+  render();
+}
+function exportMultiBascule(id, on){
+  const pl = state.modal && state.modal.type==='exportMulti' ? state.modal.payload : null; if (!pl) return;
+  pl.sel = pl.sel.filter(x=>x!==id); if (on) pl.sel.push(id);
+  const b = document.getElementById('exm-go'); if (b){ b.textContent = '⬇ Exporter ('+pl.sel.length+' coopérative'+(pl.sel.length>1?'s':'')+')'; b.disabled = !pl.sel.length; }
+}
+async function exportMultiLancer(){
+  const pl = state.modal && state.modal.type==='exportMulti' ? state.modal.payload : null; if (!pl || !pl.sel.length) return;
+  if (typeof JSZip === 'undefined'){ showToast("La bibliothèque de compression n'a pas pu se charger (connexion internet requise). Réessaie dans un instant."); return; }
+  const propre = t=>String(t||'').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/gi,'_').replace(/^_+|_+$/g,'');
+  const btn = document.getElementById('exm-go'); if (btn){ btn.disabled = true; btn.textContent = 'Préparation…'; }
+  try{
+    const zip = new JSZip(), alleger = state.stockageAllegerPdf!==false;
+    let ok = 0, ko = 0, nbC = 0, label = '';
+    const coops = pl.sel.map(id=>coopById(id)).filter(Boolean).sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'}));
+    for (let i=0;i<coops.length;i++){
+      const c = coops[i], d = fichiersParTypePourCoop(c.id)[pl.cle]; if (!d || !d.fichiers.length) continue;
+      label = d.label; nbC++;
+      const dossier = propre(c.nom) || c.id, utilises = new Set();
+      for (const f of d.fichiers){
+        if (btn) btn.textContent = 'Préparation… '+(i+1)+'/'+coops.length+' · '+c.nom;
+        const { data, error } = await supabaseClient.storage.from('documents-coop').download(f.path);
+        if (error){ ko++; continue; }
+        let name = f.nom || f.path.split('/').pop();
+        if (utilises.has(name)){ const parts = name.split('.'), ext = parts.length>1 ? '.'+parts.pop() : ''; name = parts.join('.')+'_'+Math.random().toString(36).slice(2,7)+ext; }
+        utilises.add(name);
+        const prep = await preparerFichierPourZip(name, data, alleger);
+        zip.file(dossier+'/'+name, prep.donnees, optionsCompressionZip(name)); ok++;
+      }
+    }
+    if (!ok){ showToast("Aucun fichier n'a pu être récupéré."); if (btn){ btn.disabled = false; btn.textContent = '⬇ Exporter'; } return; }
+    const blob = await zip.generateAsync({type:'blob'}), url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = propre(label||pl.cle)+'_'+nbC+'_cooperatives_'+new Date().toISOString().slice(0,10)+'.zip';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+    showToast(ok+' fichier(s) de '+nbC+' coopérative(s) exporté(s)'+(ko ? ' · '+ko+' non récupéré(s)' : '')+'.', ko ? undefined : 'success');
+  }catch(e){ showToast('Échec de l\'export : '+(e && e.message ? e.message : e)); }
+  if (btn){ btn.disabled = false; btn.textContent = '⬇ Exporter ('+pl.sel.length+' coopérative'+(pl.sel.length>1?'s':'')+')'; }
+}
 async function exporterDossiersStockage(coopId, cles){
   const coop = coopById(coopId);
   const dossiers = fichiersParTypePourCoop(coopId);
@@ -5865,6 +5920,7 @@ function renderStockageTab(){
     + '<label class="field">Coopérative<select onchange="state.stockageCoopFilter=this.value;state.dossierStockageActif=null;state.coopSearchTxt.stockage=\'\';state.stockageRecherche=\'\';render();">'
     + state.cooperatives.slice().sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr',{sensitivity:'base'})).map(c=>'<option value="'+c.id+'"'+(coopId===c.id?' selected':'')+'>'+esc(c.nom)+'</option>').join('')
     + '</select></label>'
+    + '<button class="btn" style="align-self:flex-end" onclick="exportMultiOuvrir()" title="Exporte un dossier précis (ex. Fiches de traçabilité, Documents de conformité) pour plusieurs coopératives dans un seul ZIP">📦 Exporter un dossier pour plusieurs coopératives</button>'
     + '</div>';
 
   html += '<div class="panel" id="stock-panel"><div class="panel-head"><h2>'+esc(coop?coop.nom:'')+' — '+fmtNum(totalFichiers)+' fichier(s) au total</h2>'
@@ -9897,6 +9953,23 @@ function lotsModalsHtml(){
           + '<td><select style="font-size:11.5px;padding:2px 4px" onchange="lotsTransfertSerieChange('+i+', this.value)">'+lotsSeriesOptionsPourImport(l.campagne_id, l.serie_id)+'</select> <span id="lt-client-'+i+'" class="hint" style="margin:0">'+esc(l.client||(l.serie_id?'— générique —':'—'))+'</span></td></tr>'; }).join('')
       + '</tbody></table></div><div class="hint" style="margin-top:8px">Total coché : <b>'+fmtKg(tot)+'</b> (théorique)</div></div>'
       + '<div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" id="lt-import-btn" onclick="lotsTransfertValider()">Importer '+nb+' lot'+(nb>1?'s':'')+'</button></div></div></div>';
+  }
+  if (m.type==='exportMulti'){
+    const pl = m.payload, D = exportMultiDonnees(pl.cle);
+    const cles = new Set(); (state.cooperatives||[]).forEach(c=>Object.keys(fichiersParTypePourCoop(c.id)).forEach(k=>cles.add(k)));
+    const lib = k=>{ const c0 = (state.cooperatives||[])[0]; const d = c0 ? fichiersParTypePourCoop(c0.id)[k] : null; return d ? d.label : k; };
+    const ordre = ['product_movements','compliance'].filter(k=>cles.has(k)).concat(Array.from(cles).filter(k=>k!=='product_movements' && k!=='compliance'));
+    const nbAuto = D.filter(x=>x.livre && x.n>0).length, nbAvec = D.filter(x=>x.n>0).length;
+    return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal xl"><h3>📦 Exporter un dossier pour plusieurs coopératives</h3>'
+      + '<div class="hint" style="margin-bottom:10px">Choisis le dossier à exporter ; ORIGEN produit un seul ZIP avec un sous-dossier par coopérative. Pour « Fiches de traçabilité », la sélection automatique prend les coopératives qui <b>ont livré chez nous</b> (camion déchargé, non refoulé) <b>et</b> dont les fiches sont disponibles.</div>'
+      + '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px"><label class="field" style="margin:0">Dossier à exporter<select onchange="exportMultiDossier(this.value)">'+ordre.map(k=>'<option value="'+esc(k)+'"'+(k===pl.cle?' selected':'')+'>'+esc(lib(k))+'</option>').join('')+'</select></label>'
+      + '<button class="btn btn-compact" onclick="exportMultiPreset(\'auto\')">✓ Auto : ont livré + fichiers disponibles ('+nbAuto+')</button>'
+      + '<button class="btn btn-compact" onclick="exportMultiPreset(\'tous\')">Toutes celles qui ont des fichiers ('+nbAvec+')</button>'
+      + '<button class="btn-ghost btn-compact" onclick="exportMultiPreset(\'aucune\')">Aucune</button></div>'
+      + '<div id="modal-fields"><div class="achats-defile" style="max-height:52vh;overflow:auto"><table class="tbl-fiches tbl-dense"><thead><tr><th></th><th>Coopérative</th><th>N° CCC</th><th>A livré chez nous</th><th class="num">Fichiers</th></tr></thead><tbody>'
+      + D.map(x=>'<tr'+(x.n ? '' : ' style="opacity:.55"')+'><td><input type="checkbox"'+(pl.sel.indexOf(x.c.id)>=0 ? ' checked' : '')+(x.n ? '' : ' disabled')+' onchange="exportMultiBascule(\''+escJs(x.c.id)+'\', this.checked)"></td><td><b>'+esc(x.c.nom)+'</b></td><td>'+esc(x.c.ccc_num||'—')+'</td><td>'+(x.livre ? '<span class="badge ok">oui</span>' : '<span class="hint" style="margin:0">non</span>')+'</td><td class="num">'+(x.n || '—')+'</td></tr>').join('')
+      + '</tbody></table></div></div>'
+      + '<div class="actions"><button class="btn btn-primary" id="exm-go"'+(pl.sel.length ? '' : ' disabled')+' onclick="exportMultiLancer()">⬇ Exporter ('+pl.sel.length+' coopérative'+(pl.sel.length>1?'s':'')+')</button><button class="btn" onclick="closeModal()">Fermer</button></div></div></div>';
   }
   if (m.type==='ocDossier'){
     const pl = m.payload, c = coopById(pl.coopId), D = ocDossierDonnees(pl.coopId, pl.cle);
