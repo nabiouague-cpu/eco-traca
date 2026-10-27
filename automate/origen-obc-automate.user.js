@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.41
+// @version      0.1.42
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.41';
+  const VERSION = '0.1.42';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const ENTITE = '1';                 // ECORIGINE
@@ -394,7 +394,11 @@
   }
   async function etapeBrousse(e) {
     const lot = e.lot;
-    { const [u, p, b] = await Promise.all([existeUsine(e), existePesee(e), existeBrousse(e)]); if (u || p || b) { e.fait[7] = 'déjà dans OBC'; journal(e, 'Connaissement brousse déjà saisi'); return 'suivant'; } }
+    { const [u, p, b] = await Promise.all([existeUsine(e), existePesee(e), existeBrousse(e)]);
+      // Garde-fou : un connaissement sans parcelle fait planter toute la liste d'OBC. On le contrôle dès qu'il est enregistré.
+      if (b && b.illisible) throw new Error('OBC plante en affichant ce connaissement : il a sûrement une parcelle vide. Ouvre-le dans OBC (Connaissement brousse > Modifier), choisis la parcelle de la ligne, enregistre, puis « Continuer ».');
+      if (b && b.tr) { const a = b.tr.querySelector('a[href*="/Edit/"]'); if (a) { const ed = await getHtml(a.getAttribute('href')); const sp = ed.getElementById('txtproducteur_parcelle_idEdit0'); const o = sp && (sp.querySelector('option[selected]') || sp.options[sp.selectedIndex]); if (!o || !o.value) throw new Error('Le connaissement ' + e.lot.connaissement.numero + ' est enregistré SANS parcelle : OBC va planter sur sa liste. Ouvre-le (Modifier), choisis la parcelle de la ligne, enregistre, puis « Continuer ».'); } }
+      if (u || p || b) { e.fait[7] = 'déjà dans OBC'; journal(e, 'Connaissement brousse déjà saisi'); return 'suivant'; } }
     if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
     const f = await ouvrirFormulaire(7); if (!f) return 'navigation';
     const c = lot.connaissement;
