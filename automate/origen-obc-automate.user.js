@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.2.1
+// @version      0.2.2
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.2.1';
+  const VERSION = '0.2.2';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -575,10 +575,18 @@
   async function sousEtapeOrigine(e) {
     const nom = String(e.lot.connaissement.origine || '').trim().toUpperCase(), tkm = num(e.lot.connaissement.tkm);
     if (!/ParametrageOrigine/i.test(location.pathname)) { location.href = '/AgroParametrage/ParametrageOrigine'; return 'navigation'; }
-    const existe = () => [...document.querySelectorAll('table tbody td')].some((td) => N(td.textContent) === N(nom));
+    const dansTable = () => [...document.querySelectorAll('table tbody td')].some((td) => N(td.textContent) === N(nom));
     await attendre(() => document.querySelector('table tbody tr') || /aucun|no data|pas de donn/i.test(document.body.innerText), 15000, 400); await dormir(1000);
+    // La liste d'OBC est paginée : si le nom n'est pas sur la page affichée, on le cherche avec la zone de recherche de la liste.
+    const existeRecherche = async () => {
+      if (dansTable()) return true;
+      const rech = [...document.querySelectorAll('input[type=search], .dataTables_filter input, input[placeholder*="echerche" i], input[name*="search" i], input[id*="search" i], input[id*="filter" i]')].find((x) => visible(x) && !x.closest('.modal') && !x.closest('#origen-obc'));
+      if (!rech) return false;
+      setInput(rech, nom); rech.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter' })); rech.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter', keyCode: 13 }));
+      await attendre(() => dansTable(), 6000, 400); const ok = dansTable(); setInput(rech, ''); return ok;
+    };
     const fin = () => { memoriserOrigine(nom); e.sous = null; e.origineOk = true; ecrireEtat(e); journal(e, 'Origine « ' + nom + ' » prête dans OBC'); if (e.etape === 1) return 'suite'; location.href = PAGES[7]; return 'navigation'; };
-    if (existe()) return fin();
+    if (await existeRecherche()) return fin();
     if (!modalOuverte()) {
       const cands = [...document.querySelectorAll('a, button')].filter((b) => visible(b) && !b.closest('#origen-obc') && !b.closest('.modal'));
       const btn = cands.find((b) => /Origine\/Create|Origine\/Add/i.test(b.getAttribute('href') || '')) || cands.find((b) => /^(NOUVEAU|NOUVELLE|AJOUTER|CREER)\b/.test(N(b.textContent))) || cands.find((b) => /nouv|create|add/i.test(b.id));
@@ -600,8 +608,11 @@
       if (!b) throw new Error('Bouton « Enregistrer » de la nouvelle origine inactif ou introuvable. ' + erreurVisible());
       journal(e, 'Origine « ' + nom + ' » : enregistrement automatique'); b.click(); confirmerBoite();
     } else { e.note = 'Origine « ' + nom + ' » remplie : clique « Enregistrer » dans OBC.'; ecrireEtat(e); afficherEtat(); }
-    const ok = await attendre(() => existe(), auto ? 25000 : 300000, 500);
-    if (!ok) throw new Error('Origine « ' + nom + ' » non enregistrée. ' + erreurVisible());
+    // Enregistrement réussi = la fenêtre se ferme sans message d'erreur ; la présence réelle de l'origine est de toute façon revérifiée dans la liste du formulaire « Données livraison ».
+    const t0 = Date.now(); let ferme = false;
+    while (Date.now() - t0 < (auto ? 25000 : 300000)) { if (!modalOuverte()) { ferme = true; break; } await dormir(500); }
+    if (!ferme) throw new Error('Origine « ' + nom + ' » non enregistrée : la fenêtre est restée ouverte. ' + erreurVisible());
+    await dormir(1500);
     return fin();
   }
   async function etapeLivraison(e) {
