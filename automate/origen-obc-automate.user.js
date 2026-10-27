@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.2.5
+// @version      0.2.6
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.2.5';
+  const VERSION = '0.2.6';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -106,7 +106,7 @@
     const cand = [...zone.querySelectorAll('button, input[type=submit], input[type=button], a.btn')].filter((b) => b.offsetParent !== null && /enregistrer/i.test(b.textContent || b.value || ''));
     return cand.find((b) => /btn(Create|Save|Add)/i.test(b.id)) || cand[0] || null;
   }
-  function erreurVisible() { return [...document.querySelectorAll('.toast-error .toast-message, .toast-error, .alert-danger, .swal2-html-container, .field-validation-error, .validation-summary-errors')].filter((x) => x.offsetParent !== null).map((x) => x.textContent.trim()).filter(Boolean).slice(0, 2).join(' | ').slice(0, 220); }
+  function erreurVisible() { return [...document.querySelectorAll('.toast-error .toast-message, .toast-error, .alert-danger, .swal2-html-container, .field-validation-error, .validation-summary-errors, .text-danger, .has-error .help-block, .invalid-feedback, .toast-warning, .toast-info')].filter((x) => x.offsetParent !== null).map((x) => x.textContent.trim()).filter(Boolean).slice(0, 2).join(' | ').slice(0, 220); }
   // Si OBC demande une confirmation après « Enregistrer » (boîte SweetAlert / Bootbox), on l'accepte.
   function confirmerBoite() { let n = 0; const t = setInterval(() => { const b = [...document.querySelectorAll('.swal2-confirm, .swal-button--confirm, .bootbox-accept, .sweet-alert .confirm')].find((x) => x.offsetParent !== null); if (b) { clearInterval(t); try { b.click(); } catch (er) { /* ignoré */ } } if (++n > 12) clearInterval(t); }, 400); }
   async function enregistrerAuto(e) {
@@ -130,6 +130,7 @@
     panneau.innerHTML = '<div style="background:#0E3B36;color:#fff;padding:10px 14px;border-radius:12px 12px 0 0;font-weight:700;display:flex;justify-content:space-between;align-items:center;cursor:move;" id="oo-tete"><span>ORIGEN → OBC <small style="font-weight:400;opacity:.75">v' + VERSION + '</small></span><span id="oo-ferme" style="cursor:pointer;opacity:.8;">✕</span></div>'
       + '<div style="padding:12px 14px;">'
       + '<div id="oo-etat" style="margin-bottom:10px;white-space:pre-wrap;max-height:260px;overflow:auto;"></div>'
+      + '<div id="oo-version" style="display:none;background:#fdecea;border:1px solid #B3261E;border-radius:8px;padding:6px 8px;margin-bottom:8px;font-size:12px;"></div>'
       + '<div id="oo-file" style="border:1px solid #cfd8d4;border-radius:8px;padding:8px;margin-bottom:8px;background:#f6faf8;">'
       + '<div style="font-weight:700;">🤖 File ORIGEN <span id="oo-file-etat" style="font-weight:400;color:#5b6b68;"></span></div>'
       + '<input id="oo-token" placeholder="Code de liaison (ORIGEN › Saisie OBC › 🔑) — une seule fois" style="width:100%;box-sizing:border-box;border:1px solid #cfd8d4;border-radius:6px;padding:5px;margin:6px 0;font:12px monospace;">'
@@ -175,7 +176,16 @@
     tete.onmousedown = (ev) => { drag = true; dx = ev.clientX - panneau.offsetLeft; dy = ev.clientY - panneau.offsetTop; ev.preventDefault(); };
     document.addEventListener('mousemove', (ev) => { if (!drag) return; panneau.style.left = Math.max(0, Math.min(innerWidth - 120, ev.clientX - dx)) + 'px'; panneau.style.top = Math.max(0, Math.min(innerHeight - 40, ev.clientY - dy)) + 'px'; panneau.style.right = 'auto'; });
     document.addEventListener('mouseup', () => { drag = false; });
-    afficherEtat(); afficherFile();
+    afficherEtat(); afficherFile(); verifierVersion();
+  }
+  // Prévient quand une version plus récente de l'automate est publiée (Tampermonkey met parfois des heures à la voir).
+  async function verifierVersion() {
+    try {
+      const r = await fetch('https://nabiouague-cpu.github.io/eco-traca/automate/origen-obc-automate.user.js?t=' + Date.now(), { cache: 'no-store' }); const t = await r.text();
+      const m = t.match(/@version\s+([0-9.]+)/); if (!m || m[1] === VERSION) return;
+      const z = document.getElementById('oo-version'); if (!z) return;
+      z.style.display = 'block'; z.innerHTML = '⚠ Version ' + m[1] + ' disponible (tu as ' + VERSION + ') : <a href="https://nabiouague-cpu.github.io/eco-traca/automate/origen-obc-automate.user.js" target="_blank" style="color:#B3261E;font-weight:700">cliquer ici pour mettre à jour</a>, puis recharger cette page.';
+    } catch (er) { /* hors ligne : pas de bannière */ }
   }
   function afficherFile() {
     const z = document.getElementById('oo-file-etat'); if (!z) return; const f = lireFile();
@@ -574,7 +584,11 @@
   // etapeRetour : 'suite' quand l'origine est faite en tout début de lot (on enchaîne sur l'étape 1) ; sinon retour à la page des données livraison.
   async function sousEtapeOrigine(e) {
     const nom = String(e.lot.connaissement.origine || '').trim().toUpperCase(), tkm = num(e.lot.connaissement.tkm);
-    const fin = () => { e.sous = null; ecrireEtat(e); journal(e, 'Origine « ' + nom + ' » prête : retour aux données livraison'); location.href = PAGES[7]; return 'navigation'; };
+    const fin = () => {
+      memoriserOrigine(nom); e.sous = null; e.origineOk = true; ecrireEtat(e);
+      if (e.preEtape) { journal(e, 'Origine « ' + nom + ' » : OK, on enchaîne'); return 'suite'; }
+      journal(e, 'Origine « ' + nom + ' » prête : retour aux données livraison'); location.href = PAGES[7]; return 'navigation';
+    };
     if (!/ParametrageOrigine/i.test(location.pathname)) { location.href = '/AgroParametrage/ParametrageOrigine'; return 'navigation'; }
     const dansTable = () => [...document.querySelectorAll('table tbody td')].some((td) => N(td.textContent) === N(nom));
     await attendre(() => document.querySelector('table tbody tr') || /aucun|no data|pas de donn/i.test(document.body.innerText), 15000, 400); await dormir(1000);
@@ -598,12 +612,13 @@
     await attendre(() => { const c = champsOrigine(modal); return c.lib && c.code && c.prix; }, 8000, 300); await dormir(600);
     const { ent, lib, code, prix } = champsOrigine(modal);
     if (!lib || !code || !prix) throw new Error('Formulaire « Nouvelle origine » : cases introuvables (libellé ' + !!lib + ', code ' + !!code + ', TKM ' + !!prix + '). Contenu : ' + modal.innerText.replace(/\s+/g, ' ').slice(0, 160));
-    if (ent && ent.tagName === 'SELECT') { await setSelectTexte(ent, /^ECORIGINE/i, 'Entité'); await dormir(500); }
-    setInput(lib, nom); setInput(code, nom); setInput(prix, tkm);
-    await dormir(400);
+    if (ent && ent.tagName === 'SELECT') { await setSelectTexte(ent, /^ECORIGINE/i, 'Entité'); await dormir(1500); }
+    // OBC peut vider les cases après le choix de l'entité : on remplit, on attend, on revérifie (3 passes) avant d'enregistrer.
+    const ok3 = () => lib.value === nom && code.value === nom && Number(String(prix.value).replace(',', '.')) === Number(tkm);
+    for (let passe = 0; passe < 3 && !ok3(); passe++) { setInput(lib, nom); setInput(code, nom); setInput(prix, tkm); await dormir(1200); }
     { const entTxt = ent && ent.tagName === 'SELECT' ? ((ent.options[ent.selectedIndex] || {}).text || '') : '(sans liste)';
       if (ent && ent.tagName === 'SELECT' && !/^ECORIGINE/i.test(entTxt)) throw new Error('Nouvelle origine : l\'entité n\'a pas pris ECORIGINE (« ' + entTxt + ' »), rien n\'est enregistré');
-      if (lib.value !== nom || code.value !== nom || Number(String(prix.value).replace(',', '.')) !== Number(tkm)) throw new Error('Nouvelle origine : cases mal remplies (libellé « ' + lib.value + ' », code « ' + code.value + ' », TKM « ' + prix.value + ' »), rien n\'est enregistré');
+      if (!ok3()) throw new Error('Nouvelle origine : cases vidées par OBC (libellé « ' + lib.value + ' », code « ' + code.value + ' », TKM « ' + prix.value + ' »), rien n\'est enregistré');
       journal(e, 'Nouvelle origine : entité ' + entTxt + ', libellé/code ' + nom + ', TKM ' + tkm); }
     const auto = e.enFile && lireFile().auto !== false;
     const bt = () => [...modal.querySelectorAll('button, input[type=submit]')].find((b) => /enregistrer/i.test(b.textContent || b.value || ''));
@@ -614,8 +629,18 @@
     } else { e.note = 'Origine « ' + nom + ' » remplie : clique « Enregistrer » dans OBC.'; ecrireEtat(e); afficherEtat(); }
     // Enregistrement réussi = la fenêtre se ferme sans message d'erreur ; la présence réelle de l'origine est de toute façon revérifiée dans la liste du formulaire « Données livraison ».
     const t0 = Date.now(); let ferme = false;
-    while (Date.now() - t0 < (auto ? 25000 : 300000)) { if (!modalOuverte()) { ferme = true; break; } await dormir(500); }
-    if (!ferme) throw new Error('Origine « ' + nom + ' » non enregistrée : la fenêtre est restée ouverte. ' + erreurVisible());
+    while (Date.now() - t0 < (auto ? 20000 : 300000)) {
+      if (!modalOuverte()) { ferme = true; break; }
+      if (/exist|d[ée]j[àa]|doublon|unique|already/i.test(erreurVisible())) break;      // OBC refuse un doublon : l'origine existe, c'est ce qu'on voulait
+      await dormir(500);
+    }
+    if (!ferme) {
+      const msg = erreurVisible();
+      const fermer = modalOuverte() && [...modalOuverte().querySelectorAll('button, a')].find((b) => /fermer|annuler|close/i.test(b.textContent || ''));
+      if (fermer) { fermer.click(); await dormir(1500); }
+      if (/exist|d[ée]j[àa]|doublon|unique|already/i.test(msg) || await existeRecherche()) { journal(e, 'Origine « ' + nom + ' » existe déjà dans OBC (' + (msg || 'vue dans la liste') + ')'); return fin(); }
+      throw new Error('Origine « ' + nom + ' » non enregistrée : la fenêtre est restée ouverte. ' + msg);
+    }
     await dormir(1500);
     return fin();
   }
@@ -786,6 +811,12 @@
           ecrireEtat(e); afficherEtat(); setTimeout(boucle, 4000); return;
         }
         if (e.statut === 'verifier') e.statut = 'a_faire';
+        // Tout premier élément de la chaîne : l'origine du camion existe-t-elle dans OBC ? Sinon on la crée, puis on enchaîne.
+        if (e.enFile && e.etape === 1 && !e.origineOk && !e.sous) {
+          const nomO = String(e.lot.connaissement.origine || '').trim();
+          if (!nomO || memoOrigines().includes(N(nomO))) { e.origineOk = true; } else { e.sous = 'origine'; e.preEtape = true; }
+          ecrireEtat(e);
+        }
         if (e.sous === 'origine') {
           try { const r = await sousEtapeOrigine(e); if (r === 'navigation') return; continue; }
           catch (err) {
