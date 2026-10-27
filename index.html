@@ -4396,7 +4396,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-27-314';
+const APP_VERSION = '2026-10-27-315';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -6958,7 +6958,7 @@ function renderPrefCoopDetail(coopId, campId){
     + (s.prefs.length ? '<table class="data-table"><thead><tr><th>Date</th><th>N° fiche</th><th>Type</th><th class="num">Montant</th><th>Règlement</th><th>Bénéficiaire</th><th></th></tr></thead><tbody>'
       + s.prefs.map(p=>'<tr><td>'+prefFmtDate(p.date_financement)+'</td><td>'+esc(p.numero||'')+'</td><td>'+esc(PREF_TYPES[p.type_avance]||p.type_avance||'')+'</td><td class="num">'+prefFmt(p.montant)+'</td>'
         + '<td>'+esc((p.banque||'—')+' · '+(p.mode_reglement==='virement'?'Virement':'Chèque')+(p.reference?' n°'+p.reference:''))+'</td><td>'+esc(p.beneficiaire||'—')+'</td>'
-        + '<td style="white-space:nowrap;"><button class="btn-ghost" onclick="prefFichePdf(\''+escJs(p.id)+'\',this)">📄 Fiche PDF</button><button class="btn-ghost" onclick="prefOuvrir(\''+escJs(coopId)+'\',\''+escJs(p.id)+'\')">Modifier</button><button class="btn-danger-text" onclick="prefSupprimer(\''+escJs(p.id)+'\')">Supprimer</button></td></tr>').join('')
+        + '<td style="white-space:nowrap;"><button class="btn-ghost" onclick="prefFichePdf(\''+escJs(p.id)+'\',this)">📄 Fiche PDF</button><button class="btn-ghost" onclick="pfTelechargerDoc(\'fiche\',\''+escJs(p.id)+'\',this)">📊 Fiche Excel</button><button class="btn-ghost" onclick="pfOuvrirDocs(\''+escJs(p.id)+'\')">📝 Documents à signer</button><button class="btn-ghost" onclick="prefOuvrir(\''+escJs(coopId)+'\',\''+escJs(p.id)+'\')">Modifier</button><button class="btn-danger-text" onclick="prefSupprimer(\''+escJs(p.id)+'\')">Supprimer</button></td></tr>').join('')
       + '<tr style="font-weight:700"><td colspan="3" style="text-align:left;">Total préfinancé</td><td class="num">'+prefFmt(s.A)+'</td><td colspan="3"></td></tr></tbody></table>'
       : '<div class="hint">Aucune avance enregistrée.</div>')
     + '<h3 style="margin:18px 0 8px">Livraisons (depuis les achats ORIGEN)</h3>'
@@ -7110,7 +7110,7 @@ function prefModalsHtml(){
     const pl = m.payload;
     const coops = (state.cooperatives||[]).slice().sort((a,b)=>String(a.nom).localeCompare(String(b.nom),'fr',{sensitivity:'base'}));
     return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal wide"><h3>'+(pl.id?'Modifier le préfinancement':'Nouveau préfinancement')+'</h3><div id="modal-fields">'
-      + '<label class="field">Coopérative<select name="pf_coop">'+'<option value="">— choisir —</option>'+coops.map(c=>'<option value="'+esc(c.id)+'"'+(c.id===pl.cooperative_id?' selected':'')+'>'+esc(c.nom)+'</option>').join('')+'</select></label>'
+      + '<label class="field">Coopérative<select name="pf_coop" onchange="prefFormCoop(this.value)">'+'<option value="">— choisir —</option>'+coops.map(c=>'<option value="'+esc(c.id)+'"'+(c.id===pl.cooperative_id?' selected':'')+'>'+esc(c.nom)+'</option>').join('')+'</select></label>'
       + '<label class="field">Campagne<select name="pf_campagne">'+prefCampagnes().map(c=>'<option value="'+esc(c.id)+'"'+(c.id===pl.campagne_id?' selected':'')+'>'+esc(c.nom)+'</option>').join('')+'</select></label>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;"><label class="field">Date du financement<input type="date" name="pf_date" value="'+esc(pl.date_financement||'')+'"></label>'
       + '<label class="field">Montant (FCFA)<input type="number" min="0" step="1" name="pf_montant" value="'+esc(pl.montant)+'"></label></div>'
@@ -7122,9 +7122,11 @@ function prefModalsHtml(){
       + '<label class="field">Règlement<select name="pf_mode"><option value="cheque"'+(pl.mode_reglement!=='virement'?' selected':'')+'>Chèque</option><option value="virement"'+(pl.mode_reglement==='virement'?' selected':'')+'>Virement</option></select></label>'
       + '<label class="field">N° chèque / référence<input type="text" name="pf_ref" value="'+esc(pl.reference||'')+'"></label></div>'
       + '<label class="field">Bénéficiaire (libellé)<input type="text" name="pf_benef" value="'+esc(pl.beneficiaire||'')+'" placeholder="Nom de la personne qui reçoit le chèque"></label>'
+      + prefIdentitesHtml(pl)
       + '<label class="field">N° de fiche (automatique si vide)<input type="text" name="pf_numero" value="'+esc(pl.numero||'')+'"></label>'
       + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="prefEnregistrer()">Enregistrer</button></div></div></div>';
   }
+  if (m.type==='prefDocs') return pfDocsModalHtml(m);
   if (m.type==='prefImport'){
     const pl = m.payload;
     const coops = (state.cooperatives||[]).slice().sort((a,b)=>String(a.nom).localeCompare(String(b.nom),'fr',{sensitivity:'base'}));
@@ -7148,6 +7150,8 @@ function prefModalsHtml(){
       + '<label class="field">Port de livraison<input type="text" name="pi_port" value="'+esc(pl.port_livraison||'')+'"></label>'
       + '<label class="field">Commission (FCFA/kg)<input type="number" step="0.01" min="0" name="pi_comm" value="'+esc(pl.commission_kg==null?'':pl.commission_kg)+'"></label>'
       + '<label class="field">Commentaire de suivi<textarea name="pi_comm_txt" rows="3">'+esc(pl.commentaire||'')+'</textarea></label>'
+      + '<div style="font-weight:700;margin:14px 0 2px;">Signataire de la coopérative</div><div class="hint" style="margin:0 0 8px;">Utilisé pour le protocole d\'accord, l\'avenant et la caution.</div>'
+      + prefSigChampsHtml(pfSignataire(coopById(pl.cooperative_id)||{}, pl))
       + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="prefEnregistrerInfos()">Enregistrer</button></div></div></div>';
   }
   return '';
@@ -7156,6 +7160,7 @@ function prefOuvrirInfos(coopId){ state.modal = { type:'prefInfos', payload: Obj
 async function prefEnregistrerInfos(){
   const id = state.modal.payload.cooperative_id;
   const ligne = { cooperative_id:id, fournisseur_principal: fv('pi_four').trim(), port_livraison: fv('pi_port').trim(), commission_kg: fv('pi_comm')==='' ? null : Number(fv('pi_comm')), commentaire: fv('pi_comm_txt').trim(), maj_le: new Date().toISOString() };
+  Object.assign(ligne, pfSigLue());
   const { error } = await supabaseClient.from('prefinancement_coop').upsert(ligne);
   if (error){ showToast('Échec : '+error.message); return; }
   state.prefCoopInfos = (state.prefCoopInfos||[]).filter(i=>i.cooperative_id!==id).concat([ligne]);
@@ -7182,10 +7187,14 @@ async function prefEnregistrer(){
     numero = 'FN/'+prefCodeCoop(coop)+'/'+prefCodeCampagne(campId) + (deja>0 ? '-'+(deja+1) : '');
   }
   const ligne = { id: pl.id || ('pf_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)), cooperative_id:coopId, campagne_id:campId, numero, date_financement:date, montant,
-    type_avance: fv('pf_type'), terme: fv('pf_terme').trim(), mode_remboursement: fv('pf_remb').trim(), banque: fv('pf_banque').trim(), mode_reglement: fv('pf_mode'), reference: fv('pf_ref').trim(), beneficiaire: fv('pf_benef').trim() };
+    type_avance: fv('pf_type'), terme: fv('pf_terme').trim(), mode_remboursement: fv('pf_remb').trim(), banque: fv('pf_banque').trim(), mode_reglement: fv('pf_mode'), reference: fv('pf_ref').trim(), beneficiaire: fv('pf_benef').trim() || (document.querySelector('#modal-fields [name="pf_meme"]:checked') ? fv('pf_sig_nom').trim() : '') };
+  const meme = !!document.querySelector('#modal-fields [name="pf_meme"]:checked'), nn = v=>String(v||'').trim() || null;
+  Object.assign(ligne, { benef_meme_signataire: meme, benef_fonction: meme?null:nn(fv('pf_bfonction')), benef_cni: meme?null:nn(fv('pf_bcni')), benef_naissance: meme?null:(fv('pf_bnaiss')||null),
+    benef_lieu_naissance: meme?null:nn(fv('pf_blieu')), benef_nationalite: meme?null:nn(fv('pf_bnat')), benef_profession: meme?null:nn(fv('pf_bprof')), benef_domicile: meme?null:nn(fv('pf_bdom')) });
   const { error } = await supabaseClient.from('prefinancements').upsert(ligne);
   if (error){ showToast('Échec de l\'enregistrement : '+error.message); return; }
   state.prefinancements = (state.prefinancements||[]).filter(p=>p.id!==ligne.id).concat([ligne]).sort((a,b)=>String(a.date_financement).localeCompare(String(b.date_financement)));
+  await prefEnregistrerSignataire(coopId);
   state.prefCampagne = campId; state.prefCoopOuverte = coopId;
   closeModal(); showToast('Préfinancement enregistré.', 'success');
 }
@@ -7234,7 +7243,7 @@ function prefFicheHtml(p){
     + '<td style="width:30%;text-align:right;vertical-align:top;">'+now.toLocaleDateString('fr-FR')+'<br>'+now.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})+'</td></tr></table>'
     + '<div style="text-align:center;font-size:17px;font-weight:700;margin:14px 0 16px;letter-spacing:.04em;">FICHE DE FINANCEMENT DES ACHATS</div>'
     + '<table style="width:100%;border-collapse:collapse;margin-bottom:14px;"><tr><td style="'+th+'width:58%;">FOURNISSEUR</td><td style="'+th+'">FINANCEMENT</td></tr>'
-    + '<tr><td style="'+cell+'vertical-align:top;line-height:1.7;">Code : <b>'+esc(coop.code||'')+'</b><br>Raison sociale : <b>'+esc(coop.nom||'')+'</b><br>Adresse : '+esc(coop.ville||coop.siege_social||'')+'<br>Type de cacao : <b>'+esc(prefTypeCacao(coop))+'</b></td>'
+    + '<tr><td style="'+cell+'vertical-align:top;line-height:1.7;">Code : <b>'+esc(coop.ccc_num||coop.code||'')+'</b><br>Raison sociale : <b>'+esc(coop.nom||'')+'</b><br>Adresse : '+esc(coop.ville||coop.siege_social||'')+'<br>Type de cacao : <b>'+esc(prefTypeCacao(coop))+'</b></td>'
     + '<td style="'+cell+'vertical-align:top;line-height:1.7;">N° : <b>'+esc(p.numero||'')+'</b><br>Date : <b>'+dateFiche+'</b></td></tr></table>'
     + '<div style="font-weight:700;margin:6px 0 4px;">CLAUSES</div>'
     + '<table style="width:100%;border-collapse:collapse;margin-bottom:14px;"><tr><td style="'+th+'">RÉPARTITION DU FINANCEMENT</td><td style="'+th+'text-align:center;">TERME (PÉRIODE)</td><td style="'+th+'">MODE DE REMBOURSEMENT</td></tr>'+lignesAvance+'</table>'
@@ -7272,6 +7281,425 @@ async function prefFichePdf(id, btn){
     } finally { cadre.remove(); }
   }catch(e){ showToast('Échec de la fiche : '+(e&&e.message?e.message:e)); }
   finally { if (btn){ btn.disabled = false; btn.textContent = txt; } }
+}
+
+// =====================================================================================================================
+// DOCUMENTS DE PRÉFINANCEMENT A SIGNER : protocole d'accord, avenant au protocole, convention de cautionnement (Word) et
+// fiche de financement des achats (Excel). Chaque document est genere en editant DIRECTEMENT le modele fourni (dossier
+// « modeles ») : seuls les elements variables sont remplaces, la mise en forme d'origine reste intacte.
+//  - Protocole : un par coopérative et par campagne (signé avant le 1er financement).
+//  - Avenant n°N : un par renouvellement (2e financement = avenant n°01, 3e = n°02...).
+//  - Caution : le représentant légal se porte caution, plafond = total des financements à cette date.
+//  - Fiche Excel : une par financement, reprise telle quelle du modèle ECORIGINE.
+// Les références suivent l'année et le nombre de financements de la coopérative :
+//  protocole ECO-<année>-PAP-<n°>, avenant « Avenant N°<rang-1> », caution ECO-<année>-<COOP> <rang>.
+// =====================================================================================================================
+const PF_W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+const PF_TRAIT = '…………………';          // champ laissé à compléter à la main quand l'information manque
+function pfNb(n){ return String(Math.round(Number(n)||0)).replace(/\B(?=(\d{3})+(?!\d))/g, ' '); }
+function pfDateFr(iso){ if (!iso) return ''; const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? m[3]+'/'+m[2]+'/'+m[1] : String(iso); }
+function pfAjouteJours(iso, j){ const d = new Date(iso+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()+j); return d.toISOString().slice(0,10); }
+function pfMaj1(s){ s = String(s||''); return s ? s.charAt(0).toUpperCase()+s.slice(1) : s; }
+function pfMin1(s){ s = String(s||''); return s ? s.charAt(0).toLowerCase()+s.slice(1) : s; }
+function pfSansAccent(s){ return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,''); }
+
+// ---- Outils Word (XML) ----
+function pfParas(dom){ return Array.from(dom.getElementsByTagNameNS(PF_W, 'p')); }
+function pfTextesDe(par){   // les w:t du paragraphe lui-meme (pas ceux d'un paragraphe imbrique, ex. zone de texte)
+  return Array.from(par.getElementsByTagNameNS(PF_W, 't')).filter(t=>{ let n = t.parentNode; while (n && n.localName!=='p') n = n.parentNode; return n===par; });
+}
+function pfFlat(par){ return pfTextesDe(par).map(t=>t.textContent).join(''); }
+// Remplace (chaine ou expression reguliere) dans le texte d'UN paragraphe, meme coupe en plusieurs morceaux : le nouveau texte
+// prend la mise en forme du morceau ou commence l'ancien. Renvoie le nombre de remplacements.
+function pfRemplacerPar(par, motif, rempl){
+  let n = 0, depart = 0;
+  for (let garde=0; garde<60; garde++){
+    const ts = pfTextesDe(par), flat = ts.map(t=>t.textContent).join('');
+    let idx, len, sortie;
+    if (motif instanceof RegExp){
+      const re = new RegExp(motif.source, motif.flags.replace(/[gy]/g,'')), m = re.exec(flat.slice(depart));
+      if (!m || !m[0].length) break;
+      idx = depart + m.index; len = m[0].length; sortie = typeof rempl==='function' ? rempl(m) : String(rempl);
+    } else {
+      const i = flat.indexOf(motif, depart); if (i<0 || !motif.length) break;
+      idx = i; len = motif.length; sortie = String(rempl);
+    }
+    let pos = 0, premier = true;
+    ts.forEach(t=>{
+      const tx = t.textContent, a = pos, b = pos + tx.length; pos = b;
+      if (b<=idx || a>=idx+len) return;
+      const s = Math.max(idx,a)-a, e = Math.min(idx+len,b)-a;
+      t.textContent = tx.slice(0,s) + (premier ? sortie : '') + tx.slice(e);
+      t.setAttribute('xml:space', 'preserve'); premier = false;
+    });
+    n++; depart = idx + sortie.length;
+  }
+  return n;
+}
+function pfRemplacerTout(dom, motif, rempl){ let n = 0; pfParas(dom).forEach(p=>{ n += pfRemplacerPar(p, motif, rempl); }); return n; }
+// Cherche les paragraphes contenant `repere` (chaine ou regex) et y remplace `motif`.
+function pfRemplacerDans(dom, repere, motif, rempl){
+  let n = 0;
+  pfParas(dom).forEach(p=>{
+    const f = pfFlat(p); if (!(repere instanceof RegExp ? repere.test(f) : f.indexOf(repere)>=0)) return;
+    n += pfRemplacerPar(p, motif, rempl);
+  });
+  return n;
+}
+// Reecrit un paragraphe a partir de segments {t, b} en gardant sa mise en page et la police de son premier morceau.
+function pfReecrire(dom, par, segs){
+  const runs = Array.from(par.childNodes).filter(n=>n.localName==='r');
+  const ref = runs.find(r=>r.getElementsByTagNameNS(PF_W,'t').length) || runs[0] || null;
+  const rpr = ref ? Array.from(ref.childNodes).find(n=>n.localName==='rPr') : null;
+  runs.forEach(r=>par.removeChild(r));
+  const ppr = Array.from(par.childNodes).find(n=>n.localName==='pPr');
+  let avant = ppr ? ppr.nextSibling : par.firstChild;
+  segs.forEach(s=>{
+    const r = dom.createElementNS(PF_W, 'w:r');
+    const p2 = rpr ? rpr.cloneNode(true) : dom.createElementNS(PF_W, 'w:rPr');
+    Array.from(p2.childNodes).forEach(c=>{ if (c.localName==='highlight' || c.localName==='shd' || c.localName==='b' || c.localName==='bCs') p2.removeChild(c); });
+    if (s.b){ const b = dom.createElementNS(PF_W, 'w:b'); p2.insertBefore(b, p2.firstChild); }
+    r.appendChild(p2);
+    const t = dom.createElementNS(PF_W, 'w:t'); t.setAttribute('xml:space', 'preserve'); t.textContent = s.t; r.appendChild(t);
+    par.insertBefore(r, avant);
+  });
+}
+function pfParContenant(dom, repere){ return pfParas(dom).find(p=>{ const f = pfFlat(p); return repere instanceof RegExp ? repere.test(f) : f.indexOf(repere)>=0; }) || null; }
+// Le document final ne garde aucun surlignage de travail (jaune / vert du modele).
+function pfNettoyer(dom){
+  Array.from(dom.getElementsByTagNameNS(PF_W, 'highlight')).forEach(h=>h.parentNode.removeChild(h));
+  Array.from(dom.getElementsByTagNameNS(PF_W, 'shd')).forEach(s=>{ if (s.parentNode && s.parentNode.localName==='rPr') s.parentNode.removeChild(s); });
+}
+async function pfChargerModele(url){
+  const rep = await fetch(url+'?v='+encodeURIComponent(APP_VERSION), { cache:'no-cache' });
+  if (!rep.ok) throw new Error('modèle introuvable ('+url+', HTTP '+rep.status+')');
+  return await rep.arrayBuffer();
+}
+// Applique `fn(dom)` au document.xml d'un modele Word (et au dom des en-tetes / pieds si fnAutres est fourni) et renvoie le .docx.
+async function pfEditerDocx(octets, fn){
+  const zip = await JSZip.loadAsync(octets);
+  const dom = new DOMParser().parseFromString(await zip.file('word/document.xml').async('string'), 'application/xml');
+  const bilan = fn(dom) || {};
+  pfNettoyer(dom);
+  zip.file('word/document.xml', new XMLSerializer().serializeToString(dom));
+  const blob = await zip.generateAsync({ type:'blob', mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+  return { blob, bilan };
+}
+
+// ---- Contexte d'un financement : tout ce qu'il faut pour remplir les documents ----
+function pfAnneeCampagne(camp){ const m = String((camp&&camp.nom)||'').match(/(\d{4}).*?(\d{4})/); return m ? [m[1], m[2]] : ['', '']; }
+function pfFonctionDefaut(coop){ return fonctionRepresentantFor(coop && coop.nom); }
+function pfSignataire(coop, info){
+  info = info || {};
+  return {
+    nom: (info.sig_nom || (coop && coop.representant_legal_nom) || '').trim(),
+    fonction: (info.sig_fonction || pfFonctionDefaut(coop)).trim(),
+    nationalite: (info.sig_nationalite||'').trim(), naissance: info.sig_naissance||'', lieu: (info.sig_lieu_naissance||'').trim(),
+    profession: (info.sig_profession||'').trim(), domicile: (info.sig_domicile||'').trim(), cni: (info.sig_cni||'').trim()
+  };
+}
+// Celui qui recupere le cheque : le signataire (cas courant) ou une autre personne mandatee, avec ses propres references d'identite.
+function pfBeneficiaire(p, sig){
+  const nomP = String(p.beneficiaire||'').trim();
+  const meme = p.benef_meme_signataire===true || (p.benef_meme_signataire==null && (!nomP || pfSansAccent(nomP).toUpperCase()===pfSansAccent(sig.nom).toUpperCase()));
+  if (meme) return Object.assign({ meme:true }, sig, { nom: sig.nom || nomP });
+  return { meme:false, nom:nomP, fonction:(p.benef_fonction||'Mandataire').trim(), nationalite:(p.benef_nationalite||'').trim(), naissance:p.benef_naissance||'',
+    lieu:(p.benef_lieu_naissance||'').trim(), profession:(p.benef_profession||'').trim(), domicile:(p.benef_domicile||'').trim(), cni:(p.benef_cni||'').trim() };
+}
+// Contexte pur (testable) : p = financement, ctx = {coop, camp, info, liste (financements de la coop/campagne), coopsOrdre (coops de la campagne par 1er financement), livraisons}
+function pfContexteDe(p, D){
+  const coop = D.coop, camp = D.camp, liste = D.liste.slice();
+  const rang = Math.max(1, liste.findIndex(x=>x.id===p.id)+1);
+  const premier = liste[0] || p;
+  const avant = liste.slice(0, rang-1), jusque = liste.slice(0, rang);
+  const [a1, a2] = pfAnneeCampagne(camp);
+  const dateProto = premier.date_financement || p.date_financement;
+  const annee = String(dateProto||'').slice(0,4) || a1;
+  const ordre = Math.max(1, (D.coopsOrdre||[]).indexOf(coop.id)+1);
+  const sig = pfSignataire(coop, D.info);
+  const benef = pfBeneficiaire(p, sig);
+  const nomAff = nomAfficheContrat(coop.nom);
+  const codeNom = pfSansAccent(nomAff).toUpperCase().replace(/[^A-Z0-9]+/g,'-').replace(/^-|-$/g,'');
+  const sommeAvant = avant.reduce((t,x)=>t+(Number(x.montant)||0),0);
+  const livAvant = (D.livraisons||[]).filter(l=>l.date && l.date<=p.date_financement).reduce((t,l)=>t+(l.net||0),0);
+  const solde = Math.max(0, Math.round(sommeAvant - livAvant));
+  const mandatPrev = avant.filter(x=>x.type_avance==='ponctuelle').reduce((t,x)=>t+(Number(x.montant)||0),0);
+  const soldeMandat = Math.min(solde, mandatPrev);
+  const montant = Math.round(Number(p.montant)||0);
+  const cumul = jusque.reduce((t,x)=>t+(Number(x.montant)||0),0);
+  return {
+    p, coop, camp, info:D.info||{}, rang, nbFinancements:liste.length, annee, a1, a2,
+    refProto: 'ECO-'+annee+'-PAP-'+String(ordre).padStart(3,'0'), dateProto,
+    refAvenant: 'ECO-'+annee+'-PAP-'+String(ordre).padStart(3,'0'), numAvenant: String(rang-1).padStart(2,'0'),
+    refCaution: 'ECO-'+annee+'-'+codeNom+' '+String(rang).padStart(2,'0'),
+    sig, benef, nomAff, nomComplet: coop.nom_complet ? String(coop.nom_complet).trim() : '',
+    siege: coop.siege_social || coop.ville || '',
+    montant, sommeAvant, solde, soldeMandat, soldeRevolving: solde-soldeMandat, soldeMiseEnCompte: 0, totalDette: solde+montant, plafondCaution: Math.round(cumul),
+    tonnage: Math.max(1, Math.round(montant/ (D.prixRef||1315) / 1000)),
+    delai: pfAjouteJours(p.date_financement, 10)
+  };
+}
+// Informations qui manquent pour que le document soit complet (sinon laissees en pointilles a remplir a la main).
+function pfManquesPour(ctx, doc){
+  const m = []; const s = ctx.sig, c = ctx.coop;
+  const add = (ok, t)=>{ if (!ok) m.push(t); };
+  if (doc==='protocole' || doc==='caution'){
+    add(s.nom, 'nom du signataire'); add(s.nationalite, 'nationalité'); add(s.naissance, 'date de naissance'); add(s.lieu, 'lieu de naissance');
+    add(s.cni, 'n° de CNI'); add(s.profession, 'profession'); add(s.domicile, 'domicile');
+  }
+  if (doc==='protocole'){ add(c.ccc_num, 'code Conseil Café-Cacao de la coopérative'); add(ctx.siege, 'siège de la coopérative'); }
+  if (doc==='avenant'){ add(s.nom, 'nom du signataire'); add(ctx.benef.nom, 'bénéficiaire du chèque'); add(ctx.p.reference, 'n° de chèque / référence du virement'); }
+  if (doc==='fiche'){ add(ctx.benef.nom, 'bénéficiaire du chèque'); add(ctx.benef.cni, 'n° de CNI du bénéficiaire'); add(ctx.benef.naissance, 'date de naissance du bénéficiaire'); add(ctx.p.reference, 'n° de chèque / référence du virement'); }
+  return m;
+}
+const pfV = (v)=>String(v||'').trim() || PF_TRAIT;
+
+// ---- Protocole d'accord de préfinancement ----
+function pfRemplirProtocole(dom, x){
+  const bilan = { introuvables:[] };
+  const essai = (n, nom)=>{ if (!n) bilan.introuvables.push(nom); };
+  essai(pfRemplacerTout(dom, 'ECO-2…-PAP-001', x.refProto), 'référence');
+  const s = x.sig;
+  const par = pfParContenant(dom, /La Société Coopérative.*sise à/);
+  if (par){
+    const ident = x.nomComplet ? x.nomComplet+' ('+x.nomAff+')' : 'Société Coopérative '+x.nomAff;
+    const lieuNaiss = s.lieu || PF_TRAIT;
+    pfReecrire(dom, par, [
+      { t:'La ' }, { t: ident, b:true }, { t:' sise à '+pfV(x.siege)+', agréé sous les codes du Conseil Café-Cacao ' }, { t: pfV(x.coop.ccc_num), b:true },
+      { t:' représenté par son '+pfMin1(s.fonction)+', Monsieur ' }, { t: pfV(s.nom), b:true },
+      { t:', nationalité '+pfV(s.nationalite)+', né le '+(s.naissance ? pfDateFr(s.naissance) : PF_TRAIT)+' à '+lieuNaiss+', titulaire de la CNI N° '+pfV(s.cni)+' de profession '+pfV(s.profession)+', domicilié à '+pfV(s.domicile)+', ci-après désigné « ' },
+      { t:'Le Fournisseur', b:true }, { t:' »,' }
+    ]);
+  } else bilan.introuvables.push('identité de la coopérative');
+  essai(pfRemplacerTout(dom, '2…/2…', x.a1+'/'+x.a2), 'campagne');
+  essai(pfRemplacerTout(dom, '../../2…', pfDateFr(x.dateProto)), 'date de signature');
+  return bilan;
+}
+
+// ---- Avenant au protocole d'accord ----
+function pfRemplirAvenant(dom, x){
+  const bilan = { introuvables:[] };
+  const essai = (n, nom)=>{ if (!n) bilan.introuvables.push(nom); };
+  const s = x.sig, b = x.benef;
+  essai(pfRemplacerTout(dom, 'ECO-2025-PAP-001', x.refAvenant), 'référence');
+  essai(pfRemplacerTout(dom, 'N°01', 'N°'+x.numAvenant), 'numéro d\'avenant');
+  essai(pfRemplacerTout(dom, 'PAP-2425-REV-001', x.refProto), 'référence du protocole');
+  essai(pfRemplacerDans(dom, 'liées au protocole', '04/11/2024', pfDateFr(x.dateProto)), 'date du protocole');
+  essai(pfRemplacerDans(dom, 'Pour la campagne', '2024/2025', x.a1+'/'+x.a2), 'campagne');
+  const ident = x.nomComplet ? x.nomComplet+' ('+x.nomAff+')' : x.nomAff;
+  essai(pfRemplacerTout(dom, /Société coopérative simplifiée coopérative agricole régionale de l.Agnéby\s*\(SCOOPS COOPARA\)/, ident), 'coopérative');
+  // Celui qui a reçu les avances / le cheque
+  const fonctionB = b.fonction || '';
+  [ 'En sus du solde', 'En conséquence', 'En contrepartie de cette Avance' ].forEach(rep=>{
+    pfRemplacerDans(dom, rep, 'OFFOUMOU ATTE EDOUARD', pfV(b.nom));
+    pfRemplacerDans(dom, rep, 'Président du Comité de gestion', fonctionB);
+  });
+  essai(pfRemplacerDans(dom, 'En sus du solde', /Monsieur\s+_+/, 'Monsieur '+pfV(b.nom)), 'bénéficiaire');
+  essai(pfRemplacerTout(dom, /coopérative\s+_{3,}/, 'coopérative '+x.nomAff), 'nom de la coopérative');
+  essai(pfRemplacerTout(dom, /SCOOPS[ -]CO+PARA/, x.nomAff), 'nom de la coopérative (bis)');
+  essai(pfRemplacerTout(dom, /SCOOPS-COPPARA/, x.nomAff), 'nom de la coopérative (signature)');
+  // Signataire (signature + paragraphe de presentation)
+  pfRemplacerTout(dom, 'OFFOUMOU ATTE EDOUARD', pfV(s.nom));
+  pfRemplacerTout(dom, 'Président du Comité de gestion', s.fonction);
+  // Solde des avances precedentes
+  essai(pfRemplacerDans(dom, 'Solde des avances précédentes', /\.\.0 \(défini un montant de préfinancement en fonction du volume déchargé par la coopérative \)/, pfNb(x.solde)+' ('+prefLettres(x.solde)+')'), 'solde précédent');
+  essai(pfRemplacerDans(dom, /^Solde Mandat/, /\d+(\s+FCFA)/, m=>pfNb(x.soldeMandat)+m[1]), 'solde mandat');
+  essai(pfRemplacerDans(dom, /^Mise en compte/, /\d+(\s+FCFA)/, m=>pfNb(x.soldeMiseEnCompte)+m[1]), 'mise en compte');
+  essai(pfRemplacerDans(dom, /^Solde revolving/, /\d+(\s+FCFA)/, m=>pfNb(x.soldeRevolving)+m[1]), 'solde revolving');
+  // Avance consentie
+  const p = x.p;
+  const paras = pfParas(dom);
+  const chiffres = paras.filter(q=>/^En chiffres/.test(pfFlat(q)));
+  const lettres = paras.filter(q=>/^En lettres?\b/.test(pfFlat(q)));
+  essai(chiffres.length>=2 && pfRemplacerPar(chiffres[0], /\d[\d\s]*$/, pfNb(x.montant)) && pfRemplacerPar(chiffres[1], /\d[\d\s]*$/, pfNb(x.totalDette)), 'montants en chiffres');
+  essai(lettres.length>=2 && pfRemplacerPar(lettres[0], /cinquante\s+millions/i, prefLettres(x.montant)) && pfRemplacerPar(lettres[1], /cinquante\s+millions\./i, pfMaj1(prefLettres(x.totalDette))+'.'), 'montants en lettres');
+  const reg = p.mode_reglement==='virement' ? 'du virement' : 'du chèque N°';
+  essai(pfRemplacerDans(dom, 'Versée par', 'du chèque N°', reg+(p.reference ? ' '+p.reference : ' '+PF_TRAIT)+(p.banque ? ' ('+p.banque+')' : '')), 'règlement');
+  essai(pfRemplacerDans(dom, /^2\.1/, /35\s*tonnes/, x.tonnage+' tonnes'), 'tonnage');
+  essai(pfRemplacerDans(dom, /^2\.2/, /18\/05\/2024/, pfDateFr(x.delai)), 'délai de livraison');
+  essai(pfRemplacerDans(dom, /^2\.3/, /Intégralité des sommes dues/, String(p.mode_remboursement||'').trim() || 'Intégralité des sommes dues'), 'modalité de remboursement');
+  essai(pfRemplacerDans(dom, 'au titre de la dette de préfinancement', /20\d\d-20\d\d/, x.a1+'-'+x.a2), 'campagne (dette)');
+  essai(pfRemplacerDans(dom, 'Toutes les clauses du protocole', '03/05/2024', pfDateFr(x.dateProto)), 'date du protocole (fin)');
+  essai(pfRemplacerDans(dom, 'Fait à Abidjan', /\d\d\/\d\d\.?\/\d{4}/, pfDateFr(p.date_financement)), 'date de signature');
+  return bilan;
+}
+
+// ---- Convention de cautionnement solidaire ----
+function pfRemplirCaution(dom, x){
+  const bilan = { introuvables:[] };
+  const essai = (n, nom)=>{ if (!n) bilan.introuvables.push(nom); };
+  const s = x.sig;
+  essai(pfRemplacerTout(dom, 'ECO-2025-SCOOPS-COOPARA 01', x.refCaution), 'référence');
+  const par = pfParContenant(dom, /^Monsieur.*titulaire de la CNI/);
+  if (par){
+    pfReecrire(dom, par, [
+      { t:'Monsieur ' }, { t: pfV(s.nom), b:true },
+      { t:', '+pfV(s.profession)+', nationalité '+pfV(s.nationalite)+', né le '+(s.naissance ? pfDateFr(s.naissance) : PF_TRAIT)+' à '+pfV(s.lieu)+', titulaire de la CNI N° '+pfV(s.cni)+', domicilié à '+pfV(s.domicile)+'.' }
+    ]);
+  } else bilan.introuvables.push('identité de la caution');
+  pfRemplacerTout(dom, 'OFFOUMOU ATTE EDOUARD', pfV(s.nom));
+  essai(pfRemplacerDans(dom, 'protocole d’accord de préfinancement Ref', 'ECO-2025-PAP-001', x.refProto), 'référence du protocole');
+  essai(pfRemplacerDans(dom, 'protocole d’accord de préfinancement Ref', '04/11/2024', pfDateFr(x.dateProto)), 'date du protocole');
+  const ident = x.nomComplet ? x.nomComplet+' « '+x.nomAff+' »' : '« '+x.nomAff+' »';
+  essai(pfRemplacerTout(dom, /Société Coopérative Simplifiée Coopérative Régionale de l.Agneby\s*«\s*SCOOPS COOPARA\s*»/, ident), 'coopérative (débiteur)');
+  essai(pfRemplacerTout(dom, /FCFA\s*52\s*000\s*000\s*\(cinquante-deux\s+millions\)/, 'FCFA '+pfNb(x.plafondCaution)+' ('+prefLettres(x.plafondCaution)+')'), 'plafond');
+  pfParas(dom).forEach(q=>{ const f = pfFlat(q);
+    if (/^Réf\. : ECO/.test(f) || /obligation principale/.test(f)){ pfRemplacerPar(q, 'ECO-2025-PAP-001', x.refProto); pfRemplacerPar(q, '03/05/2024', pfDateFr(x.dateProto)); }
+  });
+  essai(pfRemplacerDans(dom, /^Fait à Abidjan/, /\d\d\/\d\d\/\d{4}/, pfDateFr(x.p.date_financement)), 'date de signature');
+  return bilan;
+}
+
+// ---- Fiche de financement des achats (Excel, modele ECORIGINE) ----
+async function pfFicheExcel(x){
+  const ExcelJS = await qcChargerExcelJS();
+  const wb = new ExcelJS.Workbook(); await wb.xlsx.load(await pfChargerModele('modeles/fiche_financement_achats_26-27.xlsx'));
+  wb.calcProperties = Object.assign({}, wb.calcProperties, { fullCalcOnLoad:true });
+  wb.creator = 'ORIGEN · ECORIGINE'; wb.modified = new Date();
+  wb.worksheets.slice(1).forEach(w=>wb.removeWorksheet(w.id));
+  const ws = wb.worksheets[0];
+  ws.eachRow({ includeEmpty:false }, row=>row.eachCell({ includeEmpty:false }, c=>{
+    const v = c.value; if (v && typeof v==='object' && ('formula' in v || 'sharedFormula' in v) && 'result' in v){ const n = Object.assign({}, v); delete n.result; c.value = n; }
+  }));
+  const p = x.p, coop = x.coop, dateF = p.date_financement ? new Date(p.date_financement+'T00:00:00Z') : null;
+  ws.name = (String(coop.code_court || prefCodeCoop(coop)).replace(/[\\/?*\[\]:]/g,'')+' N°'+x.rang+'-CAMP-'+prefCodeCampagne(p.campagne_id)).slice(0,31);
+  const met = (ref, v)=>{ ws.getCell(ref).value = v; };
+  met('C8', coop.ccc_num || coop.code || ''); met('C9', coop.nom || ''); met('C10', coop.ville || coop.siege_social || ''); met('C11', prefTypeCacao(coop));
+  met('E9', p.numero || ''); if (dateF){ met('F9', dateF); met('C21', dateF); }
+  met('D15', p.terme || ''); met('E15', p.mode_remboursement || '');
+  met('B21', (PREF_TYPES[p.type_avance]||'').replace('Avance ','').replace(/^./, c=>c.toUpperCase()) || 'Revolving');
+  met('D21', x.montant); met('E21', x.benef.nom || p.beneficiaire || '');
+  met('D22', { formula:'SUM(D21:D21)' }); ws.getCell('D22').numFmt = ws.getCell('D21').numFmt || '#,##0';
+  ws.getCell('E9').alignment = Object.assign({}, ws.getCell('E9').alignment||{}, { shrinkToFit:true, wrapText:false });
+  met('B26', p.banque || '');
+  met('D26', (p.mode_reglement==='virement' ? 'VIREMENT' : 'CHEQUE')+(p.reference ? ' N°'+p.reference : ' N°'));
+  met('C29', coop.nom || ''); met('C31', prefMontantEnLettres(x.montant));
+  // Identite de celui qui recupere le cheque (a presenter avec sa CNI)
+  const b = x.benef, base = ws.getCell('B33');
+  const ligne = (ref, txt)=>{ const c = ws.getCell(ref); c.value = txt; c.style = Object.assign({}, base.style); };
+  ligne('B35', 'Bénéficiaire du chèque : '+(b.nom || PF_TRAIT)+(b.fonction ? ' ('+b.fonction+')' : ''));
+  ligne('B36', 'CNI N° '+(b.cni || PF_TRAIT)+' · né(e) le '+(b.naissance ? pfDateFr(b.naissance) : PF_TRAIT)+(b.lieu ? ' à '+b.lieu : ''));
+  return wb;
+}
+
+// ---- Contexte d'un financement dans l'application ----
+function pfContexte(id){
+  const p = (state.prefinancements||[]).find(x=>x.id===id); if (!p) return null;
+  const coop = coopById(p.cooperative_id); if (!coop) return null;
+  const tri = (a,b)=>String(a.date_financement||'').localeCompare(String(b.date_financement||'')) || String(a.created_at||'').localeCompare(String(b.created_at||'')) || String(a.id).localeCompare(String(b.id));
+  const memeCamp = (state.prefinancements||[]).filter(x=>x.campagne_id===p.campagne_id);
+  const liste = memeCamp.filter(x=>x.cooperative_id===p.cooperative_id).sort(tri);
+  const premiers = {};
+  memeCamp.slice().sort(tri).forEach(x=>{ if (!premiers[x.cooperative_id]) premiers[x.cooperative_id] = x; });
+  const coopsOrdre = Object.keys(premiers).sort((a,b)=>tri(premiers[a], premiers[b]));
+  return pfContexteDe(p, { coop, camp:(state.campagnes||[]).find(c=>c.id===p.campagne_id) || null, info:prefInfoCoop(coop.id), liste, coopsOrdre,
+    livraisons:prefLivraisons(coop.id, p.campagne_id), prixRef:PREF_PRIX_REF });
+}
+// Les documents proposes pour un financement.
+function pfDocsListe(x){
+  const dateP = pfDateFr(x.dateProto);
+  return [
+    { type:'protocole', titre:'Protocole d\'accord de préfinancement', detail:'Réf. '+x.refProto+' · du '+dateP+' (date du 1er financement de la campagne)', dispo:true },
+    { type:'avenant', titre:'Avenant n°'+x.numAvenant+' au protocole d\'accord', detail: x.rang>=2 ? 'Réf. '+x.refAvenant+' · renouvellement n°'+x.numAvenant+' · solde des avances précédentes '+prefFmt(x.solde)+' FCFA' : 'Pas d\'avenant pour le 1er financement : le protocole suffit.', dispo: x.rang>=2 },
+    { type:'caution', titre:'Convention de cautionnement solidaire', detail:'Réf. '+x.refCaution+' · plafond '+prefFmt(x.plafondCaution)+' FCFA (total des financements à cette date)', dispo:true },
+    { type:'fiche', titre:'Fiche de financement des achats (Excel)', detail:(x.p.numero ? 'N° '+x.p.numero+' · ' : '')+prefFmt(x.montant)+' FCFA · modèle ECORIGINE, rempli automatiquement', dispo:true }
+  ].map(d=>Object.assign(d, { manques: d.dispo ? pfManquesPour(x, d.type) : [] }));
+}
+async function pfGenererDoc(type, id){
+  const x = pfContexte(id); if (!x) throw new Error('financement introuvable');
+  const nomC = assainirNomFichier(x.nomAff).replace(/\s+/g,'_');
+  if (type==='fiche'){
+    const wb = await pfFicheExcel(x), buf = await wb.xlsx.writeBuffer();
+    return { blob:new Blob([buf], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), nom:assainirNomFichier('Fiche_financement_'+nomC+'_'+String(x.p.numero||x.rang).replace(/[^a-z0-9]+/gi,'_')+'.xlsx') };
+  }
+  const cfg = {
+    protocole:{ url:'modeles/protocole_accord_prefinancement.docx', fn:pfRemplirProtocole, nom:'Protocole_accord_'+nomC+'_'+x.refProto+'.docx' },
+    avenant:{ url:'modeles/avenant_protocole_accord.docx', fn:pfRemplirAvenant, nom:'Avenant_'+x.numAvenant+'_'+nomC+'.docx' },
+    caution:{ url:'modeles/convention_cautionnement.docx', fn:pfRemplirCaution, nom:'Convention_cautionnement_'+nomC+'_'+x.refCaution.replace(/\s+/g,'_')+'.docx' }
+  }[type];
+  const r = await pfEditerDocx(await pfChargerModele(cfg.url), dom=>cfg.fn(dom, x));
+  if (r.bilan.introuvables.length) console.warn('Préfinancement : éléments du modèle non remplacés', type, r.bilan.introuvables);
+  return { blob:r.blob, nom:assainirNomFichier(cfg.nom) };
+}
+async function pfTelechargerDoc(type, id, btn){
+  const txt = btn ? btn.textContent : ''; if (btn){ btn.disabled = true; btn.textContent = 'Génération…'; }
+  try{
+    if (typeof JSZip==='undefined') throw new Error('la bibliothèque de compression n\'a pas pu se charger (connexion internet requise)');
+    const d = await pfGenererDoc(type, id); telechargerBlob(d.blob, d.nom); showToast('Document téléchargé : '+d.nom, 'success');
+  }catch(e){ showToast('Échec : '+(e && e.message ? e.message : e)); }
+  finally{ if (btn){ btn.disabled = false; btn.textContent = txt; } }
+}
+async function pfTelechargerPack(id, btn){
+  const txt = btn ? btn.textContent : ''; if (btn){ btn.disabled = true; btn.textContent = 'Génération…'; }
+  try{
+    const x = pfContexte(id); if (!x) throw new Error('financement introuvable');
+    const zip = new JSZip();
+    for (const d of pfDocsListe(x).filter(d=>d.dispo)){ const r = await pfGenererDoc(d.type, id); zip.file(r.nom, r.blob); }
+    const blob = await zip.generateAsync({ type:'blob' });
+    telechargerBlob(blob, assainirNomFichier('Documents_a_signer_'+x.nomAff.replace(/\s+/g,'_')+'_'+String(x.p.numero||x.rang).replace(/[^a-z0-9]+/gi,'_')+'.zip'));
+    showToast('Dossier de signature téléchargé.', 'success');
+  }catch(e){ showToast('Échec : '+(e && e.message ? e.message : e)); }
+  finally{ if (btn){ btn.disabled = false; btn.textContent = txt; } }
+}
+function pfOuvrirDocs(id){ state.modal = { type:'prefDocs', payload:{ id } }; render(); }
+function pfDocsModalHtml(m){
+  const x = pfContexte(m.payload.id); if (!x) return '';
+  const docs = pfDocsListe(x), manque = docs.some(d=>d.manques.length);
+  return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal wide"><h3>Documents à signer — '+esc(x.coop.nom)+'</h3>'
+    + '<p class="hint">Financement '+esc(x.p.numero||'')+' du '+prefFmtDate(x.p.date_financement)+' · <b>'+prefFmt(x.montant)+' FCFA</b> · <b>'+x.rang+(x.rang===1?'er':'e')+' financement</b> de la coopérative pour cette campagne ('+x.nbFinancements+' au total). Les documents reprennent la mise en forme des modèles ECORIGINE ; ce qui n\'est pas renseigné reste en pointillés à compléter à la main.</p>'
+    + '<div style="max-height:62vh;overflow:auto;">'
+    + docs.map(d=>'<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px;'+(d.dispo?'':'opacity:.6;')+'">'
+      + '<div><b>'+esc(d.titre)+'</b><div class="hint" style="margin:2px 0 0">'+esc(d.detail)+'</div>'
+      + (d.manques.length ? '<div class="hint" style="margin:3px 0 0;color:var(--warn);">À compléter : '+esc(d.manques.join(', '))+'</div>' : '')+'</div>'
+      + (d.dispo ? '<button class="btn" style="white-space:nowrap;" onclick="pfTelechargerDoc(\''+d.type+'\',\''+escJs(x.p.id)+'\',this)">'+(d.type==='fiche'?'Télécharger Excel':'Télécharger Word')+'</button>' : '')
+      + '</div>').join('')
+    + '</div><div class="actions">'
+    + (manque ? '<button class="btn" onclick="prefOuvrir(\''+escJs(x.coop.id)+'\',\''+escJs(x.p.id)+'\')">Compléter les informations</button>' : '')
+    + '<button class="btn" onclick="closeModal()">Fermer</button><button class="btn btn-primary" onclick="pfTelechargerPack(\''+escJs(x.p.id)+'\',this)">📦 Tout télécharger (ZIP)</button></div></div></div>';
+}
+
+// ---- Champs d'identite (formulaire d'un financement et suivi de la cooperative) ----
+function prefSigChampsHtml(sig){
+  const g = (nom, lib, val, type, ph)=>'<label class="field">'+lib+'<input type="'+(type||'text')+'" name="'+nom+'" value="'+esc(val||'')+'"'+(ph?' placeholder="'+esc(ph)+'"':'')+'></label>';
+  return '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">'
+    + g('pf_sig_nom','Nom et prénoms',sig.nom) + g('pf_sig_fonction','Fonction',sig.fonction)
+    + g('pf_sig_cni','N° de la CNI',sig.cni) + g('pf_sig_naiss','Date de naissance',sig.naissance,'date')
+    + g('pf_sig_lieu','Lieu de naissance (pays)',sig.lieu,'text','ex. ATTOBROU (Côte d\'Ivoire)') + g('pf_sig_nat','Nationalité',sig.nationalite,'text','ex. ivoirienne')
+    + g('pf_sig_prof','Profession',sig.profession) + g('pf_sig_dom','Domicile',sig.domicile) + '</div>';
+}
+function prefIdentitesHtml(pl){
+  const coop = coopById(pl.cooperative_id) || {}, sig = pfSignataire(coop, prefInfoCoop(coop.id)), b = pfBeneficiaire(pl, sig);
+  const g = (nom, lib, val, type)=>'<label class="field">'+lib+'<input type="text"'+(type?' type="'+type+'"':'')+' name="'+nom+'" value="'+esc(val||'')+'"></label>';
+  const gd = (nom, lib, val)=>'<label class="field">'+lib+'<input type="date" name="'+nom+'" value="'+esc(val||'')+'"></label>';
+  return '<label style="display:flex;gap:8px;align-items:center;margin:2px 0 8px;font-weight:600;"><input type="checkbox" name="pf_meme" style="width:16px;flex:none;margin:0;"'+(b.meme?' checked':'')+' onchange="document.getElementById(\'pf-benef-autre\').style.display=this.checked?\'none\':\'block\'"> La personne qui récupère le chèque est le signataire de la coopérative (même identité, voir plus bas)</label>'
+    + '<div id="pf-benef-autre" style="display:'+(b.meme?'none':'block')+';border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px;"><div class="hint" style="margin:0 0 6px;font-weight:700;">Identité de la personne qui récupère le chèque (mandataire)</div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">'
+    + g('pf_bfonction','Qualité (ex. mandataire, trésorier)', pl.benef_fonction) + g('pf_bcni','N° de la CNI', pl.benef_cni)
+    + gd('pf_bnaiss','Date de naissance', pl.benef_naissance) + g('pf_blieu','Lieu de naissance', pl.benef_lieu_naissance)
+    + g('pf_bnat','Nationalité', pl.benef_nationalite) + g('pf_bprof','Profession', pl.benef_profession) + '</div>'
+    + g('pf_bdom','Domicile', pl.benef_domicile) + '</div>'
+    + '<div style="font-weight:700;margin:14px 0 2px;">Signataire de la coopérative</div>'
+    + '<div class="hint" style="margin:0 0 8px;">Pour le protocole d\'accord, l\'avenant et la caution. Enregistré une seule fois pour la coopérative ; si c\'est aussi lui qui récupère le chèque, sa CNI figure sur la fiche.</div>'
+    + prefSigChampsHtml(sig);
+}
+// Au changement de coopérative dans le formulaire : on recharge l'identité déjà enregistrée pour celle-ci.
+function prefFormCoop(coopId){
+  const coop = coopById(coopId); if (!coop) return;
+  const s = pfSignataire(coop, prefInfoCoop(coopId));
+  const mettre = (nom, v)=>{ const e = document.querySelector('#modal-fields [name="'+nom+'"]'); if (e) e.value = v||''; };
+  mettre('pf_sig_nom', s.nom); mettre('pf_sig_fonction', s.fonction); mettre('pf_sig_cni', s.cni); mettre('pf_sig_naiss', s.naissance);
+  mettre('pf_sig_lieu', s.lieu); mettre('pf_sig_nat', s.nationalite); mettre('pf_sig_prof', s.profession); mettre('pf_sig_dom', s.domicile);
+}
+function pfSigLue(){
+  const n = v=>String(v||'').trim() || null;
+  return { sig_nom:n(fv('pf_sig_nom')), sig_fonction:n(fv('pf_sig_fonction')), sig_cni:n(fv('pf_sig_cni')), sig_naissance:fv('pf_sig_naiss')||null,
+    sig_lieu_naissance:n(fv('pf_sig_lieu')), sig_nationalite:n(fv('pf_sig_nat')), sig_profession:n(fv('pf_sig_prof')), sig_domicile:n(fv('pf_sig_dom')) };
+}
+async function prefEnregistrerSignataire(coopId){
+  const ligne = Object.assign({ cooperative_id:coopId }, pfSigLue(), { maj_le:new Date().toISOString() });
+  const { error } = await supabaseClient.from('prefinancement_coop').upsert(ligne);
+  if (error){ showToast('Financement enregistré, mais pas l\'identité du signataire : '+error.message); return; }
+  state.prefCoopInfos = (state.prefCoopInfos||[]).filter(i=>i.cooperative_id!==coopId).concat([Object.assign({}, prefInfoCoop(coopId), ligne)]);
 }
 
 
