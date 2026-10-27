@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.42
+// @version      0.1.43
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.42';
+  const VERSION = '0.1.43';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const ENTITE = '1';                 // ECORIGINE
@@ -397,7 +397,10 @@
     { const [u, p, b] = await Promise.all([existeUsine(e), existePesee(e), existeBrousse(e)]);
       // Garde-fou : un connaissement sans parcelle fait planter toute la liste d'OBC. On le contrôle dès qu'il est enregistré.
       if (b && b.illisible) throw new Error('OBC plante en affichant ce connaissement : il a sûrement une parcelle vide. Ouvre-le dans OBC (Connaissement brousse > Modifier), choisis la parcelle de la ligne, enregistre, puis « Continuer ».');
-      if (b && b.tr) { const a = b.tr.querySelector('a[href*="/Edit/"]'); if (a) { const ed = await getHtml(a.getAttribute('href')); const sp = ed.getElementById('txtproducteur_parcelle_idEdit0'); const o = sp && (sp.querySelector('option[selected]') || sp.options[sp.selectedIndex]); if (!o || !o.value) throw new Error('Le connaissement ' + e.lot.connaissement.numero + ' est enregistré SANS parcelle : OBC va planter sur sa liste. Ouvre-le (Modifier), choisis la parcelle de la ligne, enregistre, puis « Continuer ».'); } }
+      if (b && b.tr) { const a = b.tr.querySelector('a[href*="/Edit/"]'); if (a) { const ed = await getHtml(a.getAttribute('href'));
+        const vv = (id) => { const el = ed.getElementById(id); return el ? Number(String(el.value || '').replace(',', '.')) : 1; };
+        if (!(vv('txtlivraison_montantEdit0') > 0) || !(vv('txtconnaissement_brousse_montantEdit') > 0) || !(vv('txtconnaissement_brousse_nb_sacsEdit') > 0) || !(vv('txtconnaissement_brousse_poids_netEdit') > 0)) throw new Error('Le connaissement ' + e.lot.connaissement.numero + ' est enregistré avec un montant ou des totaux vides/à 0 : OBC va planter sur sa liste. Ouvre-le (Modifier), retape le prix unitaire de la ligne pour qu\'OBC recalcule, enregistre, puis « Continuer ».');
+        const sp = ed.getElementById('txtproducteur_parcelle_idEdit0'); const o = sp && (sp.querySelector('option[selected]') || sp.options[sp.selectedIndex]); if (!o || !o.value) throw new Error('Le connaissement ' + e.lot.connaissement.numero + ' est enregistré SANS parcelle : OBC va planter sur sa liste. Ouvre-le (Modifier), choisis la parcelle de la ligne, enregistre, puis « Continuer ».'); } }
       if (u || p || b) { e.fait[7] = 'déjà dans OBC'; journal(e, 'Connaissement brousse déjà saisi'); return 'suivant'; } }
     if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
     const f = await ouvrirFormulaire(7); if (!f) return 'navigation';
@@ -433,6 +436,12 @@
     setInput(q('#txtlivraison_nb_sacsAdd0'), sacsL); setInput(q('#txtlivraison_poids_netAdd0'), poidsL); setInput(q('#txtlivraison_prix_unitaireAdd0'), num(c.prix_bord_champ));
     if (repris) journal(e, 'Producteur et parcelle repris de ' + modele.numero + ' ; sacs et poids de cette livraison (' + sacsL + ' sacs, ' + poidsL + ' kg)');
     { const m = await reappliquer(f); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
+    // Montant de la ligne et totaux d'en-tête : OBC les calcule en quittant les champs, mais pas toujours. Vides ou à 0, ils font planter la liste d'OBC : on les force.
+    { const pu = num(c.prix_bord_champ), mt = Math.round(Number(poidsL) * Number(pu)), vide = (el) => !el || !(Number(String(el.value).replace(',', '.')) > 0);
+      const ligne = q('#txtlivraison_montantAdd0'), hs = q('#txtconnaissement_brousse_nb_sacsAdd'), hp = q('#txtconnaissement_brousse_poids_netAdd'), hm = q('#txtconnaissement_brousse_montantAdd');
+      await dormir(600);
+      if (vide(ligne)) setInput(ligne, mt); if (vide(hs)) setInput(hs, sacsL); if (vide(hp)) setInput(hp, poidsL); if (vide(hm)) setInput(hm, mt);
+      if (mt > 0 && [ligne, hs, hp, hm].some((el) => el && vide(el))) throw new Error('OBC n\'a pas calculé le montant ou les totaux du connaissement (sacs, poids, montant) : ne pas enregistrer. Vérifie les cases à la main.'); }
     e.note = 'Connaissement ' + c.numero + ' (' + c.type_commodite + (c.certification ? ' ' + c.certification : '') + '), prix bord champ ' + c.prix_bord_champ + '.'; return 'rempli';
   }
   async function etapeLivraison(e) {
