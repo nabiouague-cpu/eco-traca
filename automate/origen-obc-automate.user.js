@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.46
+// @version      0.1.47
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.46';
+  const VERSION = '0.1.47';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const ENTITE = '1';                 // ECORIGINE
@@ -319,10 +319,14 @@
         else { traitantNote = ' ⚠ Gros traitant : « ' + cands.join(' / ') + ' » (ORIGEN) ne correspond à aucun gros traitant d\'OBC (' + opts.map((o) => o.text.trim()).join(', ') + ') : choisis-le toi-même dans « Gros traitant rattaché » avant d\'enregistrer si nécessaire.'; journal(e, 'Gros traitant : aucune correspondance pour ' + cands.join(' / ')); }
       } }
     setInput(q('#txtnom_prenom_interlocuteurAdd0'), c.interlocuteur_nom); setInput(q('#txtnum_telephone2_interlocuteurAdd0'), c.interlocuteur_tel); setInput(q('#txtemail_interlocuteurAdd0'), c.email); // modèle : téléphone dans « Téléphone 2 » de l'interlocuteur
+    // OBC n'active « Enregistrer » que si Téléphone ET Mobile (section Contacts) sont renseignés : on y met le téléphone de la coopérative, à défaut celui de l'interlocuteur.
+    const telCoop = c.telephone || c.interlocuteur_tel || ''; setInput(q('#txttelephone_fournisseurAdd'), telCoop); setInput(q('#txtmobile_fournisseurAdd'), telCoop);
     await attendreOption(q('#txtnumero_poste_comptableAdd0'), new RegExp('^' + poste.Value + '\\b'));
     if (!setSelect(q('#txtnumero_poste_comptableAdd0'), poste.Value)) throw new Error('Poste comptable non sélectionnable');
     setSelect(q('#txttype_prestation_achatAdd0'), '1');
     { const m = await reappliquer(f); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
+    try { if (typeof window.validateCreateFournisseur === 'function') window.validateCreateFournisseur(); } catch (er) { /* ignoré */ }
+    { const bs = q('#btnCreateFournisseur'); if (bs && bs.disabled) throw new Error('« Enregistrer » reste grisé dans OBC : il manque un champ obligatoire (Téléphone, Mobile, Ville, Adresse géographique). ' + (telCoop ? '' : 'Aucun téléphone dans ORIGEN pour cette coopérative : saisis Téléphone et Mobile dans la section Contacts. ') + 'Puis « Continuer ».'); }
     e.note = 'Coopérative ' + c.sigle + ' (' + c.ccc + ').' + traitantNote; return 'rempli';
   }
   async function etapeTransporteur(e) {
