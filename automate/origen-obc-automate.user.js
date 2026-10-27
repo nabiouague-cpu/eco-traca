@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.38
+// @version      0.1.39
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.38';
+  const VERSION = '0.1.39';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const ENTITE = '1';                 // ECORIGINE
@@ -115,11 +115,11 @@
   }
 
   // ---------- accès OBC ----------
-  // OBC répond parfois lentement ou coupe la connexion (« Failed to fetch ») : délai de 60 s par essai et 3 essais avant d'abandonner.
+  // OBC répond parfois lentement ou coupe la connexion (« Failed to fetch ») : délai de 30 s par essai et 3 essais avant d'abandonner.
   async function obcFetch(url) {
     let derniere = null;
     for (let essai = 0; essai < 3; essai++) {
-      const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 60000);
+      const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 30000);
       try { const r = await fetch(url, { credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' }, signal: ctl.signal }); clearTimeout(t); if (r.status >= 500 && essai < 2) { derniere = new Error('HTTP ' + r.status); await dormir(3000); continue; } return r; }
       catch (err) { clearTimeout(t); derniere = err; await dormir(3000); }
     }
@@ -156,11 +156,11 @@
   async function reappliquer(form, ms) {
     let manques = [];
     rafraichirListes(form);
-    for (let passe = 0; passe < 3; passe++) {
-      await dormir(ms || 1500); manques = [];
+    for (let passe = 0; passe < 2; passe++) {
+      await dormir(ms || 800); manques = [];
       [...form.querySelectorAll('select[data-origen-val]')].forEach((el) => { const v = el.dataset.origenVal; if (el.value !== v) { if (!setSelect(el, v)) manques.push(el.id); } });
     }
-    await dormir(600);
+    await dormir(300);
     [...form.querySelectorAll('select[data-origen-val]')].forEach((el) => { if (el.value !== el.dataset.origenVal && !manques.includes(el.id)) manques.push(el.id); });
     rafraichirListes(form);
     return manques;
@@ -210,14 +210,15 @@
     const nums = memeNom.map((r) => { const m = N(r.nom).match(/ (\d+)$/); return m ? Number(m[1]) : 1; });
     return { existant: null, nouveauNom: lot.transporteur.nom.trim() + ' ' + (Math.max(...nums) + 1) };
   }
-  async function campagneId(lot) {
-    const doc = await getHtml('/AgroAchatConnaissementBrousse/Create');
-    const sel = doc.querySelector('#txtcampagne_idAdd'); if (!sel) throw new Error('Liste des campagnes introuvable');
+  // Campagne : lue dans la liste du formulaire déjà ouvert (aucun chargement de page supplémentaire).
+  function campagneDansListe(sel, lot) {
+    if (!sel) throw new Error('Liste des campagnes introuvable');
     const cle = String(lot.campagne.nom || '').match(/\d{2}\s*-\s*\d{2}/); const test = cle ? cle[0].replace(/\s/g, '') : lot.campagne.nom;
     const o = [...sel.options].find((x) => x.value && N(x.text).replace(/ /g, '').includes(N(test).replace(/ /g, '')) && !/interm/i.test(x.text) === !/interm/i.test(lot.campagne.recolte));
     if (!o) throw new Error('Campagne « ' + lot.campagne.nom + ' » introuvable dans OBC');
     return o.value;
   }
+  function fixerCampagne(e) { const sel = q('#txtcampagne_idAdd'); if (!e.ids.campagne_id) e.ids.campagne_id = campagneDansListe(sel, e.lot); setSelect(sel, e.ids.campagne_id); }
 
   // ---------- les 10 étapes ----------
   // Étape 1 : compte tiers de la coopérative (Plan comptable tiers entité → Nouveau compte tiers).
@@ -367,7 +368,7 @@
     e.note = 'Producteur ' + p.nom + ' ' + p.prenoms + (p.pca ? ' (PCA de la coopérative).' : p.chauffeur ? ' (PCA non renseigné : nom du chauffeur).' : p.fictif ? ' (nom neutre : ni PCA ni producteur dans ORIGEN).' : '.'); return 'rempli';
   }
   // Existence : les pages « Historique » d'OBC acceptent un filtre exact dans l'adresse ; la colonne 4 porte le numéro.
-  async function existeDans(page, filtre, colonne, valeur) { if (!filtre) return null; let doc; try { doc = await getHtml(page + '?filter=' + encodeURIComponent(filtre) + '&pageSize=100'); } catch (err) { if (/HTTP 500/.test(String(err && err.message))) return { c: [], illisible: true }; throw err; /* OBC plante à l'affichage d'une ligne : elle est donc bien enregistrée */ } return lignesTable(doc).find((l) => N(l.c[colonne]) === N(valeur)) || null; }
+  async function existeDans(page, filtre, colonne, valeur) { if (!filtre) return null; let doc; try { doc = await getHtml(page + '?filter=' + encodeURIComponent(filtre) + '&pageSize=30'); } catch (err) { if (/HTTP 500/.test(String(err && err.message))) return { c: [], illisible: true }; throw err; /* OBC plante à l'affichage d'une ligne : elle est donc bien enregistrée */ } return lignesTable(doc).find((l) => N(l.c[colonne]) === N(valeur)) || null; }
   const existeBrousse = (e) => existeDans('/AgroAchatConnaissementBrousse/Index', e.lot.connaissement.numero, 4, e.lot.connaissement.numero);
   const existeUsine = (e) => existeDans('/AgroAchatConnaissementUsine/Index', e.lot.connaissement.numero, 4, e.lot.connaissement.numero);
   const existePesee = (e) => existeDans('/AgroAchatPeseeBrousse/Index', e.lot.pesee.code, 4, e.lot.pesee.code);
@@ -390,12 +391,11 @@
   }
   async function etapeBrousse(e) {
     const lot = e.lot;
-    if (!e.ids.campagne_id) { journal(e, 'Recherche de la campagne dans OBC…'); e.ids.campagne_id = await campagneId(lot); journal(e, 'Campagne trouvée'); }
-    if (await existeUsine(e) || await existePesee(e) || await existeBrousse(e)) { e.fait[7] = 'déjà dans OBC'; journal(e, 'Connaissement brousse déjà saisi'); return 'suivant'; }
+    { const [u, p, b] = await Promise.all([existeUsine(e), existePesee(e), existeBrousse(e)]); if (u || p || b) { e.fait[7] = 'déjà dans OBC'; journal(e, 'Connaissement brousse déjà saisi'); return 'suivant'; } }
     if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
     const f = await ouvrirFormulaire(7); if (!f) return 'navigation';
     const c = lot.connaissement;
-    setSelect(q('#txtcampagne_idAdd'), e.ids.campagne_id);
+    fixerCampagne(e);
     await listeStable(q('#txtid_fournisseurAdd')); await listeStable(q('#txttype_commodite_idAdd'));
     await setSelectTexte(q('#txtcommodite_idAdd'), /^CACAO/i, 'Commodité');
     await setSelectTexte(q('#txttype_commodite_idAdd'), new RegExp('^' + c.type_commodite, 'i'), 'Type commodité');
@@ -430,11 +430,11 @@
   }
   async function etapeLivraison(e) {
     const lot = e.lot;
-    if (await existeUsine(e) || await existePesee(e)) { e.fait[8] = 'déjà dans OBC'; journal(e, 'Données livraison déjà saisies'); return 'suivant'; }
+    { const [u, p] = await Promise.all([existeUsine(e), existePesee(e)]); if (u || p) { e.fait[8] = 'déjà dans OBC'; journal(e, 'Données livraison déjà saisies'); return 'suivant'; } }
     if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
     const f = await ouvrirFormulaire(8); if (!f) return 'navigation';
     const c = lot.connaissement;
-    setSelect(q('#txtcampagne_idAdd'), e.ids.campagne_id);
+    fixerCampagne(e);
     await listeStable(q('#txtconnaissement_brousse_idAdd')); await listeStable(q('#txttransporteur_idAdd')); await listeStable(q('#txtorigine_idAdd'));
     await setSelectTexte(q('#txtcampagne_recolte_idAdd'), new RegExp('^' + lot.campagne.recolte, 'i'), 'Récolte');
     await setSelectTexte(q('#txtconnaissement_brousse_idAdd'), c.numero, 'Connaissement brousse');
@@ -471,7 +471,7 @@
     if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
     const f = await ouvrirFormulaire(9); if (!f) return 'navigation';
     const p = lot.pesee, c = lot.connaissement;
-    setSelect(q('#txtcampagne_idAdd'), e.ids.campagne_id);
+    fixerCampagne(e);
     await listeStable(q('#txtconnaissement_usine_idAdd')); await listeStable(q('#txtqualite_idAdd'));
     await setSelectTexte(q('#txtconnaissement_usine_idAdd'), c.numero, 'Connaissement usine');
     await dormir(1500);
@@ -501,7 +501,7 @@
     if (await existeBordereau(e)) { e.fait[10] = 'déjà dans OBC'; journal(e, 'Bordereau déjà saisi'); return 'suivant'; }
     if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
     const f = await ouvrirFormulaire(10); if (!f) return 'navigation';
-    setSelect(q('#txtcampagne_idAdd'), e.ids.campagne_id);
+    fixerCampagne(e);
     await listeStable(q('#txtpesee_brousse_idAdd'));
     await setSelectTexte(q('#txtpesee_brousse_idAdd'), lot.pesee.code, 'Pesée brousse');
     await dormir(1500);
