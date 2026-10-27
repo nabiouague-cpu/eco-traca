@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.36
+// @version      0.1.37
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.36';
+  const VERSION = '0.1.37';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const ENTITE = '1';                 // ECORIGINE
@@ -115,9 +115,19 @@
   }
 
   // ---------- accès OBC ----------
-  async function getJson(url) { const r = await fetch(url, { credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } }); if (!r.ok) throw new Error('HTTP ' + r.status + ' sur ' + url.split('?')[0] + (r.status === 403 || r.status === 401 ? ' — session OBC expirée : reconnecte-toi puis « Continuer »' : '')); const j = await r.json(); if (Array.isArray(j)) return j; if (j && typeof j === 'object') { const arr = Object.values(j).find(Array.isArray); if (arr) return arr; } return []; }
+  // OBC répond parfois lentement ou coupe la connexion (« Failed to fetch ») : délai de 60 s par essai et 3 essais avant d'abandonner.
+  async function obcFetch(url) {
+    let derniere = null;
+    for (let essai = 0; essai < 3; essai++) {
+      const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 60000);
+      try { const r = await fetch(url, { credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' }, signal: ctl.signal }); clearTimeout(t); if (r.status >= 500 && essai < 2) { derniere = new Error('HTTP ' + r.status); await dormir(3000); continue; } return r; }
+      catch (err) { clearTimeout(t); derniere = err; await dormir(3000); }
+    }
+    throw new Error('OBC ne répond pas (' + (derniere && derniere.message ? derniere.message : 'réseau') + ') sur ' + url.split('?')[0] + ' : patiente un instant puis « Continuer »');
+  }
+  async function getJson(url) { const r = await obcFetch(url); if (!r.ok) throw new Error('HTTP ' + r.status + ' sur ' + url.split('?')[0] + (r.status === 403 || r.status === 401 ? ' — session OBC expirée : reconnecte-toi puis « Continuer »' : '')); const j = await r.json(); if (Array.isArray(j)) return j; if (j && typeof j === 'object') { const arr = Object.values(j).find(Array.isArray); if (arr) return arr; } return []; }
   const jsonVal = (x) => x == null ? '' : String(x.Value ?? x.value ?? x.producteur_id ?? x.Id ?? x.id ?? ''); const jsonTxt = (x) => x == null ? '' : String(x.Text ?? x.text ?? x.producteur_nom_long ?? x.Nom ?? x.nom ?? x.Name ?? x.name ?? '');
-  async function getHtml(url) { const r = await fetch(url, { credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } }); if (!r.ok) throw new Error('HTTP ' + r.status + ' sur ' + url.split('?')[0]); return new DOMParser().parseFromString(await r.text(), 'text/html'); }
+  async function getHtml(url) { const r = await obcFetch(url); if (!r.ok) throw new Error('HTTP ' + r.status + ' sur ' + url.split('?')[0]); return new DOMParser().parseFromString(await r.text(), 'text/html'); }
   const lignesTable = (doc) => [...doc.querySelectorAll('table tbody tr')].map((tr) => ({ tr, c: [...tr.querySelectorAll('td')].map((td) => td.innerText.trim()) })).filter((l) => l.c.length > 3);
   function connecte() { return !/\/Account\/Login/i.test(location.pathname) && !!document.querySelector('#logoutForm'); }
 
