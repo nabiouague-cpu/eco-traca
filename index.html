@@ -4396,7 +4396,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-27-317';
+const APP_VERSION = '2026-10-27-318';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7124,6 +7124,9 @@ function prefModalsHtml(){
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;"><label class="field">Type d\'avance<select name="pf_type">'+Object.keys(PREF_TYPES).map(k=>'<option value="'+k+'"'+(k===pl.type_avance?' selected':'')+'>'+PREF_TYPES[k]+'</option>').join('')+'</select></label>'
       + '<label class="field">Terme (période)<input type="text" name="pf_terme" value="'+esc(pl.terme||'')+'"></label></div>'
       + '<label class="field">Mode de remboursement<input type="text" name="pf_remb" value="'+esc(pl.mode_remboursement||'')+'"></label>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;"><label class="field">Tonnage estimatif (tonnes)<input type="number" min="0" step="0.5" name="pf_tonnage" value="'+esc(pl.tonnage_estimatif==null?'':pl.tonnage_estimatif)+'" placeholder="auto : montant ÷ '+prefFmt(PREF_PRIX_REF)+' F/kg"></label>'
+      + '<label class="field">Date de livraison (au plus tard)<input type="date" name="pf_livraison" value="'+esc(pl.date_livraison||'')+'"></label></div>'
+      + '<div class="hint" style="margin:-4px 0 10px;">Repris dans l\'avenant. Laissés vides : tonnage = montant ÷ '+prefFmt(PREF_PRIX_REF)+' F/kg, livraison = date du financement + 10 jours (délai du protocole).</div>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;"><label class="field">Banque<input type="text" name="pf_banque" value="'+esc(pl.banque||'')+'"></label>'
       + '<label class="field">Règlement<select name="pf_mode"><option value="cheque"'+(pl.mode_reglement!=='virement'?' selected':'')+'>Chèque</option><option value="virement"'+(pl.mode_reglement==='virement'?' selected':'')+'>Virement</option></select></label>'
       + '<label class="field">N° chèque / référence<input type="text" name="pf_ref" value="'+esc(pl.reference||'')+'"></label></div>'
@@ -7195,6 +7198,7 @@ async function prefEnregistrer(){
   const ligne = { id: pl.id || ('pf_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)), cooperative_id:coopId, campagne_id:campId, numero, date_financement:date, montant,
     type_avance: fv('pf_type'), terme: fv('pf_terme').trim(), mode_remboursement: fv('pf_remb').trim(), banque: fv('pf_banque').trim(), mode_reglement: fv('pf_mode'), reference: fv('pf_ref').trim(), beneficiaire: fv('pf_benef').trim() || (document.querySelector('#modal-fields [name="pf_meme"]:checked') ? fv('pf_sig_nom').trim() : '') };
   const meme = !!document.querySelector('#modal-fields [name="pf_meme"]:checked'), nn = v=>String(v||'').trim() || null;
+  Object.assign(ligne, { tonnage_estimatif: Number(fv('pf_tonnage'))>0 ? Number(fv('pf_tonnage')) : null, date_livraison: fv('pf_livraison')||null });
   Object.assign(ligne, { benef_meme_signataire: meme, benef_fonction: meme?null:nn(fv('pf_bfonction')), benef_cni: meme?null:nn(fv('pf_bcni')), benef_naissance: meme?null:(fv('pf_bnaiss')||null),
     benef_lieu_naissance: meme?null:nn(fv('pf_blieu')), benef_nationalite: meme?null:nn(fv('pf_bnat')), benef_profession: meme?null:nn(fv('pf_bprof')), benef_domicile: meme?null:nn(fv('pf_bdom')) });
   const { error } = await supabaseClient.from('prefinancements').upsert(ligne);
@@ -7440,13 +7444,13 @@ function pfContexteDe(p, D){
   return {
     p, coop, camp, info:D.info||{}, rang, nbFinancements:liste.length, annee, a1, a2,
     refProto: 'ECO-'+annee+'-PAP-'+String(ordre).padStart(3,'0'), dateProto,
-    refAvenant: 'ECO-'+annee+'-PAP-'+String(ordre).padStart(3,'0'), numAvenant: String(rang-1).padStart(2,'0'),
+    refAvenant: 'ECO-'+annee+'-PAP-'+String(ordre).padStart(3,'0'), numAvenant: String(rang).padStart(2,'0'),
     refCaution: 'ECO-'+annee+'-'+codeNom+' '+String(rang).padStart(2,'0'),
     sig, benef, nomAff, nomComplet: coop.nom_complet ? String(coop.nom_complet).trim() : '',
     siege: coop.siege_social || coop.ville || '',
     montant, sommeAvant, solde, soldeMandat, soldeRevolving: solde-soldeMandat, soldeMiseEnCompte: 0, totalDette: solde+montant, plafondCaution: Math.round(cumul),
-    tonnage: Math.max(1, Math.round(montant/ (D.prixRef||1315) / 1000)),
-    delai: pfAjouteJours(p.date_financement, 10)
+    tonnage: Number(p.tonnage_estimatif)>0 ? String(Number(p.tonnage_estimatif)).replace('.',',') : String(Math.max(1, Math.round(montant/ (D.prixRef||1315) / 1000))),
+    tonnageAuto: !(Number(p.tonnage_estimatif)>0), delai: p.date_livraison || pfAjouteJours(p.date_financement, 10)
   };
 }
 // Informations qui manquent pour que le document soit complet (sinon laissees en pointilles a remplir a la main).
