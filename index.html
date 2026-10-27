@@ -4393,7 +4393,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-26-308';
+const APP_VERSION = '2026-10-27-309';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -9923,7 +9923,7 @@ function lotsModalsHtml(){
       + '<div class="hint" style="margin-bottom:8px">'+esc(c && c.ccc_num ? 'N° CCC '+c.ccc_num+' · ' : '')+fmtNum(nP)+' producteur(s) dans ORIGEN. <b>Rien n\'est modifié ici</b> : les traçabilités déjà faites restent telles quelles tant que tu ne demandes pas de les refaire.'
       + (D && D.groupes.length>1 ? ' Série : <select onchange="ocDossierSerie(this.value)">'+D.groupes.map(g=>'<option value="'+esc(g.cle)+'"'+(g.cle===D.g.cle?' selected':'')+'>'+esc(g.cle)+'</option>').join('')+'</select>' : '')+'</div>'
       + '<div id="modal-fields">'+corps+'</div>'
-      + '<div class="actions"><button class="btn" onclick="ocDossierApercu()" title="Simule toute la série depuis le n° 1, comme si rien n\'avait été tracé, pour voir ce que donnerait la traçabilité refaite (aperçu, rien n\'est enregistré tant que tu ne cliques pas sur Enregistrer)">🧮 Aperçu : refaire toute la traçabilité de zéro</button><button class="btn" onclick="closeModal()">Fermer</button></div></div></div>';
+      + '<div class="actions"><button class="btn" onclick="ocDossierApercu()" title="Simule toute la série depuis le n° 1, comme si rien n\'avait été tracé, pour voir ce que donnerait la traçabilité refaite (aperçu, rien n\'est enregistré tant que tu ne cliques pas sur Enregistrer)">🧮 Aperçu : refaire toute la traçabilité de zéro</button>'+(D && D.nTrace>0 ? '<button class="btn" style="color:#a33;border-color:#e3b3b3" onclick="ocRefaireDossier()" title="Retire les traçages déjà faits de cette série (après sauvegarde) pour les retracer avec la simulation">♻ Refaire de zéro (retirer les '+D.nTrace+' traçage'+(D.nTrace>1?'s':'')+')</button>' : '')+'<button class="btn" onclick="closeModal()">Fermer</button></div></div></div>';
   }
   if (m.type==='ocSim'){
     const pl = m.payload, R = pl.res, coops = ocSimCoops(), c = coopById(pl.coopId), groupes = ocSimGroupes(pl.coopId);
@@ -12290,7 +12290,9 @@ function renderDossiersTab(){
   const puce = (n, lib, couleur)=>'<div style="flex:1;min-width:130px;background:#fff;border:1px solid var(--border);border-radius:12px;padding:12px 14px"><div style="font-size:26px;font-weight:700;color:'+couleur+'">'+fmtNum(n)+'</div><div class="hint" style="margin:0">'+lib+'</div></div>';
   let html = '<div class="panel"><div class="panel-head"><div><h2>📁 Dossiers de traçabilité</h2>'
     + '<p style="margin:2px 0 0;color:var(--ink-soft);font-size:13px;max-width:800px">Un dossier par coopérative : tous les n° de sa série (1 à N), ce qui est tracé, simulé (livré ailleurs ou pas encore tracé) ou à tracer. « Tracer avec la simulation » simule d\'abord les numéros précédents pour adapter le tracé à ce qu\'il reste. Ce qui s\'applique à une coopérative vaut pour toutes : une coopérative qui livre chez nous peut aussi livrer ailleurs puis revenir.</p></div>'
-    + '<div class="trc-actions"><button class="btn" title="Simule, camion par camion, la traçabilité d\'une coopérative en tenant compte des connaissements livrés ailleurs (numéros manquants)" onclick="ocSimOuvrir()">🧮 Simulation libre</button></div></div>'
+    + '<div class="trc-actions"><button class="btn" title="Simule, camion par camion, la traçabilité d\'une coopérative en tenant compte des connaissements livrés ailleurs (numéros manquants)" onclick="ocSimOuvrir()">🧮 Simulation libre</button>'
+    + (A.some(x=>x.nTrace>0) ? '<button class="btn" style="color:#a33;border-color:#e3b3b3" title="Retire les anciens traçages des connaissements déchargés chez Awahus (après sauvegarde) pour tout retracer avec la simulation" onclick="ocRefaireToutAwahus()">♻ Tout refaire de zéro (Awahus)</button>' : '')
+    + '</div></div>'
     + '<div style="margin:12px 0 6px;font-weight:700;font-size:14px;color:#14402a">🟢 À tracer par nous — Awahus (IPSC)</div>'
     + '<div style="display:flex;gap:10px;flex-wrap:wrap;margin:0 0 12px">'
     + puce(A.length, 'coopérative'+(A.length>1?'s':''), 'var(--ink)') + puce(tot('nNous'), 'connaissements chez nous', 'var(--ink)') + puce(tot('nTrace'), 'tracés', '#1e8449') + puce(tot('nSimule'), 'simulés', '#1F4E8C') + puce(nA, 'à tracer', nA ? '#b36b00' : '#1e8449') + '</div>'
@@ -12316,6 +12318,67 @@ function renderDossiersTab(){
 }
 function ocDossierOuvrir(coopId){ const gs = ocSimGroupes(coopId); state.modal = { type:'ocDossier', payload:{ coopId, cle: gs.length ? gs[0].cle : '' } }; render(); }
 function ocDossierSerie(cle){ const pl = state.modal && state.modal.type==='ocDossier' ? state.modal.payload : null; if (!pl) return; pl.cle = cle; render(); }
+// ---- Refaire la traçabilité de zéro : retire les anciens traçages (achats producteurs) des connaissements chez nous, après sauvegarde, pour pouvoir les retracer avec la simulation ----
+function ocRefaireCodes(coopId, cle, seulAwa){
+  const gs = ocSimGroupes(coopId).filter(g=>!cle || g.cle===cle), codes = [];
+  gs.forEach(g=>{ const D = ocDossierDonnees(coopId, g.cle); if (D) D.lignes.forEach(l=>{ if (l.nous && l.st==='trace' && (!seulAwa || l.awa)) codes.push(l.code); }); });
+  return codes;
+}
+function ocRefairePlan(items){
+  const plan = items.map(it=>{ const set = new Set(it.codes);
+    const lignes = (state.achats||[]).filter(a=>a.producteur_id && a.cooperative_id===it.coopId && set.has(String(a.connaissement)));
+    return { coopId:it.coopId, codes:it.codes, lignes }; }).filter(x=>x.lignes.length);
+  return { plan, nCoops:plan.length, nCodes:plan.reduce((t,x)=>t+new Set(x.lignes.map(a=>String(a.connaissement))).size,0), nLignes:plan.reduce((t,x)=>t+x.lignes.length,0), kg:plan.reduce((t,x)=>t+x.lignes.reduce((u,a)=>u+(Number(a.quantite_kg)||0),0),0) };
+}
+function ocRefaireDemander(items, titre){
+  const P = ocRefairePlan(items);
+  if (!P.nLignes){ showToast('Rien à refaire : aucun connaissement n\'est encore tracé dans ce périmètre.'); return; }
+  askConfirm(
+    titre+'\n\n'
+    + P.nCodes+' connaissement'+(P.nCodes>1?'s':'')+' tracé'+(P.nCodes>1?'s':'')+' sur '+P.nCoops+' coopérative'+(P.nCoops>1?'s':'')+' : '+fmtNum(P.nLignes)+' ligne(s) producteur à retirer ('+fmtKg(P.kg)+').\n\n'
+    + '• Les lignes sont d\'abord SAUVEGARDÉES (table d\'archive), puis retirées.\n'
+    + '• Les camions déchargés, leurs poids et les fiches Excel déjà téléchargées ne sont pas touchés.\n'
+    + '• La simulation enregistrée de ces coopératives est remise à zéro.\n'
+    + '• Chaque connaissement redevient « à tracer » : tu les retraces ensuite avec « Tracer avec la simulation ».',
+    ()=>ocRefaireOk(P));
+}
+async function ocRefaireOk(P){
+  try{
+    const quand = new Date().toISOString(), arch = [];
+    P.plan.forEach(x=>x.lignes.forEach(a=>arch.push({ cooperative_id:x.coopId, connaissement:String(a.connaissement), motif:'refaire la traçabilité de zéro ('+quand.slice(0,10)+')', achat:a })));
+    for (let i=0;i<arch.length;i+=200){
+      const { error } = await supabaseClient.from('achats_tracage_archive').insert(arch.slice(i,i+200));
+      if (error) throw new Error('sauvegarde impossible, rien n\'a été supprimé : '+error.message);
+    }
+    const ids = P.plan.reduce((t,x)=>t.concat(x.lignes.map(a=>a.id)),[]);
+    for (let i=0;i<ids.length;i+=100){
+      const { error } = await supabaseClient.from('achats').delete().in('id', ids.slice(i,i+100));
+      if (error) throw error;
+    }
+    const idSet = new Set(ids);
+    state.achats = (state.achats||[]).filter(a=>!idSet.has(a.id));
+    const coopIds = P.plan.map(x=>x.coopId);
+    const rs = await supabaseClient.from('tracabilite_simulee').delete().in('cooperative_id', coopIds);
+    if (!rs.error) state.tracaSim = (state.tracaSim||[]).filter(r=>coopIds.indexOf(r.cooperative_id)<0);
+    const codes = Array.from(new Set(P.plan.reduce((t,x)=>t.concat(x.codes),[])));
+    try{
+      const { data } = await supabaseClient.from('saigic_connaissements_vus').select('id').in('code_connaissement', codes).not('trace_le','is',null);
+      for (const v of (data||[])) await ocTracageRestaurerVu(v.id);
+    }catch(e){ console.warn('Connaissements SAIGIC non remis « à tracer » :', e && e.message); }
+    state.fichesTracabilite = null; _dossCache = null;
+    showToast(fmtNum(ids.length)+' ligne(s) producteur sauvegardée(s) puis retirée(s) : '+P.nCodes+' connaissement(s) à retracer.', 'success');
+    render();
+  }catch(e){ showToast('Échec : '+(e && e.message ? e.message : e), 'error'); }
+}
+function ocRefaireToutAwahus(){
+  const items = ocDossiersListe().filter(x=>x.awahus).map(x=>({ coopId:x.c.id, codes:ocRefaireCodes(x.c.id, null, true) })).filter(x=>x.codes.length);
+  ocRefaireDemander(items, 'Refaire de zéro la traçabilité de TOUTES les coopératives déchargées chez Awahus (IPSC) ?');
+}
+function ocRefaireDossier(){
+  const pl = state.modal && state.modal.type==='ocDossier' ? state.modal.payload : null; if (!pl) return;
+  const c = coopById(pl.coopId);
+  ocRefaireDemander([{ coopId:pl.coopId, codes:ocRefaireCodes(pl.coopId, pl.cle, false) }], 'Refaire de zéro la traçabilité de '+(c ? c.nom : 'cette coopérative')+' (série '+pl.cle+') ?');
+}
 function ocDossierApercu(){ const pl = state.modal && state.modal.type==='ocDossier' ? state.modal.payload : null; if (!pl) return; ocSimOuvrir(pl.coopId, pl.cle); }
 async function ocDossierTracer(coopId, code){
   const it = ocTvCandidats(coopId).find(x=>x.code===code);
