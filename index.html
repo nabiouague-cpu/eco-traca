@@ -4416,7 +4416,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-27-350';
+const APP_VERSION = '2026-10-27-351';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -24213,16 +24213,27 @@ function detailAchatHtml(a, etat){
 const OBC_QUALITE = [ ['Humidite',"Taux d'humidité"], ['Grainage','Grainage'], ['Mat Etg','Matière étrangères'], ['Brisure','Brisures'], ['Déchets','Déchets'], ['Grabots','Crabots'],
   ['Moisies','Moisies'], ['Violettes','Violettes'], ['Ardoises','Ardoisées'], ['Mitees','Mitées'], ['Germees','Germées'], ['Plates','Plates'], ['Defectueux','Défectueuses'] ];
 function obcGrade(g){ const m = String(g||'').toUpperCase().match(/G\s*(\d)|GRADE\s*(\d)/); return m ? 'GRADE '+(m[1]||m[2]) : (/SG|SOUS/.test(String(g||'').toUpperCase()) ? 'SOUS GRADE' : String(g||'')); }
+// Transporteur / plaques / chauffeur du lot : champs du connaissement, sinon ticket de pesée SAIGIC ; « TRACTEUR/REMORQUE » dans une même case est séparé ; « TRANSPORTEUR/CHAUFFEUR » donne le chauffeur.
+function obcTransporteurDe(a){
+  let nom = String(a.nom_transporteur||'').trim() || String(pdVal(a,'Transporteur')||'').trim();
+  let veh = String(a.immat_vehicule||'').trim() || String(pdVal(a,'Immatriculation')||'').trim(), rem = String(a.immat_remorque||'').trim();
+  if (!rem && veh.indexOf('/')>=0){ const p = veh.split('/').map(x=>x.trim()).filter(Boolean); veh = p[0]||''; rem = p.slice(1).join(' '); }
+  let chauf = String(a.nom_chauffeur||'').trim();
+  if (!chauf && nom.indexOf('/')>=0) chauf = nom.split('/').slice(1).join(' ').trim();
+  return { nom, immat_vehicule: veh, immat_remorque: rem, chauffeur: chauf };
+}
 function obcLot(a){
   const coop = coopById(a.cooperative_id) || {}, camp = (state.campagnes||[]).find(c=>c.id===a.campagne_id) || {};
   const par = parametresPaiementPour(a) || {};
-  const site = (state.sitesUsinage||[]).find(x=>x.code && String(x.code).toUpperCase()===String(a.usine_dechargement||'').toUpperCase());
+  const site = sachSiteDe(a.usine_dechargement);
+  const trp = obcTransporteurDe(a);
   const nature = pdVal(a,'Nature').toUpperCase();
   const certif = a.type_cacao==='RA' || /RAINFOREST/.test(nature) ? 'RAINFOREST' : a.type_cacao==='FT' || /FAIRTRADE/.test(nature) ? 'FAIRTRADE' : '';
-  const brutDecl = Number(a.poids_brut)>0 ? Number(a.poids_brut) : null;
+  // Poids brut déclaré = cacao + sacs (1 kg par sac) ; à défaut (connaissement importé du SAIGIC), net déclaré + nombre de sacs.
+  const brutDecl = Number(a.poids_brut)>0 ? Number(a.poids_brut) : (Number(a.quantite_kg)>0 && Number(a.nombre_sacs)>0 ? Math.round((Number(a.quantite_kg)+Number(a.nombre_sacs))*100)/100 : null);
   // Producteur saisi dans OBC = le président (PCA, représentant légal) ou le responsable de la coopérative. Si aucun n'est renseigné : le nom du chauffeur du camion.
   // En dernier recours : le premier producteur du registre, sinon un nom neutre.
-  const pca = String(coop.representant_legal_nom||coop.responsable_nom||'').trim(), chauffeur = String(a.nom_chauffeur||'').trim();
+  const pca = String(coop.representant_legal_nom||coop.responsable_nom||'').trim(), chauffeur = trp.chauffeur;
   const prod = (pca || chauffeur) ? null : (state.producteurs||[]).find(p=>p.cooperative_id===a.cooperative_id && String(p.nom||'').trim());
   const nomProd = pca ? pca.split(/\s+/) : chauffeur ? chauffeur.split(/\s+/) : prod ? String(prod.nom).trim().split(/\s+/) : null;
   const tel = (v)=>String(v||'').replace(/\D/g,'');
@@ -24235,14 +24246,14 @@ function obcLot(a){
       gros_traitants: [String((site&&(site.traitant||site.nom))||'').trim()].filter(Boolean),   // le traitant rattaché à l'usine de déchargement (sites d'usinage) ; « Coops Ecorigine » = coopératives en propre, sans gros traitant
       coop_propre: !!(site && /ECORIGINE/i.test(String(site.traitant||''))),
       interlocuteur_nom: coop.contact_nom||coop.adg_nom||coop.representant_legal_nom||'', interlocuteur_tel: tel(coop.contact_contact||coop.adg_contact||coop.representant_legal_contact) },
-    transporteur: { nom: String(a.nom_transporteur||'').trim(), immat_vehicule: String(a.immat_vehicule||'').trim(), immat_remorque: String(a.immat_remorque||'').trim(), chauffeur: String(a.nom_chauffeur||'').trim() },
+    transporteur: trp,
     // Producteur : obligatoire dans OBC mais sans enjeu — le PCA de la coopérative, sinon le premier producteur du registre ORIGEN, sinon un nom neutre.
     producteur: { nom: nomProd ? nomProd[0] : 'PRODUCTEUR', prenoms: nomProd ? nomProd.slice(1).join(' ') || '-' : String(coop.nom||a.fournisseur_saigic||'').toUpperCase(),
       matricule_ccc: prod ? (prod.matricule_ccc||'') : '', code: prod ? (prod.code||'') : '', localite: (prod && prod.village_district) || coop.ville || pdVal(a,'Localité') || '', pca: !!pca, chauffeur: !pca && !!chauffeur, fictif: !pca && !chauffeur && !prod },
     connaissement: { numero: a.connaissement||'', date: dateFr(a.date)||'', commodite: 'CACAO', type_commodite: certif ? 'CERTIFICATION' : 'CONVENTIONNEL', certification: certif,
       sacs_declares: Number(a.nombre_sacs)||0, poids_brut_declare: brutDecl, poids_net_declare: Number(a.quantite_kg)||0,
       origine: pdVal(a,'Departement') || a.lieu_origine || '', tkm: Number(a.tkm)||0, destination: (pdVal(a,'Destination') || (site && site.ville) || '').toUpperCase(),
-      usine_code: String(a.usine_dechargement||'').toUpperCase(), usine_nom: site ? site.nom : '', usines_toutes: (state.sitesUsinage||[]).filter(u=>u.code && String(u.nom||'').trim()).map(u=>({ code: String(u.code).toUpperCase(), nom: String(u.nom).trim().toUpperCase() })), prix_bord_champ: Number(par.prix_bord_champ)||0,
+      usine_code: String((site && site.code) || a.usine_dechargement || '').toUpperCase(), usine_nom: site ? site.nom : '', usines_toutes: (state.sitesUsinage||[]).filter(u=>u.code && String(u.nom||'').trim()).map(u=>({ code: String(u.code).toUpperCase(), nom: String(u.nom).trim().toUpperCase() })), prix_bord_champ: Number(par.prix_bord_champ)||0,
       detail_arbitraire: { date_achat: (function(){ const m = String(a.date||'').match(/^(\d{4})-(\d{2})-(\d{2})$/); if (!m) return ''; const d = new Date(Date.UTC(+m[1], +m[2]-1, +m[3]-1)); return String(d.getUTCDate()).padStart(2,'0')+'/'+String(d.getUTCMonth()+1).padStart(2,'0')+'/'+d.getUTCFullYear(); })(), numero_recu: '001', sacs: 1, poids_net: 56 } },
     pesee: { code: pdVal(a,'Code Pesee')||a.code_pesee||'', date: (pdDate(a,'Date P2')||pdDate(a,'Date P1')||{}).jour || dateFr(a.date)||'',
       date_entree: (function(){ const d = pdDate(a,'Date P1'); return d ? d.jour.split('/').reverse().join('-')+'T'+(d.heure||'00:00') : ''; })(), date_sortie: (function(){ const d = pdDate(a,'Date P2'); return d ? d.jour.split('/').reverse().join('-')+'T'+(d.heure||'00:00') : ''; })(), pont: pdVal(a,'CodePont'), poids_entree: pdNum(a,'Poids1'), poids_sortie: pdNum(a,'Poids2'),
@@ -24385,7 +24396,7 @@ function analyseBlocHtml(a){
 // Données du bordereau, calculées comme OBC les affiche.
 function bordereauReceptionData(a){
   const coop = coopById(a.cooperative_id) || {}, camp = (state.campagnes||[]).find(c=>c.id===a.campagne_id);
-  const site = (state.sitesUsinage||[]).find(x=>x.code && String(x.code).toUpperCase()===String(a.usine_dechargement||'').toUpperCase());
+  const site = sachSiteDe(a.usine_dechargement);
   const m = calcMontantPaiement(a) || {};
   const netPaye = Number(a.poids_net_produit)||0, netLivre = Number(a.poids_brut_accepte)||0;
   const brut = pdNum(a,'PdsBrute'), tareSacs = pdNum(a,'Tare Emb');
