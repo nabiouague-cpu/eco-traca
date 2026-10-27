@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.50
+// @version      0.1.51
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.50';
+  const VERSION = '0.1.51';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const ENTITE = '1';                 // ECORIGINE
@@ -326,9 +326,12 @@
         if (choisi) { setSelect(sel, choisi.value); traitantNote = ' Gros traitant rattaché : ' + choisi.text.trim() + ' (ORIGEN : ' + cand + ').'; journal(e, 'Gros traitant rattaché : ' + choisi.text.trim()); }
         else { traitantNote = ' ⚠ Gros traitant : « ' + cands.join(' / ') + ' » (ORIGEN) ne correspond à aucun gros traitant d\'OBC (' + opts.map((o) => o.text.trim()).join(', ') + ') : choisis-le toi-même dans « Gros traitant rattaché » avant d\'enregistrer si nécessaire.'; journal(e, 'Gros traitant : aucune correspondance pour ' + cands.join(' / ')); }
       } }
-    setInput(q('#txtnom_prenom_interlocuteurAdd0'), c.interlocuteur_nom); setInput(q('#txtnum_telephone2_interlocuteurAdd0'), c.interlocuteur_tel); setInput(q('#txtemail_interlocuteurAdd0'), c.email); // modèle : téléphone dans « Téléphone 2 » de l'interlocuteur
-    // OBC n'active « Enregistrer » que si Téléphone ET Mobile (section Contacts) sont renseignés : on y met le téléphone de la coopérative, à défaut celui de l'interlocuteur.
-    const telCoop = c.telephone || c.interlocuteur_tel || '0000000000';   // coopérative non enregistrée chez nous : 10 zéros (règle de Nabi) setInput(q('#txttelephone_fournisseurAdd'), telCoop); setInput(q('#txtmobile_fournisseurAdd'), telCoop);
+    // OBC n'active « Enregistrer » que si Téléphone ET Mobile (section Contacts) sont renseignés : téléphone de la coopérative, à défaut celui de l'interlocuteur, à défaut 10 zéros (règle de Nabi).
+    const telCoop = c.telephone || c.interlocuteur_tel || '0000000000';
+    setInput(q('#txttelephone_fournisseurAdd'), telCoop); setInput(q('#txtmobile_fournisseurAdd'), telCoop);
+    // Interlocuteur : celui d'ORIGEN ; coopérative sans interlocuteur et rattachée à BOBBY VO : BOBBY VO lui-même (règle de Nabi).
+    const gtC = grosTraitantCible(lot), interNom = c.interlocuteur_nom || (gtC && gtC.cle === 'BOBBY VO' ? 'BOBBY VO' : '');
+    setInput(q('#txtnom_prenom_interlocuteurAdd0'), interNom); setInput(q('#txtnum_telephone2_interlocuteurAdd0'), c.interlocuteur_tel || (interNom ? telCoop : '')); setInput(q('#txtemail_interlocuteurAdd0'), c.email); // modèle : téléphone dans « Téléphone 2 » de l'interlocuteur
     await attendreOption(q('#txtnumero_poste_comptableAdd0'), new RegExp('^' + poste.Value + '\\b'));
     if (!setSelect(q('#txtnumero_poste_comptableAdd0'), poste.Value)) throw new Error('Poste comptable non sélectionnable');
     setSelect(q('#txttype_prestation_achatAdd0'), '1');
