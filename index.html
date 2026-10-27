@@ -4396,7 +4396,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-27-313';
+const APP_VERSION = '2026-10-27-314';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -9985,7 +9985,7 @@ function lotsModalsHtml(){
       while (i<D.lignes.length){
         const l = D.lignes[i];
         if (l.nous){ rows.push('<tr style="background:'+(l.st==='atracer'?'#FFF6E0':'#F2F8F4')+'"><td><b>'+l.seq+'</b></td><td><b>Chez nous</b></td><td>'+esc(l.code)+'</td><td>'+esc(dateFr(l.iso)||'')+'</td><td class="num">'+fmtKg(l.kg)+'</td><td>'+badge(l.st)+'</td><td class="num">'+(l.nProd||'—')+'</td>'
-          + '<td>'+(l.st==='atracer' ? '<button class="btn btn-primary btn-compact" onclick="ocDossierTracer(\''+escJs(pl.coopId)+'\',\''+escJs(l.code)+'\')" title="Simule d\'abord les camions précédents qui manquent, puis répartit ce connaissement sur ce qu\'il reste">Tracer avec la simulation</button>' : (l.st==='simule' ? '<button class="btn btn-primary btn-compact" onclick="ocDossierAppliquer(\''+escJs(pl.coopId)+'\',\''+escJs(l.code)+'\')" title="La répartition simulée devient le vrai traçage de ce camion (achats producteurs + fiche)">Appliquer (tracer pour de bon)</button>' : ''))+'</td></tr>'); i++; continue; }
+          + '<td>'+(l.st==='atracer' ? '<button class="btn btn-primary btn-compact" onclick="ocDossierTracer(\''+escJs(pl.coopId)+'\',\''+escJs(l.code)+'\')" title="Simule d\'abord les camions précédents qui manquent, puis répartit ce connaissement sur ce qu\'il reste">Tracer avec la simulation</button>' : (l.st==='simule' ? '<button class="btn btn-primary btn-compact" onclick="ocDossierAppliquer(\''+escJs(pl.coopId)+'\',\''+escJs(l.code)+'\')" title="La répartition simulée devient le vrai traçage de ce camion (achats producteurs + fiche)">Appliquer (tracer pour de bon)</button> <button class="btn-ghost btn-compact" onclick="ocDossierRetirerSim(\''+escJs(pl.coopId)+'\',\''+escJs(l.code)+'\')" title="Efface seulement la simulation de ce camion (rien de réel n\'est touché)">Retirer</button>' : (l.st==='trace' ? '<button class="btn-ghost btn-compact" style="color:#a33" onclick="ocDossierSupprimerTracage(\''+escJs(pl.coopId)+'\',\''+escJs(l.code)+'\')" title="Supprime le traçage de ce camion (après sauvegarde) : il redevient à tracer">🗑 Supprimer</button>' : '')))+'</td></tr>'); i++; continue; }
         let j = i; while (j+1<D.lignes.length && !D.lignes[j+1].nous) j++;
         const plage = D.lignes.slice(i, j+1), toutSim = plage.every(x=>x.st==='simule'), nb = plage.length;
         rows.push('<tr style="opacity:.8"><td>'+(nb>1 ? plage[0].seq+'–'+plage[nb-1].seq : plage[0].seq)+'</td><td>Ailleurs</td><td class="hint">'+nb+' camion'+(nb>1?'s':'')+' livré'+(nb>1?'s':'')+' ailleurs</td><td></td><td class="num">≈ '+fmtKg(nb*35000)+'</td><td>'+(toutSim ? badge('simule') : badge('asimuler'))+'</td><td class="num">'+(toutSim ? plage.reduce((t,x)=>t+x.nProd,0) : '—')+'</td><td></td></tr>');
@@ -12501,6 +12501,16 @@ function ocDossierAppliquer(coopId, code){
     _dossCache = null; state.fichesTracabilite = null;
     showToast(ok+' camion(s) tracé(s) pour de bon ('+nProd+' lignes producteurs)'+(ko.length ? ' · non appliqué(s) : '+ko.join(' ; ') : '')+'.', ko.length ? 'error' : 'success');
     render();
+  });
+}
+function ocDossierSupprimerTracage(coopId, code){
+  ocRefaireDemander([{ coopId, codes:[code] }], 'Supprimer le traçage du connaissement '+code+' ?');
+}
+function ocDossierRetirerSim(coopId, code){
+  const cs = ocSimAnalyseCode(code); if (!cs) return;
+  const row = (state.tracaSim||[]).find(r=>r.cooperative_id===coopId && r.serie===cs.cle && r.seq===cs.seq); if (!row){ showToast('Aucune simulation à retirer pour ce camion.'); return; }
+  askConfirm('Retirer la simulation du connaissement '+code+' ?\n\nSeule la simulation est effacée (rien de réel n\'est touché). Le camion redevient « à tracer ».', async ()=>{
+    await ocSimSupprimer(coopId, row.campagne_id||'', cs.cle, cs.seq); _dossCache = null; render();
   });
 }
 function ocDossierApercu(){ const pl = state.modal && state.modal.type==='ocDossier' ? state.modal.payload : null; if (!pl) return; ocSimOuvrir(pl.coopId, pl.cle); }
