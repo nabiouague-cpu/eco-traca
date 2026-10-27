@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.2.2
+// @version      0.2.3
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.2.2';
+  const VERSION = '0.2.3';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -574,6 +574,18 @@
   // etapeRetour : 'suite' quand l'origine est faite en tout début de lot (on enchaîne sur l'étape 1) ; sinon retour à la page des données livraison.
   async function sousEtapeOrigine(e) {
     const nom = String(e.lot.connaissement.origine || '').trim().toUpperCase(), tkm = num(e.lot.connaissement.tkm);
+    const fin = () => { memoriserOrigine(nom); e.sous = null; e.origineOk = true; ecrireEtat(e); journal(e, 'Origine « ' + nom + ' » prête dans OBC'); return 'suite'; };
+    // 1) Vérification de référence : l'origine est-elle dans la liste du formulaire « Données livraison » (celle que la saisie utilisera) ? Si oui, rien à créer.
+    if (!e.origVerifiee) {
+      if (!location.pathname.toLowerCase().startsWith(PAGES[7].toLowerCase())) { location.href = PAGES[7]; return 'navigation'; }
+      const fo = await ouvrirFormulaire(8); if (!fo) return 'navigation';
+      const sO = q('#txtorigine_idAdd'); await listeStable(sO);
+      const trouvee = optionParTexte(sO, exact(nom));
+      e.origVerifiee = true; ecrireEtat(e);
+      if (trouvee) { journal(e, 'Origine « ' + nom + ' » déjà dans OBC'); return fin(); }
+      if (e.origCreee) throw new Error('Origine « ' + nom + ' » toujours absente de la liste après sa création : rien de plus n\'est créé (éviter un doublon). Vérifie-la dans OBC.');
+      location.href = '/AgroParametrage/ParametrageOrigine'; return 'navigation';
+    }
     if (!/ParametrageOrigine/i.test(location.pathname)) { location.href = '/AgroParametrage/ParametrageOrigine'; return 'navigation'; }
     const dansTable = () => [...document.querySelectorAll('table tbody td')].some((td) => N(td.textContent) === N(nom));
     await attendre(() => document.querySelector('table tbody tr') || /aucun|no data|pas de donn/i.test(document.body.innerText), 15000, 400); await dormir(1000);
@@ -585,7 +597,6 @@
       setInput(rech, nom); rech.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter' })); rech.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter', keyCode: 13 }));
       await attendre(() => dansTable(), 6000, 400); const ok = dansTable(); setInput(rech, ''); return ok;
     };
-    const fin = () => { memoriserOrigine(nom); e.sous = null; e.origineOk = true; ecrireEtat(e); journal(e, 'Origine « ' + nom + ' » prête dans OBC'); if (e.etape === 1) return 'suite'; location.href = PAGES[7]; return 'navigation'; };
     if (await existeRecherche()) return fin();
     if (!modalOuverte()) {
       const cands = [...document.querySelectorAll('a, button')].filter((b) => visible(b) && !b.closest('#origen-obc') && !b.closest('.modal'));
@@ -613,7 +624,8 @@
     while (Date.now() - t0 < (auto ? 25000 : 300000)) { if (!modalOuverte()) { ferme = true; break; } await dormir(500); }
     if (!ferme) throw new Error('Origine « ' + nom + ' » non enregistrée : la fenêtre est restée ouverte. ' + erreurVisible());
     await dormir(1500);
-    return fin();
+    e.origCreee = true; e.origVerifiee = false; ecrireEtat(e); journal(e, 'Origine « ' + nom + ' » créée : vérification dans la liste des données livraison');
+    location.href = PAGES[7]; return 'navigation';
   }
   async function etapeLivraison(e) {
     const lot = e.lot;
