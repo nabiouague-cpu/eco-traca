@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.47
+// @version      0.1.48
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.47';
+  const VERSION = '0.1.48';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const ENTITE = '1';                 // ECORIGINE
@@ -274,11 +274,15 @@
     setSelect(q('#txtmode_reglement_fournisseurAdd'), '2'); setSelect(q('#txtsecteur_fournisseurAdd'), '1');
     setInput(q('#txtville_fournisseurAdd'), 'ABIDJAN'); setInput(q('#txtadresse_geographique_fournisseurAdd'), 'ABIDJAN');
     setRadio('txttype_fournisseur_agroAdd4');   // GROS TRAITANT
+    // OBC n'active « Enregistrer » que si Téléphone ET Mobile sont renseignés : aucun numéro connu pour un gros traitant, on met un numéro à zéros (à corriger dans OBC si besoin).
+    setInput(q('#txttelephone_fournisseurAdd'), '0000000000'); setInput(q('#txtmobile_fournisseurAdd'), '0000000000');
     await attendreOption(q('#txtnumero_poste_comptableAdd0'), new RegExp('^' + g.code + '\\b'));
     if (!setSelect(q('#txtnumero_poste_comptableAdd0'), g.code)) throw new Error('Poste comptable « ' + g.code + ' » non sélectionnable');
     setSelect(q('#txttype_prestation_achatAdd0'), '1');
     { const m = await reappliquer(f); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
-    e.note = 'Gros traitant ' + g.nom + ' (' + g.code + ') — type GROS TRAITANT. Ville et adresse mises à « ABIDJAN » par défaut : corrige-les si besoin avant d\'enregistrer.'; return 'rempli';
+    try { if (typeof window.validateCreateFournisseur === 'function') window.validateCreateFournisseur(); } catch (er) { /* ignoré */ }
+    { const bs = q('#btnCreateFournisseur'); if (bs && bs.disabled) throw new Error('« Enregistrer » reste grisé dans OBC : il manque un champ obligatoire (Téléphone, Mobile, Ville, Adresse géographique). Complète-le à la main, puis « Continuer ».'); }
+    e.note = 'Gros traitant ' + g.nom + ' (' + g.code + ') — type GROS TRAITANT. Ville et adresse mises à « ABIDJAN », téléphone et mobile à 0000000000 par défaut (champs obligatoires) : corrige-les si besoin avant d\'enregistrer.'; return 'rempli';
   }
   async function etapeCompteTiers(e) {
     const c = e.lot.cooperative, ccc = String(c.ccc || '').trim().toUpperCase(), sigle = String(c.sigle || c.nom_complet || '').trim();
