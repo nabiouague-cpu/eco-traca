@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.49
+// @version      0.1.50
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.49';
+  const VERSION = '0.1.50';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const ENTITE = '1';                 // ECORIGINE
@@ -259,6 +259,8 @@
     const r = await creerCompteTiers(e, 1, g.code, g.nom); if (r !== 'rempli') return r;
     e.note = 'Compte tiers du gros traitant ' + g.nom + ' (' + g.code + ') : classe 4, Fournisseur, compte général ' + COMPTE_GENERAL + '.'; return 'rempli';
   }
+  // Champs que la règle d'OBC exige pour activer « Enregistrer » (formulaire fournisseur) : liste de ceux qui sont vides.
+  function champsFournisseurVides() { return [['txttelephone_fournisseurAdd', 'Téléphone'], ['txtmobile_fournisseurAdd', 'Mobile'], ['txtville_fournisseurAdd', 'Ville'], ['txtadresse_geographique_fournisseurAdd', 'Adresse géographique'], ['txtcode_fournisseurAdd', 'Sigle'], ['txtnom_fournisseurAdd', 'Dénomination sociale']].filter(([id]) => { const el = document.getElementById(id); return !el || !String(el.value || '').trim(); }).map((x) => x[1]); }
   async function etapeGrosTraitant(e) {
     const g = grosTraitantCible(e.lot);
     if (!g) { e.fait[2] = 'rien à créer'; return 'suivant'; }
@@ -281,7 +283,7 @@
     setSelect(q('#txttype_prestation_achatAdd0'), '1');
     { const m = await reappliquer(f); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
     try { if (typeof window.validateCreateFournisseur === 'function') window.validateCreateFournisseur(); } catch (er) { /* ignoré */ }
-    { const bs = q('#btnCreateFournisseur'); if (bs && bs.disabled) throw new Error('« Enregistrer » reste grisé dans OBC : il manque un champ obligatoire (Téléphone, Mobile, Ville, Adresse géographique). Complète-le à la main, puis « Continuer ».'); }
+    { const bs = q('#btnCreateFournisseur'); if (bs && bs.disabled) { const v = champsFournisseurVides(); throw new Error('« Enregistrer » reste grisé dans OBC. ' + (v.length ? 'Champs vides : ' + v.join(', ') + '. Remplis-les à la main, puis « Continuer ».' : 'Aucun champ obligatoire vide détecté : retape une lettre dans « Dénomination sociale » pour relancer le contrôle d\'OBC, puis « Continuer ».')); } }
     e.note = 'Gros traitant ' + g.nom + ' (' + g.code + ') — type GROS TRAITANT. Ville et adresse mises à « ABIDJAN », téléphone et mobile à 0000000000 par défaut (champs obligatoires) : corrige-les si besoin avant d\'enregistrer.'; return 'rempli';
   }
   async function etapeCompteTiers(e) {
@@ -306,8 +308,10 @@
     setEntite(q('#txtid_entiteAdd'));
     setInput(q('#txtnom_fournisseurAdd'), c.sigle); setInput(q('#txtcode_fournisseurAdd'), c.sigle); // modèle CAEZ COOP-CA : dénomination = code = sigle
     setSelect(q('#txtmode_reglement_fournisseurAdd'), '2'); setSelect(q('#txtsecteur_fournisseurAdd'), '1');
-    setInput(q('#txtville_fournisseurAdd'), c.ville); // modèle : ni DFE, ni RCCM, ni téléphone/e-mail du fournisseur
-    setInput(q('#txtadresse_postale_fournisseurAdd'), c.adresse_postale || ('BP ' + (c.ville || ''))); setInput(q('#txtadresse_geographique_fournisseurAdd'), c.siege);
+    // Coopérative créée depuis SAIGIC (fiche vide dans ORIGEN) : ville = localité du producteur, à défaut le département d'origine du connaissement ; adresse géographique = ville.
+    const villeC = String(c.ville || (lot.producteur && lot.producteur.localite) || (lot.connaissement && lot.connaissement.origine) || 'ABIDJAN').toUpperCase();
+    setInput(q('#txtville_fournisseurAdd'), villeC); // modèle : ni DFE, ni RCCM, ni téléphone/e-mail du fournisseur
+    setInput(q('#txtadresse_postale_fournisseurAdd'), c.adresse_postale || ('BP ' + villeC)); setInput(q('#txtadresse_geographique_fournisseurAdd'), c.siege || villeC);
     setRadio('txttype_fournisseur_agroAdd2'); setInput(q('#txtnumero_agrement_ccc_fournisseur_agroAdd'), c.ccc); // code CCC demandé en plus du modèle
     // Gros traitant rattaché : le traitant du site de déchargement du lot dans ORIGEN (Awahus, Sitapa, M Bobby Vo, Coops Touton, Coops Sucden ; « Coops Ecorigine » = coopératives en propre, aucun gros traitant),
     // retrouvé par son nom dans la liste des gros traitants d'OBC. Aucun rattachement n'est inventé : sans correspondance, la liste reste vide.
@@ -330,7 +334,7 @@
     setSelect(q('#txttype_prestation_achatAdd0'), '1');
     { const m = await reappliquer(f); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
     try { if (typeof window.validateCreateFournisseur === 'function') window.validateCreateFournisseur(); } catch (er) { /* ignoré */ }
-    { const bs = q('#btnCreateFournisseur'); if (bs && bs.disabled) throw new Error('« Enregistrer » reste grisé dans OBC : il manque un champ obligatoire (Téléphone, Mobile, Ville, Adresse géographique). ' +  + 'Puis « Continuer ».'); }
+    { const bs = q('#btnCreateFournisseur'); if (bs && bs.disabled) { const v = champsFournisseurVides(); throw new Error('« Enregistrer » reste grisé dans OBC. ' + (v.length ? 'Champs vides : ' + v.join(', ') + '. Remplis-les à la main, puis « Continuer ».' : 'Aucun champ obligatoire vide détecté : retape une lettre dans « Dénomination sociale » pour relancer le contrôle d\'OBC, puis « Continuer ».')); } }
     e.note = 'Coopérative ' + c.sigle + ' (' + c.ccc + ').' + traitantNote; return 'rempli';
   }
   async function etapeTransporteur(e) {
