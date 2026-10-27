@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.34
+// @version      0.1.35
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.34';
+  const VERSION = '0.1.35';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const ENTITE = '1';                 // ECORIGINE
@@ -229,8 +229,8 @@
     { const m = await reappliquer(f); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
     return 'rempli';
   }
-  // Gros traitants à créer dans OBC s'ils y manquent (code et dénomination validés). TOUTON : en attente de confirmation, non créé.
-  const GROS_TRAITANTS = [{ cle: 'BOBBY VO', code: 'BOBB001', nom: 'BOBBY VO' }, { cle: 'SUCDEN', code: 'SUCD001', nom: 'SUCDEN' }];
+  // Gros traitants à créer dans OBC s'ils y manquent. Un nouveau code est donné même si l'entreprise existe déjà comme simple fournisseur (TOU002 TOUTON NEGOCE CI, SUC002 SUCDEN-CI).
+  const GROS_TRAITANTS = [{ cle: 'BOBBY VO', code: 'BOBB001', nom: 'BOBBY VO' }, { cle: 'SUCDEN', code: 'SUCD001', nom: 'SUCDEN-CI' }, { cle: 'TOUTON', code: 'TOUT001', nom: 'TOUTON NEGOCE CI' }];
   function grosTraitantCible(lot) {
     const c = lot.cooperative; if (c.coop_propre) return null;
     for (const cand of (c.gros_traitants || [])) { const n = N(cand); const g = GROS_TRAITANTS.find((x) => n.includes(x.cle)); if (g) return g; }
@@ -249,14 +249,14 @@
     const g = grosTraitantCible(e.lot);
     if (!g) { e.fait[2] = 'rien à créer'; return 'suivant'; }
     const doc = await getHtml('/Fournisseur/Index?isProjetProv=0&filterEntite=' + ENTITE + '&filtrePosteComptable=&filter=' + encodeURIComponent(g.nom.split(' ')[0]) + '&pageSize=100');
-    const ex = lignesTable(doc).find((l) => N(l.c[3]) === N(g.code) || N(l.c[2]) === N(g.nom));
+    const ex = lignesTable(doc).find((l) => N(l.c[3]) === N(g.code));   // par le code seulement : le même nom existe déjà sous un autre code (simple fournisseur)
     if (ex) { e.fait[2] = 'déjà dans OBC : ' + ex.c[2]; journal(e, 'Gros traitant trouvé : ' + ex.c[2]); return 'suivant'; }
     if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
     const plan = await trouverCompteTiers(g.code);
     if (!plan) { e.erreur = 'Le compte tiers « ' + g.code + ' – ' + g.nom + ' » n\'existe pas encore dans OBC : crée-le d\'abord, puis « Continuer ».'; return 'stop'; }
     const f = await ouvrirFormulaire(2); if (!f) return 'navigation';
     setEntite(q('#txtid_entiteAdd'));
-    setInput(q('#txtnom_fournisseurAdd'), g.nom); setInput(q('#txtcode_fournisseurAdd'), g.nom);
+    setInput(q('#txtnom_fournisseurAdd'), g.nom); setInput(q('#txtcode_fournisseurAdd'), g.code);   // la colonne « Code » de la liste = le sigle (ex. AWAH001)
     setSelect(q('#txtmode_reglement_fournisseurAdd'), '2'); setSelect(q('#txtsecteur_fournisseurAdd'), '1');
     setInput(q('#txtville_fournisseurAdd'), 'ABIDJAN'); setInput(q('#txtadresse_geographique_fournisseurAdd'), 'ABIDJAN');
     setRadio('txttype_fournisseur_agroAdd4');   // GROS TRAITANT
@@ -294,7 +294,7 @@
     // Gros traitant rattaché : le traitant du site de déchargement du lot dans ORIGEN (Awahus, Sitapa, M Bobby Vo, Coops Touton, Coops Sucden ; « Coops Ecorigine » = coopératives en propre, aucun gros traitant),
     // retrouvé par son nom dans la liste des gros traitants d'OBC. Aucun rattachement n'est inventé : sans correspondance, la liste reste vide.
     e.note = ''; let traitantNote = '';
-    { const sel = q('#txtid_fournisseur_agro_gros_traitantAdd'); const cands = [].concat(c.gros_traitants || []).map((x) => String(x || '').trim()).filter(Boolean);
+    { const sel = q('#txtid_fournisseur_agro_gros_traitantAdd'); const gt = grosTraitantCible(lot); const cands = (gt ? [gt.nom] : []).concat(c.gros_traitants || []).map((x) => String(x || '').trim()).filter(Boolean);
       if (c.coop_propre) { traitantNote = ' Coopérative en propre (ECORIGINE) : pas de gros traitant rattaché.'; journal(e, 'Coopérative en propre : aucun gros traitant'); }
       else if (sel && cands.length) {
         await attendreOption(sel, /./).catch(() => null);
