@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.2.6
+// @version      0.2.7
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.2.6';
+  const VERSION = '0.2.7';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -274,7 +274,7 @@
   // Entité : déjà ECORIGINE dans OBC ; la changer déclenche le rechargement de toutes les listes (et efface les sélections).
   function setEntite(el) { if (!el) return; if (String(el.value) !== ENTITE) setSelect(el, ENTITE); }
   // Attend qu'une liste ait fini de se (re)charger : nombre d'options stable pendant 1,2 s et au moins une valeur.
-  async function listeStable(el) { let n = -1, stableDepuis = 0; const t0 = Date.now(); while (Date.now() - t0 < ATTENTE_MAX) { const m = el ? el.options.length : 0; if (m === n && m > 1) { if (Date.now() - stableDepuis > 1200) return true; } else { n = m; stableDepuis = Date.now(); } await dormir(200); } return el && el.options.length > 1; }
+  async function listeStable(el) { let n = -1, stableDepuis = 0; const t0 = Date.now(); while (Date.now() - t0 < ATTENTE_MAX) { const m = el ? el.options.length : 0; if (m === n && m > 1) { if (Date.now() - stableDepuis > 800) return true; } else { n = m; stableDepuis = Date.now(); } await dormir(200); } return el && el.options.length > 1; }
   function setRadio(id) { const el = document.getElementById(id); if (!el) return; el.checked = true; el.dispatchEvent(new Event('change', { bubbles: true })); }
   const q = (s) => document.querySelector(s);
 
@@ -290,7 +290,7 @@
     btn.click();
     const f = await attendre(() => q(FORMS[k - 1]), ATTENTE_MAX);
     if (!f) throw new Error('Le formulaire ne s\'est pas ouvert (' + FORMS[k - 1] + ')');
-    await dormir(800);
+    await dormir(500);
     return f;
   }
 
@@ -808,7 +808,7 @@
             if (ecoule > 90000) { await echecLot(e, 'enregistrement automatique sans effet après 90 s. ' + erreurVisible()); return; }
             if (ecoule > 30000 && (e.cliques || 0) < 2) { const b = boutonEnregistrer(e.etape); if (b && !b.disabled) { e.cliques = (e.cliques || 0) + 1; ecrireEtat(e); journal(e, 'Nouvel essai d\'enregistrement'); b.click(); confirmerBoite(); } }
           }
-          ecrireEtat(e); afficherEtat(); setTimeout(boucle, 4000); return;
+          ecrireEtat(e); afficherEtat(); setTimeout(boucle, e && e.enFile ? 1500 : 4000); return;
         }
         if (e.statut === 'verifier') e.statut = 'a_faire';
         // Tout premier élément de la chaîne : l'origine du camion existe-t-elle dans OBC ? Sinon on la crée, puis on enchaîne.
@@ -840,11 +840,11 @@
         if (res === 'rempli') {
           e.statut = 'attente_enregistrement'; journal(e, ETAPES[e.etape - 1] + ' : formulaire rempli' + (e.enFile && lireFile().auto !== false ? '' : ', en attente d\'Enregistrer'));
           if (e.enFile && lireFile().auto !== false) { if (!(await enregistrerAuto(e))) return; }
-          setTimeout(boucle, 4000); return;
+          setTimeout(boucle, e && e.enFile ? 1500 : 4000); return;
         }
         if (res === 'navigation') return;          // la page change : le script reprend au chargement
         if (res === 'stop') { ecrireEtat(e); afficherEtat(); return; }
-        if (res === 'attendre') { ecrireEtat(e); afficherEtat(); setTimeout(boucle, 4000); return; }
+        if (res === 'attendre') { ecrireEtat(e); afficherEtat(); setTimeout(boucle, e && e.enFile ? 1500 : 4000); return; }
       }
     } finally { enCours = false; }
   }
