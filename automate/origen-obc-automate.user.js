@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.2.3
+// @version      0.2.5
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.2.3';
+  const VERSION = '0.2.5';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -574,18 +574,7 @@
   // etapeRetour : 'suite' quand l'origine est faite en tout début de lot (on enchaîne sur l'étape 1) ; sinon retour à la page des données livraison.
   async function sousEtapeOrigine(e) {
     const nom = String(e.lot.connaissement.origine || '').trim().toUpperCase(), tkm = num(e.lot.connaissement.tkm);
-    const fin = () => { memoriserOrigine(nom); e.sous = null; e.origineOk = true; ecrireEtat(e); journal(e, 'Origine « ' + nom + ' » prête dans OBC'); return 'suite'; };
-    // 1) Vérification de référence : l'origine est-elle dans la liste du formulaire « Données livraison » (celle que la saisie utilisera) ? Si oui, rien à créer.
-    if (!e.origVerifiee) {
-      if (!location.pathname.toLowerCase().startsWith(PAGES[7].toLowerCase())) { location.href = PAGES[7]; return 'navigation'; }
-      const fo = await ouvrirFormulaire(8); if (!fo) return 'navigation';
-      const sO = q('#txtorigine_idAdd'); await listeStable(sO);
-      const trouvee = optionParTexte(sO, exact(nom));
-      e.origVerifiee = true; ecrireEtat(e);
-      if (trouvee) { journal(e, 'Origine « ' + nom + ' » déjà dans OBC'); return fin(); }
-      if (e.origCreee) throw new Error('Origine « ' + nom + ' » toujours absente de la liste après sa création : rien de plus n\'est créé (éviter un doublon). Vérifie-la dans OBC.');
-      location.href = '/AgroParametrage/ParametrageOrigine'; return 'navigation';
-    }
+    const fin = () => { e.sous = null; ecrireEtat(e); journal(e, 'Origine « ' + nom + ' » prête : retour aux données livraison'); location.href = PAGES[7]; return 'navigation'; };
     if (!/ParametrageOrigine/i.test(location.pathname)) { location.href = '/AgroParametrage/ParametrageOrigine'; return 'navigation'; }
     const dansTable = () => [...document.querySelectorAll('table tbody td')].some((td) => N(td.textContent) === N(nom));
     await attendre(() => document.querySelector('table tbody tr') || /aucun|no data|pas de donn/i.test(document.body.innerText), 15000, 400); await dormir(1000);
@@ -612,6 +601,10 @@
     if (ent && ent.tagName === 'SELECT') { await setSelectTexte(ent, /^ECORIGINE/i, 'Entité'); await dormir(500); }
     setInput(lib, nom); setInput(code, nom); setInput(prix, tkm);
     await dormir(400);
+    { const entTxt = ent && ent.tagName === 'SELECT' ? ((ent.options[ent.selectedIndex] || {}).text || '') : '(sans liste)';
+      if (ent && ent.tagName === 'SELECT' && !/^ECORIGINE/i.test(entTxt)) throw new Error('Nouvelle origine : l\'entité n\'a pas pris ECORIGINE (« ' + entTxt + ' »), rien n\'est enregistré');
+      if (lib.value !== nom || code.value !== nom || Number(String(prix.value).replace(',', '.')) !== Number(tkm)) throw new Error('Nouvelle origine : cases mal remplies (libellé « ' + lib.value + ' », code « ' + code.value + ' », TKM « ' + prix.value + ' »), rien n\'est enregistré');
+      journal(e, 'Nouvelle origine : entité ' + entTxt + ', libellé/code ' + nom + ', TKM ' + tkm); }
     const auto = e.enFile && lireFile().auto !== false;
     const bt = () => [...modal.querySelectorAll('button, input[type=submit]')].find((b) => /enregistrer/i.test(b.textContent || b.value || ''));
     if (auto) {
@@ -624,8 +617,7 @@
     while (Date.now() - t0 < (auto ? 25000 : 300000)) { if (!modalOuverte()) { ferme = true; break; } await dormir(500); }
     if (!ferme) throw new Error('Origine « ' + nom + ' » non enregistrée : la fenêtre est restée ouverte. ' + erreurVisible());
     await dormir(1500);
-    e.origCreee = true; e.origVerifiee = false; ecrireEtat(e); journal(e, 'Origine « ' + nom + ' » créée : vérification dans la liste des données livraison');
-    location.href = PAGES[7]; return 'navigation';
+    return fin();
   }
   async function etapeLivraison(e) {
     const lot = e.lot;
@@ -650,7 +642,9 @@
       const cb = q('#txtconnaissement_brousse_idAdd'); if (cb && !cb.value) { await setSelectTexte(cb, c.numero, 'Connaissement brousse'); await dormir(1200); } }
     setInput(q('#txtconnaissement_usine_dateAdd'), isoDate(c.date));
     if (!q('#txtconnaissement_usine_numeroAdd').value) setInput(q('#txtconnaissement_usine_numeroAdd'), c.numero);
-    { const selO = q('#txtorigine_idAdd'), oO = await attendre(() => optionParTexte(selO, exact(c.origine)), 6000, 300);
+    { const selO = q('#txtorigine_idAdd'); await listeStable(selO);
+      if (!selO || selO.options.length <= 1) throw new Error('OBC ne répond pas : la liste des origines est vide (non chargée), rien n\'est créé');
+      const oO = await attendre(() => optionParTexte(selO, exact(c.origine)), 5000, 300);
       if (!oO) {
         // L'origine n'existe pas encore dans OBC (référentiel à part) : on la crée (entité ECORIGINE, libellé = code = localité, TKM du connaissement), puis on revient ici.
         if (!c.origine) throw new Error('Origine du connaissement vide dans ORIGEN');
@@ -792,12 +786,6 @@
           ecrireEtat(e); afficherEtat(); setTimeout(boucle, 4000); return;
         }
         if (e.statut === 'verifier') e.statut = 'a_faire';
-        // Pré-contrôle en tout début de lot : l'origine du camion existe-t-elle dans OBC ? Sinon on la crée AVANT toute autre saisie.
-        if (e.enFile && e.etape === 1 && !e.origineOk && !e.sous) {
-          const nomO = String(e.lot.connaissement.origine || '').trim();
-          if (!nomO || memoOrigines().includes(N(nomO))) { e.origineOk = true; } else { e.sous = 'origine'; }
-          ecrireEtat(e);
-        }
         if (e.sous === 'origine') {
           try { const r = await sousEtapeOrigine(e); if (r === 'navigation') return; continue; }
           catch (err) {
