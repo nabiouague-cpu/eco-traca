@@ -4396,7 +4396,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-27-312';
+const APP_VERSION = '2026-10-27-313';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -9985,7 +9985,7 @@ function lotsModalsHtml(){
       while (i<D.lignes.length){
         const l = D.lignes[i];
         if (l.nous){ rows.push('<tr style="background:'+(l.st==='atracer'?'#FFF6E0':'#F2F8F4')+'"><td><b>'+l.seq+'</b></td><td><b>Chez nous</b></td><td>'+esc(l.code)+'</td><td>'+esc(dateFr(l.iso)||'')+'</td><td class="num">'+fmtKg(l.kg)+'</td><td>'+badge(l.st)+'</td><td class="num">'+(l.nProd||'—')+'</td>'
-          + '<td>'+(l.st==='atracer' ? '<button class="btn btn-primary btn-compact" onclick="ocDossierTracer(\''+escJs(pl.coopId)+'\',\''+escJs(l.code)+'\')" title="Simule d\'abord les camions précédents qui manquent, puis répartit ce connaissement sur ce qu\'il reste">Tracer avec la simulation</button>' : '')+'</td></tr>'); i++; continue; }
+          + '<td>'+(l.st==='atracer' ? '<button class="btn btn-primary btn-compact" onclick="ocDossierTracer(\''+escJs(pl.coopId)+'\',\''+escJs(l.code)+'\')" title="Simule d\'abord les camions précédents qui manquent, puis répartit ce connaissement sur ce qu\'il reste">Tracer avec la simulation</button>' : (l.st==='simule' ? '<button class="btn btn-primary btn-compact" onclick="ocDossierAppliquer(\''+escJs(pl.coopId)+'\',\''+escJs(l.code)+'\')" title="La répartition simulée devient le vrai traçage de ce camion (achats producteurs + fiche)">Appliquer (tracer pour de bon)</button>' : ''))+'</td></tr>'); i++; continue; }
         let j = i; while (j+1<D.lignes.length && !D.lignes[j+1].nous) j++;
         const plage = D.lignes.slice(i, j+1), toutSim = plage.every(x=>x.st==='simule'), nb = plage.length;
         rows.push('<tr style="opacity:.8"><td>'+(nb>1 ? plage[0].seq+'–'+plage[nb-1].seq : plage[0].seq)+'</td><td>Ailleurs</td><td class="hint">'+nb+' camion'+(nb>1?'s':'')+' livré'+(nb>1?'s':'')+' ailleurs</td><td></td><td class="num">≈ '+fmtKg(nb*35000)+'</td><td>'+(toutSim ? badge('simule') : badge('asimuler'))+'</td><td class="num">'+(toutSim ? plage.reduce((t,x)=>t+x.nProd,0) : '—')+'</td><td></td></tr>');
@@ -9999,7 +9999,7 @@ function lotsModalsHtml(){
       + '<div class="hint" style="margin-bottom:8px">'+esc(c && c.ccc_num ? 'N° CCC '+c.ccc_num+' · ' : '')+fmtNum(nP)+' producteur(s) dans ORIGEN. <b>Rien n\'est modifié ici</b> : les traçabilités déjà faites restent telles quelles tant que tu ne demandes pas de les refaire.'
       + (D && D.groupes.length>1 ? ' Série : <select onchange="ocDossierSerie(this.value)">'+D.groupes.map(g=>'<option value="'+esc(g.cle)+'"'+(g.cle===D.g.cle?' selected':'')+'>'+esc(g.cle)+'</option>').join('')+'</select>' : '')+'</div>'
       + '<div id="modal-fields">'+corps+'</div>'
-      + '<div class="actions"><button class="btn" onclick="ocDossierApercu()" title="Simule toute la série depuis le n° 1, comme si rien n\'avait été tracé, pour voir ce que donnerait la traçabilité refaite (aperçu, rien n\'est enregistré tant que tu ne cliques pas sur Enregistrer)">🧮 Aperçu : refaire toute la traçabilité de zéro</button>'+(D && D.nTrace>0 ? '<button class="btn" style="color:#a33;border-color:#e3b3b3" onclick="ocRefaireDossier()" title="Retire les traçages déjà faits de cette série (après sauvegarde) pour les retracer avec la simulation">♻ Refaire de zéro (retirer les '+D.nTrace+' traçage'+(D.nTrace>1?'s':'')+')</button>' : '')+'<button class="btn" onclick="closeModal()">Fermer</button></div></div></div>';
+      + '<div class="actions"><button class="btn" onclick="ocDossierApercu()" title="Simule toute la série depuis le n° 1, comme si rien n\'avait été tracé, pour voir ce que donnerait la traçabilité refaite (aperçu, rien n\'est enregistré tant que tu ne cliques pas sur Enregistrer)">🧮 Aperçu : refaire toute la traçabilité de zéro</button>'+(D && D.lignes.some(l=>l.nous && l.st==='simule') ? '<button class="btn btn-primary" onclick="ocDossierAppliquer(\''+escJs(pl.coopId)+'\')" title="Transforme en vrai traçage tous les camions chez nous qui n\'existent que dans la simulation">✅ Appliquer la simulation aux camions chez nous</button>' : '')+(D && D.nTrace>0 ? '<button class="btn" style="color:#a33;border-color:#e3b3b3" onclick="ocRefaireDossier()" title="Retire les traçages déjà faits de cette série (après sauvegarde) pour les retracer avec la simulation">♻ Refaire de zéro (retirer les '+D.nTrace+' traçage'+(D.nTrace>1?'s':'')+')</button>' : '')+'<button class="btn" onclick="closeModal()">Fermer</button></div></div></div>';
   }
   if (m.type==='ocSim'){
     const pl = m.payload, R = pl.res, coops = ocSimCoops(), c = coopById(pl.coopId), groupes = ocSimGroupes(pl.coopId);
@@ -12454,6 +12454,54 @@ function ocRefaireDossier(){
   const pl = state.modal && state.modal.type==='ocDossier' ? state.modal.payload : null; if (!pl) return;
   const c = coopById(pl.coopId);
   ocRefaireDemander([{ coopId:pl.coopId, codes:ocRefaireCodes(pl.coopId, pl.cle, false) }], 'Refaire de zéro la traçabilité de '+(c ? c.nom : 'cette coopérative')+' (série '+pl.cle+') ?');
+}
+// ---- Appliquer la simulation enregistrée aux camions chez nous : la répartition simulée devient un VRAI traçage (achats producteurs + fiche rangée dans le dossier) ----
+async function ocAppliquerSimCamion(coopId, code){
+  const it = ocTvCandidats(coopId).find(x=>x.code===code); if (!it) return { ko:'ce connaissement n\'est plus à tracer' };
+  const cs = ocSimAnalyseCode(code); if (!cs) return { ko:'numéro de connaissement non reconnu' };
+  const pf = ocTvPrefillItem(it), campagneId = pf.campagneId || (state.campagneFilter && state.campagneFilter!=='all' ? state.campagneFilter : '');
+  if (!campagneId) return { ko:'campagne non reconnue' };
+  const row = (state.tracaSim||[]).find(r=>r.cooperative_id===coopId && r.serie===cs.cle && r.seq===cs.seq && (r.campagne_id||'')===campagneId);
+  if (!row) return { ko:'pas de simulation enregistrée pour ce camion' };
+  if (Number(row.manque_kg)>0) return { ko:'limite du potentiel atteinte pour ce camion ('+fmtKg(row.manque_kg)+' sans producteur) : trace-le sur une autre coopérative' };
+  const prods = (state.producteurs||[]).filter(p=>p.cooperative_id===coopId && p.farm_id);
+  const allocations = (row.alloc||[]).map(a=>({ p:prods.find(z=>z.farm_id===a.farm), kg:Math.round(Number(a.kg)||0) }));
+  if (!allocations.length || allocations.some(a=>!a.p || !(a.kg>0))) return { ko:'simulation incomplète (producteur introuvable)' };
+  const volumeKg = allocations.reduce((t,a)=>t+a.kg,0);
+  const nbSacs = Math.max(allocations.length, Math.round(Number(it.sacs)||0) || Math.round(volumeKg/65));
+  const sacsArr = ocRepartirSacs(allocations, nbSacs), datesArr = allocations.map(()=>ocDateAleatoireDansIntervalle(pf.dateDebut, pf.dateFin));
+  const coopFiche = coopById(coopId), sigleConn = String((it.vu && it.vu.fournisseur_saigic) || (it.achat && it.achat.fournisseur_saigic) || '').trim();
+  const entete = { fournisseur: sigleConn || (coopFiche ? (coopFiche.nom_complet || coopFiche.nom || '') : ''), ville: coopFiche ? (coopFiche.ville || coopFiche.siege_social || '') : '',
+    dateConnaissement: it.iso ? dateFr(it.iso) : '', numero: code, coopFichier: coopId };
+  const fiche = await ocConstruireFicheTracabiliteDirecte(allocations, sacsArr, datesArr, coopId, campagneId, entete);
+  const genId_ = genId('gen');
+  const lignes = allocations.map((a,i)=>({ id:genId('a'), cooperative_id:coopId, producteur_id:a.p.farm_id, date:datesArr[i], quantite_kg:a.kg, nombre_sacs:sacsArr[i], connaissement:code, type_cacao:'', campagne_id:campagneId, periode:'principale', fiche_generation_id:genId_ }));
+  { const uid = state.session && state.session.user ? state.session.user.id : null;
+    const { error: errFiche } = await supabaseClient.from('fiches_tracabilite_generees').insert({ id:genId_, cooperative_id:coopId, campagne_id:campagneId, periode:'principale', date_debut:pf.dateDebut, date_fin:pf.dateFin,
+      volume_total_kg:volumeKg, nombre_sacs_total:nbSacs, nombre_producteurs_demande:allocations.length, nombre_producteurs_utilises:allocations.length, created_by:uid });
+    if (errFiche){ console.warn('Fiche non enregistrée en base :', errFiche.message); lignes.forEach(l=>{ l.fiche_generation_id = null; }); } }
+  const { error } = await supabaseClient.from('achats').insert(lignes);
+  if (error){ await supabaseClient.from('fiches_tracabilite_generees').delete().eq('id', genId_); return { ko:'enregistrement impossible : '+error.message }; }
+  lignes.forEach(l=>state.achats.push(l));
+  await ocStockerFicheGeneree(fiche, coopId, genId_, code);
+  if (it.vu){ await supabaseClient.from('saigic_connaissements_vus').update({ trace_le:new Date().toISOString() }).eq('id', it.vu.id); state.saigicATracer = (state.saigicATracer||[]).filter(x=>x.id!==it.vu.id); }
+  await ocSimSupprimer(coopId, campagneId, cs.cle, cs.seq);   // ce camion est tracé pour de bon : sa ligne de simulation disparaît pour ne pas compter deux fois
+  return { ok:true, nProd:allocations.length, kg:volumeKg };
+}
+function ocDossierAppliquer(coopId, code){
+  const D = ocDossierDonnees(coopId, (state.modal && state.modal.payload && state.modal.payload.cle) || ''); if (!D) return;
+  const liste = D.lignes.filter(l=>l.nous && l.st==='simule' && (!code || l.code===code)).sort((a,b)=>a.seq-b.seq);
+  if (!liste.length){ showToast('Aucun camion simulé à appliquer.'); return; }
+  askConfirm('Appliquer la simulation ?\n\n'+liste.length+' camion'+(liste.length>1?'s':'')+' chez nous ('+liste.map(l=>l.code).join(', ')+') passe'+(liste.length>1?'nt':'')+' en VRAI traçage : la répartition simulée devient les achats des producteurs (leur potentiel est consommé) et chaque fiche est rangée dans le dossier « Fiches de traçabilité » de la coopérative.\n\nLes camions et leurs poids ne sont pas modifiés.', async ()=>{
+    let ok = 0, nProd = 0; const ko = [];
+    for (const l of liste){
+      try{ const r = await ocAppliquerSimCamion(coopId, l.code); if (r.ok){ ok++; nProd += r.nProd; } else ko.push(l.code+' : '+r.ko); }
+      catch(e){ ko.push(l.code+' : '+(e && e.message ? e.message : e)); }
+    }
+    _dossCache = null; state.fichesTracabilite = null;
+    showToast(ok+' camion(s) tracé(s) pour de bon ('+nProd+' lignes producteurs)'+(ko.length ? ' · non appliqué(s) : '+ko.join(' ; ') : '')+'.', ko.length ? 'error' : 'success');
+    render();
+  });
 }
 function ocDossierApercu(){ const pl = state.modal && state.modal.type==='ocDossier' ? state.modal.payload : null; if (!pl) return; ocSimOuvrir(pl.coopId, pl.cle); }
 async function ocDossierTracer(coopId, code){
