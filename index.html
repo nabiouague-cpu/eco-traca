@@ -4396,7 +4396,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-27-319';
+const APP_VERSION = '2026-10-27-320';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -23263,7 +23263,10 @@ function payerLeResteChamp(){
   const n = document.getElementById('pa-note'), deja = Number(n && n.getAttribute('data-deja'))||0, ap = Math.round(Number((document.querySelector('[name="pa_montant_a_payer"]')||{}).value)||0);
   if (!(ap>0)){ showToast('Indique d\'abord le montant à payer.'); return; }
   if (ap<=deja){ showToast('Il ne reste rien à payer.'); return; }
-  remplirChampPaiement('pa_montant_paye', ap-deja);
+  const rb = Math.round(Number((document.querySelector('[name="pa_remb_montant"]')||{}).value)||0), mode = (document.querySelector('[name="pa_remb_mode"]')||{}).value;
+  const retenue = (mode && mode!=='aucun') ? rb : 0;
+  const e = document.querySelector('[name="pa_montant_paye"]'); if (e) e.removeAttribute('data-auto');
+  remplirChampPaiement('pa_montant_paye', Math.max(0, ap-deja-retenue));
 }
 function majNotePaiement(){
   const n = document.getElementById('pa-note'); if (!n) return;
@@ -23306,6 +23309,16 @@ function majRembPaiement(manuel){
   champ.readOnly = (mode==='aucun' || mode==='total');
   const r = lire('pa_remb_montant'), note = document.getElementById('pa-remb-note'); if (!note) return;
   note.classList.remove('rouge');
+  const recap = document.getElementById('pa-recap'), retenue = (mode && mode!=='aucun') ? r : 0;
+  if (recap){
+    if (ap>0){
+      recap.innerHTML = 'Montant à payer '+fmtNum(ap)+(deja>0?' − déjà payé '+fmtNum(deja):'')+(retenue>0?' − retenue préfinancement '+fmtNum(retenue):'')+' = <span style="color:var(--teal);">chèque à émettre : '+fmtNum(Math.max(0, dispo-retenue))+' FCFA</span>';
+      recap.style.display = 'block';
+    } else recap.style.display = 'none';
+  }
+  const ch = document.querySelector('[name="pa_montant_paye"]');
+  if (ch && ap>0 && retenue>0 && (ch.value==='' || ch.getAttribute('data-auto')==='1')){ ch.value = Math.max(0, dispo-retenue); ch.setAttribute('data-auto','1'); majNotePaiement(); }
+  else if (ch && retenue===0 && ch.getAttribute('data-auto')==='1'){ ch.value = ''; ch.removeAttribute('data-auto'); majNotePaiement(); }
   if (r>reste){ note.textContent = 'Le remboursement dépasse le reste dû sur le préfinancement ('+fmtNum(reste)+' FCFA).'; note.classList.add('rouge'); note.style.display = 'block'; }
   else if (ap>0 && r>dispo){ note.textContent = 'Le remboursement dépasse le montant restant à payer ('+fmtNum(dispo)+' FCFA).'; note.classList.add('rouge'); note.style.display = 'block'; }
   else if (r>0){ note.textContent = 'Chèque à émettre : '+fmtNum(Math.max(0, dispo-r))+' FCFA (montant restant à payer '+fmtNum(dispo)+' − remboursement '+fmtNum(r)+'). Reste dû sur le préfinancement après : '+fmtNum(reste-r)+' FCFA.'; note.style.display = 'block'; }
@@ -25811,21 +25824,23 @@ function _renderBrut(){
         + '<fieldset style="margin-top:12px;"><legend>À renseigner</legend>'
         + '<label class="field">Montant à payer (FCFA)<input type="number" step="1" min="0" name="pa_montant_a_payer" value="'+esc(aPayerDef)+'"'+(fixe ? ' readonly' : '')+' oninput="majNotePaiement();majRembPaiement()"></label>'
         + (m && m.montant!==null && !fixe && !edit ? '<span class="hint">Calculé par ORIGEN : (('+fmtNum(m.prixEntreeUsine)+' + '+fmtNum(m.tkm)+' TKM + '+fmtNum(m.commission)+' commission) × '+fmtNum(m.poids)+' kg) − '+fmtNum(m.retenueBic)+' retenue BIC = <b>'+fmtNum(m.montant)+' FCFA</b> <button type="button" class="lien-param" onclick="remplirChampPaiement(\'pa_montant_a_payer\','+m.montant+')">Utiliser ce montant</button></span>' : '')
-        + '<label class="field">Montant payé par ce chèque (FCFA)<input type="number" step="1" min="0" name="pa_montant_paye" value="'+esc(payeDef)+'" oninput="majNotePaiement()"></label>'
-        + '<span class="hint">Pour payer tout ce qui reste : <button type="button" class="lien-param" onclick="payerLeResteChamp()">Payer le reste</button></span>'
-        + '<div class="pa-note" id="pa-note" data-deja="'+deja+'" style="display:none;"></div>'
         + (function(){
             const ctx = prefRembContexte(a); if (!ctx) return '';
             const mode = a.pref_remb_mode || ((!edit && prefRembParDefaut(a)) ? 'total' : 'aucun'), mt = Number(a.pref_remb_montant)||0;
-            return '<fieldset style="margin-top:12px;" id="pa-remb" data-reste="'+ctx.reste+'"><legend>Remboursement du préfinancement</legend>'
-              + '<span class="hint">Reste dû sur le préfinancement de cette coopérative : <b>'+fmtNum(ctx.reste)+' FCFA</b>. Le montant remboursé est retenu sur ce paiement (il n\'est pas payé par chèque).</span>'
+            return '<fieldset style="margin-top:12px;border:2px solid var(--gold);border-radius:10px;" id="pa-remb" data-reste="'+ctx.reste+'"><legend>Préfinancement de la coopérative</legend>'
+              + '<div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:8px;"><span>Avances reçues <b>'+fmtNum(ctx.A)+'</b> FCFA</span><span>Déjà remboursé <b>'+fmtNum(ctx.A-ctx.reste)+'</b> FCFA</span><span>Reste dû <b>'+fmtNum(ctx.reste)+'</b> FCFA</span></div>'
+              + '<span class="hint">Le montant remboursé est retenu sur ce paiement : il n\'est pas payé par chèque.</span>'
               + '<label class="field">Modalité<select name="pa_remb_mode" onchange="majRembPaiement()">'
               + '<option value="aucun"'+(mode==='aucun'?' selected':'')+'>Aucun remboursement sur ce paiement</option>'
               + '<option value="total"'+(mode==='total'?' selected':'')+'>Rembourser tout le financement (dans la limite du montant à payer)</option>'
               + '<option value="partiel"'+(mode==='partiel'?' selected':'')+'>Rembourser une partie du financement</option></select></label>'
               + '<label class="field">Montant remboursé (FCFA)<input type="number" step="1" min="0" name="pa_remb_montant" value="'+(mt||'')+'" oninput="majRembPaiement(true)"></label>'
-              + '<div class="pa-note" id="pa-remb-note" style="display:none;"></div></fieldset>';
+              + '<div class="pa-note" id="pa-remb-note" style="display:none;"></div>'
+              + '<div id="pa-recap" style="display:none;margin-top:8px;padding:8px 10px;border-radius:8px;background:var(--surface-2);font-weight:600;"></div></fieldset>';
           })()
+        + '<label class="field">Montant payé par ce chèque (FCFA)<input type="number" step="1" min="0" name="pa_montant_paye" value="'+esc(payeDef)+'" oninput="this.removeAttribute(\'data-auto\');majNotePaiement()"></label>'
+        + '<span class="hint">Pour payer tout ce qui reste : <button type="button" class="lien-param" onclick="payerLeResteChamp()">Payer le reste</button></span>'
+        + '<div class="pa-note" id="pa-note" data-deja="'+deja+'" style="display:none;"></div>'
         + '<label class="field">Date du paiement (aujourd\'hui si laissée vide)<input type="date" name="pa_date" value="'+esc(edit && edit.date_paiement ? edit.date_paiement : '')+'"></label>'
         + '<label class="field">Banque<input type="text" name="pa_banque" list="pa-banques" value="'+esc(edit ? edit.banque||'' : '')+'" placeholder="ex : Ecobank"></label>'
         + '<datalist id="pa-banques">'+uniques('banque').map(b=>'<option value="'+esc(b)+'">').join('')+'</datalist>'
