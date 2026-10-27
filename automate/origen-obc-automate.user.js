@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.2.0
+// @version      0.2.1
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.2.0';
+  const VERSION = '0.2.1';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -554,32 +554,42 @@
     e.note = 'Connaissement ' + c.numero + ' (' + c.type_commodite + (c.certification ? ' ' + c.certification : '') + '), prix bord champ ' + c.prix_bord_champ + '.'; return 'rempli';
   }
   // Création d'une origine dans OBC (Agro › Paramétrage › Origine › Nouvelle origine) : ENTITE = ECORIGINE, LIBELLE ORIGINE = CODE = nom de la localité, PRIX UNITAIRE TKM = TKM du connaissement.
-  const modalOuverte = () => [...document.querySelectorAll('.modal')].find((m) => m.offsetParent !== null || /\bshow\b|\bin\b/.test(m.className));
+  const visible = (el) => !!el && (el.offsetParent !== null || getComputedStyle(el).display !== 'none') && getComputedStyle(el).visibility !== 'hidden';
+  const modalOuverte = () => [...document.querySelectorAll('.modal')].filter((m) => getComputedStyle(m).display !== 'none' && m.querySelector('input:not([type=hidden]), select')).pop() || null;
   function champParLibelle(modal, re) {
-    const lab = [...modal.querySelectorAll('label')].find((l) => re.test(N(l.textContent)));
+    const lab = [...modal.querySelectorAll('label, .control-label')].find((l) => re.test(N(l.textContent)));
     if (!lab) return null;
     const direct = lab.htmlFor && modal.querySelector('#' + CSS.escape(lab.htmlFor)); if (direct) return direct;
-    let n = lab.parentElement; for (let k = 0; k < 3 && n; k++, n = n.parentElement) { const c = n.querySelector('input:not([type=hidden]), select, textarea'); if (c) return c; }
+    let n = lab.parentElement; for (let k = 0; k < 3 && n; k++, n = n.parentElement) { const c = n.querySelector('input:not([type=hidden]):not([type=search]), select, textarea'); if (c) return c; }
     return null;
   }
+  // Champs du formulaire « Nouvelle origine » : par libellé, sinon dans l'ordre (entité, libellé, code, TKM).
+  function champsOrigine(modal) {
+    const sels = [...modal.querySelectorAll('select')];
+    const txt = [...modal.querySelectorAll('input')].filter((x) => !/hidden|search|checkbox|radio|button|submit/i.test(x.type) && !x.closest('.bootstrap-select'));
+    return { ent: champParLibelle(modal, /^ENTITE/) || sels[0] || null, lib: champParLibelle(modal, /^LIBELLE/) || txt[0] || null, code: champParLibelle(modal, /^CODE$/) || txt[1] || null, prix: champParLibelle(modal, /PRIX UNITAIRE|TKM/) || txt[2] || null };
+  }
+  const memoOrigines = () => lireFile().origines || [];
+  function memoriserOrigine(nom) { const f = lireFile(); f.origines = [...new Set((f.origines || []).concat([N(nom)]))]; ecrireFile(f); }
+  // etapeRetour : 'suite' quand l'origine est faite en tout début de lot (on enchaîne sur l'étape 1) ; sinon retour à la page des données livraison.
   async function sousEtapeOrigine(e) {
     const nom = String(e.lot.connaissement.origine || '').trim().toUpperCase(), tkm = num(e.lot.connaissement.tkm);
     if (!/ParametrageOrigine/i.test(location.pathname)) { location.href = '/AgroParametrage/ParametrageOrigine'; return 'navigation'; }
     const existe = () => [...document.querySelectorAll('table tbody td')].some((td) => N(td.textContent) === N(nom));
-    await attendre(() => document.querySelector('table tbody tr'), 15000, 400); await dormir(800);
-    const retour = () => { e.sous = null; ecrireEtat(e); journal(e, 'Origine « ' + nom + ' » prête dans OBC'); location.href = PAGES[7]; return 'navigation'; };
-    if (existe()) return retour();
+    await attendre(() => document.querySelector('table tbody tr') || /aucun|no data|pas de donn/i.test(document.body.innerText), 15000, 400); await dormir(1000);
+    const fin = () => { memoriserOrigine(nom); e.sous = null; e.origineOk = true; ecrireEtat(e); journal(e, 'Origine « ' + nom + ' » prête dans OBC'); if (e.etape === 1) return 'suite'; location.href = PAGES[7]; return 'navigation'; };
+    if (existe()) return fin();
     if (!modalOuverte()) {
-      const btn = [...document.querySelectorAll('a, button')].filter((b) => b.offsetParent !== null && !b.closest('#origen-obc') && !b.closest('.modal'))
-        .find((b) => /Origine\/Create|Origine\/Add/i.test(b.getAttribute('href') || '') || /^\s*\+?\s*(nouveau|nouvelle|ajouter|creer)/i.test(N(b.textContent).toLowerCase()) || /\bnouv/i.test(b.id));
-      if (!btn) throw new Error('Bouton « Nouveau » introuvable sur la page des origines d\'OBC : crée l\'origine « ' + nom + ' » à la main (ENTITE ECORIGINE, libellé = code = ' + nom + ', TKM ' + tkm + '), puis « Continuer ».');
-      btn.click();
+      const cands = [...document.querySelectorAll('a, button')].filter((b) => visible(b) && !b.closest('#origen-obc') && !b.closest('.modal'));
+      const btn = cands.find((b) => /Origine\/Create|Origine\/Add/i.test(b.getAttribute('href') || '')) || cands.find((b) => /^(NOUVEAU|NOUVELLE|AJOUTER|CREER)\b/.test(N(b.textContent))) || cands.find((b) => /nouv|create|add/i.test(b.id));
+      if (!btn) throw new Error('Bouton « Nouveau » introuvable sur la page des origines. Boutons vus : ' + cands.map((b) => (b.textContent || '').trim().slice(0, 20)).filter(Boolean).slice(0, 15).join(' | '));
+      journal(e, 'Origine : clic sur « ' + (btn.textContent || btn.id || '').trim().slice(0, 30) + ' »'); btn.click();
     }
-    const modal = await attendre(() => { const m = modalOuverte(); return m && champParLibelle(m, /^LIBELLE/) ? m : null; }, 12000, 300);
-    if (!modal) throw new Error('Le formulaire « Nouvelle origine » ne s\'est pas ouvert');
-    await dormir(600);
-    const ent = champParLibelle(modal, /^ENTITE/), lib = champParLibelle(modal, /^LIBELLE/), code = champParLibelle(modal, /^CODE$/), prix = champParLibelle(modal, /PRIX UNITAIRE TKM|^TKM|PRIX UNITAIRE/);
-    if (!lib || !code || !prix) throw new Error('Formulaire « Nouvelle origine » : case introuvable (' + [!lib && 'libellé', !code && 'code', !prix && 'TKM'].filter(Boolean).join(', ') + ')');
+    const modal = await attendre(() => modalOuverte(), 25000, 300);
+    if (!modal) throw new Error('Le formulaire « Nouvelle origine » ne s\'est pas ouvert (aucune fenêtre visible après le clic)');
+    await attendre(() => { const c = champsOrigine(modal); return c.lib && c.code && c.prix; }, 8000, 300); await dormir(600);
+    const { ent, lib, code, prix } = champsOrigine(modal);
+    if (!lib || !code || !prix) throw new Error('Formulaire « Nouvelle origine » : cases introuvables (libellé ' + !!lib + ', code ' + !!code + ', TKM ' + !!prix + '). Contenu : ' + modal.innerText.replace(/\s+/g, ' ').slice(0, 160));
     if (ent && ent.tagName === 'SELECT') { await setSelectTexte(ent, /^ECORIGINE/i, 'Entité'); await dormir(500); }
     setInput(lib, nom); setInput(code, nom); setInput(prix, tkm);
     await dormir(400);
@@ -592,7 +602,7 @@
     } else { e.note = 'Origine « ' + nom + ' » remplie : clique « Enregistrer » dans OBC.'; ecrireEtat(e); afficherEtat(); }
     const ok = await attendre(() => existe(), auto ? 25000 : 300000, 500);
     if (!ok) throw new Error('Origine « ' + nom + ' » non enregistrée. ' + erreurVisible());
-    return retour();
+    return fin();
   }
   async function etapeLivraison(e) {
     const lot = e.lot;
@@ -759,6 +769,20 @@
           ecrireEtat(e); afficherEtat(); setTimeout(boucle, 4000); return;
         }
         if (e.statut === 'verifier') e.statut = 'a_faire';
+        // Pré-contrôle en tout début de lot : l'origine du camion existe-t-elle dans OBC ? Sinon on la crée AVANT toute autre saisie.
+        if (e.enFile && e.etape === 1 && !e.origineOk && !e.sous) {
+          const nomO = String(e.lot.connaissement.origine || '').trim();
+          if (!nomO || memoOrigines().includes(N(nomO))) { e.origineOk = true; } else { e.sous = 'origine'; }
+          ecrireEtat(e);
+        }
+        if (e.sous === 'origine') {
+          try { const r = await sousEtapeOrigine(e); if (r === 'navigation') return; continue; }
+          catch (err) {
+            const msg = err && err.message ? err.message : String(err);
+            if (e.enFile) { if (transitoire(msg) && (e.retries || 0) < 30) { e.retries = (e.retries || 0) + 1; journal(e, 'Erreur passagère, nouvel essai dans 20 s : ' + msg); setTimeout(boucle, 20000); return; } e.etape = e.etape; await echecLot(e, 'origine : ' + msg); return; }
+            e.erreur = 'Origine : ' + msg; journal(e, 'Erreur : ' + e.erreur); return;
+          }
+        }
         e.erreur = null; ecrireEtat(e); afficherEtat();
         let res;
         try { res = await EXEC[e.etape - 1](e); }
