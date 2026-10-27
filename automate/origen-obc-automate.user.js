@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.37
+// @version      0.1.38
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.37';
+  const VERSION = '0.1.38';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const ENTITE = '1';                 // ECORIGINE
@@ -390,7 +390,7 @@
   }
   async function etapeBrousse(e) {
     const lot = e.lot;
-    if (!e.ids.campagne_id) e.ids.campagne_id = await campagneId(lot);
+    if (!e.ids.campagne_id) { journal(e, 'Recherche de la campagne dans OBC…'); e.ids.campagne_id = await campagneId(lot); journal(e, 'Campagne trouvée'); }
     if (await existeUsine(e) || await existePesee(e) || await existeBrousse(e)) { e.fait[7] = 'déjà dans OBC'; journal(e, 'Connaissement brousse déjà saisi'); return 'suivant'; }
     if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
     const f = await ouvrirFormulaire(7); if (!f) return 'navigation';
