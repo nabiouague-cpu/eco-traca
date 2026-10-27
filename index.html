@@ -4396,7 +4396,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-27-322';
+const APP_VERSION = '2026-10-27-323';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -23257,7 +23257,7 @@ async function ouvrirPaiement(achatId, paiementId){
 // (même règle que le bordereau). Elle reste modifiable : « Aucun » ou « Une partie ».
 function prefRembParDefaut(a){
   const ctx = prefRembContexte(a); if (!ctx || !(ctx.reste>0)) return false;
-  return (state.prefinancements||[]).some(p=>p.cooperative_id===a.cooperative_id && p.type_avance==='revolving' && /total/i.test(p.mode_remboursement||'total') && (!a.campagne_id || p.campagne_id===a.campagne_id));
+  return prefsPourAchat(a).some(p=>p.type_avance==='revolving' && /total/i.test(p.mode_remboursement||'total'));
 }
 function remplirChampPaiement(nom, valeur){ const e = document.querySelector('[name="'+nom+'"]'); if (e && !e.readOnly){ e.value = valeur; majNotePaiement(); if (nom==='pa_montant_a_payer') majRembPaiement(); } }
 function payerLeResteChamp(){
@@ -23282,16 +23282,20 @@ function majNotePaiement(){
 // « valeur totale du poids net livré » de la coopérative est retenue dans la limite du reste dû et du net à payer (même règle que le formulaire de paiement).
 function revolvingPourBordereau(a, aPayerAvant){
   if (a.pref_remb_mode) return a.pref_remb_mode!=='aucun' ? (Number(a.pref_remb_montant)||0) : 0;
-  const prefs = (state.prefinancements||[]).filter(p=>p.cooperative_id===a.cooperative_id && p.type_avance==='revolving' && /total/i.test(p.mode_remboursement||'total') && (!a.campagne_id || p.campagne_id===a.campagne_id));
+  const prefs = prefsPourAchat(a).filter(p=>p.type_avance==='revolving' && /total/i.test(p.mode_remboursement||'total'));
   if (!prefs.length) return 0;
   const A = prefs.reduce((s,p)=>s+(Number(p.montant)||0),0);
   const deja = (state.achats||[]).filter(x=>x.id!==a.id && x.cooperative_id===a.cooperative_id && (!a.campagne_id || x.campagne_id===a.campagne_id)).reduce((s,x)=>s+(Number(x.pref_remb_montant)||0),0);
   return Math.max(0, Math.min(A-deja, Math.round(aPayerAvant)));
 }
 // Remboursement du prefinancement au moment du paiement d'une livraison : tout le financement (dans la limite du montant a payer) ou une partie.
+// Avances qu'une livraison peut rembourser : celles faites AVANT cette livraison (une avance plus récente finance les livraisons à venir, pas celle-ci).
+function prefsPourAchat(a){
+  return (state.prefinancements||[]).filter(p=>p.cooperative_id===a.cooperative_id && (!a.campagne_id || p.campagne_id===a.campagne_id) && (!a.date || !p.date_financement || String(p.date_financement)<=String(a.date)));
+}
 function prefRembContexte(a){
   if (!a || !a.cooperative_id) return null;
-  const prefs = (state.prefinancements||[]).filter(p=>p.cooperative_id===a.cooperative_id && (!a.campagne_id || p.campagne_id===a.campagne_id));
+  const prefs = prefsPourAchat(a);
   if (!prefs.length) return null;
   const A = prefs.reduce((t,p)=>t+(Number(p.montant)||0),0);
   const deja = (state.achats||[]).filter(x=>x.id!==a.id && x.cooperative_id===a.cooperative_id && (!a.campagne_id || x.campagne_id===a.campagne_id)).reduce((t,x)=>t+(Number(x.pref_remb_montant)||0),0);
@@ -25837,8 +25841,8 @@ function _renderBrut(){
             const mode = a.pref_remb_mode || ((!edit && prefRembParDefaut(a)) ? 'total' : 'aucun'), mt = Number(a.pref_remb_montant)||0;
             return '<fieldset style="margin-top:12px;border:2px solid var(--gold);border-radius:10px;" id="pa-remb" data-reste="'+ctx.reste+'"><legend>Préfinancement de la coopérative</legend>'
               + (ctx.derniere ? '<div style="font-size:15px;margin-bottom:6px;">Avance faite : <b>'+fmtNum(ctx.derniere.montant)+' FCFA</b>'+(ctx.derniere.date?' le '+new Date(ctx.derniere.date+'T00:00:00').toLocaleDateString('fr-FR'):'')+(ctx.derniere.numero?' · '+esc(ctx.derniere.numero):'')+(ctx.nb>1?' <span class="hint">('+ctx.nb+' avances au total)</span>':'')+'</div>' : '')
-              + '<div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:8px;"><span>Avances reçues <b>'+fmtNum(ctx.A)+'</b> FCFA</span><span>Déjà remboursé <b>'+fmtNum(ctx.A-ctx.reste)+'</b> FCFA</span><span>Reste dû <b>'+fmtNum(ctx.reste)+'</b> FCFA</span></div>'
-              + '<span class="hint">Le montant remboursé est retenu sur ce paiement : il n\'est pas payé par chèque.</span>'
+              + '<div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:8px;"><span>Avances antérieures <b>'+fmtNum(ctx.A)+'</b> FCFA</span><span>Déjà remboursé <b>'+fmtNum(ctx.A-ctx.reste)+'</b> FCFA</span><span>Reste dû <b>'+fmtNum(ctx.reste)+'</b> FCFA</span></div>'
+              + '<span class="hint">Seules les avances faites avant cette livraison sont prises en compte (une avance plus récente finance les livraisons à venir). Le montant remboursé est retenu sur ce paiement : il n\'est pas payé par chèque.</span>'
               + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;"><button type="button" class="btn'+(mode==='total'?' btn-primary':'')+'" data-rm="total" onclick="choisirRembPaiement(\'total\')">✅ Déduire l\'avance</button>'
               + '<button type="button" class="btn'+(mode==='aucun'?' btn-primary':'')+'" data-rm="aucun" onclick="choisirRembPaiement(\'aucun\')">⏸ Laisser (ne pas déduire)</button>'
               + '<button type="button" class="btn'+(mode==='partiel'?' btn-primary':'')+'" data-rm="partiel" onclick="choisirRembPaiement(\'partiel\')">Déduire une partie…</button></div>'
