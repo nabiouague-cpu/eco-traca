@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.52
+// @version      0.2.0
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,9 +14,11 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.52';
+  const VERSION = '0.2.0';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
+  const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
+  const CLE_FILE = 'origen_obc_file';
   const ENTITE = '1';                 // ECORIGINE
   const ATTENTE_MAX = 20000;
   const NB_ETAPES = 10;
@@ -46,6 +48,78 @@
   function effacerEtat() { localStorage.removeItem(CLE); }
   function journal(e, texte) { e.journal = (e.journal || []).concat([new Date().toLocaleTimeString('fr-FR') + ' ' + texte]).slice(-60); ecrireEtat(e); afficherEtat(); }
 
+  // ---------- file d'attente ORIGEN ----------
+  function lireFile() { try { return JSON.parse(localStorage.getItem(CLE_FILE) || 'null') || {}; } catch (e) { return {}; } }
+  function ecrireFile(f) { localStorage.setItem(CLE_FILE, JSON.stringify(f)); }
+  async function api(action, data) {
+    let derniere = null;
+    for (let essai = 0; essai < 3; essai++) {
+      try {
+        const r = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ token: lireFile().token, action }, data || {})) });
+        const j = await r.json().catch(() => ({}));
+        if (r.status === 401) throw new Error('Code de liaison invalide : copie-le à nouveau depuis ORIGEN (onglet Saisie OBC › 🔑 Code de liaison)');
+        if (!r.ok) throw new Error(j.erreur || 'HTTP ' + r.status);
+        return j;
+      } catch (err) { derniere = err; if (/Code de liaison/.test(err.message)) throw err; await dormir(2500); }
+    }
+    throw new Error('ORIGEN injoignable (' + (derniere && derniere.message ? derniere.message : 'réseau') + ')');
+  }
+  async function rapporter(achatId, statut, message, numero) {
+    for (let i = 0; i < 5; i++) { try { await api('resultat', { achat_id: achatId, statut, message, bordereau_numero: numero }); return true; } catch (err) { if (/Code de liaison/.test(err.message)) break; await dormir(4000); } }
+    const f = lireFile(); f.enAttenteRapport = (f.enAttenteRapport || []).concat([{ achat_id: achatId, statut, message, bordereau_numero: numero }]); ecrireFile(f); return false;
+  }
+  async function viderRapports() {
+    const f = lireFile(); const l = f.enAttenteRapport || []; if (!l.length) return;
+    f.enAttenteRapport = []; ecrireFile(f);
+    for (const r of l) await rapporter(r.achat_id, r.statut, r.message, r.bordereau_numero);
+  }
+  const fileActive = () => !!lireFile().actif;
+  const transitoire = (m) => /session OBC expirée|ne répond pas|Failed to fetch|NetworkError|HTTP 5\d\d|Connecte-toi/i.test(m || '');
+  async function suivantFile() {
+    const f = lireFile(); if (!f.actif || f.pause) return false;
+    await viderRapports();
+    let r;
+    try { r = await api('prochain'); }
+    catch (err) { const g = lireFile(); g.erreurApi = err.message; if (/Code de liaison/.test(err.message)) g.actif = false; else setTimeout(boucle, 20000); ecrireFile(g); afficherFile(); return false; }
+    const g = lireFile();
+    if (!r.lot) { g.actif = false; g.erreurApi = null; g.dernier = 'File terminée : ' + (g.saisis || 0) + ' saisi(s), ' + (g.echecs || 0) + ' échec(s). Les résultats sont dans ORIGEN › Saisie OBC.'; ecrireFile(g); afficherFile(); return false; }
+    g.erreurApi = null; ecrireFile(g);
+    ecrireEtat({ v10: true, lot: r.lot, etape: 1, statut: 'a_faire', ids: {}, fait: {}, journal: [], pause: false, erreur: null, note: '', enFile: true });
+    afficherEtat(); afficherFile(); return true;
+  }
+  async function finLotFile(e) {
+    const f = lireFile(); const num = (e.lot.bordereau && e.lot.bordereau.numero) || '';
+    await rapporter(e.lot.achat_id, 'saisi', '', num);
+    f.saisis = (f.saisis || 0) + 1; f.consecutifs = 0; ecrireFile(f);
+    effacerEtat(); afficherEtat(); afficherFile(); setTimeout(boucle, 600);
+  }
+  async function echecLot(e, msg) {
+    const f = lireFile(); const texte = ETAPES[e.etape - 1] + ' : ' + msg;
+    await rapporter(e.lot.achat_id, 'echec', texte, '');
+    f.echecs = (f.echecs || 0) + 1; f.consecutifs = (f.consecutifs || 0) + 1;
+    if (f.consecutifs >= 3) { f.actif = false; f.dernier = 'File arrêtée : 3 échecs de suite. Dernier : ' + texte; }
+    ecrireFile(f); effacerEtat(); afficherEtat(); afficherFile(); setTimeout(boucle, 600);
+  }
+  // Bouton « Enregistrer » du formulaire de l'étape k (dans la fenêtre modale qui le contient).
+  function boutonEnregistrer(k) {
+    const f = q(FORMS[k - 1]); const zone = (f && f.closest('.modal')) || document;
+    const cand = [...zone.querySelectorAll('button, input[type=submit], input[type=button], a.btn')].filter((b) => b.offsetParent !== null && /enregistrer/i.test(b.textContent || b.value || ''));
+    return cand.find((b) => /btn(Create|Save|Add)/i.test(b.id)) || cand[0] || null;
+  }
+  function erreurVisible() { return [...document.querySelectorAll('.toast-error .toast-message, .toast-error, .alert-danger, .swal2-html-container, .field-validation-error, .validation-summary-errors')].filter((x) => x.offsetParent !== null).map((x) => x.textContent.trim()).filter(Boolean).slice(0, 2).join(' | ').slice(0, 220); }
+  // Si OBC demande une confirmation après « Enregistrer » (boîte SweetAlert / Bootbox), on l'accepte.
+  function confirmerBoite() { let n = 0; const t = setInterval(() => { const b = [...document.querySelectorAll('.swal2-confirm, .swal-button--confirm, .bootbox-accept, .sweet-alert .confirm')].find((x) => x.offsetParent !== null); if (b) { clearInterval(t); try { b.click(); } catch (er) { /* ignoré */ } } if (++n > 12) clearInterval(t); }, 400); }
+  async function enregistrerAuto(e) {
+    if (/⚠/.test(e.note || '')) { await echecLot(e, 'contrôle non concordant, rien n\'a été enregistré. ' + e.note); return false; }
+    const b = await attendre(() => boutonEnregistrer(e.etape), 8000, 300);
+    if (!b) { await echecLot(e, 'bouton « Enregistrer » introuvable'); return false; }
+    await attendre(() => !b.disabled, 6000, 300);
+    if (b.disabled) { await echecLot(e, 'bouton « Enregistrer » inactif (champ obligatoire non rempli). ' + erreurVisible()); return false; }
+    e.t_save = Date.now(); e.cliques = (e.cliques || 0) + 1; ecrireEtat(e);
+    journal(e, ETAPES[e.etape - 1] + ' : enregistrement automatique');
+    b.click(); confirmerBoite(); return true;
+  }
+
   // ---------- panneau ----------
   let panneau, zoneTexte, zoneEtat;
   function creerPanneau() {
@@ -56,6 +130,12 @@
     panneau.innerHTML = '<div style="background:#0E3B36;color:#fff;padding:10px 14px;border-radius:12px 12px 0 0;font-weight:700;display:flex;justify-content:space-between;align-items:center;cursor:move;" id="oo-tete"><span>ORIGEN → OBC <small style="font-weight:400;opacity:.75">v' + VERSION + '</small></span><span id="oo-ferme" style="cursor:pointer;opacity:.8;">✕</span></div>'
       + '<div style="padding:12px 14px;">'
       + '<div id="oo-etat" style="margin-bottom:10px;white-space:pre-wrap;max-height:260px;overflow:auto;"></div>'
+      + '<div id="oo-file" style="border:1px solid #cfd8d4;border-radius:8px;padding:8px;margin-bottom:8px;background:#f6faf8;">'
+      + '<div style="font-weight:700;">🤖 File ORIGEN <span id="oo-file-etat" style="font-weight:400;color:#5b6b68;"></span></div>'
+      + '<input id="oo-token" placeholder="Code de liaison (ORIGEN › Saisie OBC › 🔑) — une seule fois" style="width:100%;box-sizing:border-box;border:1px solid #cfd8d4;border-radius:6px;padding:5px;margin:6px 0;font:12px monospace;">'
+      + '<label style="display:flex;gap:6px;align-items:center;margin-bottom:6px;"><input type="checkbox" id="oo-auto" checked> Enregistrer automatiquement</label>'
+      + '<button id="oo-file-go" style="background:#0E3B36;color:#fff;border:0;border-radius:8px;padding:8px 12px;font-weight:700;cursor:pointer;">▶ Lancer la file</button> '
+      + '<button id="oo-file-stop" style="background:#fff;border:1px solid #cfd8d4;border-radius:8px;padding:8px 12px;cursor:pointer;">⏹ Arrêter la file</button></div>'
       + '<textarea id="oo-lot" placeholder="Colle ici le lot copié depuis ORIGEN (bouton « Saisir dans OBC »)" style="width:100%;box-sizing:border-box;height:60px;border:1px solid #cfd8d4;border-radius:8px;padding:6px;font:12px monospace;"></textarea>'
       + '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">'
       + '<button id="oo-demarrer" style="background:#F2B705;border:0;border-radius:8px;padding:8px 12px;font-weight:700;cursor:pointer;">Démarrer</button>'
@@ -77,6 +157,15 @@
     onglet.ondblclick = () => { rouvrir(); panneau.style.left = 'auto'; panneau.style.right = '12px'; panneau.style.top = '60px'; };
     panneau.querySelector('#oo-ferme').onclick = ranger;
     panneau.querySelector('#oo-demarrer').onclick = demarrer;
+    panneau.querySelector('#oo-file-go').onclick = async () => {
+      const f = lireFile(); const t = panneau.querySelector('#oo-token').value.trim(); if (t) f.token = t;
+      if (!f.token) { alert('Colle d\'abord le code de liaison (ORIGEN › Saisie OBC › 🔑 Code de liaison).'); return; }
+      f.auto = panneau.querySelector('#oo-auto').checked; f.actif = true; f.pause = false; f.saisis = 0; f.echecs = 0; f.consecutifs = 0; f.dernier = ''; f.erreurApi = null; ecrireFile(f);
+      try { await api('liberer'); } catch (err) { f.actif = false; f.erreurApi = err.message; ecrireFile(f); afficherFile(); return; }
+      afficherFile(); boucle();
+    };
+    panneau.querySelector('#oo-file-stop').onclick = () => { const f = lireFile(); f.actif = false; ecrireFile(f); afficherFile(); };
+    panneau.querySelector('#oo-auto').onchange = (ev) => { const f = lireFile(); f.auto = ev.target.checked; ecrireFile(f); };
     panneau.querySelector('#oo-continuer').onclick = () => { const e = lireEtat(); if (!e) return; e.pause = false; e.erreur = null; if (e.statut === 'attente_enregistrement') e.statut = 'verifier'; ecrireEtat(e); boucle(); };
     panneau.querySelector('#oo-pause').onclick = () => { const e = lireEtat(); if (!e) return; e.pause = !e.pause; ecrireEtat(e); afficherEtat(); if (!e.pause) boucle(); };
     panneau.querySelector('#oo-journal').onclick = () => { const e = lireEtat(); navigator.clipboard.writeText(JSON.stringify({ origen_obc_journal: true, etape: e && e.etape, statut: e && e.statut, ids: e && e.ids, journal: e && e.journal }, null, 1)); };
@@ -86,7 +175,13 @@
     tete.onmousedown = (ev) => { drag = true; dx = ev.clientX - panneau.offsetLeft; dy = ev.clientY - panneau.offsetTop; ev.preventDefault(); };
     document.addEventListener('mousemove', (ev) => { if (!drag) return; panneau.style.left = Math.max(0, Math.min(innerWidth - 120, ev.clientX - dx)) + 'px'; panneau.style.top = Math.max(0, Math.min(innerHeight - 40, ev.clientY - dy)) + 'px'; panneau.style.right = 'auto'; });
     document.addEventListener('mouseup', () => { drag = false; });
-    afficherEtat();
+    afficherEtat(); afficherFile();
+  }
+  function afficherFile() {
+    const z = document.getElementById('oo-file-etat'); if (!z) return; const f = lireFile();
+    const tok = document.getElementById('oo-token'); if (tok) tok.style.display = f.token ? 'none' : '';
+    const auto = document.getElementById('oo-auto'); if (auto && f.auto === false) auto.checked = false;
+    z.innerHTML = (f.actif ? '<b style="color:#1f7a4d">en marche</b> — ' + (f.saisis || 0) + ' saisi(s), ' + (f.echecs || 0) + ' échec(s)' : 'arrêtée' + (f.token ? ' — liaison ✓' : '')) + (f.erreurApi ? '<div style="color:#B3261E">⚠ ' + f.erreurApi + '</div>' : '') + (f.dernier ? '<div style="color:#0E3B36;font-weight:700">' + f.dernier + '</div>' : '');
   }
   function afficherEtat() {
     if (!zoneEtat) return;
@@ -458,9 +553,51 @@
       if (mt > 0 && [ligne, hs, hp, hm].some((el) => el && vide(el))) throw new Error('OBC n\'a pas calculé le montant ou les totaux du connaissement (sacs, poids, montant) : ne pas enregistrer. Vérifie les cases à la main.'); }
     e.note = 'Connaissement ' + c.numero + ' (' + c.type_commodite + (c.certification ? ' ' + c.certification : '') + '), prix bord champ ' + c.prix_bord_champ + '.'; return 'rempli';
   }
+  // Création d'une origine dans OBC (Agro › Paramétrage › Origine › Nouvelle origine) : ENTITE = ECORIGINE, LIBELLE ORIGINE = CODE = nom de la localité, PRIX UNITAIRE TKM = TKM du connaissement.
+  const modalOuverte = () => [...document.querySelectorAll('.modal')].find((m) => m.offsetParent !== null || /\bshow\b|\bin\b/.test(m.className));
+  function champParLibelle(modal, re) {
+    const lab = [...modal.querySelectorAll('label')].find((l) => re.test(N(l.textContent)));
+    if (!lab) return null;
+    const direct = lab.htmlFor && modal.querySelector('#' + CSS.escape(lab.htmlFor)); if (direct) return direct;
+    let n = lab.parentElement; for (let k = 0; k < 3 && n; k++, n = n.parentElement) { const c = n.querySelector('input:not([type=hidden]), select, textarea'); if (c) return c; }
+    return null;
+  }
+  async function sousEtapeOrigine(e) {
+    const nom = String(e.lot.connaissement.origine || '').trim().toUpperCase(), tkm = num(e.lot.connaissement.tkm);
+    if (!/ParametrageOrigine/i.test(location.pathname)) { location.href = '/AgroParametrage/ParametrageOrigine'; return 'navigation'; }
+    const existe = () => [...document.querySelectorAll('table tbody td')].some((td) => N(td.textContent) === N(nom));
+    await attendre(() => document.querySelector('table tbody tr'), 15000, 400); await dormir(800);
+    const retour = () => { e.sous = null; ecrireEtat(e); journal(e, 'Origine « ' + nom + ' » prête dans OBC'); location.href = PAGES[7]; return 'navigation'; };
+    if (existe()) return retour();
+    if (!modalOuverte()) {
+      const btn = [...document.querySelectorAll('a, button')].filter((b) => b.offsetParent !== null && !b.closest('#origen-obc') && !b.closest('.modal'))
+        .find((b) => /Origine\/Create|Origine\/Add/i.test(b.getAttribute('href') || '') || /^\s*\+?\s*(nouveau|nouvelle|ajouter|creer)/i.test(N(b.textContent).toLowerCase()) || /\bnouv/i.test(b.id));
+      if (!btn) throw new Error('Bouton « Nouveau » introuvable sur la page des origines d\'OBC : crée l\'origine « ' + nom + ' » à la main (ENTITE ECORIGINE, libellé = code = ' + nom + ', TKM ' + tkm + '), puis « Continuer ».');
+      btn.click();
+    }
+    const modal = await attendre(() => { const m = modalOuverte(); return m && champParLibelle(m, /^LIBELLE/) ? m : null; }, 12000, 300);
+    if (!modal) throw new Error('Le formulaire « Nouvelle origine » ne s\'est pas ouvert');
+    await dormir(600);
+    const ent = champParLibelle(modal, /^ENTITE/), lib = champParLibelle(modal, /^LIBELLE/), code = champParLibelle(modal, /^CODE$/), prix = champParLibelle(modal, /PRIX UNITAIRE TKM|^TKM|PRIX UNITAIRE/);
+    if (!lib || !code || !prix) throw new Error('Formulaire « Nouvelle origine » : case introuvable (' + [!lib && 'libellé', !code && 'code', !prix && 'TKM'].filter(Boolean).join(', ') + ')');
+    if (ent && ent.tagName === 'SELECT') { await setSelectTexte(ent, /^ECORIGINE/i, 'Entité'); await dormir(500); }
+    setInput(lib, nom); setInput(code, nom); setInput(prix, tkm);
+    await dormir(400);
+    const auto = e.enFile && lireFile().auto !== false;
+    const bt = () => [...modal.querySelectorAll('button, input[type=submit]')].find((b) => /enregistrer/i.test(b.textContent || b.value || ''));
+    if (auto) {
+      const b = await attendre(() => { const x = bt(); return x && !x.disabled ? x : null; }, 6000, 300);
+      if (!b) throw new Error('Bouton « Enregistrer » de la nouvelle origine inactif ou introuvable. ' + erreurVisible());
+      journal(e, 'Origine « ' + nom + ' » : enregistrement automatique'); b.click(); confirmerBoite();
+    } else { e.note = 'Origine « ' + nom + ' » remplie : clique « Enregistrer » dans OBC.'; ecrireEtat(e); afficherEtat(); }
+    const ok = await attendre(() => existe(), auto ? 25000 : 300000, 500);
+    if (!ok) throw new Error('Origine « ' + nom + ' » non enregistrée. ' + erreurVisible());
+    return retour();
+  }
   async function etapeLivraison(e) {
     const lot = e.lot;
     { const [u, p] = await Promise.all([existeUsine(e), existePesee(e)]); if (u || p) { e.fait[8] = 'déjà dans OBC'; journal(e, 'Données livraison déjà saisies'); return 'suivant'; } }
+    if (e.sous === 'origine') return sousEtapeOrigine(e);
     if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
     const f = await ouvrirFormulaire(8); if (!f) return 'navigation';
     const c = lot.connaissement;
@@ -480,7 +617,15 @@
       const cb = q('#txtconnaissement_brousse_idAdd'); if (cb && !cb.value) { await setSelectTexte(cb, c.numero, 'Connaissement brousse'); await dormir(1200); } }
     setInput(q('#txtconnaissement_usine_dateAdd'), isoDate(c.date));
     if (!q('#txtconnaissement_usine_numeroAdd').value) setInput(q('#txtconnaissement_usine_numeroAdd'), c.numero);
-    await setSelectTexte(q('#txtorigine_idAdd'), exact(c.origine), 'Origine', c.origine);
+    { const selO = q('#txtorigine_idAdd'), oO = await attendre(() => optionParTexte(selO, exact(c.origine)), 6000, 300);
+      if (!oO) {
+        // L'origine n'existe pas encore dans OBC (référentiel à part) : on la crée (entité ECORIGINE, libellé = code = localité, TKM du connaissement), puis on revient ici.
+        if (!c.origine) throw new Error('Origine du connaissement vide dans ORIGEN');
+        if (e.origineEssayee) throw new Error('Origine « ' + c.origine + ' » toujours absente de la liste après sa création');
+        e.origineEssayee = true; e.sous = 'origine'; ecrireEtat(e); journal(e, 'Origine « ' + c.origine + ' » absente d\'OBC : création');
+        location.href = '/AgroParametrage/ParametrageOrigine'; return 'navigation';
+      }
+      setSelect(selO, oO.value); }
     setInput(q('#txtconnaissement_usine_cout_tkmAdd'), num(c.tkm));
     await setSelectTexte(q('#txtdestination_idAdd'), exact(c.destination), 'Destination', c.destination);
     const nomTr = e.ids.transporteur_nom || e.ids.transporteur_nouveau; if (nomTr) await setSelectTexte(q('#txttransporteur_idAdd'), exact(nomTr), 'Transporteur', nomTr);
@@ -586,27 +731,51 @@
     if (enCours) return; enCours = true;
     try {
       let e = lireEtat();
+      if ((!e || e.statut === 'termine') && fileActive()) { if (!(await suivantFile())) return; e = lireEtat(); }
       if (!e || e.pause || e.statut === 'termine') return;
       if (!connecte()) { e.erreur = 'Connecte-toi à OBC, puis « Continuer ».'; ecrireEtat(e); afficherEtat(); return; }
       for (let garde = 0; garde < 25; garde++) {
         e = lireEtat(); if (!e || e.pause) return;
-        if (e.etape > NB_ETAPES) { try { const r = await existeBordereau(e); const lien = r && r.tr && r.tr.querySelector('a[href*="RptAgroAchatBordereauReceptionViewer"]'); if (lien) e.urlImpression = lien.getAttribute('href'); } catch (er) { /* lien facultatif */ } e.statut = 'termine'; e.note = 'Dans ORIGEN, sous cette livraison, clique « déjà saisi » pour la marquer OBC ✓ (n° de bordereau : ' + (e.lot.bordereau && e.lot.bordereau.numero || '') + ').'; ecrireEtat(e); afficherEtat(); if (e.lot && e.lot.achat_id && !e.imprime) { e.imprime = true; ecrireEtat(e); setTimeout(() => { location.href = ORIGEN_URL + '#bordereau=' + encodeURIComponent(e.lot.achat_id); }, 2000); } return; }
+        if (e.etape > NB_ETAPES) {
+          if (e.enFile) { await finLotFile(e); return; }
+          try { const r = await existeBordereau(e); const lien = r && r.tr && r.tr.querySelector('a[href*="RptAgroAchatBordereauReceptionViewer"]'); if (lien) e.urlImpression = lien.getAttribute('href'); } catch (er) { /* lien facultatif */ } e.statut = 'termine'; e.note = 'Dans ORIGEN, sous cette livraison, clique « déjà saisi » pour la marquer OBC ✓ (n° de bordereau : ' + (e.lot.bordereau && e.lot.bordereau.numero || '') + ').'; ecrireEtat(e); afficherEtat(); if (e.lot && e.lot.achat_id && !e.imprime) { e.imprime = true; ecrireEtat(e); setTimeout(() => { location.href = ORIGEN_URL + '#bordereau=' + encodeURIComponent(e.lot.achat_id); }, 2000); } return; }
         if (e.statut === 'attente_enregistrement') {
-          // le formulaire est rempli : on attend que l'utilisateur enregistre, puis on vérifie toutes les 4 s
+          // le formulaire est rempli et enregistré (par le robot ou par l'utilisateur) : on vérifie toutes les 4 s
           let res;
           try { res = await EXEC[e.etape - 1](e); }
-          catch (err) { e.erreur = ETAPES[e.etape - 1] + ' (vérification) : ' + (err && err.message ? err.message : String(err)); ecrireEtat(e); afficherEtat(); setTimeout(boucle, 8000); return; }
+          catch (err) {
+            const msg = err && err.message ? err.message : String(err);
+            e.verifErr = (e.verifErr || 0) + 1;
+            if (e.enFile && e.verifErr >= 8) { await echecLot(e, msg); return; }
+            e.erreur = ETAPES[e.etape - 1] + ' (vérification) : ' + msg; ecrireEtat(e); afficherEtat(); setTimeout(boucle, 8000); return;
+          }
           if (e.erreur) { e.erreur = null; }
-          if (res === 'suivant') { e.statut = 'a_faire'; e.note = ''; e.etape++; ecrireEtat(e); afficherEtat(); continue; }
+          if (res === 'suivant') { e.statut = 'a_faire'; e.note = ''; e.etape++; delete e.t_save; delete e.cliques; delete e.verifErr; ecrireEtat(e); afficherEtat(); continue; }
+          if (e.enFile && e.t_save && lireFile().auto !== false) {
+            const ecoule = Date.now() - e.t_save;
+            if (ecoule > 90000) { await echecLot(e, 'enregistrement automatique sans effet après 90 s. ' + erreurVisible()); return; }
+            if (ecoule > 30000 && (e.cliques || 0) < 2) { const b = boutonEnregistrer(e.etape); if (b && !b.disabled) { e.cliques = (e.cliques || 0) + 1; ecrireEtat(e); journal(e, 'Nouvel essai d\'enregistrement'); b.click(); confirmerBoite(); } }
+          }
           ecrireEtat(e); afficherEtat(); setTimeout(boucle, 4000); return;
         }
         if (e.statut === 'verifier') e.statut = 'a_faire';
         e.erreur = null; ecrireEtat(e); afficherEtat();
         let res;
         try { res = await EXEC[e.etape - 1](e); }
-        catch (err) { e.erreur = ETAPES[e.etape - 1] + ' : ' + (err && err.message ? err.message : String(err)); journal(e, 'Erreur : ' + e.erreur); return; }
+        catch (err) {
+          const msg = err && err.message ? err.message : String(err);
+          if (e.enFile) {
+            if (transitoire(msg) && (e.retries || 0) < 30) { e.retries = (e.retries || 0) + 1; e.erreur = ETAPES[e.etape - 1] + ' : ' + msg; journal(e, 'Erreur passagère, nouvel essai dans 20 s : ' + msg); setTimeout(boucle, 20000); return; }
+            await echecLot(e, msg); return;
+          }
+          e.erreur = ETAPES[e.etape - 1] + ' : ' + msg; journal(e, 'Erreur : ' + e.erreur); return;
+        }
         if (res === 'suivant') { e.statut = 'a_faire'; e.etape++; e.note = ''; ecrireEtat(e); afficherEtat(); continue; }
-        if (res === 'rempli') { e.statut = 'attente_enregistrement'; journal(e, ETAPES[e.etape - 1] + ' : formulaire rempli, en attente d\'Enregistrer'); setTimeout(boucle, 4000); return; }
+        if (res === 'rempli') {
+          e.statut = 'attente_enregistrement'; journal(e, ETAPES[e.etape - 1] + ' : formulaire rempli' + (e.enFile && lireFile().auto !== false ? '' : ', en attente d\'Enregistrer'));
+          if (e.enFile && lireFile().auto !== false) { if (!(await enregistrerAuto(e))) return; }
+          setTimeout(boucle, 4000); return;
+        }
         if (res === 'navigation') return;          // la page change : le script reprend au chargement
         if (res === 'stop') { ecrireEtat(e); afficherEtat(); return; }
         if (res === 'attendre') { ecrireEtat(e); afficherEtat(); setTimeout(boucle, 4000); return; }

@@ -4416,7 +4416,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-27-348';
+const APP_VERSION = '2026-10-27-349';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -24266,6 +24266,65 @@ function obcManques(l){
   if (!l.pesee.code || l.pesee.poids_entree==null) m.push('détail de la pesée SAIGIC');
   return m;
 }
+// ====================== FILE D'ATTENTE VERS L'AUTOMATE OBC ======================
+// ORIGEN dépose les lots dans la table obc_file ; l'automate (Tampermonkey) les lit, les saisit seul dans OBC et renvoie le résultat (saisi + n° de bordereau, ou échec + raison).
+async function obcFileCharger(){
+  try{
+    const r = await supabaseClient.from('obc_file').select('achat_id,connaissement,statut,message,bordereau_numero,maj_le');
+    if (r.error) throw r.error;
+    state.obcFile = {}; (r.data||[]).forEach(x=>{ state.obcFile[x.achat_id] = x; });
+    const saisis = (r.data||[]).filter(x=>x.statut==='saisi' && !(state.achats||[]).some(a=>a.id===x.achat_id && a.obc_saisi_le)).map(x=>x.achat_id);
+    if (saisis.length){ const q = await supabaseClient.from('achats').select('*').in('id', saisis); if (!q.error) (q.data||[]).forEach(row=>{ const a = (state.achats||[]).find(x=>x.id===row.id); if (a) Object.assign(a, row); }); }
+  }catch(e){ console.warn('obc_file', e); state.obcFile = state.obcFile || {}; }
+}
+function obcFileCompte(){ const n = { attente:0, en_cours:0, saisi:0, echec:0 }; Object.values(state.obcFile||{}).forEach(x=>{ n[x.statut] = (n[x.statut]||0)+1; }); return n; }
+function obcFileMention(a){
+  const f = state.obcFile && state.obcFile[a.id]; if (!f || a.obc_saisi_le) return '';
+  if (f.statut==='attente') return '<div class="vide" style="font-size:10px">⏳ En file d\'attente</div>';
+  if (f.statut==='en_cours') return '<div style="font-size:10px;color:#0E3B36;font-weight:700">🤖 Saisie en cours…</div>';
+  if (f.statut==='echec') return '<div style="font-size:10px;color:#B3261E" title="'+esc(f.message||'')+'">⚠ Échec : '+esc(String(f.message||'').slice(0,70))+'</div>';
+  return '';
+}
+function obcFileCandidats(){
+  const f = state.obcFile || {};
+  return (state.achats||[]).filter(a=>!a.producteur_id && a.connaissement && !a.refoulee && saisieObcStatut(a).cle==='pret' && (!f[a.id] || f[a.id].statut==='echec'))
+    .sort((x,y)=> String(x.connaissement).localeCompare(String(y.connaissement), 'fr', { numeric:true }));
+}
+async function obcFileEnvoyer(){
+  if (!state.prefCharge) await chargerPrefinancements(); // les avances revolving entrent dans le bordereau
+  await obcFileCharger();
+  const max = Math.floor(Number(state.obcFileMax)) || 0, lignes = [], ignores = [];
+  obcFileCandidats().forEach(a=>{
+    if (max && lignes.length>=max) return;
+    try{ const lot = obcLot(a), manques = obcManques(lot);
+      if (manques.length){ ignores.push(a.connaissement+' ('+manques.join(', ')+')'); return; }
+      lignes.push({ achat_id:a.id, connaissement:a.connaissement, lot, statut:'attente', message:null, bordereau_numero:null, envoye_le:new Date().toISOString(), maj_le:new Date().toISOString() });
+    }catch(e){ ignores.push(a.connaissement+' (lot illisible)'); }
+  });
+  if (!lignes.length){ showToast(ignores.length ? 'Rien à envoyer : '+ignores.slice(0,3).join(' ; ')+(ignores.length>3 ? '…' : '') : 'Aucun connaissement prêt à saisir.'); return; }
+  const { error } = await supabaseClient.from('obc_file').upsert(lignes, { onConflict:'achat_id' });
+  if (error){ showToast('Échec de l\'envoi : '+error.message); return; }
+  await obcFileCharger();
+  showToast(lignes.length+' connaissement(s) dans la file de l\'automate'+(ignores.length ? ' · '+ignores.length+' ignoré(s) : '+ignores.slice(0,2).join(' ; ')+(ignores.length>2 ? '…' : '') : '')+'. Ouvre OBC (Chrome) et clique « Lancer la file » dans l\'automate.', 'success');
+  render();
+}
+async function obcFileVider(){
+  askConfirm('Retirer de la file tous les connaissements en attente ou en échec ? (Ce qui est déjà saisi dans OBC reste saisi.)', async ()=>{
+    const { error } = await supabaseClient.from('obc_file').delete().in('statut', ['attente','echec','en_cours']);
+    if (error){ showToast('Échec : '+error.message); return; }
+    await obcFileCharger(); showToast('File vidée.', 'success'); render();
+  });
+}
+async function obcCodeLiaison(){
+  const r = await supabaseClient.from('obc_liaison').select('token').eq('id', 1).maybeSingle();
+  if (r.error || !r.data){ showToast('Code de liaison introuvable.'); return; }
+  try{ await navigator.clipboard.writeText(r.data.token); showToast('Code de liaison copié : colle-le une seule fois dans l\'automate OBC.', 'success'); }
+  catch(e){ prompt('Code de liaison (à coller dans l\'automate OBC) :', r.data.token); }
+}
+if (!window.__obcFilePoll){ window.__obcFilePoll = setInterval(async ()=>{
+  try{ if (state.tab!=='saisieobc' || document.visibilityState!=='visible' || state.modal) return;
+    const n = obcFileCompte(); if (!(n.attente>0 || n.en_cours>0)) return;
+    await obcFileCharger(); render(); }catch(e){ /* le suivi réessaie au prochain passage */ } }, 10000); }
 async function obcMarquer(achatId, fait){
   const a = (state.achats||[]).find(x=>x.id===achatId); if (!a) return;
   let numero = a.obc_bordereau_numero || null;
@@ -24894,6 +24953,7 @@ function celluleMontantCacaoHtml(a){
 }
 function setSaisieObcFiltre(k){ state.saisieObcFiltre = k; render(); }
 function renderSaisieObcTab(){
+  if (!state.obcFileLance){ state.obcFileLance = true; obcFileCharger().then(()=>render()); }
   const aSaisir = (state.achats||[]).filter(a=>!a.producteur_id && a.connaissement && !a.refoulee)
     .sort((x,y)=> String(x.connaissement).localeCompare(String(y.connaissement), 'fr', { numeric:true }));
   const st = new Map(aSaisir.map(a=>[a.id, saisieObcStatut(a)]));
@@ -24908,6 +24968,14 @@ function renderSaisieObcTab(){
     + '<b>🧾 Bordereaux groupés</b> du <input type="date" value="'+esc(state.sobcDu||'')+'" onchange="setSobcPeriode(\'sobcDu\', this.value)"> au <input type="date" value="'+esc(state.sobcAu||'')+'" onchange="setSobcPeriode(\'sobcAu\', this.value)">'
     + '<label style="display:flex;gap:4px;align-items:center"><input type="checkbox"'+(state.sobcInclureNonSaisis?' checked':'')+' onchange="state.sobcInclureNonSaisis=this.checked;render()"> inclure ceux pas encore saisis</label>'
     + '<button type="button" class="btn btn-primary btn-compact" onclick="ouvrirBordereauxGroupes()" title="Réunit tous les bordereaux de la période dans un seul document : Imprimer › Enregistrer au format PDF = un seul fichier">⬇ Télécharger les '+fmtNum(bordereauxGroupesListe().length)+' bordereaux (un seul PDF)</button></div>'
+    + (function(){ const n = obcFileCompte(), cand = obcFileCandidats().length;
+        return '<div class="sobc-groupe" style="display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;padding:0 18px 10px;font-size:13px">'
+          + '<b>🤖 Automate OBC</b> <span>'+fmtNum(n.attente)+' en file · '+fmtNum(n.en_cours)+' en cours · '+fmtNum(n.saisi)+' saisis · <span style="color:'+(n.echec ? '#B3261E' : 'inherit')+'">'+fmtNum(n.echec)+' en échec</span></span>'
+          + '<label style="display:flex;gap:4px;align-items:center">limite (test) <input type="number" min="1" style="width:56px" value="'+esc(state.obcFileMax||'')+'" placeholder="tous" onchange="state.obcFileMax=this.value"></label>'
+          + '<button type="button" class="btn btn-primary btn-compact" onclick="obcFileEnvoyer()" title="Envoie à l\'automate tous les connaissements déchargés et pas encore saisis, par ordre de numéro">🤖 Envoyer les '+fmtNum(cand)+' prêts à l\'automate</button>'
+          + '<button type="button" class="btn-ghost btn-compact" onclick="obcFileCharger().then(render)">↻ Actualiser</button>'
+          + '<button type="button" class="btn-ghost btn-compact" onclick="obcFileVider()">Vider la file</button>'
+          + '<button type="button" class="btn-ghost btn-compact" onclick="obcCodeLiaison()" title="À coller une seule fois dans l\'automate OBC">🔑 Code de liaison</button></div>'; })()
     + '<div class="achats-barre" style="padding:0 18px 10px"><div class="achats-filtres">'
     + [['tous','Tous'],['pret','Prêts à saisir'],['prix','Prix à renseigner'],['attente','En attente de pesée'],['saisi','Saisis dans OBC']].map(([k,l])=>'<button type="button" class="chip-coop'+(f===k?' actif':'')+'" onclick="setSaisieObcFiltre(\''+k+'\')">'+esc(l)+' <small>('+nb[k]+')</small></button>').join('')
     + '</div></div>';
@@ -24923,7 +24991,7 @@ function renderSaisieObcTab(){
       + '<td class="num">'+(Number(a.nombre_sacs_accepte)>0 ? fmtNum(a.nombre_sacs_accepte) : '<span class="vide">—</span>')+'</td>'
       + '<td class="num">'+(Number(a.poids_net_produit)>0 ? fmtNum(a.poids_net_produit) : '<span class="vide">—</span>')+'</td>'
       + '<td class="num">'+celluleMontantCacaoHtml(a)+'</td>'
-      + '<td><span class="badge '+x.cls+'" title="'+esc(x.aide)+'">'+(x.cle==='saisi' ? '' : 'Non saisi · ')+esc(x.label)+(x.cle==='saisi' && a.obc_bordereau_numero ? ' · bord. '+esc(a.obc_bordereau_numero) : '')+'</span></td>'
+      + '<td><span class="badge '+x.cls+'" title="'+esc(x.aide)+'">'+(x.cle==='saisi' ? '' : 'Non saisi · ')+esc(x.label)+(x.cle==='saisi' && a.obc_bordereau_numero ? ' · bord. '+esc(a.obc_bordereau_numero) : '')+'</span>'+obcFileMention(a)+'</td>'
       + '<td class="sobc-act">'+(Number(a.poids_net_produit)>0 ? '<button type="button" class="btn-ghost btn-compact" onclick="ouvrirBordereauReception(\''+a.id+'\')" title="Ouvre le bordereau de réception (même modèle que celui d\'OBC) : clique « Imprimer / Enregistrer en PDF » pour le télécharger'+(a.bordereau_groupe_le ? ' — déjà téléchargé en groupe le '+(dateFr(String(a.bordereau_groupe_le).slice(0,10))||'')+' (téléchargement individuel uniquement)' : '')+'">🧾 Bordereau'+(a.bordereau_groupe_le ? ' ✓' : '')+'</button>' : '')+(x.cle==='saisi'
         ? '<button type="button" class="act-lien" onclick="obcMarquer(\''+a.id+'\', false)" title="Retirer la marque « saisi dans OBC »">annuler</button>'
         : '<button type="button" class="act-btn act-obc" onclick="obcCopierLot(\''+a.id+'\')" title="Copie le lot pour l\'automate OBC (Chrome)"><span class="act-ico">🤖</span>Saisir dans OBC</button> <button type="button" class="act-lien" onclick="obcMarquer(\''+a.id+'\', true)" title="Marquer ce connaissement comme déjà saisi dans OBC">déjà saisi</button>')+'</td></tr>';
