@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.31
+// @version      0.1.32
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.31';
+  const VERSION = '0.1.32';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const ENTITE = '1';                 // ECORIGINE
@@ -249,13 +249,25 @@
     setInput(q('#txtville_fournisseurAdd'), c.ville); setInput(q('#txtnumero_cc_fournisseurAdd'), c.dfe); setInput(q('#txtnumero_rccm_fournisseurAdd'), c.rccm);
     setInput(q('#txtadresse_postale_fournisseurAdd'), c.adresse_postale); setInput(q('#txtadresse_geographique_fournisseurAdd'), c.siege);
     setRadio('txttype_fournisseur_agroAdd2'); setInput(q('#txtnumero_agrement_ccc_fournisseur_agroAdd'), c.ccc);
+    // Gros traitant rattaché : celui qu'ORIGEN connaît pour la coopérative (fournisseur principal, à défaut le traitant du site de déchargement),
+    // retrouvé par son nom dans la liste des gros traitants d'OBC. Aucun rattachement n'est inventé : sans correspondance, la liste reste vide.
+    e.note = ''; let traitantNote = '';
+    { const sel = q('#txtid_fournisseur_agro_gros_traitantAdd'); const cands = [].concat(c.gros_traitants || []).map((x) => String(x || '').trim()).filter(Boolean);
+      if (sel && cands.length) {
+        await attendreOption(sel, /./).catch(() => null);
+        const opts = [...sel.options].filter((o) => o.value !== '');
+        let choisi = null, cand = '';
+        for (const x of cands) { const cn = N(x); if (cn.length < 3) continue; choisi = opts.find((o) => N(o.text) === cn) || opts.find((o) => { const on = N(o.text); return on.length >= 3 && (cn.includes(on) || on.includes(cn)); }); if (choisi) { cand = x; break; } }
+        if (choisi) { setSelect(sel, choisi.value); traitantNote = ' Gros traitant rattaché : ' + choisi.text.trim() + ' (ORIGEN : ' + cand + ').'; journal(e, 'Gros traitant rattaché : ' + choisi.text.trim()); }
+        else { traitantNote = ' ⚠ Gros traitant : « ' + cands.join(' / ') + ' » (ORIGEN) ne correspond à aucun gros traitant d\'OBC (' + opts.map((o) => o.text.trim()).join(', ') + ') : choisis-le toi-même dans « Gros traitant rattaché » avant d\'enregistrer si nécessaire.'; journal(e, 'Gros traitant : aucune correspondance pour ' + cands.join(' / ')); }
+      } }
     setInput(q('#txttelephone_fournisseurAdd'), c.telephone); setInput(q('#txtemail_fournisseurAdd'), c.email);
     setInput(q('#txtnom_prenom_interlocuteurAdd0'), c.interlocuteur_nom); setInput(q('#txtnum_telephone1_interlocuteurAdd0'), c.interlocuteur_tel);
     await attendreOption(q('#txtnumero_poste_comptableAdd0'), new RegExp('^' + poste.Value + '\\b'));
     if (!setSelect(q('#txtnumero_poste_comptableAdd0'), poste.Value)) throw new Error('Poste comptable non sélectionnable');
     setSelect(q('#txttype_prestation_achatAdd0'), '1');
     { const m = await reappliquer(f); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
-    e.note = 'Coopérative ' + c.sigle + ' (' + c.ccc + ').'; return 'rempli';
+    e.note = 'Coopérative ' + c.sigle + ' (' + c.ccc + ').' + traitantNote; return 'rempli';
   }
   async function etapeTransporteur(e) {
     const lot = e.lot;
