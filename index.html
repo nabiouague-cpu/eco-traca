@@ -4397,7 +4397,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-27-330';
+const APP_VERSION = '2026-10-27-331';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -24826,6 +24826,7 @@ function ligneAchatHtml(a, montrerCoop, ouvert, avecNomPlateforme){
 // ====================== ONGLET « SAISIE OBC » ======================
 // Une seule liste : les connaissements pas encore saisis dans OBC (hors camions refoulés), avec ce qu'il faut pour contrôler et lancer la saisie.
 function saisieObcStatut(a){
+  if (a.obc_saisi_le) return { cle:'saisi', label:'Saisi dans OBC', cls:'ok', aide:'Saisi le '+(dateFr(String(a.obc_saisi_le).slice(0,10))||'')+(a.obc_bordereau_numero ? ' · bordereau '+a.obc_bordereau_numero : '') };
   if (!(Number(a.poids_net_produit)>0)) return { cle:'attente', label:'En attente de pesée', cls:'neutral', aide:"Le poids net payé n'est pas encore connu : OBC se saisit après la pesée à l'usine." };
   const par = parametresPaiementPour(a), manque = [];
   if (!(Number(par && par.prix_bord_champ)>0)) manque.push('prix bord champ');
@@ -24835,21 +24836,21 @@ function saisieObcStatut(a){
 }
 function setSaisieObcFiltre(k){ state.saisieObcFiltre = k; render(); }
 function renderSaisieObcTab(){
-  const aSaisir = (state.achats||[]).filter(a=>!a.producteur_id && a.connaissement && !a.refoulee && !a.obc_saisi_le)
-    .sort((x,y)=> String(y.date||'').localeCompare(String(x.date||'')) || String(y.connaissement).localeCompare(String(x.connaissement)));
+  const aSaisir = (state.achats||[]).filter(a=>!a.producteur_id && a.connaissement && !a.refoulee)
+    .sort((x,y)=> String(x.connaissement).localeCompare(String(y.connaissement), 'fr', { numeric:true }));
   const st = new Map(aSaisir.map(a=>[a.id, saisieObcStatut(a)]));
-  const nb = { tous:aSaisir.length, pret:0, prix:0, attente:0 };
+  const nb = { tous:aSaisir.length, pret:0, prix:0, attente:0, saisi:0 };
   st.forEach(x=>{ nb[x.cle]++; });
-  const f = ['pret','prix','attente'].indexOf(state.saisieObcFiltre)>=0 ? state.saisieObcFiltre : 'tous';
+  const f = ['pret','prix','attente','saisi'].indexOf(state.saisieObcFiltre)>=0 ? state.saisieObcFiltre : 'tous';
   const liste = aSaisir.filter(a=> f==='tous' || st.get(a.id).cle===f);
   const sacs = liste.reduce((t,a)=>t+(Number(a.nombre_sacs_accepte)||0),0), vol = liste.reduce((t,a)=>t+(Number(a.poids_net_produit)||0),0);
-  let html = '<div class="panel"><div class="panel-head"><h2>Saisie OBC — connaissements à saisir ('+fmtNum(aSaisir.length)+')</h2>'
-    + '<p class="hint" style="margin:4px 0 0">Seulement les connaissements pas encore saisis dans OBC. Une fois la saisie terminée, clique « déjà saisi » : la ligne quitte cette liste.</p></div>'
+  let html = '<div class="panel"><div class="panel-head"><h2>Saisie OBC — connaissements ('+fmtNum(aSaisir.length)+' · '+fmtNum(nb.tous-nb.saisi)+' à saisir)</h2>'
+    + '<p class="hint" style="margin:4px 0 0">Tous les connaissements, par ordre de numéro, avec leur statut de saisie dans OBC. Une fois la saisie terminée, clique « déjà saisi » : la ligne passe en « Saisi dans OBC ».</p></div>'
     + '<div class="achats-barre" style="padding:0 18px 10px"><div class="achats-filtres">'
-    + [['tous','Tous'],['pret','Prêts à saisir'],['prix','Prix à renseigner'],['attente','En attente de pesée']].map(([k,l])=>'<button type="button" class="chip-coop'+(f===k?' actif':'')+'" onclick="setSaisieObcFiltre(\''+k+'\')">'+esc(l)+' <small>('+nb[k]+')</small></button>').join('')
+    + [['tous','Tous'],['pret','Prêts à saisir'],['prix','Prix à renseigner'],['attente','En attente de pesée'],['saisi','Saisis dans OBC']].map(([k,l])=>'<button type="button" class="chip-coop'+(f===k?' actif':'')+'" onclick="setSaisieObcFiltre(\''+k+'\')">'+esc(l)+' <small>('+nb[k]+')</small></button>').join('')
     + '</div></div>';
   if (!liste.length){
-    return html + '<div class="empty">'+(aSaisir.length ? 'Aucun connaissement ne correspond à ce filtre.' : 'Tous les connaissements sont saisis dans OBC. 🎉')+'</div></div>';
+    return html + '<div class="empty">'+'Aucun connaissement ne correspond à ce filtre.'+'</div></div>';
   }
   html += '<div style="padding:0 18px 18px;overflow:auto;"><table class="data-table pref-table"><thead><tr><th style="text-align:left">Coopérative</th><th>Connaissement</th><th>Date</th><th>Certification</th><th class="num">Sacs acceptés</th><th class="num">Volume déchargé<small> kg</small></th><th class="num">Montant à payer<small> FCFA</small></th><th>Statut OBC</th><th>Actions</th></tr></thead><tbody>';
   liste.forEach(a=>{
@@ -24860,8 +24861,10 @@ function renderSaisieObcTab(){
       + '<td class="num">'+(Number(a.nombre_sacs_accepte)>0 ? fmtNum(a.nombre_sacs_accepte) : '<span class="vide">—</span>')+'</td>'
       + '<td class="num">'+(Number(a.poids_net_produit)>0 ? fmtNum(a.poids_net_produit) : '<span class="vide">—</span>')+'</td>'
       + '<td class="num">'+celluleMontantHtml(a)+'</td>'
-      + '<td><span class="badge '+x.cls+'" title="'+esc(x.aide)+'">Non saisi · '+esc(x.label)+'</span></td>'
-      + '<td style="white-space:nowrap"><button type="button" class="act-btn act-obc" onclick="obcCopierLot(\''+a.id+'\')" title="Copie le lot pour l\'automate OBC (Chrome)"><span class="act-ico">🤖</span>Saisir dans OBC</button> <button type="button" class="act-lien" onclick="obcMarquer(\''+a.id+'\', true)" title="Marquer ce connaissement comme déjà saisi dans OBC">déjà saisi</button></td></tr>';
+      + '<td><span class="badge '+x.cls+'" title="'+esc(x.aide)+'">'+(x.cle==='saisi' ? '' : 'Non saisi · ')+esc(x.label)+(x.cle==='saisi' && a.obc_bordereau_numero ? ' · bord. '+esc(a.obc_bordereau_numero) : '')+'</span></td>'
+      + '<td style="white-space:nowrap">'+(x.cle==='saisi'
+        ? '<button type="button" class="act-lien" onclick="obcMarquer(\''+a.id+'\', false)" title="Retirer la marque « saisi dans OBC »">annuler</button>'
+        : '<button type="button" class="act-btn act-obc" onclick="obcCopierLot(\''+a.id+'\')" title="Copie le lot pour l\'automate OBC (Chrome)"><span class="act-ico">🤖</span>Saisir dans OBC</button> <button type="button" class="act-lien" onclick="obcMarquer(\''+a.id+'\', true)" title="Marquer ce connaissement comme déjà saisi dans OBC">déjà saisi</button>')+'</td></tr>';
   });
   html += '</tbody><tfoot><tr><td style="text-align:left"><b>Total ('+fmtNum(liste.length)+')</b></td><td></td><td></td><td></td><td class="num"><b>'+fmtNum(sacs)+'</b></td><td class="num"><b>'+fmtNum(vol)+'</b></td><td></td><td></td><td></td></tr></tfoot></table></div></div>';
   return html;
