@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.33
+// @version      0.1.34
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,17 +14,17 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.33';
+  const VERSION = '0.1.34';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const ENTITE = '1';                 // ECORIGINE
   const ATTENTE_MAX = 20000;
-  const NB_ETAPES = 8;
+  const NB_ETAPES = 10;
   const COMPTE_GENERAL = '401100000';   // « 401100000 - Fournisseurs » : compte général des coopératives (validé par l'utilisateur)
-  const ETAPES = ['Compte tiers', 'Coopérative', 'Transporteur', 'Producteur', 'Connaissement brousse', 'Données livraison', 'Pesée', 'Bordereau de réception'];
-  const PAGES = ['/PlanComptableTiersEntite/Index', '/Fournisseur/Index', '/AgroParametrage/ParametrageTransporteur', '/AgroAchatProducteur/Index', '/AgroAchatConnaissementBrousse/Index', '/AgroAchatConnaissementUsine/Index', '/AgroAchatPeseeBrousse/Index', '/AgroAchatBordereauReception/Index'];
-  const BTN_NOUVEAU = ['#btnCreatePlanComptableEntiteIndex', 'a[href="/Fournisseur/Create"]', 'a[href="/AgroParametrageTransporteur/Create"]', 'a[href="/AgroAchatProducteur/Create"]', 'a[href="/AgroAchatConnaissementBrousse/Create"]', 'a[href="/AgroAchatConnaissementUsine/Create"]', 'a[href="/AgroAchatPeseeBrousse/Create"]', 'a[href="/AgroAchatBordereauReception/Create"]'];
-  const FORMS = ['#formCreatePlanComptableTiersEntite', '#formCreateEditFournisseur', '#frmAgroParametrageTransporteurCreate', '#frmAgroAchatProducteurCreate', '#frmAgroAchatConnaissementBrousseCreate', '#frmAgroAchatConnaissementUsineCreate', '#frmAgroAchatPeseeBrousseCreate', '#frmAgroAchatBordereauReceptionCreate'];
+  const ETAPES = ['Compte tiers gros traitant', 'Gros traitant', 'Compte tiers coopérative', 'Coopérative', 'Transporteur', 'Producteur', 'Connaissement brousse', 'Données livraison', 'Pesée', 'Bordereau de réception'];
+  const PAGES = ['/PlanComptableTiersEntite/Index', '/Fournisseur/Index', '/PlanComptableTiersEntite/Index', '/Fournisseur/Index', '/AgroParametrage/ParametrageTransporteur', '/AgroAchatProducteur/Index', '/AgroAchatConnaissementBrousse/Index', '/AgroAchatConnaissementUsine/Index', '/AgroAchatPeseeBrousse/Index', '/AgroAchatBordereauReception/Index'];
+  const BTN_NOUVEAU = ['#btnCreatePlanComptableEntiteIndex', 'a[href="/Fournisseur/Create"]', '#btnCreatePlanComptableEntiteIndex', 'a[href="/Fournisseur/Create"]', 'a[href="/AgroParametrageTransporteur/Create"]', 'a[href="/AgroAchatProducteur/Create"]', 'a[href="/AgroAchatConnaissementBrousse/Create"]', 'a[href="/AgroAchatConnaissementUsine/Create"]', 'a[href="/AgroAchatPeseeBrousse/Create"]', 'a[href="/AgroAchatBordereauReception/Create"]'];
+  const FORMS = ['#formCreatePlanComptableTiersEntite', '#formCreateEditFournisseur', '#formCreatePlanComptableTiersEntite', '#formCreateEditFournisseur', '#frmAgroParametrageTransporteurCreate', '#frmAgroAchatProducteurCreate', '#frmAgroAchatConnaissementBrousseCreate', '#frmAgroAchatConnaissementUsineCreate', '#frmAgroAchatPeseeBrousseCreate', '#frmAgroAchatBordereauReceptionCreate'];
 
   const N = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim();
   const PLAQUE = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -37,8 +37,8 @@
   function lireEtat() {
     try {
       const e = JSON.parse(localStorage.getItem(CLE) || 'null');
-      // lot lancé avec l'ancienne version (7 étapes, sans « Compte tiers ») : on décale les étapes d'un cran
-      if (e && !e.v8) { e.v8 = true; e.etape = (e.etape || 1) + 1; const f = {}; Object.keys(e.fait || {}).forEach((k) => { f[Number(k) + 1] = e.fait[k]; }); e.fait = f; localStorage.setItem(CLE, JSON.stringify(e)); }
+      // lot lancé avec une ancienne version (7 ou 8 étapes) : on décale les étapes d'un cran
+      if (e && !e.v10) { const d = e.v8 ? 2 : 3; e.v10 = true; e.etape = (e.etape || 1) + d; const f = {}; Object.keys(e.fait || {}).forEach((k) => { f[Number(k) + d] = e.fait[k]; }); e.fait = f; localStorage.setItem(CLE, JSON.stringify(e)); }
       return e;
     } catch (e) { return null; }
   }
@@ -102,14 +102,14 @@
     if (e.erreur) message = '<div style="color:#B3261E;margin-top:8px;">⚠ ' + e.erreur + '</div>';
     else if (e.pause) message = '<div style="color:#8a6d00;margin-top:8px;">⏸ En pause.</div>';
     else if (e.statut === 'attente_enregistrement') message = '<div style="color:#0E3B36;margin-top:8px;background:#fff6d6;padding:6px 8px;border-radius:8px;">✎ Formulaire rempli : <b>vérifie, puis clique « Enregistrer » dans OBC</b>. Le robot vérifie l\'enregistrement et enchaîne tout seul. ' + (e.note || '') + '</div>';
-    else if (e.statut === 'termine') message = '<div style="color:#1f7a4d;margin-top:8px;font-weight:700;">✓ Les 8 étapes sont faites. ' + (e.note || '') + '</div>' + (e.lot && e.lot.achat_id ? '<div style="margin-top:6px;"><a href="' + ORIGEN_URL + '#bordereau=' + encodeURIComponent(e.lot.achat_id) + '" target="_blank" style="color:#0E3B36;font-weight:700;">🖨 Imprimer le bordereau (ORIGEN)</a></div>' : '');
+    else if (e.statut === 'termine') message = '<div style="color:#1f7a4d;margin-top:8px;font-weight:700;">✓ Les 10 étapes sont faites. ' + (e.note || '') + '</div>' + (e.lot && e.lot.achat_id ? '<div style="margin-top:6px;"><a href="' + ORIGEN_URL + '#bordereau=' + encodeURIComponent(e.lot.achat_id) + '" target="_blank" style="color:#0E3B36;font-weight:700;">🖨 Imprimer le bordereau (ORIGEN)</a></div>' : '');
     else if (e.note) message = '<div style="color:#5b6b68;margin-top:8px;">' + e.note + '</div>';
     zoneEtat.innerHTML = tete + lignes.join('<br>') + message + (e.journal && e.journal.length ? '<div style="color:#5b6b68;margin-top:6px;font-size:11px;">' + e.journal[e.journal.length - 1] + '</div>' : '');
   }
   function demarrer() {
     let lot; try { lot = JSON.parse(zoneTexte.value.trim()); } catch (e) { alert('Le texte collé n\'est pas un lot ORIGEN valide.'); return; }
     if (!lot || !lot.origen_obc_lot) { alert('Ce n\'est pas un lot « Saisir dans OBC » d\'ORIGEN.'); return; }
-    ecrireEtat({ v8: true, lot, etape: 1, statut: 'a_faire', ids: {}, fait: {}, journal: [], pause: false, erreur: null, note: '' });
+    ecrireEtat({ v10: true, lot, etape: 1, statut: 'a_faire', ids: {}, fait: {}, journal: [], pause: false, erreur: null, note: '' });
     zoneTexte.value = '';
     afficherEtat(); boucle();
   }
@@ -209,39 +209,81 @@
     return o.value;
   }
 
-  // ---------- les 8 étapes ----------
+  // ---------- les 10 étapes ----------
   // Étape 1 : compte tiers de la coopérative (Plan comptable tiers entité → Nouveau compte tiers).
   // N° compte = code CCC ; intitulé = sigle de la coopérative ; classe 4 ; catégorie Fournisseur ; compte général 401100000.
   async function trouverCompteTiers(ccc) {
     const plan = await getJson('/AppMethods1/LoadPlanComptableEntiteTiersFournisseurByEntiteId?EntiteId=' + ENTITE);
     return plan.find((p) => String(p.Value || '').trim().toUpperCase() === String(ccc).toUpperCase()) || null;
   }
-  async function etapeCompteTiers(e) {
-    const c = e.lot.cooperative, ccc = String(c.ccc || '').trim().toUpperCase(), sigle = String(c.sigle || c.nom_complet || '').trim();
-    if (!ccc) { e.erreur = 'La coopérative n\'a pas de code CCC dans ORIGEN : renseigne-le dans sa fiche, puis recopie le lot (« Saisir dans OBC »).'; return 'stop'; }
-    const ex = await trouverCompteTiers(ccc);
-    if (ex) { e.ids.compte_tiers = ccc; e.fait[1] = 'déjà dans OBC : ' + (ex.Text || ccc); journal(e, 'Compte tiers trouvé : ' + (ex.Text || ccc)); return 'suivant'; }
-    if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
-    const f = await ouvrirFormulaire(1); if (!f) return 'navigation';
+  // Création d'un compte tiers (formulaire « Nouveau compte tiers ») : k = n° de l'étape qui porte le formulaire.
+  async function creerCompteTiers(e, k, ccc, intitule) {
+    const f = await ouvrirFormulaire(k); if (!f) return 'navigation';
     const ent = q('#txtid_entitePlanComptableTiersEntiteAdd');
     if (ent && !/^ECORIGINE/i.test((ent.options[ent.selectedIndex] || {}).text || '')) await setSelectTexte(ent, /^ECORIGINE/i, 'Entité');
     await setSelectTexte(q('#txtplan_comptable_entite_natureAdd'), /^CLASSE 4/i, 'Classe');
     await dormir(800); await listeStable(q('#txtplan_comptable_entite_parentAdd'));
     await setSelectTexte(q('#txtplan_comptable_entite_parentAdd'), new RegExp('^' + COMPTE_GENERAL + '\\b'), 'Compte général', COMPTE_GENERAL + ' - Fournisseurs');
     await setSelectTexte(q('#txtplan_comptable_entite_type_tiersAdd'), exact('Fournisseur'), 'Catégorie tiers', 'Fournisseur');
-    setInput(q('#txtplan_comptable_entite_numeroAdd'), ccc); setInput(q('#txtplan_comptable_entite_nomAdd'), sigle);
+    setInput(q('#txtplan_comptable_entite_numeroAdd'), ccc); setInput(q('#txtplan_comptable_entite_nomAdd'), intitule);
     { const m = await reappliquer(f); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
+    return 'rempli';
+  }
+  // Gros traitants à créer dans OBC s'ils y manquent (code et dénomination validés). TOUTON : en attente de confirmation, non créé.
+  const GROS_TRAITANTS = [{ cle: 'BOBBY VO', code: 'BOBB001', nom: 'BOBBY VO' }, { cle: 'SUCDEN', code: 'SUCD001', nom: 'SUCDEN' }];
+  function grosTraitantCible(lot) {
+    const c = lot.cooperative; if (c.coop_propre) return null;
+    for (const cand of (c.gros_traitants || [])) { const n = N(cand); const g = GROS_TRAITANTS.find((x) => n.includes(x.cle)); if (g) return g; }
+    return null;
+  }
+  async function etapeGrosTraitantTiers(e) {
+    const g = grosTraitantCible(e.lot);
+    if (!g) { e.fait[1] = 'rien à créer'; return 'suivant'; }
+    const ex = await trouverCompteTiers(g.code);
+    if (ex) { e.fait[1] = 'déjà dans OBC : ' + (ex.Text || g.code); journal(e, 'Compte tiers gros traitant trouvé : ' + (ex.Text || g.code)); return 'suivant'; }
+    if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
+    const r = await creerCompteTiers(e, 1, g.code, g.nom); if (r !== 'rempli') return r;
+    e.note = 'Compte tiers du gros traitant ' + g.nom + ' (' + g.code + ') : classe 4, Fournisseur, compte général ' + COMPTE_GENERAL + '.'; return 'rempli';
+  }
+  async function etapeGrosTraitant(e) {
+    const g = grosTraitantCible(e.lot);
+    if (!g) { e.fait[2] = 'rien à créer'; return 'suivant'; }
+    const doc = await getHtml('/Fournisseur/Index?isProjetProv=0&filterEntite=' + ENTITE + '&filtrePosteComptable=&filter=' + encodeURIComponent(g.nom.split(' ')[0]) + '&pageSize=100');
+    const ex = lignesTable(doc).find((l) => N(l.c[3]) === N(g.code) || N(l.c[2]) === N(g.nom));
+    if (ex) { e.fait[2] = 'déjà dans OBC : ' + ex.c[2]; journal(e, 'Gros traitant trouvé : ' + ex.c[2]); return 'suivant'; }
+    if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
+    const plan = await trouverCompteTiers(g.code);
+    if (!plan) { e.erreur = 'Le compte tiers « ' + g.code + ' – ' + g.nom + ' » n\'existe pas encore dans OBC : crée-le d\'abord, puis « Continuer ».'; return 'stop'; }
+    const f = await ouvrirFormulaire(2); if (!f) return 'navigation';
+    setEntite(q('#txtid_entiteAdd'));
+    setInput(q('#txtnom_fournisseurAdd'), g.nom); setInput(q('#txtcode_fournisseurAdd'), g.nom);
+    setSelect(q('#txtmode_reglement_fournisseurAdd'), '2'); setSelect(q('#txtsecteur_fournisseurAdd'), '1');
+    setInput(q('#txtville_fournisseurAdd'), 'ABIDJAN'); setInput(q('#txtadresse_geographique_fournisseurAdd'), 'ABIDJAN');
+    setRadio('txttype_fournisseur_agroAdd4');   // GROS TRAITANT
+    await attendreOption(q('#txtnumero_poste_comptableAdd0'), new RegExp('^' + g.code + '\\b'));
+    if (!setSelect(q('#txtnumero_poste_comptableAdd0'), g.code)) throw new Error('Poste comptable « ' + g.code + ' » non sélectionnable');
+    setSelect(q('#txttype_prestation_achatAdd0'), '1');
+    { const m = await reappliquer(f); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
+    e.note = 'Gros traitant ' + g.nom + ' (' + g.code + ') — type GROS TRAITANT. Ville et adresse mises à « ABIDJAN » par défaut : corrige-les si besoin avant d\'enregistrer.'; return 'rempli';
+  }
+  async function etapeCompteTiers(e) {
+    const c = e.lot.cooperative, ccc = String(c.ccc || '').trim().toUpperCase(), sigle = String(c.sigle || c.nom_complet || '').trim();
+    if (!ccc) { e.erreur = 'La coopérative n\'a pas de code CCC dans ORIGEN : renseigne-le dans sa fiche, puis recopie le lot (« Saisir dans OBC »).'; return 'stop'; }
+    const ex = await trouverCompteTiers(ccc);
+    if (ex) { e.ids.compte_tiers = ccc; e.fait[3] = 'déjà dans OBC : ' + (ex.Text || ccc); journal(e, 'Compte tiers trouvé : ' + (ex.Text || ccc)); return 'suivant'; }
+    if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
+    const r = await creerCompteTiers(e, 3, ccc, sigle); if (r !== 'rempli') return r;
     e.note = 'Compte tiers ' + ccc + ' — ' + sigle + ' (classe 4, Fournisseur, compte général ' + COMPTE_GENERAL + ').'; return 'rempli';
   }
   async function etapeCooperative(e) {
     const lot = e.lot;
-    if (!e.ids.fournisseur_id) { const r = await trouverFournisseur(lot); if (r) { e.ids.fournisseur_id = r.id; e.ids.fournisseur_nom = r.code; e.fait[2] = 'déjà dans OBC : ' + r.code; journal(e, 'Coopérative trouvée : ' + r.code + ' (id ' + r.id + ')'); return 'suivant'; } }
+    if (!e.ids.fournisseur_id) { const r = await trouverFournisseur(lot); if (r) { e.ids.fournisseur_id = r.id; e.ids.fournisseur_nom = r.code; e.fait[4] = 'déjà dans OBC : ' + r.code; journal(e, 'Coopérative trouvée : ' + r.code + ' (id ' + r.id + ')'); return 'suivant'; } }
     else return 'suivant';
     if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
     const plan = await getJson('/AppMethods1/LoadPlanComptableEntiteTiersFournisseurByEntiteId?EntiteId=' + ENTITE);
     const poste = plan.find((p) => String(p.Value || '').toUpperCase() === String(lot.cooperative.ccc).toUpperCase());
     if (!poste) { e.erreur = 'Le poste comptable « ' + lot.cooperative.ccc + ' – ' + lot.cooperative.sigle + ' » n\'existe pas dans le plan comptable d\'OBC : crée-le d\'abord, puis « Continuer ».'; return 'stop'; }
-    const f = await ouvrirFormulaire(2); if (!f) return 'navigation';
+    const f = await ouvrirFormulaire(4); if (!f) return 'navigation';
     const c = lot.cooperative;
     setEntite(q('#txtid_entiteAdd'));
     setInput(q('#txtnom_fournisseurAdd'), c.nom_complet); setInput(q('#txtcode_fournisseurAdd'), c.sigle);
@@ -273,13 +315,13 @@
   async function etapeTransporteur(e) {
     const lot = e.lot;
     if (e.ids.transporteur_nom) return 'suivant';
-    if (!lot.transporteur.nom) { e.fait[3] = 'pas de transporteur sur le connaissement'; journal(e, 'Transporteur absent du lot : étape sautée'); return 'suivant'; }
+    if (!lot.transporteur.nom) { e.fait[5] = 'pas de transporteur sur le connaissement'; journal(e, 'Transporteur absent du lot : étape sautée'); return 'suivant'; }
     const rows = await listerTransporteurs(lot.transporteur.nom.split(' ')[0]);
     const ch = choisirTransporteur(lot, rows);
-    if (ch.existant) { e.ids.transporteur_nom = ch.existant.nom; e.fait[3] = 'déjà dans OBC : ' + ch.existant.nom; journal(e, 'Transporteur trouvé : ' + ch.existant.nom + ' (' + ch.existant.veh + ' / ' + ch.existant.rem + ')'); return 'suivant'; }
+    if (ch.existant) { e.ids.transporteur_nom = ch.existant.nom; e.fait[5] = 'déjà dans OBC : ' + ch.existant.nom; journal(e, 'Transporteur trouvé : ' + ch.existant.nom + ' (' + ch.existant.veh + ' / ' + ch.existant.rem + ')'); return 'suivant'; }
     if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
     e.ids.transporteur_nouveau = ch.nouveauNom;
-    const f = await ouvrirFormulaire(3); if (!f) return 'navigation';
+    const f = await ouvrirFormulaire(5); if (!f) return 'navigation';
     setEntite(q('#txtid_entiteAdd'));
     setInput(q('#txttransporteur_nomAdd'), ch.nouveauNom); setInput(q('#txttransporteur_codeAdd'), ch.nouveauNom);
     setInput(q('#txttransporteur_immatriculation_vehiculeAdd'), lot.transporteur.immat_vehicule); setInput(q('#txttransporteur_immatriculation_remorqueAdd'), lot.transporteur.immat_remorque);
@@ -294,12 +336,12 @@
     const motsCle = [...new Set([N(nomCoop).split(' ').find((m) => m.length >= 3) || N(nomCoop).split(' ')[0], String(lot.cooperative.ccc || '').toUpperCase()].filter(Boolean))];
     let lignesP = [];
     for (const mot of motsCle) { const docP = await getHtml('/AgroAchatProducteur/Index?filter=' + encodeURIComponent(mot) + '&pageSize=200'); lignesP = lignesTable(docP).filter((l) => N(l.c[2]) === N(nomCoop)); if (lignesP.length) break; }
-    if (lignesP.length) { const nomP = lignesP[0].c.slice(3, 5).join(' ').trim(); e.fait[4] = 'déjà dans OBC : ' + nomP; journal(e, 'Producteur trouvé : ' + nomP); return 'suivant'; }
+    if (lignesP.length) { const nomP = lignesP[0].c.slice(3, 5).join(' ').trim(); e.fait[6] = 'déjà dans OBC : ' + nomP; journal(e, 'Producteur trouvé : ' + nomP); return 'suivant'; }
     const liste = await getJson('/AppMethods1/LoadAgroProducteursByFournisseurId2?FournisseurId=' + e.ids.fournisseur_id);
     const prods = liste.filter((p) => jsonVal(p) !== '' && jsonTxt(p) !== '');
-    if (prods.length) { const nomL = N((lot.producteur.nom || '') + ' ' + (lot.producteur.prenoms || '')); const choisi = prods.find((p) => N(jsonTxt(p)).startsWith(nomL)) || prods[0]; e.ids.producteur_id = jsonVal(choisi); e.fait[4] = 'déjà dans OBC : ' + jsonTxt(choisi); journal(e, 'Producteur trouvé : ' + jsonTxt(choisi)); return 'suivant'; }
+    if (prods.length) { const nomL = N((lot.producteur.nom || '') + ' ' + (lot.producteur.prenoms || '')); const choisi = prods.find((p) => N(jsonTxt(p)).startsWith(nomL)) || prods[0]; e.ids.producteur_id = jsonVal(choisi); e.fait[6] = 'déjà dans OBC : ' + jsonTxt(choisi); journal(e, 'Producteur trouvé : ' + jsonTxt(choisi)); return 'suivant'; }
     if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
-    const f = await ouvrirFormulaire(4); if (!f) return 'navigation';
+    const f = await ouvrirFormulaire(6); if (!f) return 'navigation';
     const p = lot.producteur;
     setEntite(q('#txtid_entiteAdd'));
     setInput(q('#txtproducteur_nomAdd'), p.nom); setInput(q('#txtproducteur_prenomsAdd'), p.prenoms);
@@ -339,9 +381,9 @@
   async function etapeBrousse(e) {
     const lot = e.lot;
     if (!e.ids.campagne_id) e.ids.campagne_id = await campagneId(lot);
-    if (await existeUsine(e) || await existePesee(e) || await existeBrousse(e)) { e.fait[5] = 'déjà dans OBC'; journal(e, 'Connaissement brousse déjà saisi'); return 'suivant'; }
+    if (await existeUsine(e) || await existePesee(e) || await existeBrousse(e)) { e.fait[7] = 'déjà dans OBC'; journal(e, 'Connaissement brousse déjà saisi'); return 'suivant'; }
     if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
-    const f = await ouvrirFormulaire(5); if (!f) return 'navigation';
+    const f = await ouvrirFormulaire(7); if (!f) return 'navigation';
     const c = lot.connaissement;
     setSelect(q('#txtcampagne_idAdd'), e.ids.campagne_id);
     await listeStable(q('#txtid_fournisseurAdd')); await listeStable(q('#txttype_commodite_idAdd'));
@@ -378,9 +420,9 @@
   }
   async function etapeLivraison(e) {
     const lot = e.lot;
-    if (await existeUsine(e) || await existePesee(e)) { e.fait[6] = 'déjà dans OBC'; journal(e, 'Données livraison déjà saisies'); return 'suivant'; }
+    if (await existeUsine(e) || await existePesee(e)) { e.fait[8] = 'déjà dans OBC'; journal(e, 'Données livraison déjà saisies'); return 'suivant'; }
     if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
-    const f = await ouvrirFormulaire(6); if (!f) return 'navigation';
+    const f = await ouvrirFormulaire(8); if (!f) return 'navigation';
     const c = lot.connaissement;
     setSelect(q('#txtcampagne_idAdd'), e.ids.campagne_id);
     await listeStable(q('#txtconnaissement_brousse_idAdd')); await listeStable(q('#txttransporteur_idAdd')); await listeStable(q('#txtorigine_idAdd'));
@@ -415,9 +457,9 @@
   }
   async function etapePesee(e) {
     const lot = e.lot;
-    if (await existePesee(e)) { e.fait[7] = 'déjà dans OBC'; journal(e, 'Pesée déjà saisie'); return 'suivant'; }
+    if (await existePesee(e)) { e.fait[9] = 'déjà dans OBC'; journal(e, 'Pesée déjà saisie'); return 'suivant'; }
     if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
-    const f = await ouvrirFormulaire(7); if (!f) return 'navigation';
+    const f = await ouvrirFormulaire(9); if (!f) return 'navigation';
     const p = lot.pesee, c = lot.connaissement;
     setSelect(q('#txtcampagne_idAdd'), e.ids.campagne_id);
     await listeStable(q('#txtconnaissement_usine_idAdd')); await listeStable(q('#txtqualite_idAdd'));
@@ -446,9 +488,9 @@
   }
   async function etapeBordereau(e) {
     const lot = e.lot, b = lot.bordereau;
-    if (await existeBordereau(e)) { e.fait[8] = 'déjà dans OBC'; journal(e, 'Bordereau déjà saisi'); return 'suivant'; }
+    if (await existeBordereau(e)) { e.fait[10] = 'déjà dans OBC'; journal(e, 'Bordereau déjà saisi'); return 'suivant'; }
     if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
-    const f = await ouvrirFormulaire(8); if (!f) return 'navigation';
+    const f = await ouvrirFormulaire(10); if (!f) return 'navigation';
     setSelect(q('#txtcampagne_idAdd'), e.ids.campagne_id);
     await listeStable(q('#txtpesee_brousse_idAdd'));
     await setSelectTexte(q('#txtpesee_brousse_idAdd'), lot.pesee.code, 'Pesée brousse');
@@ -496,7 +538,7 @@
       : ' ⚠ Cases ≠ ORIGEN : brut ' + fr(vb) + ' (attendu ' + fr(att.brut) + '), revolving ' + fr(lire('retenue_montant_revolving')) + ' (attendu ' + fr(att.revolving) + '), net à payer ' + fr(vn) + ' (attendu ' + fr(att.net) + ') : ne pas enregistrer avant vérification.';
     e.note = 'Bordereau ' + b.numero + ' : PU ' + b.pu_commodite + ', BIC ' + b.pu_bic + ', transport ' + b.pu_transport + (b.montant_revolving ? ', revolving ' + b.montant_revolving : '') + '.' + verif; return 'rempli';
   }
-  const EXEC = [etapeCompteTiers, etapeCooperative, etapeTransporteur, etapeProducteur, etapeBrousse, etapeLivraison, etapePesee, etapeBordereau];
+  const EXEC = [etapeGrosTraitantTiers, etapeGrosTraitant, etapeCompteTiers, etapeCooperative, etapeTransporteur, etapeProducteur, etapeBrousse, etapeLivraison, etapePesee, etapeBordereau];
 
   // ---------- boucle ----------
   let enCours = false;
@@ -506,7 +548,7 @@
       let e = lireEtat();
       if (!e || e.pause || e.statut === 'termine') return;
       if (!connecte()) { e.erreur = 'Connecte-toi à OBC, puis « Continuer ».'; ecrireEtat(e); afficherEtat(); return; }
-      for (let garde = 0; garde < 10; garde++) {
+      for (let garde = 0; garde < 25; garde++) {
         e = lireEtat(); if (!e || e.pause) return;
         if (e.etape > NB_ETAPES) { try { const r = await existeBordereau(e); const lien = r && r.tr && r.tr.querySelector('a[href*="RptAgroAchatBordereauReceptionViewer"]'); if (lien) e.urlImpression = lien.getAttribute('href'); } catch (er) { /* lien facultatif */ } e.statut = 'termine'; e.note = 'Dans ORIGEN, sous cette livraison, clique « déjà saisi » pour la marquer OBC ✓ (n° de bordereau : ' + (e.lot.bordereau && e.lot.bordereau.numero || '') + ').'; ecrireEtat(e); afficherEtat(); if (e.lot && e.lot.achat_id && !e.imprime) { e.imprime = true; ecrireEtat(e); setTimeout(() => { location.href = ORIGEN_URL + '#bordereau=' + encodeURIComponent(e.lot.achat_id); }, 2000); } return; }
         if (e.statut === 'attente_enregistrement') {
