@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.51
+// @version      0.1.52
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.51';
+  const VERSION = '0.1.52';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const ENTITE = '1';                 // ECORIGINE
@@ -165,7 +165,7 @@
     rafraichirListes(form);
     return manques;
   }
-  async function setSelectTexte(el, test, libelle, affiche) { const o = await attendreOption(el, test); if (!o) throw new Error(libelle + ' : « ' + (affiche || (test instanceof RegExp ? test.source : typeof test === 'function' ? '?' : test)) + ' » non reconnu dans la liste OBC'); setSelect(el, o.value); return o; }
+  async function setSelectTexte(el, test, libelle, affiche) { const o = await attendreOption(el, test); if (!o) throw new Error(libelle + ' : « ' + (affiche || (test instanceof RegExp ? test.source : typeof test === 'function' ? '?' : test)) + ' » non reconnu dans la liste OBC' + (/^(Origine|Destination)$/.test(libelle) ? ' : cette liste est un référentiel d\'OBC qui ne se remplit pas toute seule. Ajoute « ' + (affiche || '') + ' » dans OBC (Agro > Paramétrage > ' + libelle + '), puis « Continuer ».' : '')); setSelect(el, o.value); return o; }
   // Entité : déjà ECORIGINE dans OBC ; la changer déclenche le rechargement de toutes les listes (et efface les sélections).
   function setEntite(el) { if (!el) return; if (String(el.value) !== ENTITE) setSelect(el, ENTITE); }
   // Attend qu'une liste ait fini de se (re)charger : nombre d'options stable pendant 1,2 s et au moins une valeur.
