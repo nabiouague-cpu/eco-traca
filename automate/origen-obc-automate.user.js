@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.32
+// @version      0.1.33
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.32';
+  const VERSION = '0.1.33';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const ENTITE = '1';                 // ECORIGINE
@@ -249,11 +249,12 @@
     setInput(q('#txtville_fournisseurAdd'), c.ville); setInput(q('#txtnumero_cc_fournisseurAdd'), c.dfe); setInput(q('#txtnumero_rccm_fournisseurAdd'), c.rccm);
     setInput(q('#txtadresse_postale_fournisseurAdd'), c.adresse_postale); setInput(q('#txtadresse_geographique_fournisseurAdd'), c.siege);
     setRadio('txttype_fournisseur_agroAdd2'); setInput(q('#txtnumero_agrement_ccc_fournisseur_agroAdd'), c.ccc);
-    // Gros traitant rattaché : celui qu'ORIGEN connaît pour la coopérative (fournisseur principal, à défaut le traitant du site de déchargement),
+    // Gros traitant rattaché : le traitant du site de déchargement du lot dans ORIGEN (Awahus, Sitapa, M Bobby Vo, Coops Touton, Coops Sucden ; « Coops Ecorigine » = coopératives en propre, aucun gros traitant),
     // retrouvé par son nom dans la liste des gros traitants d'OBC. Aucun rattachement n'est inventé : sans correspondance, la liste reste vide.
     e.note = ''; let traitantNote = '';
     { const sel = q('#txtid_fournisseur_agro_gros_traitantAdd'); const cands = [].concat(c.gros_traitants || []).map((x) => String(x || '').trim()).filter(Boolean);
-      if (sel && cands.length) {
+      if (c.coop_propre) { traitantNote = ' Coopérative en propre (ECORIGINE) : pas de gros traitant rattaché.'; journal(e, 'Coopérative en propre : aucun gros traitant'); }
+      else if (sel && cands.length) {
         await attendreOption(sel, /./).catch(() => null);
         const opts = [...sel.options].filter((o) => o.value !== '');
         let choisi = null, cand = '';
