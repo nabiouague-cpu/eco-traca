@@ -4396,7 +4396,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-27-320';
+const APP_VERSION = '2026-10-27-321';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -23294,7 +23294,13 @@ function prefRembContexte(a){
   if (!prefs.length) return null;
   const A = prefs.reduce((t,p)=>t+(Number(p.montant)||0),0);
   const deja = (state.achats||[]).filter(x=>x.id!==a.id && x.cooperative_id===a.cooperative_id && (!a.campagne_id || x.campagne_id===a.campagne_id)).reduce((t,x)=>t+(Number(x.pref_remb_montant)||0),0);
-  return { A, reste: Math.max(0, A-deja) };
+  const der = prefs.slice().sort((x,y)=>String(x.date_financement||'').localeCompare(String(y.date_financement||'')) || String(x.created_at||'').localeCompare(String(y.created_at||''))).pop();
+  return { A, reste: Math.max(0, A-deja), derniere: der ? { montant:Number(der.montant)||0, date:der.date_financement, numero:der.numero||'' } : null, nb: prefs.length };
+}
+function choisirRembPaiement(mode){
+  const sel = document.querySelector('[name="pa_remb_mode"]'); if (!sel) return;
+  sel.value = mode; majRembPaiement();
+  if (mode==='partiel'){ const c = document.querySelector('[name="pa_remb_montant"]'); if (c){ c.readOnly = false; c.focus(); } }
 }
 function majRembPaiement(manuel){
   const box = document.getElementById('pa-remb'); if (!box) return;
@@ -23302,6 +23308,7 @@ function majRembPaiement(manuel){
   const reste = Number(box.getAttribute('data-reste'))||0, mode = (document.querySelector('[name="pa_remb_mode"]')||{}).value;
   const champ = document.querySelector('[name="pa_remb_montant"]'), n = document.getElementById('pa-note');
   const ap = lire('pa_montant_a_payer'), deja = Number(n && n.getAttribute('data-deja'))||0, dispo = Math.max(0, ap-deja);
+  box.querySelectorAll('[data-rm]').forEach(b=>b.classList.toggle('btn-primary', b.getAttribute('data-rm')===mode));
   if (!manuel){
     if (mode==='aucun') champ.value = '';
     else if (mode==='total') champ.value = Math.min(reste, dispo) || '';
@@ -25828,9 +25835,13 @@ function _renderBrut(){
             const ctx = prefRembContexte(a); if (!ctx) return '';
             const mode = a.pref_remb_mode || ((!edit && prefRembParDefaut(a)) ? 'total' : 'aucun'), mt = Number(a.pref_remb_montant)||0;
             return '<fieldset style="margin-top:12px;border:2px solid var(--gold);border-radius:10px;" id="pa-remb" data-reste="'+ctx.reste+'"><legend>Préfinancement de la coopérative</legend>'
+              + (ctx.derniere ? '<div style="font-size:15px;margin-bottom:6px;">Avance faite : <b>'+fmtNum(ctx.derniere.montant)+' FCFA</b>'+(ctx.derniere.date?' le '+new Date(ctx.derniere.date+'T00:00:00').toLocaleDateString('fr-FR'):'')+(ctx.derniere.numero?' · '+esc(ctx.derniere.numero):'')+(ctx.nb>1?' <span class="hint">('+ctx.nb+' avances au total)</span>':'')+'</div>' : '')
               + '<div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:8px;"><span>Avances reçues <b>'+fmtNum(ctx.A)+'</b> FCFA</span><span>Déjà remboursé <b>'+fmtNum(ctx.A-ctx.reste)+'</b> FCFA</span><span>Reste dû <b>'+fmtNum(ctx.reste)+'</b> FCFA</span></div>'
               + '<span class="hint">Le montant remboursé est retenu sur ce paiement : il n\'est pas payé par chèque.</span>'
-              + '<label class="field">Modalité<select name="pa_remb_mode" onchange="majRembPaiement()">'
+              + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;"><button type="button" class="btn'+(mode==='total'?' btn-primary':'')+'" data-rm="total" onclick="choisirRembPaiement(\'total\')">✅ Déduire l\'avance</button>'
+              + '<button type="button" class="btn'+(mode==='aucun'?' btn-primary':'')+'" data-rm="aucun" onclick="choisirRembPaiement(\'aucun\')">⏸ Laisser (ne pas déduire)</button>'
+              + '<button type="button" class="btn'+(mode==='partiel'?' btn-primary':'')+'" data-rm="partiel" onclick="choisirRembPaiement(\'partiel\')">Déduire une partie…</button></div>'
+              + '<label class="field" style="display:none;">Modalité<select name="pa_remb_mode" onchange="majRembPaiement()">'
               + '<option value="aucun"'+(mode==='aucun'?' selected':'')+'>Aucun remboursement sur ce paiement</option>'
               + '<option value="total"'+(mode==='total'?' selected':'')+'>Rembourser tout le financement (dans la limite du montant à payer)</option>'
               + '<option value="partiel"'+(mode==='partiel'?' selected':'')+'>Rembourser une partie du financement</option></select></label>'
