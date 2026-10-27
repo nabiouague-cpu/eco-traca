@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.1.40
+// @version      0.1.41
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.1.40';
+  const VERSION = '0.1.41';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const ENTITE = '1';                 // ECORIGINE
@@ -173,20 +173,15 @@
   function setRadio(id) { const el = document.getElementById(id); if (!el) return; el.checked = true; el.dispatchEvent(new Event('change', { bubbles: true })); }
   const q = (s) => document.querySelector(s);
 
-  // Ouvre le formulaire de création de l'étape k : bouton « Nouveau » de la page Historique ; si la page Historique est en erreur
-  // (OBC plante parfois à l'affichage d'une ligne) ou n'a pas le bouton, on ouvre directement la page « Create » du même formulaire.
+  // Ouvre le formulaire de création de l'étape k sur la page courante (ou navigue d'abord vers la bonne page).
+  // NB : la page /Create ouverte seule est un formulaire brut (sans les scripts d'OBC : listes en cascade absentes) : on passe toujours par le bouton « Nouveau » de la page Historique.
   async function ouvrirFormulaire(k) {
     if (q(FORMS[k - 1])) return q(FORMS[k - 1]);
-    const m = BTN_NOUVEAU[k - 1].match(/href="([^"]+)"/);
-    const urlCreate = m ? m[1] : '/PlanComptableTiersEntite/Create?defaultClasse=4';
-    if (location.pathname.toLowerCase() === urlCreate.split('?')[0].toLowerCase()) {
-      const f0 = await attendre(() => q(FORMS[k - 1]), ATTENTE_MAX); if (!f0) throw new Error('Le formulaire ne s\'est pas ouvert (' + FORMS[k - 1] + ')');
-      await dormir(500); return f0;
-    }
     if (!location.pathname.toLowerCase().startsWith(PAGES[k - 1].toLowerCase())) { location.href = PAGES[k - 1]; return null; }
     const enErreur = () => /Une erreur est survenue/.test((document.body && document.body.innerText) || '');
     const btn = await attendre(() => q(BTN_NOUVEAU[k - 1]) || (enErreur() ? 'erreur' : null), 10000);
-    if (!btn || btn === 'erreur') { const e = lireEtat(); if (e) journal(e, 'Page Historique indisponible : ouverture directe du formulaire'); location.href = urlCreate; return null; }
+    if (btn === 'erreur') throw new Error('La page « ' + ETAPES[k - 1] + ' » d\'OBC est en erreur : OBC plante à l\'affichage de sa liste (un enregistrement a une donnée vide, souvent une parcelle sans code). Corrige cet enregistrement dans OBC, puis « Continuer ».');
+    if (!btn) throw new Error('Bouton « Nouveau » introuvable sur ' + PAGES[k - 1]);
     btn.click();
     const f = await attendre(() => q(FORMS[k - 1]), ATTENTE_MAX);
     if (!f) throw new Error('Le formulaire ne s\'est pas ouvert (' + FORMS[k - 1] + ')');
