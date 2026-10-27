@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.2.7
+// @version      0.2.8
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.2.7';
+  const VERSION = '0.2.8';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -310,9 +310,10 @@
   }
   function choisirTransporteur(lot, rows) {
     const base = N(lot.transporteur.nom); if (!base) return { existant: null, nouveauNom: '' };
-    const memeNom = rows.filter((r) => N(r.nom) === base || N(r.nom).replace(/ \d+$/, '') === base);
-    const veh = PLAQUE(lot.transporteur.immat_vehicule), rem = PLAQUE(lot.transporteur.immat_remorque);
-    const existant = memeNom.find((r) => PLAQUE(r.veh) === veh && PLAQUE(r.rem) === rem) || null;
+    // OBC complète le nom du transporteur avec le dernier mot du nom du chauffeur (« ZOUNGRANA ABDOULAYE » devient « ZOUNGRANA ABDOULAYE SIAKA ») et garde le nom saisi comme CODE.
+    const memeNom = rows.filter((r) => N(r.nom) === base || N(r.nom).replace(/ \d+$/, '') === base || N(r.code) === base || N(r.code).replace(/ \d+$/, '') === base || N(r.nom).startsWith(base + ' '));
+    const veh = PLAQUE(lot.transporteur.immat_vehicule), rem = PLAQUE(lot.transporteur.immat_remorque), chauf = N(lot.transporteur.chauffeur);
+    const existant = memeNom.find((r) => PLAQUE(r.veh) === veh && PLAQUE(r.rem) === rem) || memeNom.find((r) => N(r.code) === base && chauf && N(r.chauffeur) === chauf) || null;
     if (existant) return { existant, nouveauNom: '' };
     if (!memeNom.length) return { existant: null, nouveauNom: lot.transporteur.nom.trim() };
     const nums = memeNom.map((r) => { const m = N(r.nom).match(/ (\d+)$/); return m ? Number(m[1]) : 1; });
@@ -582,51 +583,51 @@
   const memoOrigines = () => lireFile().origines || [];
   function memoriserOrigine(nom) { const f = lireFile(); f.origines = [...new Set((f.origines || []).concat([N(nom)]))]; ecrireFile(f); }
   // etapeRetour : 'suite' quand l'origine est faite en tout début de lot (on enchaîne sur l'étape 1) ; sinon retour à la page des données livraison.
-  async function sousEtapeOrigine(e) {
-    const nom = String(e.lot.connaissement.origine || '').trim().toUpperCase(), tkm = num(e.lot.connaissement.tkm);
-    const fin = () => {
-      memoriserOrigine(nom); e.sous = null; e.origineOk = true; ecrireEtat(e);
-      if (e.preEtape) { journal(e, 'Origine « ' + nom + ' » : OK, on enchaîne'); return 'suite'; }
-      journal(e, 'Origine « ' + nom + ' » prête : retour aux données livraison'); location.href = PAGES[7]; return 'navigation';
-    };
-    if (!/ParametrageOrigine/i.test(location.pathname)) { location.href = '/AgroParametrage/ParametrageOrigine'; return 'navigation'; }
-    const dansTable = () => [...document.querySelectorAll('table tbody td')].some((td) => N(td.textContent) === N(nom));
+  const memoUsines = () => lireFile().usines || [];
+  function memoriserUsine(code) { const f = lireFile(); f.usines = [...new Set((f.usines || []).concat([String(code).toUpperCase()]))]; ecrireFile(f); }
+  // Création d'un élément de référentiel OBC : 'origine' (entité, libellé, code, TKM) ou 'usine' (entité, libellé, code). L'élément est d'abord cherché dans la liste.
+  // Création d'un élément de référentiel OBC sur sa page : 'origine' (entité, libellé = code, TKM) ou 'usine' (entité, libellé, code). Cherche d'abord dans la liste. Renvoie 'existe' ou 'cree'.
+  async function creerElement(e, type, it) {
+    const usine = type === 'usine', LIB = usine ? 'Nouvelle usine' : 'Nouvelle origine', LABEL = usine ? 'Usine' : 'Origine';
+    const nom = it.nom, codeVal = it.code, tkm = it.tkm;
+    const cle = usine ? codeVal : nom;
+    const dansTable = () => [...document.querySelectorAll('table tbody td')].some((td) => N(td.textContent) === N(cle));
     await attendre(() => document.querySelector('table tbody tr') || /aucun|no data|pas de donn/i.test(document.body.innerText), 15000, 400); await dormir(1000);
     // La liste d'OBC est paginée : si le nom n'est pas sur la page affichée, on le cherche avec la zone de recherche de la liste.
     const existeRecherche = async () => {
       if (dansTable()) return true;
       const rech = [...document.querySelectorAll('input[type=search], .dataTables_filter input, input[placeholder*="echerche" i], input[name*="search" i], input[id*="search" i], input[id*="filter" i]')].find((x) => visible(x) && !x.closest('.modal') && !x.closest('#origen-obc'));
       if (!rech) return false;
-      setInput(rech, nom); rech.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter' })); rech.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter', keyCode: 13 }));
+      setInput(rech, cle); rech.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter' })); rech.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter', keyCode: 13 }));
       await attendre(() => dansTable(), 6000, 400); const ok = dansTable(); setInput(rech, ''); return ok;
     };
-    if (await existeRecherche()) return fin();
+    if (await existeRecherche()) return 'existe';
     if (!modalOuverte()) {
       const cands = [...document.querySelectorAll('a, button')].filter((b) => visible(b) && !b.closest('#origen-obc') && !b.closest('.modal'));
-      const btn = cands.find((b) => /Origine\/Create|Origine\/Add/i.test(b.getAttribute('href') || '')) || cands.find((b) => /^(NOUVEAU|NOUVELLE|AJOUTER|CREER)\b/.test(N(b.textContent))) || cands.find((b) => /nouv|create|add/i.test(b.id));
-      if (!btn) throw new Error('Bouton « Nouveau » introuvable sur la page des origines. Boutons vus : ' + cands.map((b) => (b.textContent || '').trim().slice(0, 20)).filter(Boolean).slice(0, 15).join(' | '));
-      journal(e, 'Origine : clic sur « ' + (btn.textContent || btn.id || '').trim().slice(0, 30) + ' »'); btn.click();
+      const btn = cands.find((b) => new RegExp(usine ? 'Usine/(Create|Add)' : 'Origine/(Create|Add)', 'i').test(b.getAttribute('href') || '')) || cands.find((b) => /^(NOUVEAU|NOUVELLE|AJOUTER|CREER)\b/.test(N(b.textContent))) || cands.find((b) => /nouv|create|add/i.test(b.id));
+      if (!btn) throw new Error('Bouton « Nouveau » introuvable sur la page « ' + LABEL + ' ». Boutons vus : ' + cands.map((b) => (b.textContent || '').trim().slice(0, 20)).filter(Boolean).slice(0, 15).join(' | '));
+      journal(e, LABEL + ' : clic sur « ' + (btn.textContent || btn.id || '').trim().slice(0, 30) + ' »'); btn.click();
     }
     const modal = await attendre(() => modalOuverte(), 25000, 300);
-    if (!modal) throw new Error('Le formulaire « Nouvelle origine » ne s\'est pas ouvert (aucune fenêtre visible après le clic)');
-    await attendre(() => { const c = champsOrigine(modal); return c.lib && c.code && c.prix; }, 8000, 300); await dormir(600);
+    if (!modal) throw new Error('Le formulaire « ' + LIB + ' » ne s\'est pas ouvert (aucune fenêtre visible après le clic)');
+    await attendre(() => { const c = champsOrigine(modal); return c.lib && c.code && (usine || c.prix); }, 8000, 300); await dormir(600);
     const { ent, lib, code, prix } = champsOrigine(modal);
-    if (!lib || !code || !prix) throw new Error('Formulaire « Nouvelle origine » : cases introuvables (libellé ' + !!lib + ', code ' + !!code + ', TKM ' + !!prix + '). Contenu : ' + modal.innerText.replace(/\s+/g, ' ').slice(0, 160));
+    if (!lib || !code || (!usine && !prix)) throw new Error('Formulaire « ' + LIB + ' » : cases introuvables (libellé ' + !!lib + ', code ' + !!code + ', TKM ' + !!prix + '). Contenu : ' + modal.innerText.replace(/\s+/g, ' ').slice(0, 160));
     if (ent && ent.tagName === 'SELECT') { await setSelectTexte(ent, /^ECORIGINE/i, 'Entité'); await dormir(1500); }
     // OBC peut vider les cases après le choix de l'entité : on remplit, on attend, on revérifie (3 passes) avant d'enregistrer.
-    const ok3 = () => lib.value === nom && code.value === nom && Number(String(prix.value).replace(',', '.')) === Number(tkm);
-    for (let passe = 0; passe < 3 && !ok3(); passe++) { setInput(lib, nom); setInput(code, nom); setInput(prix, tkm); await dormir(1200); }
+    const ok3 = () => lib.value === nom && code.value === codeVal && (usine || Number(String(prix.value).replace(',', '.')) === Number(tkm));
+    for (let passe = 0; passe < 3 && !ok3(); passe++) { setInput(lib, nom); setInput(code, codeVal); if (prix) setInput(prix, tkm); await dormir(1200); }
     { const entTxt = ent && ent.tagName === 'SELECT' ? ((ent.options[ent.selectedIndex] || {}).text || '') : '(sans liste)';
-      if (ent && ent.tagName === 'SELECT' && !/^ECORIGINE/i.test(entTxt)) throw new Error('Nouvelle origine : l\'entité n\'a pas pris ECORIGINE (« ' + entTxt + ' »), rien n\'est enregistré');
-      if (!ok3()) throw new Error('Nouvelle origine : cases vidées par OBC (libellé « ' + lib.value + ' », code « ' + code.value + ' », TKM « ' + prix.value + ' »), rien n\'est enregistré');
-      journal(e, 'Nouvelle origine : entité ' + entTxt + ', libellé/code ' + nom + ', TKM ' + tkm); }
+      if (ent && ent.tagName === 'SELECT' && !/^ECORIGINE/i.test(entTxt)) throw new Error(LIB + ' : l\'entité n\'a pas pris ECORIGINE (« ' + entTxt + ' »), rien n\'est enregistré');
+      if (!ok3()) throw new Error(LIB + ' : cases vidées par OBC (libellé « ' + lib.value + ' », code « ' + code.value + ' », TKM « ' + prix.value + ' »), rien n\'est enregistré');
+      journal(e, LIB + ' : entité ' + entTxt + ', libellé ' + nom + ', code ' + codeVal + (usine ? '' : ', TKM ' + tkm)); }
     const auto = e.enFile && lireFile().auto !== false;
     const bt = () => [...modal.querySelectorAll('button, input[type=submit]')].find((b) => /enregistrer/i.test(b.textContent || b.value || ''));
     if (auto) {
       const b = await attendre(() => { const x = bt(); return x && !x.disabled ? x : null; }, 6000, 300);
-      if (!b) throw new Error('Bouton « Enregistrer » de la nouvelle origine inactif ou introuvable. ' + erreurVisible());
-      journal(e, 'Origine « ' + nom + ' » : enregistrement automatique'); b.click(); confirmerBoite();
-    } else { e.note = 'Origine « ' + nom + ' » remplie : clique « Enregistrer » dans OBC.'; ecrireEtat(e); afficherEtat(); }
+      if (!b) throw new Error('Bouton « Enregistrer » de « ' + LIB + ' » inactif ou introuvable. ' + erreurVisible());
+      journal(e, LABEL + ' « ' + nom + ' » : enregistrement automatique'); b.click(); confirmerBoite();
+    } else { e.note = LABEL + ' « ' + nom + ' » remplie : clique « Enregistrer » dans OBC.'; ecrireEtat(e); afficherEtat(); }
     // Enregistrement réussi = la fenêtre se ferme sans message d'erreur ; la présence réelle de l'origine est de toute façon revérifiée dans la liste du formulaire « Données livraison ».
     const t0 = Date.now(); let ferme = false;
     while (Date.now() - t0 < (auto ? 20000 : 300000)) {
@@ -638,16 +639,57 @@
       const msg = erreurVisible();
       const fermer = modalOuverte() && [...modalOuverte().querySelectorAll('button, a')].find((b) => /fermer|annuler|close/i.test(b.textContent || ''));
       if (fermer) { fermer.click(); await dormir(1500); }
-      if (/exist|d[ée]j[àa]|doublon|unique|already/i.test(msg) || await existeRecherche()) { journal(e, 'Origine « ' + nom + ' » existe déjà dans OBC (' + (msg || 'vue dans la liste') + ')'); return fin(); }
-      throw new Error('Origine « ' + nom + ' » non enregistrée : la fenêtre est restée ouverte. ' + msg);
+      if (/exist|d[ée]j[àa]|doublon|unique|already/i.test(msg) || await existeRecherche()) { journal(e, LABEL + ' « ' + nom + ' » existe déjà dans OBC (' + (msg || 'vue dans la liste') + ')'); return 'existe'; }
+      throw new Error(LABEL + ' « ' + nom + ' » non enregistrée : la fenêtre est restée ouverte. ' + msg);
     }
     await dormir(1500);
+    return 'cree';
+  }
+  const usinesDuLot = (e, tout) => {
+    const c0 = e.lot.connaissement, vu = new Set(), r = [];
+    [{ code: c0.usine_code, nom: c0.usine_nom }].concat(tout ? (c0.usines_toutes || []) : []).forEach((u) => { const code = String(u.code || '').trim().toUpperCase(), nom = String(u.nom || u.code || '').trim().toUpperCase(); if (code && nom && !vu.has(code)) { vu.add(code); r.push({ code, nom }); } });
+    return r;
+  };
+  const usinesManquantes = (e) => usinesDuLot(e, true).filter((u) => !memoUsines().includes(u.code));
+  function urlReferentiel(type) {
+    if (type === 'origine') return '/AgroParametrage/ParametrageOrigine';
+    const f = lireFile(); if (f.urlUsine) return f.urlUsine;
+    const l = [...document.querySelectorAll('a[href]')].find((x) => !x.closest('#origen-obc') && /^USINES?$/.test(N(x.textContent)) && !/Connaissement|Achat|Pesee/i.test(x.getAttribute('href')) && x.getAttribute('href') !== '#' && !/^javascript/i.test(x.getAttribute('href')));
+    return l ? l.getAttribute('href') : '/AgroParametrage/ParametrageUsine';
+  }
+  // Étape préalable / de secours : crée dans OBC les usines (toutes celles d'ORIGEN) ou l'origine du lot, puis enchaîne.
+  async function sousEtapeOrigine(e) {
+    const type = e.sous || 'origine', usine = type === 'usine', c0 = e.lot.connaissement;
+    const fin = () => {
+      e.sous = null; if (usine) e.usinesOk = true; else e.origineOk = true; ecrireEtat(e);
+      if (e.preEtape) return 'suite';
+      journal(e, (usine ? 'Usine' : 'Origine') + ' prête : retour aux données livraison'); location.href = PAGES[7]; return 'navigation';
+    };
+    const page = urlReferentiel(type);
+    if (location.pathname.toLowerCase() !== page.split('?')[0].toLowerCase()) { journal(e, (usine ? 'Usines' : 'Origine') + ' : ouverture de ' + page); location.href = page; return 'navigation'; }
+    await attendre(() => document.querySelector('table tbody tr') || /aucun|no data|pas de donn/i.test(document.body.innerText), 15000, 400); await dormir(1000);
+    if (usine) {
+      const liste = e.preEtape ? usinesManquantes(e) : usinesDuLot(e, false);
+      if (!liste.length) return fin();
+      const f0 = lireFile(); f0.urlUsine = location.pathname; ecrireFile(f0);
+      journal(e, 'Usines à vérifier dans OBC : ' + liste.map((u) => u.code).join(', '));
+      for (const u of liste) {
+        const r = await creerElement(e, 'usine', u);
+        memoriserUsine(u.code); journal(e, 'Usine « ' + u.nom + ' - ' + u.code + ' » : ' + (r === 'cree' ? 'créée' : 'déjà présente'));
+        await dormir(800);
+      }
+      return fin();
+    }
+    const nom = String(c0.origine || '').trim().toUpperCase();
+    if (!nom) throw new Error('Origine vide dans ORIGEN');
+    const r = await creerElement(e, 'origine', { nom, code: nom, tkm: num(c0.tkm) });
+    memoriserOrigine(nom); journal(e, 'Origine « ' + nom + ' » : ' + (r === 'cree' ? 'créée' : 'déjà présente'));
     return fin();
   }
   async function etapeLivraison(e) {
     const lot = e.lot;
     { const [u, p] = await Promise.all([existeUsine(e), existePesee(e)]); if (u || p) { e.fait[8] = 'déjà dans OBC'; journal(e, 'Données livraison déjà saisies'); return 'suivant'; } }
-    if (e.sous === 'origine') return sousEtapeOrigine(e);
+    if (e.sous) return sousEtapeOrigine(e);
     if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
     const f = await ouvrirFormulaire(8); if (!f) return 'navigation';
     const c = lot.connaissement;
@@ -685,7 +727,14 @@
     if (!q('#txtconnaissement_immatriculation_vehiculeAdd').value) setInput(q('#txtconnaissement_immatriculation_vehiculeAdd'), lot.transporteur.immat_vehicule);
     if (!q('#txtconnaissement_immatriculation_remorqueAdd').value) setInput(q('#txtconnaissement_immatriculation_remorqueAdd'), lot.transporteur.immat_remorque);
     if (!q('#txtconnaissement_nom_chauffeurAdd').value) setInput(q('#txtconnaissement_nom_chauffeurAdd'), lot.transporteur.chauffeur);
-    await setSelectTexte(q('#txtusine_idAdd'), new RegExp('-\\s*' + c.usine_code + '\\s*$', 'i'), 'Usine');
+    { const selU = q('#txtusine_idAdd'); await listeStable(selU);
+      const reU = new RegExp('-\\s*' + c.usine_code + '\\s*$', 'i');
+      if (selU && selU.options.length > 1 && !(await attendre(() => optionParTexte(selU, reU), 4000, 300))) {
+        if (e.usineEssayee) throw new Error('Usine « ' + c.usine_code + ' » toujours absente de la liste après sa création');
+        e.usineEssayee = true; e.sous = 'usine'; ecrireEtat(e); journal(e, 'Usine « ' + c.usine_code + ' » absente d\'OBC : création');
+        location.href = urlReferentiel('usine'); return 'navigation';
+      }
+      await setSelectTexte(selU, reU, 'Usine'); }
     setInput(q('#txtconnaissement_usine_nb_sacs_chargeAdd'), c.sacs_declares); setInput(q('#txtconnaissement_usine_nb_sacs_receptionneAdd'), c.sacs_declares);
     setInput(q('#txtconnaissement_usine_poids_brut_chargeAdd'), c.poids_brut_declare || ''); setInput(q('#txtconnaissement_usine_poids_refactionAdd'), '0');
     ['nb_sacs_charge', 'poids_brut_charge'].forEach((k) => { const el = q('#txtconnaissement_usine_' + k + 'Add'); if (el) el.dispatchEvent(new Event('focusout', { bubbles: true })); });
@@ -812,16 +861,20 @@
         }
         if (e.statut === 'verifier') e.statut = 'a_faire';
         // Tout premier élément de la chaîne : l'origine du camion existe-t-elle dans OBC ? Sinon on la crée, puis on enchaîne.
-        if (e.enFile && e.etape === 1 && !e.origineOk && !e.sous) {
+        if (e.enFile && e.etape === 1 && !e.sous && !(e.usinesOk && e.origineOk)) {
           const nomO = String(e.lot.connaissement.origine || '').trim();
-          if (!nomO || memoOrigines().includes(N(nomO))) { e.origineOk = true; } else { e.sous = 'origine'; e.preEtape = true; }
+          if (!e.usinesOk && usinesManquantes(e).length) { e.sous = 'usine'; e.preEtape = true; }
+          else {
+            e.usinesOk = true;
+            if (!nomO || memoOrigines().includes(N(nomO))) { e.origineOk = true; e.preEtape = false; } else { e.sous = 'origine'; e.preEtape = true; }
+          }
           ecrireEtat(e);
         }
-        if (e.sous === 'origine') {
+        if (e.sous) {
           try { const r = await sousEtapeOrigine(e); if (r === 'navigation') return; continue; }
           catch (err) {
             const msg = err && err.message ? err.message : String(err);
-            if (e.enFile) { if (transitoire(msg) && (e.retries || 0) < 30) { e.retries = (e.retries || 0) + 1; journal(e, 'Erreur passagère, nouvel essai dans 20 s : ' + msg); setTimeout(boucle, 20000); return; } e.etape = e.etape; await echecLot(e, 'origine : ' + msg); return; }
+            if (e.enFile) { if (transitoire(msg) && (e.retries || 0) < 30) { e.retries = (e.retries || 0) + 1; journal(e, 'Erreur passagère, nouvel essai dans 20 s : ' + msg); setTimeout(boucle, 20000); return; } e.etape = e.etape; await echecLot(e, (e.sous === 'usine' ? 'usine : ' : 'origine : ') + msg); return; }
             e.erreur = 'Origine : ' + msg; journal(e, 'Erreur : ' + e.erreur); return;
           }
         }
