@@ -4396,7 +4396,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-27-315';
+const APP_VERSION = '2026-10-27-316';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -4893,6 +4893,7 @@ async function refreshDemandesTab(){
     state.demandeFichiers = [];
   }
   { const g = await supabaseClient.from('demande_fichiers').select('*').is('demande_id', null).eq('type','product_movements'); state.fichesGenerees = g.error ? (state.fichesGenerees||[]) : (g.data||[]); }
+  { const g = await supabaseClient.from('demande_fichiers').select('*').is('demande_id', null).eq('type','prefinancement'); state.fichiersPrefin = g.error ? (state.fichiersPrefin||[]) : (g.data||[]); }
   await qcChargerReponsesAdmin();
   render();
 }
@@ -5086,6 +5087,8 @@ function fichiersParTypePourCoop(coopId){
   // Le dossier « Fiches de traçabilité » ne contient QUE les fiches envoyées par les coopératives : les connaissements (PDF) ont leur propre dossier,
   // et les documents envoyés par ECORIGINE (contrat, code de conduite...) n'y sont jamais rangés.
   ['product_movements','connaissements'].concat(Object.keys(DEMANDE_TYPE_LABELS).filter(t=>t!=='product_movements')).forEach(t=>{ dossiers[t] = { label: t==='connaissements' ? 'Connaissements (PDF)' : DEMANDE_TYPE_LABELS[t], fichiers: [] }; });
+  // « Préfinancement » : protocole d'accord, avenants, convention de cautionnement et fiches de financement générés par ORIGEN
+  dossiers['prefinancement'] = { label:'Préfinancement', fichiers: (state.fichiersPrefin||[]).filter(f=>f.cooperative_id===coopId).map(f=>({ path:f.path, nom:f.nom||f.path.split('/').pop(), date:f.uploaded_at, titre:'Document de préfinancement généré par ORIGEN', source:'prefin_fichiers', sourceId:f.id, origine:'ecorigine' })) };
   (state.demandeFichiers||[]).forEach(f=>{
     if (!demandeIdsCoop.has(f.demande_id)) return;
     // Les depots de la cooperative pour le registre / la geolocalisation sont enregistres
@@ -5219,6 +5222,9 @@ async function supprimerFichierEnBase(f){
     await supabaseClient.from('doc_check').update({ disponible:false, fichier_path:null, fichier_nom:null }).eq('id', f.sourceId);
     const dc = (state.docCheck||[]).find(x=>x.id===f.sourceId);
     if (dc){ dc.disponible = false; dc.fichier_path = null; dc.fichier_nom = null; }
+  } else if (f.source==='prefin_fichiers'){
+    await supabaseClient.from('demande_fichiers').delete().eq('id', f.sourceId);
+    state.fichiersPrefin = (state.fichiersPrefin||[]).filter(x=>x.id!==f.sourceId);
   } else if (f.source==='coop_database_files'){
     await supabaseClient.from('coop_database_files').delete().eq('id', f.sourceId);
     state.coopDatabaseFiles = (state.coopDatabaseFiles||[]).filter(x=>x.id!==f.sourceId);
@@ -6952,7 +6958,7 @@ function renderPrefCoopDetail(coopId, campId){
   const s = prefSituation(coopId, campId), info = prefInfoCoop(coopId);
   let html = '<div class="panel" id="pref-detail"><div class="panel-head" style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">'
     + '<div><h2>'+esc(coop.nom)+'</h2><p class="hint" style="margin:4px 0 0">Fournisseur principal : <b>'+esc(info.fournisseur_principal||'—')+'</b> · Port : <b>'+esc(prefPort(coopId, campId)||'—')+'</b> · Commission : <b>'+(info.commission_kg!=null&&info.commission_kg!==''?prefFmt(info.commission_kg,2)+' F/kg':'—')+'</b></p></div>'
-    + '<div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn" onclick="prefOuvrirInfos(\''+escJs(coopId)+'\')">Modifier le suivi</button><button class="btn btn-primary" onclick="prefOuvrir(\''+escJs(coopId)+'\')">+ Avance</button><button class="btn-ghost" onclick="prefFermerCoop()">Fermer</button></div></div>'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn" onclick="prefOuvrirInfos(\''+escJs(coopId)+'\')">Modifier le suivi</button><button class="btn" onclick="pfRangerToutCoop(\''+escJs(coopId)+'\',\''+escJs(campId)+'\',this)" title="Génère les documents de tous les financements et les range dans le dossier Préfinancement de la coopérative (onglet Stockage)">🗂 Ranger les documents</button><button class="btn" onclick="pfVoirDossier(\''+escJs(coopId)+'\')">📁 Dossier Préfinancement</button><button class="btn btn-primary" onclick="prefOuvrir(\''+escJs(coopId)+'\')">+ Avance</button><button class="btn-ghost" onclick="prefFermerCoop()">Fermer</button></div></div>'
     + '<div style="padding:0 18px 18px;overflow:auto;">'
     + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin:8px 0;"><h3 style="margin:0">Avances versées</h3>'+(s.prefs.length>1?'<button class="btn-danger-text" onclick="prefToutSupprimer(\''+escJs(coopId)+'\',\''+escJs(campId)+'\')">Tout supprimer ('+s.prefs.length+')</button>':'')+'</div>'
     + (s.prefs.length ? '<table class="data-table"><thead><tr><th>Date</th><th>N° fiche</th><th>Type</th><th class="num">Montant</th><th>Règlement</th><th>Bénéficiaire</th><th></th></tr></thead><tbody>'
@@ -7195,6 +7201,7 @@ async function prefEnregistrer(){
   if (error){ showToast('Échec de l\'enregistrement : '+error.message); return; }
   state.prefinancements = (state.prefinancements||[]).filter(p=>p.id!==ligne.id).concat([ligne]).sort((a,b)=>String(a.date_financement).localeCompare(String(b.date_financement)));
   await prefEnregistrerSignataire(coopId);
+  pfRangerDocs(ligne.id, false).then(()=>render());
   state.prefCampagne = campId; state.prefCoopOuverte = coopId;
   closeModal(); showToast('Préfinancement enregistré.', 'success');
 }
@@ -7208,6 +7215,7 @@ function prefToutSupprimer(coopId, campId){
     if (error){ showToast('Échec : '+error.message); return; }
     const faits = new Set((data||[]).map(r=>r.id));
     state.prefinancements = (state.prefinancements||[]).filter(x=>!faits.has(x.id));
+    pfRetirerDocsRanges(Array.from(faits));
     showToast(faits.size+' préfinancement(s) supprimé(s).', faits.size===ids.length?'success':undefined);
     render();
   });
@@ -7219,6 +7227,7 @@ function prefSupprimer(id){
     if (error){ showToast('Échec : '+error.message); return; }
     if (!data || !data.length){ showToast('Suppression refusée (droits insuffisants ou ligne déjà supprimée).'); return; }
     state.prefinancements = (state.prefinancements||[]).filter(x=>x.id!==id);
+    pfRetirerDocsRanges([id]);
     showToast('Préfinancement supprimé.', 'success');
     render();
   });
@@ -7655,7 +7664,7 @@ function pfDocsModalHtml(m){
       + '</div>').join('')
     + '</div><div class="actions">'
     + (manque ? '<button class="btn" onclick="prefOuvrir(\''+escJs(x.coop.id)+'\',\''+escJs(x.p.id)+'\')">Compléter les informations</button>' : '')
-    + '<button class="btn" onclick="closeModal()">Fermer</button><button class="btn btn-primary" onclick="pfTelechargerPack(\''+escJs(x.p.id)+'\',this)">📦 Tout télécharger (ZIP)</button></div></div></div>';
+    + '<button class="btn" onclick="pfVoirDossier(\''+escJs(x.coop.id)+'\')">Voir le dossier Préfinancement</button><button class="btn" onclick="pfRangerDepuisModal(\''+escJs(x.p.id)+'\',this)">🗂 Ranger dans le dossier</button><button class="btn" onclick="closeModal()">Fermer</button><button class="btn btn-primary" onclick="pfTelechargerPack(\''+escJs(x.p.id)+'\',this)">📦 Tout télécharger (ZIP)</button></div></div></div>';
 }
 
 // ---- Champs d'identite (formulaire d'un financement et suivi de la cooperative) ----
@@ -7700,6 +7709,60 @@ async function prefEnregistrerSignataire(coopId){
   const { error } = await supabaseClient.from('prefinancement_coop').upsert(ligne);
   if (error){ showToast('Financement enregistré, mais pas l\'identité du signataire : '+error.message); return; }
   state.prefCoopInfos = (state.prefCoopInfos||[]).filter(i=>i.cooperative_id!==coopId).concat([Object.assign({}, prefInfoCoop(coopId), ligne)]);
+}
+
+// ---- Rangement dans le dossier « Préfinancement » de la coopérative (onglet Stockage) ----
+// Les documents (protocole, avenant, caution, fiche Excel) sont générés puis rangés dans documents-coop/<coop>/prefinancement/...,
+// avec une ligne demande_fichiers de type « prefinancement ». Régénérer un document remplace le précédent (même chemin).
+function pfCheminRange(x, type, nom){ return x.coop.id+'/prefinancement/'+(type==='protocole' ? x.p.campagne_id : x.p.id)+'/'+nom; }
+async function pfRangerDocs(id, silencieux){
+  const x = pfContexte(id); if (!x) return 0;
+  const uid = state.session && state.session.user ? state.session.user.id : null;
+  let n = 0;
+  try{
+    for (const d of pfDocsListe(x).filter(d=>d.dispo)){
+      const r = await pfGenererDoc(d.type, id);
+      const path = pfCheminRange(x, d.type, r.nom);
+      const up = await supabaseClient.storage.from('documents-coop').upload(path, r.blob, { upsert:true, contentType:r.blob.type || undefined });
+      if (up.error) throw new Error(up.error.message);
+      const deja = (state.fichiersPrefin||[]).find(f=>f.path===path);
+      if (deja){
+        const maj = await supabaseClient.from('demande_fichiers').update({ uploaded_at:new Date().toISOString() }).eq('id', deja.id);
+        if (!maj.error) deja.uploaded_at = new Date().toISOString();
+      } else {
+        const ins = await supabaseClient.from('demande_fichiers').insert({ type:'prefinancement', path, nom:r.nom, cooperative_id:x.coop.id, demande_id:null, uploaded_by:uid }).select('*').single();
+        if (ins.error){ await supabaseClient.storage.from('documents-coop').remove([path]); throw new Error(ins.error.message); }
+        state.fichiersPrefin = (state.fichiersPrefin||[]).concat([ins.data]);
+      }
+      n++;
+    }
+    if (!silencieux) showToast(n+' document(s) rangé(s) dans le dossier « Préfinancement » de '+x.coop.nom+'.', 'success');
+  }catch(e){ showToast('Rangement dans le dossier Préfinancement impossible : '+(e && e.message ? e.message : e)); }
+  return n;
+}
+async function pfRangerToutCoop(coopId, campId, btn){
+  const txt = btn ? btn.textContent : ''; if (btn){ btn.disabled = true; btn.textContent = 'Rangement…'; }
+  try{
+    const liste = (state.prefinancements||[]).filter(p=>p.cooperative_id===coopId && (!campId || p.campagne_id===campId));
+    let n = 0; for (const p of liste) n += await pfRangerDocs(p.id, true);
+    showToast(n+' document(s) rangé(s) dans le dossier « Préfinancement ».', n ? 'success' : undefined);
+  } finally { if (btn){ btn.disabled = false; btn.textContent = txt; } render(); }
+}
+async function pfRangerDepuisModal(id, btn){
+  const txt = btn ? btn.textContent : ''; if (btn){ btn.disabled = true; btn.textContent = 'Rangement…'; }
+  try{ await pfRangerDocs(id, false); } finally { if (btn){ btn.disabled = false; btn.textContent = txt; } }
+}
+function pfVoirDossier(coopId){ state.stockageCoopFilter = coopId; state.dossierStockageActif = 'prefinancement'; state.modal = null; setTab('stockage'); }
+// Quand un financement est supprime, ses documents rangés partent avec lui.
+async function pfRetirerDocsRanges(ids){
+  try{
+    const motifs = ids.map(i=>'/prefinancement/'+i+'/');
+    const lignes = (state.fichiersPrefin||[]).filter(f=>motifs.some(m=>String(f.path).indexOf(m)>=0));
+    if (!lignes.length) return;
+    await supabaseClient.storage.from('documents-coop').remove(lignes.map(f=>f.path));
+    await supabaseClient.from('demande_fichiers').delete().in('id', lignes.map(f=>f.id));
+    const sup = new Set(lignes.map(f=>f.id)); state.fichiersPrefin = (state.fichiersPrefin||[]).filter(f=>!sup.has(f.id));
+  }catch(e){ console.warn('Documents de préfinancement non retirés', e && e.message); }
 }
 
 
