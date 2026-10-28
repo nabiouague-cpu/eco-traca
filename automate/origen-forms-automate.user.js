@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → Forms CARGILL (automate de saisie)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      1.21.0
+// @version      1.22.0
 // @description  Saisit automatiquement dans le formulaire Microsoft Forms de CARGILL les questionnaires producteurs collectés dans ORIGEN (ECORIGINE). Un lot copié depuis ORIGEN, un producteur par réponse, reprise automatique après chaque envoi.
 // @author       ECORIGINE — ORIGEN
 // @match        https://forms.office.com/*
@@ -20,7 +20,44 @@
   const PAUSE = 450;           // ms entre deux actions (laisse React re-rendre)
   const ATTENTE_MAX = 15000;   // ms d'attente maximale d'un element
   const N = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-  const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
+  // ---------- anti-veille : Chrome ralentit les onglets cachés (1 action/s, puis 1/min après 5 min) ----------
+  // Les attentes passent par un Web Worker (non bridé), l'onglet garde un verrou Web Locks (ni gelé ni déchargé),
+  // un son inaudible et un verrou d'écran empêchent la mise en veille ; chaque pièce est facultative et se replie sans erreur.
+  const veille = (function () {
+    let worker = null, seq = 0, demarre = false; const attente = new Map();
+    try {
+      const src = 'self.onmessage=function(e){var id=e.data.id;setTimeout(function(){self.postMessage(id)},e.data.ms)}';
+      worker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+      worker.onmessage = (ev) => { const x = attente.get(ev.data); if (x) { attente.delete(ev.data); x.r(); } };
+      worker.onerror = () => { const l = [...attente.values()]; attente.clear(); worker = null; l.forEach((x) => setTimeout(x.r, x.ms)); };
+    } catch (er) { worker = null; }
+    const dormir = (ms) => new Promise((r) => {
+      if (!worker) return setTimeout(r, ms);
+      const id = ++seq; attente.set(id, { r, ms });
+      try { worker.postMessage({ id, ms }); } catch (er) { attente.delete(id); setTimeout(r, ms); }
+    });
+    function demarrer() {
+      if (demarre) return; demarre = true;
+      try { if (navigator.locks) navigator.locks.request('origen-noah-actif', () => new Promise(() => {})); } catch (er) { /* ignoré */ }
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (AC) {
+          const ctx = new AC(), o = ctx.createOscillator(), g = ctx.createGain();
+          g.gain.value = 0.0001; o.frequency.value = 30; o.connect(g); g.connect(ctx.destination); o.start();
+          const reprendre = () => { try { if (ctx.state === 'suspended') ctx.resume().catch(() => {}); } catch (er) { /* ignoré */ } };
+          reprendre(); ['click', 'keydown', 'pointerdown'].forEach((ev) => window.addEventListener(ev, reprendre, { capture: true, passive: true })); setInterval(reprendre, 5000);
+        }
+      } catch (er) { /* ignoré */ }
+      try {
+        if (navigator.wakeLock) {
+          const verrou = () => navigator.wakeLock.request('screen').catch(() => {});
+          verrou(); document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') verrou(); });
+        }
+      } catch (er) { /* ignoré */ }
+    }
+    return { dormir, demarrer };
+  })();
+  const dormir = veille.dormir;
   const visible = (el) => !!el && el.offsetParent !== null && !el.disabled;
   // Trace fine (par tentative) de ce que voit cocherEtVerifier/remplirEtVerifier pour LA question en cours
   // de traitement -- remise a zero a chaque appel de repondreBloc, incluse dans le message d'erreur si ca
@@ -448,6 +485,7 @@
   async function boucle() {
     if (enCours) return; enCours = true;
     try {
+      veille.demarrer();
       let lot = lireLot();
       if (!lot || lot.pause || !lot.restants.length) { afficherEtat(); return; }
       // Page « merci » : passer a la reponse suivante (recharge la page -> le script reprend)
@@ -633,7 +671,7 @@
   function init() {
     creerPanneau();
     const lot = lireLot();
-    if (lot && !lot.pause && lot.restants.length) { setTimeout(boucle, 1500); }
+    if (lot && !lot.pause && lot.restants.length) { dormir(1500).then(boucle); }
   }
   if (document.readyState === 'complete' || document.readyState === 'interactive') setTimeout(init, 800); else window.addEventListener('DOMContentLoaded', () => setTimeout(init, 800));
 })();

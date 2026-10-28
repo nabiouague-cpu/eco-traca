@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.2.9
+// @version      0.3.0
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.2.9';
+  const VERSION = '0.3.0';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -30,7 +30,44 @@
 
   const N = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim();
   const PLAQUE = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-  const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
+  // ---------- anti-veille : Chrome ralentit les onglets cachés (1 action/s, puis 1/min après 5 min) ----------
+  // Les attentes passent par un Web Worker (non bridé), l'onglet garde un verrou Web Locks (ni gelé ni déchargé),
+  // un son inaudible et un verrou d'écran empêchent la mise en veille ; chaque pièce est facultative et se replie sans erreur.
+  const veille = (function () {
+    let worker = null, seq = 0, demarre = false; const attente = new Map();
+    try {
+      const src = 'self.onmessage=function(e){var id=e.data.id;setTimeout(function(){self.postMessage(id)},e.data.ms)}';
+      worker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+      worker.onmessage = (ev) => { const x = attente.get(ev.data); if (x) { attente.delete(ev.data); x.r(); } };
+      worker.onerror = () => { const l = [...attente.values()]; attente.clear(); worker = null; l.forEach((x) => setTimeout(x.r, x.ms)); };
+    } catch (er) { worker = null; }
+    const dormir = (ms) => new Promise((r) => {
+      if (!worker) return setTimeout(r, ms);
+      const id = ++seq; attente.set(id, { r, ms });
+      try { worker.postMessage({ id, ms }); } catch (er) { attente.delete(id); setTimeout(r, ms); }
+    });
+    function demarrer() {
+      if (demarre) return; demarre = true;
+      try { if (navigator.locks) navigator.locks.request('origen-noah-actif', () => new Promise(() => {})); } catch (er) { /* ignoré */ }
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (AC) {
+          const ctx = new AC(), o = ctx.createOscillator(), g = ctx.createGain();
+          g.gain.value = 0.0001; o.frequency.value = 30; o.connect(g); g.connect(ctx.destination); o.start();
+          const reprendre = () => { try { if (ctx.state === 'suspended') ctx.resume().catch(() => {}); } catch (er) { /* ignoré */ } };
+          reprendre(); ['click', 'keydown', 'pointerdown'].forEach((ev) => window.addEventListener(ev, reprendre, { capture: true, passive: true })); setInterval(reprendre, 5000);
+        }
+      } catch (er) { /* ignoré */ }
+      try {
+        if (navigator.wakeLock) {
+          const verrou = () => navigator.wakeLock.request('screen').catch(() => {});
+          verrou(); document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') verrou(); });
+        }
+      } catch (er) { /* ignoré */ }
+    }
+    return { dormir, demarrer };
+  })();
+  const dormir = veille.dormir;
   const num = (v) => { const t = String(v == null ? '' : v).trim().replace(/\s/g, '').replace(',', '.'); if (t === '') return ''; const n = Number(t); return isFinite(n) ? String(n) : ''; };
   const isoDate = (fr) => { const m = String(fr || '').match(/^(\d{2})\/(\d{2})\/(\d{4})/); return m ? m[3] + '-' + m[2] + '-' + m[1] : ''; };
   const $ = () => window.jQuery;
@@ -80,7 +117,7 @@
     await viderRapports();
     let r;
     try { r = await api('prochain'); }
-    catch (err) { const g = lireFile(); g.erreurApi = err.message; if (/Code de liaison/.test(err.message)) g.actif = false; else setTimeout(boucle, 20000); ecrireFile(g); afficherFile(); return false; }
+    catch (err) { const g = lireFile(); g.erreurApi = err.message; if (/Code de liaison/.test(err.message)) g.actif = false; else dormir(20000).then(boucle); ecrireFile(g); afficherFile(); return false; }
     const g = lireFile();
     if (!r.lot) { g.actif = false; g.erreurApi = null; g.dernier = 'File terminée : ' + (g.saisis || 0) + ' saisi(s), ' + (g.echecs || 0) + ' échec(s). Les résultats sont dans ORIGEN › Saisie OBC.'; ecrireFile(g); afficherFile(); return false; }
     g.erreurApi = null; ecrireFile(g);
@@ -91,14 +128,14 @@
     const f = lireFile(); const num = (e.lot.bordereau && e.lot.bordereau.numero) || '';
     await rapporter(e.lot.achat_id, 'saisi', '', num);
     f.saisis = (f.saisis || 0) + 1; f.consecutifs = 0; ecrireFile(f);
-    effacerEtat(); afficherEtat(); afficherFile(); setTimeout(boucle, 600);
+    effacerEtat(); afficherEtat(); afficherFile(); dormir(600).then(boucle);
   }
   async function echecLot(e, msg) {
     const f = lireFile(); const texte = ETAPES[e.etape - 1] + ' : ' + msg;
     await rapporter(e.lot.achat_id, 'echec', texte, '');
     f.echecs = (f.echecs || 0) + 1; f.consecutifs = (f.consecutifs || 0) + 1;
     if (f.consecutifs >= 3) { f.actif = false; f.dernier = 'File arrêtée : 3 échecs de suite. Dernier : ' + texte; }
-    ecrireFile(f); effacerEtat(); afficherEtat(); afficherFile(); setTimeout(boucle, 600);
+    ecrireFile(f); effacerEtat(); afficherEtat(); afficherFile(); dormir(600).then(boucle);
   }
   // Bouton « Enregistrer » du formulaire de l'étape k (dans la fenêtre modale qui le contient).
   function boutonEnregistrer(k) {
@@ -831,6 +868,7 @@
   async function boucle() {
     if (enCours) return; enCours = true;
     try {
+      veille.demarrer();
       let e = lireEtat();
       if ((!e || e.statut === 'termine') && fileActive()) { if (!(await suivantFile())) return; e = lireEtat(); }
       if (!e || e.pause || e.statut === 'termine') return;
@@ -848,7 +886,7 @@
             const msg = err && err.message ? err.message : String(err);
             e.verifErr = (e.verifErr || 0) + 1;
             if (e.enFile && e.verifErr >= 8) { await echecLot(e, msg); return; }
-            e.erreur = ETAPES[e.etape - 1] + ' (vérification) : ' + msg; ecrireEtat(e); afficherEtat(); setTimeout(boucle, 8000); return;
+            e.erreur = ETAPES[e.etape - 1] + ' (vérification) : ' + msg; ecrireEtat(e); afficherEtat(); dormir(8000).then(boucle); return;
           }
           if (e.erreur) { e.erreur = null; }
           if (res === 'suivant') { e.statut = 'a_faire'; e.note = ''; e.etape++; delete e.t_save; delete e.cliques; delete e.verifErr; ecrireEtat(e); afficherEtat(); continue; }
@@ -857,7 +895,7 @@
             if (ecoule > 90000) { await echecLot(e, 'enregistrement automatique sans effet après 90 s. ' + erreurVisible()); return; }
             if (ecoule > 30000 && (e.cliques || 0) < 2) { const b = boutonEnregistrer(e.etape); if (b && !b.disabled) { e.cliques = (e.cliques || 0) + 1; ecrireEtat(e); journal(e, 'Nouvel essai d\'enregistrement'); b.click(); confirmerBoite(); } }
           }
-          ecrireEtat(e); afficherEtat(); setTimeout(boucle, e && e.enFile ? 1500 : 4000); return;
+          ecrireEtat(e); afficherEtat(); dormir(e && e.enFile ? 1500 : 4000).then(boucle); return;
         }
         if (e.statut === 'verifier') e.statut = 'a_faire';
         // Tout premier élément de la chaîne : l'origine du camion existe-t-elle dans OBC ? Sinon on la crée, puis on enchaîne.
@@ -874,7 +912,7 @@
           try { const r = await sousEtapeOrigine(e); if (r === 'navigation') return; continue; }
           catch (err) {
             const msg = err && err.message ? err.message : String(err);
-            if (e.enFile) { if (transitoire(msg) && (e.retries || 0) < 30) { e.retries = (e.retries || 0) + 1; journal(e, 'Erreur passagère, nouvel essai dans 20 s : ' + msg); setTimeout(boucle, 20000); return; } e.etape = e.etape; await echecLot(e, (e.sous === 'usine' ? 'usine : ' : 'origine : ') + msg); return; }
+            if (e.enFile) { if (transitoire(msg) && (e.retries || 0) < 30) { e.retries = (e.retries || 0) + 1; journal(e, 'Erreur passagère, nouvel essai dans 20 s : ' + msg); dormir(20000).then(boucle); return; } e.etape = e.etape; await echecLot(e, (e.sous === 'usine' ? 'usine : ' : 'origine : ') + msg); return; }
             e.erreur = 'Origine : ' + msg; journal(e, 'Erreur : ' + e.erreur); return;
           }
         }
@@ -884,7 +922,7 @@
         catch (err) {
           const msg = err && err.message ? err.message : String(err);
           if (e.enFile) {
-            if (transitoire(msg) && (e.retries || 0) < 30) { e.retries = (e.retries || 0) + 1; e.erreur = ETAPES[e.etape - 1] + ' : ' + msg; journal(e, 'Erreur passagère, nouvel essai dans 20 s : ' + msg); setTimeout(boucle, 20000); return; }
+            if (transitoire(msg) && (e.retries || 0) < 30) { e.retries = (e.retries || 0) + 1; e.erreur = ETAPES[e.etape - 1] + ' : ' + msg; journal(e, 'Erreur passagère, nouvel essai dans 20 s : ' + msg); dormir(20000).then(boucle); return; }
             await echecLot(e, msg); return;
           }
           e.erreur = ETAPES[e.etape - 1] + ' : ' + msg; journal(e, 'Erreur : ' + e.erreur); return;
@@ -893,11 +931,11 @@
         if (res === 'rempli') {
           e.statut = 'attente_enregistrement'; journal(e, ETAPES[e.etape - 1] + ' : formulaire rempli' + (e.enFile && lireFile().auto !== false ? '' : ', en attente d\'Enregistrer'));
           if (e.enFile && lireFile().auto !== false) { if (!(await enregistrerAuto(e))) return; }
-          setTimeout(boucle, e && e.enFile ? 1500 : 4000); return;
+          dormir(e && e.enFile ? 1500 : 4000).then(boucle); return;
         }
         if (res === 'navigation') return;          // la page change : le script reprend au chargement
         if (res === 'stop') { ecrireEtat(e); afficherEtat(); return; }
-        if (res === 'attendre') { ecrireEtat(e); afficherEtat(); setTimeout(boucle, e && e.enFile ? 1500 : 4000); return; }
+        if (res === 'attendre') { ecrireEtat(e); afficherEtat(); dormir(e && e.enFile ? 1500 : 4000).then(boucle); return; }
       }
     } finally { enCours = false; }
   }
@@ -916,5 +954,5 @@
     return;
   }
   creerPanneau();
-  setTimeout(boucle, 1200);
+  dormir(1200).then(boucle);
 })();
