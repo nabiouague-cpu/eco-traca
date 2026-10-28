@@ -4478,7 +4478,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-27-353';
+const APP_VERSION = '2026-10-28-354';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -13220,6 +13220,18 @@ function ocOuvrirTracerVolume(coopId, mode){
   openModal('tracerVolumeDirecte', { mode: mode||'transfert', coopId: (coopId && coopId!=='all') ? coopId : '', campagneId: (camp && camp!=='all') ? camp : '' });
 }
 
+// Après un traçage validé : on revient exactement là où l'on était (même onglet, même fenêtre de dossier, même défilement).
+function ocRetourApresTracage(r){
+  state.tab = r.tab; state.tracageSous = r.sous;
+  state.modal = r.prevModal ? { type: r.prevModal.type, payload: r.prevModal.payload } : null; state.pendingImport = null;
+  render();
+  try{
+    const app = document.getElementById('app'), m = app && app.querySelector('.modal');
+    if (m && r.modalY) m.scrollTop = r.modalY;
+    window.scrollTo(0, r.y || 0);
+    requestAnimationFrame(()=>{ const m2 = document.querySelector('#app .modal'); if (m2 && r.modalY) m2.scrollTop = r.modalY; window.scrollTo(0, r.y || 0); });
+  }catch(e){}
+}
 let _ocTracerVolumeEnCours = false;
 async function submitTracerVolumeDirecte(){
   if (_ocTracerVolumeEnCours) return;
@@ -13316,12 +13328,12 @@ async function submitTracerVolumeDirecte(){
       // Ce camion est maintenant tracé pour de bon : sa ligne de simulation (s'il y en avait une) disparaît pour ne pas compter deux fois.
       { const cs = ocSimAnalyseCode(itSrc.code); if (cs) await ocSimSupprimer(coopId, campagneId, cs.cle, cs.seq); }
     }
-    if (state.tab!=='tracage') state.tab = 'tracage';
-    state.tracageSous = 'tracer';
+    const retour = pl.retour || null;
+    if (!retour){ if (state.tab!=='tracage') state.tab = 'tracage'; state.tracageSous = 'tracer'; }
 
     // 4) telechargement de la fiche
     ocTelechargerBlob(fiche.blob, fiche.nomFichier);
-    closeModal();
+    if (retour){ _dossCache = null; ocRetourApresTracage(retour); } else closeModal();
     showToast(resultat.nbUtilises+' producteur(s) · '+fmtKg(volumeKg)+' · '+nbSacs+' sacs : achats enregistrés, fiche téléchargée'+(rangee && rangee.path ? ' et rangée dans le dossier Fiches de traçabilité' : ' (non rangée dans le dossier : '+(rangee && rangee.erreur ? rangee.erreur : 'erreur')+')')
       + (resultat.nbUtilises!==nbProd ? ' (nombre de producteurs ajusté de '+nbProd+' à '+resultat.nbUtilises+' pour respecter les plafonds)' : '')+'.', 'success');
   } finally {
@@ -18398,6 +18410,17 @@ function renderOcNcTraitement(id){
 function ocNcApercuExigence(code){ state.ocNcNewExigenceApercu = code; render(); }
 
 function openModal(type, payload){
+  // Traçage d'un volume : on mémorise où l'on était (onglet, sous-onglet, défilement, fenêtre ouverte comme le dossier d'une coopérative)
+  // pour y revenir une fois le traçage validé.
+  if (type==='tracerVolumeDirecte'){
+    payload = payload || {};
+    if (!payload.retour){
+      const app = document.getElementById('app'), m = app && app.querySelector('.modal');
+      payload.retour = { tab: state.tab, sous: state.tracageSous, y: window.scrollY || 0,
+        prevModal: (state.modal && state.modal.type!=='tracerVolumeDirecte') ? { type: state.modal.type, payload: state.modal.payload } : null,
+        modalY: m ? m.scrollTop : 0 };
+    }
+  }
   state.modal = {type, payload: payload||{}};
   // La fiche coopérative propose un "Nom du client" (diligence externe) dont la liste et le contact
   // enregistré viennent des données "Lots & export" -- on s'assure qu'elles sont chargées même en
