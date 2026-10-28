@@ -3535,6 +3535,23 @@ function qcoValeurs(c){
   };
 }
 function qcoManques(c){ const v = qcoValeurs(c); return QCO_QUESTIONS.filter(q=>!v[q.cle]).map(q=>q.court); }
+function ouvrirQuestionnaireProds(){
+  if (!(state.demandesCoop||[]).some(qcEstQuestionnaire)){ showToast('Aucune demande de questionnaire producteurs.'); return; }
+  state.modal = { type:'questionnaireProds', payload:{} }; render();
+}
+function qcpVoirReponses(demandeId){ state.modal = null; state.tab = 'demandes'; state.demandesSousOnglet = 'attente'; state.qcVueDemandeId = demandeId; state.qcFiltre = ''; render(); }
+function qcpLigneHtml(d){
+  const coop = qcCoopDe(d), prods = qcProducteursDe(d), s = qcResume(d, prods);
+  const liste = qcTransfertReponses(d.id), saisis = liste.filter(l=>l.transmis).length, aSaisir = liste.length - saisis;
+  const [bc, bl] = STATUT_BADGE[d.statut] || ['neutral', d.statut];
+  return '<tr><td style="padding:7px 6px"><b>'+esc(coop ? coop.nom : '—')+'</b></td>'
+    + '<td style="padding:7px 6px;text-align:center">'+s.remplis+' / '+s.total+'</td>'
+    + '<td style="padding:7px 6px;text-align:center">'+saisis+' / '+liste.length+'</td>'
+    + '<td style="padding:7px 6px"><span class="badge '+bc+'">'+esc(bl)+'</span></td>'
+    + '<td style="padding:7px 6px;white-space:nowrap">'
+    + (aSaisir>0 ? '<button type="button" class="btn btn-primary btn-compact" onclick="qcTransfertOuvrir(\''+qcJs(d.id)+'\')">Saisir dans Forms ('+aSaisir+')</button> ' : '<span class="badge ok">Tout saisi</span> ')
+    + '<button type="button" class="btn-ghost btn-compact" onclick="qcpVoirReponses(\''+qcJs(d.id)+'\')">Réponses</button></td></tr>';
+}
 function ouvrirQuestionnaireCoops(){
   if (!qcoCoops().length){ showToast('Aucune coopérative enregistrée.'); return; }
   state.modal = { type:'questionnaireCoops', payload:{} }; render();
@@ -4478,7 +4495,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-28-354';
+const APP_VERSION = '2026-10-28-355';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -23171,6 +23188,7 @@ function renderCooperativesTab(){
       + (nCertifieesTotal>0 ? '<button class="btn btn-primary" onclick="ouvrirGenerationContratsGroupe()">Générer des contrats en masse</button>' : '')
       + '<button class="btn" onclick="ouvrirCompletionNomsComplets()">Compléter les noms complets</button>'
       + '<button class="btn" onclick="ouvrirQuestionnaireCoops()" title="Réponses du formulaire d\'enquête coopératives, saisies par l\'automate">📝 Questionnaire coopératives (Forms)</button>'
+      + '<button class="btn" onclick="ouvrirQuestionnaireProds()" title="Questionnaires producteurs CARGILL : réponses terminées et saisie dans le formulaire Forms">📝 Questionnaire producteurs (Forms)</button>'
       + '<button class="btn" onclick="exporterFichesCooperatives()">⬇ Télécharger les fiches (Excel)</button>'
       + '</div>';
     html += renderCertLecture();
@@ -26871,6 +26889,16 @@ function _renderBrut(){
   if (state.modal && state.modal.type==='presAchats') html += renderPresAchats();
   if (state.modal && state.modal.type==='previsionsEdit') html += renderPrevisionsEdit();
 
+  if (state.modal && state.modal.type==='questionnaireProds'){
+    const lst = (state.demandesCoop||[]).filter(qcEstQuestionnaire).sort((x,y)=>String((qcCoopDe(x)||{}).nom||'').localeCompare(String((qcCoopDe(y)||{}).nom||''),'fr',{sensitivity:'base'}));
+    html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal wide" style="max-width:860px">'
+      + '<h3>Questionnaire producteurs CARGILL (Forms)</h3>'
+      + '<div class="hint" style="margin-bottom:10px">Une ligne par coopérative : questionnaires terminés dans ORIGEN, puis déjà saisis dans le formulaire Forms de CARGILL. « Saisir dans Forms » ouvre l\'assistant et l\'automate.</div>'
+      + '<div style="max-height:430px;overflow:auto;border:1px solid var(--border);border-radius:8px"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="font-size:11px;text-transform:uppercase;color:var(--ink-faint);text-align:left;position:sticky;top:0;background:var(--surface,#fff)">'
+      + ['Coopérative','Terminés','Saisis dans Forms','Demande',''].map(h=>'<th style="padding:8px 6px">'+h+'</th>').join('')
+      + '</tr></thead><tbody>'+lst.map(qcpLigneHtml).join('')+'</tbody></table></div>'
+      + '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Fermer</button></div></div></div>';
+  }
   if (state.modal && state.modal.type==='questionnaireCoops'){
     const lst = qcoCoops(), nbPret = lst.filter(c=>!c.enquete_forms_le && !qcoManques(c).length).length;
     html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal wide" style="max-width:1280px">'
