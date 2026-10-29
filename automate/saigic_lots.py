@@ -3,7 +3,7 @@
 """
 Robot LOTS EXPORT SAIGIC -> ORIGEN (LECTURE SEULE). Troisième robot du VPS, même connexion que saigic_pesees.py.
 
-ÉTAPE 1 (cette version) : explorer le formulaire « Situation des lots fabriqués (Fèves) » (/Rapport/EtatLotFeves)
+Un passage (sans option, ou --dry-run) : lit l'état des lots fabriqués (toutes les traites de la récolte en cours), l'envoie à ORIGEN (fonction reception-lots-saigic),
 sans rien écrire nulle part, pour que le robot sache exactement quoi envoyer.
 
 Options :
@@ -130,8 +130,10 @@ def valeurs_par_defaut(f, format_voulu):
 def main():
     if '--lire' in sys.argv:
         lire_xls(option(sys.argv, '--lire', SORTIE_APERCU + '.xls')); return 0
-    if not any(o in sys.argv for o in ('--formulaire', '--apercu', '--outils', '--listes')):
+    if '--aide' in sys.argv or '-h' in sys.argv:
         print(__doc__); return 0
+    if not any(o in sys.argv for o in ('--formulaire', '--apercu', '--outils', '--listes')):
+        return passage()
     c = ouvrir_session()
     if '--outils' in sys.argv:
         st, js, _ = c.req('/Scripts/public/saigic.tools.core.js')
@@ -205,60 +207,159 @@ def lire_xls(chemin):
             if any(vals): print(' | '.join(vals))
 
 
-def apercu(c, L):
-    """Reproduit le clic sur « Aperçu » : POST /Rapport/ShowEtatLotFeves puis lecture de /Rapport/AfficherEtat. Lecture seule."""
+def donnees_formulaire(L, **f):
+    """Champs envoyés par le bouton « Aperçu » (valeurs relevées dans la page du SAIGIC)."""
     from datetime import date
     auj = date.today()
     etats = L['Listes des états (ddlListeEtat)']
-    etat = option(sys.argv, '--etat') or next((v for v, lib in etats if re.search(r'fabriqu', str(lib), re.I)), (etats[0][0] if etats else ''))
-    recolte = option(sys.argv, '--recolte') or (L['Récoltes (ddlRecolte)'][-1][0] if L['Récoltes (ddlRecolte)'] else '')
-    traite = option(sys.argv, '--traite') or (L['Traites (ddlTraite)'][0][0] if L['Traites (ddlTraite)'] else '')
-    fmt = (option(sys.argv, '--format', 'XLS') or 'XLS').upper()
-    fmt = 'XLS' if fmt.startswith('EX') else fmt
-    du = option(sys.argv, '--du', P.date_debut_campagne(auj).strftime('%d/%m/%Y')); au = option(sys.argv, '--au', auj.strftime('%d/%m/%Y'))
-    data = {'Prdt_Id': PRDT_CACAO, 'ddlListeEtat': etat, 'ddlRecolte': recolte, 'ddlTraite': traite, 'txtParite': '', 'ddlExportateur': EXP_ECORIGINE,
-            'DateDebut': du, 'DateFin': au, 'ddlSite': option(sys.argv, '--site', ''), 'ddlMagasin': option(sys.argv, '--magasin', ''), 'txtNumeroLot': option(sys.argv, '--lot', ''),
-            'ddlFormule': option(sys.argv, '--fo1', ''), 'ddlD6': '-1', 'ddlVueEmb': '-1', 'ddlExportType': fmt}
-    P.log('Aperçu : ' + json.dumps(data, ensure_ascii=False))
+    etat = f.get('etat') or next((v for v, lib in etats if re.search(r'fabriqu', str(lib), re.I)), (etats[0][0] if etats else ''))
+    recolte = f.get('recolte') or (L['Récoltes (ddlRecolte)'][-1][0] if L['Récoltes (ddlRecolte)'] else '')
+    traite = f.get('traite') if f.get('traite') is not None else (L['Traites (ddlTraite)'][0][0] if L['Traites (ddlTraite)'] else '')
+    return {'Prdt_Id': PRDT_CACAO, 'ddlListeEtat': etat, 'ddlRecolte': recolte, 'ddlTraite': traite, 'txtParite': '', 'ddlExportateur': EXP_ECORIGINE,
+            'DateDebut': f.get('du', ''), 'DateFin': f.get('au', ''), 'ddlSite': f.get('site', ''), 'ddlMagasin': f.get('magasin', ''), 'txtNumeroLot': f.get('lot', ''),
+            'ddlFormule': f.get('fo1', ''), 'ddlD6': '-1', 'ddlVueEmb': '-1', 'ddlExportType': f.get('format', 'XLS')}
 
-    def appel(chemin, corps=None, referer=PAGE):
-        hdr = {'User-Agent': P.UA, 'Authorization': c.basic, 'Referer': P.BASE + referer}
+
+def telecharger(c, data):
+    """Reproduit le clic sur « Aperçu » : POST /Rapport/ShowEtatLotFeves puis lecture de /Rapport/AfficherEtat. Lecture seule."""
+    def appel(chemin, corps=None):
+        hdr = {'User-Agent': P.UA, 'Authorization': c.basic, 'Referer': P.BASE + PAGE}
         if corps is not None: hdr['Content-Type'] = 'application/x-www-form-urlencoded'
         r = urllib.request.Request(P.BASE + chemin, data=corps, headers=hdr)
         try:
-            with c.opener.open(r, timeout=180) as rep: return rep.status, rep.read(), rep.headers, rep.geturl()
-        except urllib.error.HTTPError as e: return e.code, e.read(), e.headers, chemin
-
-    st, brut, h, u = appel('/Rapport/ShowEtatLotFeves?Length=7', urllib.parse.urlencode(data).encode())
-    P.log('POST ShowEtatLotFeves : HTTP %s, %s, %d octets' % (st, h.get('Content-Type', '?'), len(brut)))
-    print(brut[:600].decode('utf-8', 'replace'))
-    st, brut, h, u = appel('/Rapport/AfficherEtat')
-    ctype = h.get('Content-Type', '?'); cd = h.get('Content-Disposition', '')
-    P.log('GET AfficherEtat : HTTP %s, %s, %d octets, %s' % (st, ctype, len(brut), cd))
+            with c.opener.open(r, timeout=180) as rep: return rep.status, rep.read(), rep.headers
+        except urllib.error.HTTPError as e: return e.code, e.read(), e.headers
+    st, brut, h = appel('/Rapport/ShowEtatLotFeves?Length=7', urllib.parse.urlencode(data).encode())
+    if st != 200: raise RuntimeError('ShowEtatLotFeves : HTTP %s' % st)
+    st, brut, h = appel('/Rapport/AfficherEtat')
+    if st != 200: raise RuntimeError('AfficherEtat : HTTP %s' % st)
     ext = 'pdf' if brut[:4] == b'%PDF' else ('xlsx' if brut[:2] == b'PK' else ('xls' if brut[:4] == b'\xd0\xcf\x11\xe0' else 'html'))
+    return ext, brut
+
+
+def norme(x): return re.sub(r'[^a-z0-9]', '', html.unescape(str(x)).lower().replace('é', 'e').replace('è', 'e'))
+
+def lots_du_xls(chemin):
+    """Relit l'état des lots fabriqués (.xls) : une ligne par lot, colonnes repérées par leur titre."""
+    import xlrd
+    wb = xlrd.open_workbook(chemin); sh = wb.sheet_by_index(0)
+    cles = {'datefab': 'date_fab', 'code': 'code_exp', 'exportateur': 'exportateur', 'numerolot': 'numero', 'grade': 'grade', 'marque': 'marque', 'recolte': 'recolte',
+            'numerobv': 'numero_bv', 'nfo1provisoire': 'fo1_provisoire', 'nfo1': 'fo1', 'poidsthq': 'poids_theorique', 'poidsreel': 'poids_reel', 'd6': 'd6', 'vuemb': 'vu_emb'}
+    entete = None; col = {}
+    lots = []
+    for r in range(sh.nrows):
+        vals = sh.row_values(r)
+        if entete is None:
+            m = {norme(v): i for i, v in enumerate(vals) if str(v).strip()}
+            if 'numerolot' in m and 'datefab' in m:
+                entete = r; col = {cles[k]: i for k, i in m.items() if k in cles}
+            continue
+        brut = {k: (vals[i] if i < len(vals) else '') for k, i in col.items()}
+        numero = str(brut.get('numero', '')).strip()
+        if numero.endswith('.0'): numero = numero[:-2]
+        if not numero.isdigit(): continue
+        d = brut.get('date_fab')
+        if isinstance(d, float) and d > 30000:
+            d = xlrd.xldate_as_datetime(d, wb.datemode).strftime('%Y-%m-%dT%H:%M:%S')
+        lot = {'numero': numero, 'date_fab': str(d or '')}
+        for k in ('code_exp', 'exportateur', 'grade', 'marque', 'recolte', 'numero_bv', 'fo1_provisoire', 'fo1', 'd6', 'vu_emb'):
+            v = brut.get(k, ''); lot[k] = (str(int(v)) if isinstance(v, float) and v == int(v) else str(v)).strip()
+        for k in ('poids_theorique', 'poids_reel'):
+            v = brut.get(k, ''); lot[k] = v if isinstance(v, float) else nombre_lot(v)
+        lots.append(lot)
+    return lots
+
+def nombre_lot(v):
+    return P.nombre(v)
+
+
+def apercu(c, L):
+    """Mode d'essai : reproduit « Aperçu » et affiche le contenu du rapport reçu."""
+    from datetime import date
+    f = {'etat': option(sys.argv, '--etat'), 'recolte': option(sys.argv, '--recolte'), 'traite': option(sys.argv, '--traite'), 'du': option(sys.argv, '--du', ''), 'au': option(sys.argv, '--au', ''),
+         'site': option(sys.argv, '--site', ''), 'magasin': option(sys.argv, '--magasin', ''), 'lot': option(sys.argv, '--lot', ''), 'fo1': option(sys.argv, '--fo1', '')}
+    fmt = (option(sys.argv, '--format', 'XLS') or 'XLS').upper(); f['format'] = 'XLS' if fmt.startswith('EX') else fmt
+    data = donnees_formulaire(L, **{k: v for k, v in f.items() if v is not None})
+    P.log('Aperçu : ' + json.dumps(data, ensure_ascii=False))
+    ext, brut = telecharger(c, data)
     chemin = '%s.%s' % (SORTIE_APERCU, ext); open(chemin, 'wb').write(brut)
-    P.log('fichier reçu enregistré : %s' % chemin)
-    if ext == 'pdf':
+    P.log('fichier reçu (%d octets) enregistré : %s' % (len(brut), chemin))
+    if ext == 'xls': lire_xls(chemin)
+    elif ext == 'pdf':
         try:
-            txt = subprocess.run(['pdftotext', '-layout', chemin, '-'], capture_output=True, text=True, timeout=60).stdout
-            open(SORTIE_APERCU + '.txt', 'w').write(txt); print(txt[:4000])
-        except Exception as e: P.log('pdftotext indisponible (%s) : apt-get install -y poppler-utils' % e)
-    elif ext == 'xls':
-        lire_xls(chemin)
-    elif ext == 'xlsx':
-        try:
-            import openpyxl
-            ws = openpyxl.load_workbook(chemin, data_only=True).active
-            for row in ws.iter_rows(values_only=True):
-                if any(v not in (None, '') for v in row): print(' | '.join('' if v is None else str(v) for v in row))
-        except Exception as e: P.log('lecture xlsx impossible (%s) : pip install openpyxl' % e)
-    else:
-        t = brut.decode('utf-8', 'replace')
-        if '<table' in t.lower():
-            for tr in re.findall(r'<tr\b.*?</tr>', t, re.S | re.I)[:40]:
-                print(' | '.join(re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]+>', '', td))).strip() for td in re.findall(r'<t[dh]\b.*?</t[dh]>', tr, re.S | re.I)))
-        else: print(re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', t))[:2000])
+            t = subprocess.run(['pdftotext', '-layout', chemin, '-'], capture_output=True, text=True, timeout=60).stdout
+            open(SORTIE_APERCU + '.txt', 'w').write(t); print(t[:4000])
+        except Exception as e: P.log('pdftotext indisponible (%s)' % e)
+    else: print(re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', brut.decode('utf-8', 'replace')))[:2000])
     return 0
+
+
+# ---------- passage complet : SAIGIC -> ORIGEN ----------
+ETAT = os.environ.get('LOTS_ETAT', '/root/.saigic_lots_etat.json')
+FAILS = os.environ.get('LOTS_FAILS', '/root/.saigic_lots.fails')
+LOTS_URL = os.environ.get('RELAIS_LOTS_URL', 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/reception-lots-saigic')
+DUREE_CACHE_SITE_H = 6   # un lot dont on n'a pas trouvé le site n'est re-cherché qu'après 6 h
+
+def lire_etat():
+    try: return json.load(open(ETAT))
+    except Exception: return {}
+
+def lots_du_rapport(c, L, **filtres):
+    ext, brut = telecharger(c, donnees_formulaire(L, **filtres))
+    if ext != 'xls': raise RuntimeError('format reçu inattendu : %s' % ext)
+    tmp = '/tmp/saigic_lots_rapport.xls'; open(tmp, 'wb').write(brut)
+    return lots_du_xls(tmp)
+
+def passage():
+    dry = '--dry-run' in sys.argv
+    env = P.trouver_env()
+    if not env.get('secret'): P.log('secret du relais introuvable (lancer saigic_pesees.py --verifier)'); return 2
+    secret = os.environ[env['secret']]
+    c = ouvrir_session()
+    try:
+        L = lire_listes(c)
+        lots = []
+        for traite in [v for v, _ in L['Traites (ddlTraite)']] or ['']:
+            lots += lots_du_rapport(c, L, traite=traite)
+        P.log('SAIGIC : %d lot(s) fabriqué(s) pour ECORIGINE (récolte en cours)' % len(lots))
+        st, rep = P.poster(LOTS_URL, secret, {'lots': lots, 'complet': True, 'dry_run': dry})
+        if st != 200 or not rep.get('ok'): raise RuntimeError('ORIGEN a refusé (HTTP %s) : %s' % (st, rep))
+        etat = lire_etat(); cache = etat.get('site_inconnu', {}); maintenant = time.time()
+        a_loc = [n for n in rep.get('a_localiser', []) if maintenant - cache.get(n, 0) > DUREE_CACHE_SITE_H * 3600]
+        localisation = {}
+        if a_loc:
+            P.log('%d lot(s) sans site : recherche site par site (%d sites d\'ORIGEN)' % (len(a_loc), len(rep.get('sites_a_tester', []))))
+            for site in rep.get('sites_a_tester', []):
+                if not a_loc: break
+                for traite in [v for v, _ in L['Traites (ddlTraite)']] or ['']:
+                    for lot in lots_du_rapport(c, L, traite=traite, site=site):
+                        if lot['numero'] in a_loc: localisation[lot['numero']] = site
+                time.sleep(0.5)
+            for n in a_loc:
+                if n not in localisation: cache[n] = maintenant
+            if localisation:
+                st, rep = P.poster(LOTS_URL, secret, {'lots': lots, 'localisation': localisation, 'complet': True, 'dry_run': dry})
+                if st != 200 or not rep.get('ok'): raise RuntimeError('ORIGEN a refusé (2e envoi, HTTP %s) : %s' % (st, rep))
+        resume = {k: rep.get(k) for k in ('lues', 'creees', 'mises_a_jour', 'inchangees', 'a_classer', 'a_localiser', 'poids_corriges', 'ecarts_poids_signales', 'clients_completes', 'absents_du_saigic', 'erreurs')}
+        P.log('ORIGEN%s : %s' % (' (essai à blanc)' if dry else '', json.dumps(resume, ensure_ascii=False)))
+        if dry:
+            for pl in rep.get('plan', [])[:30]: P.log('  plan : ' + json.dumps(pl, ensure_ascii=False))
+        else:
+            etat['site_inconnu'] = cache; json.dump(etat, open(ETAT, 'w'))
+        if os.path.exists(FAILS): os.remove(FAILS)
+        return 0
+    except P.RefusMotDePasse as e:
+        P.log('⛔ %s' % e); open(P.STOP, 'w').write(str(e)); return 4
+    except Exception as e:
+        n = 0
+        try: n = int(open(FAILS).read() or 0)
+        except Exception: pass
+        n += 1; open(FAILS, 'w').write(str(n))
+        P.log('échec : %s (consécutifs : %d)' % (e, n))
+        if n in (3, 12, 48):
+            try: P.alerter(secret, '[Robot lots] %d échecs consécutifs. Dernier : %s' % (n, e))
+            except Exception: pass
+        return 1
 
 
 if __name__ == '__main__':
