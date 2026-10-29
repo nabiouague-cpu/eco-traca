@@ -218,7 +218,7 @@ def apercu(c, L):
     du = option(sys.argv, '--du', P.date_debut_campagne(auj).strftime('%d/%m/%Y')); au = option(sys.argv, '--au', auj.strftime('%d/%m/%Y'))
     data = {'Prdt_Id': PRDT_CACAO, 'ddlListeEtat': etat, 'ddlRecolte': recolte, 'ddlTraite': traite, 'txtParite': '', 'ddlExportateur': EXP_ECORIGINE,
             'DateDebut': du, 'DateFin': au, 'ddlSite': option(sys.argv, '--site', ''), 'ddlMagasin': option(sys.argv, '--magasin', ''), 'txtNumeroLot': option(sys.argv, '--lot', ''),
-            'ddlFormule': '-1', 'ddlD6': '-1', 'ddlVueEmb': '-1', 'ddlExportType': fmt}
+            'ddlFormule': option(sys.argv, '--fo1', ''), 'ddlD6': '-1', 'ddlVueEmb': '-1', 'ddlExportType': fmt}
     P.log('Aperçu : ' + json.dumps(data, ensure_ascii=False))
 
     def appel(chemin, corps=None, referer=PAGE):
