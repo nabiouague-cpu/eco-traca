@@ -18,7 +18,7 @@ Options :
                  Options : --format XLS|PDF (défaut XLS)  --etat <valeur>  --recolte  --traite  --du jj/mm/aaaa  --au jj/mm/aaaa  --site UA55  --magasin <code>  --lot 3700
 Il ne clique JAMAIS sur Valider / Créer : un rapport est une simple lecture.
 """
-import html, json, os, re, subprocess, sys, urllib.error, urllib.parse, urllib.request
+import html, json, os, re, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
 from html.parser import HTMLParser
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
