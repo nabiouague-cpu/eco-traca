@@ -10,15 +10,15 @@ Options :
   --formulaire   se connecte, lit la page du rapport et affiche tous les champs (nom, type, valeur par défaut)
                  et toutes les listes déroulantes (Site = sites d'usinage UA/US, Magasin = magasins de stockage,
                  Liste des Etats, format PDF/Excel...). Enregistre la page dans /root/saigic_lots_form.html.
+  --listes       affiche le contenu réel des listes : sites, magasins, récoltes, traites, exportateurs, états.
   --outils       lit le script de la page (/Scripts/public/saigic.tools.core.js) et affiche comment les listes
                  Site, Magasin, Récolte, Traite, Exportateur, Liste des États sont remplies (adresses des appels).
-  --apercu       envoie le formulaire avec ses valeurs par défaut (campagne en cours, traite principale, exportateur 009)
-                 comme le bouton « Aperçu », et décrit la réponse (type, taille) ; enregistre le fichier reçu
-                 dans /root/saigic_lots_apercu.* (+ texte extrait si PDF et pdftotext présent).
-                 Ajouter  --format Excel  (ou PDF, Word...) pour choisir le format de la liste à côté d'Aperçu.
+  --apercu       reproduit le bouton « Aperçu » (campagne en cours, traite principale, exportateur 009, du 1er sept. à aujourd'hui),
+                 lit le rapport reçu (/Rapport/AfficherEtat), l'enregistre dans /root/saigic_lots_apercu.* et en affiche le contenu.
+                 Options : --format XLS|PDF (défaut XLS)  --etat <valeur>  --recolte  --traite  --du jj/mm/aaaa  --au jj/mm/aaaa  --site UA55  --magasin <code>  --lot 3700
 Il ne clique JAMAIS sur Valider / Créer : un rapport est une simple lecture.
 """
-import html, os, re, subprocess, sys, urllib.error, urllib.parse, urllib.request
+import html, json, os, re, subprocess, sys, urllib.error, urllib.parse, urllib.request
 from html.parser import HTMLParser
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -128,7 +128,7 @@ def valeurs_par_defaut(f, format_voulu):
 
 
 def main():
-    if not any(o in sys.argv for o in ('--formulaire', '--apercu', '--outils')):
+    if not any(o in sys.argv for o in ('--formulaire', '--apercu', '--outils', '--listes')):
         print(__doc__); return 0
     c = ouvrir_session()
     if '--outils' in sys.argv:
@@ -141,51 +141,106 @@ def main():
             print('\n=== %s ===' % nom)
             print(js[m.start():m.start() + 1400] if m else '(définition introuvable)')
         return 0
+    if '--listes' in sys.argv or '--apercu' in sys.argv:
+        L = lire_listes(c)
+        if '--listes' in sys.argv:
+            for nom, lst in L.items():
+                print('\n=== %s (%d) ===' % (nom, len(lst)))
+                for v, lib in lst: print('   %s = %s' % (v, lib))
+            return 0
+        return apercu(c, L)
     st, page, url = c.req(PAGE)
     P.log('page %s : HTTP %s, %d caractères' % (PAGE, st, len(page)))
     if st != 200: return 1
     open(SORTIE_FORM, 'w', encoding='utf-8').write(page)
-    forms = lire_formulaires(page)
-    # le formulaire du rapport = celui qui contient la liste « Site » / « Magasin » ou le plus grand
-    forms = [f for f in forms if f['champs']]
+    forms = [f for f in lire_formulaires(page) if f['champs']]
     if not forms: P.log('aucun formulaire trouvé dans la page'); return 1
-    if '--formulaire' in sys.argv:
-        afficher_formulaire(forms)
-        scripts = re.findall(r'<script[^>]*src="([^"]+)"', page, re.I)
-        print('\nscripts de la page :', ' | '.join(scripts))
-        print('\nPage enregistrée : %s (la déposer dans la conversation si besoin)' % SORTIE_FORM)
-        return 0
-    f = max(forms, key=lambda x: len(x['champs']))
-    fmt = sys.argv[sys.argv.index('--format') + 1] if '--format' in sys.argv else 'PDF'
-    data = valeurs_par_defaut(f, fmt)
-    P.log('envoi du formulaire (%s %s) avec %d champs : %s' % (f['method'], f['action'], len(data), ', '.join('%s=%s' % (k, v) for k, v in data if not k.startswith('__'))))
-    action = f['action'] or PAGE
-    if f['method'] == 'GET':
-        st, corps, u = c.req(action + ('&' if '?' in action else '?') + urllib.parse.urlencode(data), referer=P.BASE + PAGE)
-        brut = corps.encode('utf-8', 'replace'); ctype = '?'
-    else:
-        import urllib.request
-        body = urllib.parse.urlencode(data).encode()
-        r = urllib.request.Request(P.BASE + action if action.startswith('/') else action, data=body, headers={
-            'User-Agent': P.UA, 'Authorization': c.basic, 'Referer': P.BASE + PAGE, 'Content-Type': 'application/x-www-form-urlencoded'})
+    afficher_formulaire(forms)
+    print('\nPage enregistrée : %s' % SORTIE_FORM)
+    return 0
+
+
+# ---------- listes déroulantes (appels relevés dans /Scripts/public/saigic.tools.core.js) ----------
+CAMP_ID = '26'      # campagne 2026-2027 (valeur codée en dur dans la page du SAIGIC)
+PRDT_CACAO = '2'
+EXP_ECORIGINE = '009'
+
+def lire_json(c, chemin, params=None):
+    q = ('?' + urllib.parse.urlencode(params)) if params else ''
+    st, txt, _ = c.req(chemin + q, json_=True)
+    if st != 200: raise RuntimeError('%s : HTTP %s' % (chemin, st))
+    d = json.loads(txt)
+    if isinstance(d, dict):
+        for k in ('aaData', 'data', 'Data', 'items'):
+            if k in d: d = d[k]; break
+    return d
+
+def lire_listes(c):
+    L = {}
+    L['Sites (ddlSite)'] = [(o.get('IDSite'), '%s - %s' % (o.get('IDSite'), o.get('NomCourt'))) for o in lire_json(c, '/Site/GetSiteJson')]
+    L['Magasins (ddlMagasin)'] = [(o.get('CodeMagasin'), o.get('NomMagasin')) for o in lire_json(c, '/Magasin/getMagasinJson')]
+    rec = lire_json(c, '/Recolte/GetRecolte', {'Option': 'ListeRecolteCamp', 'Camp_Id': CAMP_ID, 'Recolte': '', 'Exp_Id': '', 'Prdt_Id': 0})
+    L['Récoltes (ddlRecolte)'] = [(o.get('RCLT_LIB'), o.get('RCLT_LIB')) for o in rec]
+    r0 = L['Récoltes (ddlRecolte)'][0][0] if L['Récoltes (ddlRecolte)'] else ''
+    L['Traites (ddlTraite)'] = [(o.get('LibelleTraite'), o.get('Intitule')) for o in lire_json(c, '/Recolte/GetTraite', {'Option': 'ListeTraite', 'Camp_Id': CAMP_ID, 'Recolte': r0, 'Exp_Id': '', 'Prdt_Id': PRDT_CACAO})]
+    L['Exportateurs (ddlExportateur)'] = [(o.get('Exp_Id'), o.get('NomCourt')) for o in lire_json(c, '/Exportateur/GetExportateurJson', {'Exp_Id': EXP_ECORIGINE, 'type': 1})]
+    L['Listes des états (ddlListeEtat)'] = [(o.get('IDWithCodeEtat'), o.get('LibelleEtat')) for o in lire_json(c, '/ListeEtat/GetListeEtatJson', {'vppPrdt': PRDT_CACAO, 'vppGroupe': 'LOT'})]
+    return L
+
+def option(argv, nom, defaut=None):
+    return argv[argv.index(nom) + 1] if nom in argv and argv.index(nom) + 1 < len(argv) else defaut
+
+def apercu(c, L):
+    """Reproduit le clic sur « Aperçu » : POST /Rapport/ShowEtatLotFeves puis lecture de /Rapport/AfficherEtat. Lecture seule."""
+    from datetime import date
+    auj = date.today()
+    etats = L['Listes des états (ddlListeEtat)']
+    etat = option(sys.argv, '--etat') or next((v for v, lib in etats if re.search(r'fabriqu', str(lib), re.I)), (etats[0][0] if etats else ''))
+    recolte = option(sys.argv, '--recolte') or (L['Récoltes (ddlRecolte)'][0][0] if L['Récoltes (ddlRecolte)'] else '')
+    traite = option(sys.argv, '--traite') or (L['Traites (ddlTraite)'][0][0] if L['Traites (ddlTraite)'] else '')
+    fmt = (option(sys.argv, '--format', 'XLS') or 'XLS').upper()
+    fmt = 'XLS' if fmt.startswith('EX') else fmt
+    du = option(sys.argv, '--du', P.date_debut_campagne(auj).strftime('%d/%m/%Y')); au = option(sys.argv, '--au', auj.strftime('%d/%m/%Y'))
+    data = {'Prdt_Id': PRDT_CACAO, 'ddlListeEtat': etat, 'ddlRecolte': recolte, 'ddlTraite': traite, 'txtParite': '', 'ddlExportateur': EXP_ECORIGINE,
+            'DateDebut': du, 'DateFin': au, 'ddlSite': option(sys.argv, '--site', ''), 'ddlMagasin': option(sys.argv, '--magasin', ''), 'txtNumeroLot': option(sys.argv, '--lot', ''),
+            'ddlFormule': '-1', 'ddlD6': '-1', 'ddlVueEmb': '-1', 'ddlExportType': fmt}
+    P.log('Aperçu : ' + json.dumps(data, ensure_ascii=False))
+
+    def appel(chemin, corps=None, referer=PAGE):
+        hdr = {'User-Agent': P.UA, 'Authorization': c.basic, 'Referer': P.BASE + referer}
+        if corps is not None: hdr['Content-Type'] = 'application/x-www-form-urlencoded'
+        r = urllib.request.Request(P.BASE + chemin, data=corps, headers=hdr)
         try:
-            with c.opener.open(r, timeout=120) as rep: st = rep.status; brut = rep.read(); ctype = rep.headers.get('Content-Type', '?'); u = rep.geturl(); cd = rep.headers.get('Content-Disposition', '')
-        except urllib.error.HTTPError as e:
-            st = e.code; brut = e.read(); ctype = e.headers.get('Content-Type', '?'); u = action; cd = ''
-        else: pass
-    P.log('réponse : HTTP %s, type %s, %d octets, adresse finale %s' % (st, ctype, len(brut), u))
+            with c.opener.open(r, timeout=180) as rep: return rep.status, rep.read(), rep.headers, rep.geturl()
+        except urllib.error.HTTPError as e: return e.code, e.read(), e.headers, chemin
+
+    st, brut, h, u = appel('/Rapport/ShowEtatLotFeves?Length=7', urllib.parse.urlencode(data).encode())
+    P.log('POST ShowEtatLotFeves : HTTP %s, %s, %d octets' % (st, h.get('Content-Type', '?'), len(brut)))
+    print(brut[:600].decode('utf-8', 'replace'))
+    st, brut, h, u = appel('/Rapport/AfficherEtat')
+    ctype = h.get('Content-Type', '?'); cd = h.get('Content-Disposition', '')
+    P.log('GET AfficherEtat : HTTP %s, %s, %d octets, %s' % (st, ctype, len(brut), cd))
     ext = 'pdf' if brut[:4] == b'%PDF' else ('xlsx' if brut[:2] == b'PK' else ('xls' if brut[:4] == b'\xd0\xcf\x11\xe0' else 'html'))
     chemin = '%s.%s' % (SORTIE_APERCU, ext); open(chemin, 'wb').write(brut)
     P.log('fichier reçu enregistré : %s' % chemin)
     if ext == 'pdf':
         try:
             txt = subprocess.run(['pdftotext', '-layout', chemin, '-'], capture_output=True, text=True, timeout=60).stdout
-            open(SORTIE_APERCU + '.txt', 'w').write(txt); print(txt[:3000])
+            open(SORTIE_APERCU + '.txt', 'w').write(txt); print(txt[:4000])
         except Exception as e: P.log('pdftotext indisponible (%s) : apt-get install -y poppler-utils' % e)
-    elif ext == 'html':
-        print(re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', brut.decode('utf-8', 'replace')))[:1500])
-        liens = re.findall(r'(?:src|href|data)="([^"]+)"', brut.decode('utf-8', 'replace'), re.I)
-        print('liens/ressources dans la réponse :', ' | '.join(liens[:15]))
+    elif ext == 'xlsx':
+        try:
+            import openpyxl
+            ws = openpyxl.load_workbook(chemin, data_only=True).active
+            for row in ws.iter_rows(values_only=True):
+                if any(v not in (None, '') for v in row): print(' | '.join('' if v is None else str(v) for v in row))
+        except Exception as e: P.log('lecture xlsx impossible (%s) : pip install openpyxl' % e)
+    else:
+        t = brut.decode('utf-8', 'replace')
+        if '<table' in t.lower():
+            for tr in re.findall(r'<tr\b.*?</tr>', t, re.S | re.I)[:40]:
+                print(' | '.join(re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]+>', '', td))).strip() for td in re.findall(r'<t[dh]\b.*?</t[dh]>', tr, re.S | re.I)))
+        else: print(re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', t))[:2000])
     return 0
 
 
