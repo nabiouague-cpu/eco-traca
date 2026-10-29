@@ -8,6 +8,7 @@
 //    et on ne remplit que ce qui est vide (client, série, site, type, marque, poids) ; jamais d'écrasement d'une saisie à la main,
 //    SAUF le poids d'entrepôt, que le SAIGIC corrige (sauf sites loco-magasin, dont le poids AGL est saisi par le shipping : l'écart est seulement signalé) ;
 //  - lot absent d'ORIGEN : il est créé (origine « saigic »), avec le site si le robot a pu le trouver.
+// La date de fabrication du SAIGIC (saisie du lot dans le SAIGIC) n'est PAS recopiée comme date de production : elle reste dans saigic_date_fab.
 // Corps : { lots: [...], localisation?: {numero: "UA55"}, complet?: true, dry_run?: true }.  Secret : en-tête x-relais-secret = RELAIS_SAIGIC_SECRET.
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
@@ -80,7 +81,7 @@ Deno.serve(async (req) => {
         const defauts: Record<string, unknown> = {
           client: serie?.client ?? null, serie_id: serie?.id ?? null, type_cacao: serie?.type_cacao ?? null, programme: serie?.programme ?? null,
           niveau_tracabilite: serie?.niveau_tracabilite ?? null, marque: txt(l.marque), campagne_id: camp?.id ?? null,
-          poids_theorique_kg: num(l.poids_theorique), date_production: jour,
+          poids_theorique_kg: num(l.poids_theorique),
         };
         for (const [k, v] of Object.entries(defauts)) { if (vide(ex[k]) && !vide(v)) { patch[k] = v; if (k === 'client') bilan.clients_completes.push(numero); } }
         if (vide(ex.site_code)) { const sc = siteCode || serie?.site_code || null; if (sc) { patch.site_code = sc; if (vide(ex.site)) patch.site = siteDe(sc)?.nom ?? sc; } }
@@ -111,7 +112,7 @@ Deno.serve(async (req) => {
       const nouveau: Record<string, unknown> = {
         id: 'lu_saigic_' + numero, numero, campagne_id: camp?.id ?? null, site: sc ? (siteDe(sc)?.nom ?? sc) : null, site_code: sc,
         client: serie?.client ?? null, serie_id: serie?.id ?? null, type_cacao: serie?.type_cacao ?? null, programme: serie?.programme ?? null,
-        niveau_tracabilite: serie?.niveau_tracabilite ?? null, marque: txt(l.marque), statut: 'ouvert', origine: 'saigic', date_production: jour,
+        niveau_tracabilite: serie?.niveau_tracabilite ?? null, marque: txt(l.marque), statut: 'ouvert', origine: 'saigic',
         poids_theorique_kg: num(l.poids_theorique), poids_entrepot_kg: reel !== null && reel > 0 ? reel : null,
         ...saigic, saigic_lu_le: maintenant,
       };
