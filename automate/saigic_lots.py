@@ -10,6 +10,8 @@ Options :
   --formulaire   se connecte, lit la page du rapport et affiche tous les champs (nom, type, valeur par défaut)
                  et toutes les listes déroulantes (Site = sites d'usinage UA/US, Magasin = magasins de stockage,
                  Liste des Etats, format PDF/Excel...). Enregistre la page dans /root/saigic_lots_form.html.
+  --outils       lit le script de la page (/Scripts/public/saigic.tools.core.js) et affiche comment les listes
+                 Site, Magasin, Récolte, Traite, Exportateur, Liste des États sont remplies (adresses des appels).
   --apercu       envoie le formulaire avec ses valeurs par défaut (campagne en cours, traite principale, exportateur 009)
                  comme le bouton « Aperçu », et décrit la réponse (type, taille) ; enregistre le fichier reçu
                  dans /root/saigic_lots_apercu.* (+ texte extrait si PDF et pdftotext présent).
@@ -126,9 +128,19 @@ def valeurs_par_defaut(f, format_voulu):
 
 
 def main():
-    if '--formulaire' not in sys.argv and '--apercu' not in sys.argv:
+    if not any(o in sys.argv for o in ('--formulaire', '--apercu', '--outils')):
         print(__doc__); return 0
     c = ouvrir_session()
+    if '--outils' in sys.argv:
+        st, js, _ = c.req('/Scripts/public/saigic.tools.core.js')
+        P.log('saigic.tools.core.js : HTTP %s, %d caractères' % (st, len(js)))
+        open('/root/saigic_tools_core.js', 'w', encoding='utf-8').write(js)
+        for nom in ('fpbChargerComboSites', 'fpbChargerComboMagasins', 'fpbChargerComboRecoltes', 'fpbChargerComboTraites',
+                    'fpbChargerComboExportateurs', 'fpbChargerComboListeDesEtats', 'fpbChargerComboOuiNon'):
+            m = re.search(r'(%s\s*[:=]\s*function|function\s+%s)' % (nom, nom), js)
+            print('\n=== %s ===' % nom)
+            print(js[m.start():m.start() + 1400] if m else '(définition introuvable)')
+        return 0
     st, page, url = c.req(PAGE)
     P.log('page %s : HTTP %s, %d caractères' % (PAGE, st, len(page)))
     if st != 200: return 1
