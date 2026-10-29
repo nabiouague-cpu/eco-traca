@@ -4495,7 +4495,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-28-355';
+const APP_VERSION = '2026-10-29-356';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -23287,11 +23287,22 @@ function calcMontantPaiement(a){
 // au prix loco-magasin moins le coût de la sacherie (ECORIGINE fournit les sacs). Les coopératives ne sont pas payées par ECORIGINE.
 // Produit du connaissement tel que le SAIGIC l'affiche (« CACAO(Ordinaire) », « CACAO(RAINFOREST) ») : colonne achats.produit_saigic, remplie par la base à partir du connaissement.
 function produitSaigicLibelle(a){ const t = String((a && a.produit_saigic)||'').trim(); if (!t) return ''; const m = /\(([^)]*)\)/.exec(t); const x = (m ? m[1] : t).trim(); return x ? x.charAt(0).toUpperCase()+x.slice(1).toLowerCase() : ''; }
+// Libellé complet et unique du type de cacao : « Rainforest Alliance » (vert), « Cacao ordinaire » (bleu), « Fairtrade » (vert) — jamais « RA » puis « Rainforest » côte à côte.
+function typeCacaoLibelleComplet(t){ const x = String(t||'').trim(); if (!x) return ''; if (/ordinaire|conventionnel|^ord/i.test(x)) return 'Cacao ordinaire'; if (/^(ra|rainforest)/i.test(x)) return 'Rainforest Alliance'; if (/^(fair|ft)/i.test(x)) return 'Fairtrade'; return x; }
+function typeCacaoBadgeHtml(a){
+  const saigic = produitSaigicLibelle(a), typeEnr = String((a&&a.type_cacao)||'').trim();
+  if (!saigic && !typeEnr) return '';
+  if (!saigic){ const l = typeCacaoLibelleComplet(typeEnr); return '<span class="badge '+(l==='Cacao ordinaire' ? 'info' : 'ok')+'">'+esc(l)+'</span>'; }
+  // le SAIGIC fait foi pour l'affichage ; si ORIGEN a enregistré un autre type, le badge passe en orange et le dit
+  const l = typeCacaoLibelleComplet(saigic), lEnr = typeCacaoLibelleComplet(typeEnr);
+  const ecart = typeEnr!=='' && lEnr!==l;
+  return '<span class="badge '+(ecart ? 'warn' : (l==='Cacao ordinaire' ? 'info' : 'ok'))+'" title="Produit du connaissement sur le SAIGIC : '+esc(a.produit_saigic)+(ecart ? ' — différent du type de cacao enregistré dans ORIGEN ('+esc(lEnr)+')' : '')+'">'+esc(l)+(ecart ? ' ⚠' : '')+'</span>';
+}
 function produitSaigicBadgeHtml(a){
   const l = produitSaigicLibelle(a); if (!l) return '';
   const ordinaire = /ordinaire/i.test(l), certifie = /^(ra|rainforest|fair|ft)/i.test(String(a.type_cacao||'').trim());
   const typeEnr = String(a.type_cacao||'').trim(), ecart = (ordinaire && certifie) || (!ordinaire && typeEnr!=='' && !certifie);
-  return '<span class="badge '+(ecart ? 'warn' : (ordinaire ? 'info' : 'ok'))+'" title="Produit du connaissement sur le SAIGIC : '+esc(a.produit_saigic)+(ecart ? ' — différent du type de cacao enregistré dans ORIGEN ('+esc(a.type_cacao)+')' : '')+'">'+esc(l)+'</span>';
+  return '<span class="badge '+(ecart ? 'warn' : (ordinaire ? 'info' : 'ok'))+'" title="Produit du connaissement sur le SAIGIC : '+esc(a.produit_saigic)+(ecart ? ' — différent du type de cacao enregistré dans ORIGEN ('+esc(a.type_cacao)+')' : '')+'">'+esc(typeCacaoLibelleComplet(l))+'</span>';
 }
 function calcMontantUsinier(a){
   if (!a || !usineTracabiliteExterne(a.usine_dechargement)) return null;
@@ -25027,7 +25038,7 @@ function ligneAchatHtml(a, montrerCoop, ouvert, avecNomPlateforme){
   return '<tr class="ligne-achat'+(ouvert?' ouvert':'')+'" data-id="'+esc(a.id)+'" data-q="'+esc(q)+'"'+(cache?' style="display:none"':'')+'>'
     + '<td class="chev-cell" onclick="toggleAchatDetail(\''+a.id+'\')" title="Afficher le détail"><span class="chev">▸</span></td>'
     + '<td class="g cliquable" onclick="toggleAchatDetail(\''+a.id+'\')"><div class="num-conn">'+esc(a.connaissement||'(sans numéro)')+(a.obc_saisi_le ? ' <span class="badge-obc" title="Saisi dans OBC le '+esc(dateFr(String(a.obc_saisi_le).slice(0,10)))+(a.obc_bordereau_numero ? ' · bordereau '+esc(a.obc_bordereau_numero) : '')+'">OBC ✓</span>' : '')+'</div>'
-      + '<div class="sous">'+(!coop && (a.code_fourn||a.fournisseur_saigic) ? '<span class="badge warn" title="Fournisseur SAIGIC : '+esc((a.fournisseur_saigic||'')+' '+(a.code_fourn||''))+'">À identifier : '+esc(a.fournisseur_saigic||a.code_fourn)+'</span> <button type="button" class="btn-ghost btn-compact" onclick="identifierCoopSaigic(\''+escJs(a.id)+'\')">Identifier</button>' : (montrerCoop ? esc(coop?coop.nom:'—') : ''))+(montrerCoop && a.type_cacao ? ' · ' : '')+(a.type_cacao ? '<span class="type">'+esc(a.type_cacao)+'</span>' : '')+(a.produit_saigic ? ' '+produitSaigicBadgeHtml(a) : '')+'</div>'
+      + '<div class="sous">'+(!coop && (a.code_fourn||a.fournisseur_saigic) ? '<span class="badge warn" title="Fournisseur SAIGIC : '+esc((a.fournisseur_saigic||'')+' '+(a.code_fourn||''))+'">À identifier : '+esc(a.fournisseur_saigic||a.code_fourn)+'</span> <button type="button" class="btn-ghost btn-compact" onclick="identifierCoopSaigic(\''+escJs(a.id)+'\')">Identifier</button>' : (montrerCoop ? esc(coop?coop.nom:'—') : ''))+(montrerCoop && a.type_cacao ? ' · ' : '')+typeCacaoBadgeHtml(a)+'</div>'
       + achatClientSelectHtml(a)+'</td>'
     + '<td class="n">'+esc(dateFr(a.date)||'—')+'<div class="sous">'+(a.periode ? (a.periode==='principale' ? 'Principale' : 'Intermédiaire') : '')+'</div></td>'
     + '<td>'+verif+'</td>'
