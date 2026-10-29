@@ -3,8 +3,8 @@
 """
 Robot LOTS EXPORT SAIGIC -> ORIGEN (LECTURE SEULE). Troisième robot du VPS, même connexion que saigic_pesees.py.
 
-Un passage (sans option, ou --dry-run) : lit l'état des lots fabriqués (toutes les traites de la récolte en cours), l'envoie à ORIGEN (fonction reception-lots-saigic),
-sans rien écrire nulle part, pour que le robot sache exactement quoi envoyer.
+Un passage (sans option, ou --dry-run) : lit l'état des lots fabriqués (toutes les traites de la récolte en cours), l'envoie à ORIGEN (fonction reception-lots-saigic)
+et remplit ce qui manque (client d'après la série, site, poids). Avec --dry-run, ORIGEN ne reçoit qu'un essai à blanc. Rien n'est jamais écrit sur le SAIGIC.
 
 Options :
   --formulaire   se connecte, lit la page du rapport et affiche tous les champs (nom, type, valeur par défaut)
