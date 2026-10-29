@@ -6,7 +6,7 @@
 //    numéro de début est le plus grand sans dépasser le numéro du lot) ; un lot sans série est signalé « à classer » ;
 //  - lot déjà dans ORIGEN : on enregistre les infos du SAIGIC (date de fabrication, grade, BV, Fo1, poids théorique et réel, D6, vu embarqué)
 //    et on ne remplit que ce qui est vide (client, série, site, type, marque, poids) ; jamais d'écrasement d'une saisie à la main,
-//    SAUF le poids d'entrepôt, que le SAIGIC corrige (sauf sites loco-magasin, dont le poids AGL est saisi par le shipping : l'écart est seulement signalé) ;
+//    y compris le poids d'entrepôt (v3 : rempli seulement s'il est vide ; tout écart avec le SAIGIC est signalé, pas écrasé) ;
 //  - lot absent d'ORIGEN : il est créé (origine « saigic »), avec le site si le robot a pu le trouver.
 // La date de fabrication du SAIGIC (saisie du lot dans le SAIGIC) n'est PAS recopiée comme date de production : elle reste dans saigic_date_fab.
 // Corps : { lots: [...], localisation?: {numero: "UA55"}, complet?: true, dry_run?: true }.  Secret : en-tête x-relais-secret = RELAIS_SAIGIC_SECRET.
@@ -87,14 +87,15 @@ Deno.serve(async (req) => {
         if (vide(ex.site_code)) { const sc = siteCode || serie?.site_code || null; if (sc) { patch.site_code = sc; if (vide(ex.site)) patch.site = siteDe(sc)?.nom ?? sc; } }
         const site = String(patch.site_code ?? ex.site_code ?? '') || null;
         if (!site) bilan.a_localiser.push(numero);
-        // poids d'entrepôt : le SAIGIC fait foi (sauf loco-magasin)
+        // poids d'entrepôt : v3 — le ticket de pesée fait foi ; le SAIGIC (saisi à la main par le shipping) peut contenir des erreurs
+        // (ex. poids saisis dans l'ordre des tickets et non selon le n° de lot). On ne le recopie que si ORIGEN n'a aucun poids ;
+        // sinon l'écart est seulement signalé (le poids du SAIGIC reste dans saigic_poids_reel_kg).
         const reel = num(l.poids_reel);
         if (reel !== null && reel > 0) {
           const actuel = num(ex.poids_entrepot_kg);
           if (actuel === null) patch.poids_entrepot_kg = reel;
           else if (actuel !== reel) {
-            if (locoMagasin(site)) bilan.ecarts_poids_signales.push({ numero, orig_en: actuel, saigic: reel, raison: 'loco-magasin : poids AGL conservé' });
-            else { patch.poids_entrepot_kg = reel; bilan.poids_corriges.push({ numero, avant: actuel, apres: reel }); }
+            bilan.ecarts_poids_signales.push({ numero, orig_en: actuel, saigic: reel, raison: locoMagasin(site) ? 'loco-magasin : poids AGL conservé' : 'poids ORIGEN conservé (ticket de pesée)' });
           }
         }
         const reste = Object.keys(patch).filter((k) => k !== 'saigic_lu_le');
