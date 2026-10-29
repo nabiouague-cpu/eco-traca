@@ -128,6 +128,8 @@ def valeurs_par_defaut(f, format_voulu):
 
 
 def main():
+    if '--lire' in sys.argv:
+        lire_xls(option(sys.argv, '--lire', SORTIE_APERCU + '.xls')); return 0
     if not any(o in sys.argv for o in ('--formulaire', '--apercu', '--outils', '--listes')):
         print(__doc__); return 0
     c = ouvrir_session()
@@ -181,7 +183,7 @@ def lire_listes(c):
     L['Magasins (ddlMagasin)'] = [(o.get('CodeMagasin'), o.get('NomMagasin')) for o in lire_json(c, '/Magasin/getMagasinJson')]
     rec = lire_json(c, '/Recolte/GetRecolte', {'Option': 'ListeRecolteCamp', 'Camp_Id': CAMP_ID, 'Recolte': '', 'Exp_Id': '', 'Prdt_Id': 0})
     L['Récoltes (ddlRecolte)'] = [(o.get('RCLT_LIB'), o.get('RCLT_LIB')) for o in rec]
-    r0 = L['Récoltes (ddlRecolte)'][0][0] if L['Récoltes (ddlRecolte)'] else ''
+    r0 = option(sys.argv, '--recolte') or (L['Récoltes (ddlRecolte)'][-1][0] if L['Récoltes (ddlRecolte)'] else '')
     L['Traites (ddlTraite)'] = [(o.get('LibelleTraite'), o.get('Intitule')) for o in lire_json(c, '/Recolte/GetTraite', {'Option': 'ListeTraite', 'Camp_Id': CAMP_ID, 'Recolte': r0, 'Exp_Id': '', 'Prdt_Id': PRDT_CACAO})]
     L['Exportateurs (ddlExportateur)'] = [(o.get('Exp_Id'), o.get('NomCourt')) for o in lire_json(c, '/Exportateur/GetExportateurJson', {'Exp_Id': EXP_ECORIGINE, 'type': 1})]
     L['Listes des états (ddlListeEtat)'] = [(o.get('IDWithCodeEtat'), o.get('LibelleEtat')) for o in lire_json(c, '/ListeEtat/GetListeEtatJson', {'vppPrdt': PRDT_CACAO, 'vppGroupe': 'LOT'})]
@@ -190,13 +192,26 @@ def lire_listes(c):
 def option(argv, nom, defaut=None):
     return argv[argv.index(nom) + 1] if nom in argv and argv.index(nom) + 1 < len(argv) else defaut
 
+def lire_xls(chemin):
+    try:
+        import xlrd
+    except ImportError:
+        P.log('lecture .xls impossible : lancer  pip install --break-system-packages xlrd  puis  python3 saigic_lots.py --lire ' + chemin); return
+    wb = xlrd.open_workbook(chemin)
+    for sh in wb.sheets():
+        print('--- feuille « %s » : %d lignes x %d colonnes ---' % (sh.name, sh.nrows, sh.ncols))
+        for r in range(sh.nrows):
+            vals = [str(v).strip() for v in sh.row_values(r)]
+            if any(vals): print(' | '.join(vals))
+
+
 def apercu(c, L):
     """Reproduit le clic sur « Aperçu » : POST /Rapport/ShowEtatLotFeves puis lecture de /Rapport/AfficherEtat. Lecture seule."""
     from datetime import date
     auj = date.today()
     etats = L['Listes des états (ddlListeEtat)']
     etat = option(sys.argv, '--etat') or next((v for v, lib in etats if re.search(r'fabriqu', str(lib), re.I)), (etats[0][0] if etats else ''))
-    recolte = option(sys.argv, '--recolte') or (L['Récoltes (ddlRecolte)'][0][0] if L['Récoltes (ddlRecolte)'] else '')
+    recolte = option(sys.argv, '--recolte') or (L['Récoltes (ddlRecolte)'][-1][0] if L['Récoltes (ddlRecolte)'] else '')
     traite = option(sys.argv, '--traite') or (L['Traites (ddlTraite)'][0][0] if L['Traites (ddlTraite)'] else '')
     fmt = (option(sys.argv, '--format', 'XLS') or 'XLS').upper()
     fmt = 'XLS' if fmt.startswith('EX') else fmt
@@ -228,6 +243,8 @@ def apercu(c, L):
             txt = subprocess.run(['pdftotext', '-layout', chemin, '-'], capture_output=True, text=True, timeout=60).stdout
             open(SORTIE_APERCU + '.txt', 'w').write(txt); print(txt[:4000])
         except Exception as e: P.log('pdftotext indisponible (%s) : apt-get install -y poppler-utils' % e)
+    elif ext == 'xls':
+        lire_xls(chemin)
     elif ext == 'xlsx':
         try:
             import openpyxl
