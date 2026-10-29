@@ -1,13 +1,16 @@
 #!/bin/bash
 # Robot LOTS EXPORT SAIGIC -> ORIGEN. Même fichier d'identifiants que les autres robots ; lance saigic_lots.py.
-# Options : --planifier (toutes les 15 min, décalé), --arreter, --dry-run (rien n'est écrit dans ORIGEN), sans option = un passage.
+# Options : --planifier [minutes, défaut 5], --arreter, --dry-run (rien n'est écrit dans ORIGEN), sans option = un passage.
 set -u
 ENV_FILE="${SAIGIC_ENV:-/root/.saigic_relais.env}"
 LOCK=/root/.saigic_lots.lock
 case "${1:-}" in
   --planifier)
-    ( crontab -l 2>/dev/null | grep -v saigic_lots.sh ; echo '4-59/15 * * * * /bin/bash /root/saigic_lots.sh >> /var/log/saigic_lots.log 2>&1' ) | crontab -
-    echo "Planifié : un passage toutes les 15 minutes (décalé des autres robots). Journal : /var/log/saigic_lots.log"; exit 0;;
+    MIN="${2:-5}"
+    case "$MIN" in ''|*[!0-9]*) echo "Intervalle invalide : $MIN"; exit 2 ;; esac
+    if [ "$MIN" -lt 2 ] || [ "$MIN" -gt 30 ]; then echo "Intervalle hors limites (2 à 30 minutes) : $MIN"; exit 2; fi
+    ( crontab -l 2>/dev/null | grep -v saigic_lots.sh ; echo "1-59/$MIN * * * * /bin/bash /root/saigic_lots.sh >> /var/log/saigic_lots.log 2>&1" ) | crontab -
+    echo "Planifié : un passage toutes les $MIN minutes (décalé d'une minute des autres robots). Journal : /var/log/saigic_lots.log"; exit 0;;
   --arreter)
     crontab -l 2>/dev/null | grep -v saigic_lots.sh | crontab - ; echo "Robot des lots retiré du cron."; exit 0;;
 esac
