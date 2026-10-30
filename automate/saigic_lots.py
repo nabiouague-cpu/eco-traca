@@ -17,6 +17,8 @@ Options :
                  Option : --filtre lot  (ne garde que les liens dont le libellé ou l'adresse contient ce mot)
   --ecran /Chemin   LIT (GET seulement) une page du SAIGIC et affiche ses formulaires et leurs champs ; l'enregistre dans /root/saigic_ecran.html.
                  Ne remplit et n'envoie rien.
+  --listes-saisie  LIT l'écran « Créer Lots » (/Lot/CreateLotFeve) et affiche en entier les listes Usine, Magasin, Type certificat, Emballage
+                 ainsi que la liste Qualité (appel du script de la page). Ne remplit et n'envoie rien. Enregistre dans /root/saigic_listes_saisie.txt.
   --apercu       reproduit le bouton « Aperçu » (campagne en cours, traite principale, exportateur 009, du 1er sept. à aujourd'hui),
                  lit le rapport reçu (/Rapport/AfficherEtat), l'enregistre dans /root/saigic_lots_apercu.* et en affiche le contenu.
                  Options : --format XLS|PDF (défaut XLS)  --etat <valeur>  --recolte  --traite  --du jj/mm/aaaa  --au jj/mm/aaaa  --site UA55  --magasin <code>  --lot 3700
@@ -136,9 +138,35 @@ def main():
         lire_xls(option(sys.argv, '--lire', SORTIE_APERCU + '.xls')); return 0
     if '--aide' in sys.argv or '-h' in sys.argv:
         print(__doc__); return 0
-    if not any(o in sys.argv for o in ('--formulaire', '--apercu', '--outils', '--listes', '--menu', '--ecran')):
+    if not any(o in sys.argv for o in ('--formulaire', '--apercu', '--outils', '--listes', '--menu', '--ecran', '--listes-saisie')):
         return passage()
     c = ouvrir_session()
+    if '--listes-saisie' in sys.argv:
+        st, page, _ = c.req('/Lot/CreateLotFeve')
+        P.log('page /Lot/CreateLotFeve : HTTP %s, %d caractères' % (st, len(page)))
+        if st != 200: return 1
+        sortie = []
+        forms = [f for f in lire_formulaires(page) if f['champs']]
+        for f in forms:
+            for ch in f['champs']:
+                if ch['tag'] == 'select' and ch['name'] in ('IDSite', 'ddlMagasin', 'ddlTypeCertificat', 'ddlEmballage', 'Prdt_Id', 'txtFormat'):
+                    sortie.append('\n=== %s (%s) — %d choix ===' % (ch['label'], ch['name'], len(ch['options'])))
+                    for o in ch['options']: sortie.append('%s = %s' % (o['value'], o['label']))
+        # liste Qualité : chargée par le script de la page
+        i = page.find('GetProduitLotJson')
+        sortie.append('\n=== script de la page autour de GetProduitLotJson ===')
+        sortie.append(page[max(0, i - 200): i + 900] if i >= 0 else '(introuvable)')
+        for params in ({'Prdt_Id': '2'}, {'prdt_Id': '2'}, {'Prdt_Id': '2', 'Camp_Id': '26'}):
+            try:
+                st2, txt, _ = c.req('/ProduitDerive/GetProduitLotJson?' + urllib.parse.urlencode(params), json_=True)
+                sortie.append('\n=== GET /ProduitDerive/GetProduitLotJson %s : HTTP %s ===\n%s' % (params, st2, txt[:1500]))
+                if st2 == 200 and txt.strip() not in ('', '[]', 'null'): break
+            except Exception as e:
+                sortie.append('\n=== GET %s : erreur %s ===' % (params, e))
+        texte = '\n'.join(sortie)
+        open('/root/saigic_listes_saisie.txt', 'w', encoding='utf-8').write(texte)
+        print(texte)
+        return 0
     if '--menu' in sys.argv:
         mot = (option(sys.argv, '--filtre', '') or '').lower()
         st, page, _ = c.req('/')
