@@ -4497,7 +4497,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-30-361';
+const APP_VERSION = '2026-10-30-362';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -6981,6 +6981,63 @@ function shipBadgeSaigic(lib, val, aide){
   const ok = String(val||'').trim()!=='';
   return '<span class="badge '+(ok?'ok':'neutral')+'" title="'+esc(aide+(ok?' : '+val:' : pas encore'))+'" style="margin-right:3px">'+esc(lib)+'</span>';
 }
+// ---- Alertes du shipping : ce qui bloque ou qui cloche, lot par lot ----
+function shipAlertes(lots){
+  const al = [];
+  lots.forEach(l=>{
+    const s = shipSuiviDe(l.id) || {}, ot = shipOtDuLot(l.id), et = shipEtape(l), num = String(l.numero);
+    const sortie = Number(l.poids_sortie_kg)>0 ? Number(l.poids_sortie_kg) : null, pese = lotsUsinagePese(l)||null, fr = shipFreinte(sortie, pese);
+    const agree = s.agreage_resultat || (l.agree_le ? 'agree' : '');
+    if (fr!==null && fr>1) al.push(['danger', num, 'Freinte usine → entrepôt de '+String(fr).replace('.',',')+' % (au-delà de 1 %)']);
+    if (pese && l.saigic_poids_reel_kg && Math.abs(Number(l.saigic_poids_reel_kg)-pese)>0.5) al.push(['warn', num, 'Poids déclaré au SAIGIC '+fmtNum(l.saigic_poids_reel_kg)+' kg ≠ poids du ticket '+fmtNum(pese)+' kg (correction à demander au Conseil)']);
+    if (ot && agree!=='agree') al.push(['warn', num, 'Rattaché à l\'OT '+ot.numero+' sans agréage enregistré']);
+    if (ot && !s.si_recue_le) al.push(['info', num, 'OT '+ot.numero+' : instructions d\'embarquement non enregistrées']);
+    if (agree==='refuse') al.push(['danger', num, 'Lot refusé par le client']);
+    if (pese && !l.saigic_date_fab) al.push(['warn', num, 'En entrepôt mais pas encore déclaré au SAIGIC']);
+    if (ot && ot.bl_numero && !l.saigic_vu_emb) al.push(['info', num, 'BL émis mais « vu embarqué » absent du SAIGIC']);
+    if (et==='embarque' && !s.poids_empotage_kg) al.push(['info', num, 'Embarqué sans poids d\'empotage']);
+  });
+  return al;
+}
+function renderShipAlertes(lots){
+  const al = shipAlertes(lots); if (!al.length) return '';
+  const grp = {}; al.forEach(a=>{ (grp[a[2]] = grp[a[2]] || { niv:a[0], lots:[] }).lots.push(a[1]); });
+  const ordre = { danger:0, warn:1, info:2 };
+  return '<details style="margin:0 0 14px" '+(state.shipAlertesOuvert===false?'':'open')+' ontoggle="state.shipAlertesOuvert=this.open"><summary style="cursor:pointer;font-weight:600">Alertes <span class="badge '+(al.some(a=>a[0]==='danger')?'danger':'warn')+'">'+al.length+'</span></summary><div style="margin-top:8px;display:flex;flex-direction:column;gap:5px">'
+    + Object.entries(grp).sort((a,b)=>ordre[a[1].niv]-ordre[b[1].niv]).map(([msg,g])=>'<div><span class="badge '+g.niv+'">'+g.lots.length+' lot'+(g.lots.length>1?'s':'')+'</span> '+esc(msg)+' <span class="hint" style="margin:0">— '+esc(g.lots.sort((a,b)=>a.localeCompare(b,'fr',{numeric:true})).join(', '))+'</span></div>').join('')
+    + '</div></details>';
+}
+// ---- Export du tracking (même disposition que le fichier « TRACKING EXPORT CAMPAGNE 26-27 ») ----
+async function shipTrackingExporter(){
+  let ExcelJS; try{ ExcelJS = await qcChargerExcelJS(); }catch(e){ showToast('Impossible de préparer le classeur : '+e.message, 'error'); return; }
+  if (!state.finLtdCharge) await finChargerLtd();
+  const lots = (state.lotsUsinage||[]).slice().sort((a,b)=>String(a.numero).localeCompare(String(b.numero),'fr',{numeric:true}));
+  const wb = new ExcelJS.Workbook(); wb.creator = 'ORIGEN · ECORIGINE';
+  const S = wb.addWorksheet('TRACKING LOTS EXPORT', { views:[{ state:'frozen', ySplit:4 }] });
+  const cols = ['Date de production','Période','Port','Usine production','N° du lot','Type de cacao','Poids net après usinage (kg)','N° LTD','Banque','Date de transmission documentation','Date de réception des fonds','Poids net sortie usine pont bascule','Date d\'entrée en entrepôt export','Poids net entrée entrepôt export (ticket de pesée)','Freinte sortie usine − entrée entrepôt','Entrepôt export','N° OT','Client','Num contrat client','Date de présentation au client','Date de sondage','Date d\'agréage','Agréage','Date de sortie entrepôt export','Poids net sortie entrepôt export','Freinte magasinage','Poids net empotage','Freinte empotage','N° BL','Destination','CV CCC','CV de déblocage','Commentaire'];
+  const bord = { style:'thin', color:{ argb:'FFBFBFBF' } }, cadre = { top:bord, bottom:bord, left:bord, right:bord };
+  S.getCell('A1').value = 'TRACKING DES LOTS EXPORT — campagne '+((state.campagnes||[]).map(c=>c.nom).join(', ')||'')+' — exporté d\'ORIGEN le '+dateFr(aujourdhuiIso()); S.getCell('A1').font = { name:'Arial', size:13, bold:true };
+  const grp = [['Service Achats',1,7],['Service Finances',8,11],['Export',12,33]];
+  grp.forEach(([t,a,b])=>{ S.mergeCells(3,a,3,b); const c = S.getCell(3,a); c.value = t; c.font = { name:'Arial', size:10, bold:true, color:{ argb:'FFFFFFFF' } }; c.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FF1F4E3D' } }; c.alignment = { horizontal:'center' }; });
+  cols.forEach((h,i)=>{ const c = S.getCell(4,i+1); c.value = h; c.font = { name:'Arial', size:9, bold:true }; c.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFEDEDED' } }; c.alignment = { wrapText:true, vertical:'middle', horizontal:'center' }; c.border = cadre; });
+  S.getRow(4).height = 48; S.columns = cols.map((h,i)=>({ width: i===0||i===12||i===19||i===20||i===21||i===23 ? 12 : (i===4 ? 9 : 16) }));
+  const d = v=>v ? new Date(v+'T00:00:00') : null, n = v=>Number(v)>0 ? Number(v) : null;
+  lots.forEach((l,k)=>{
+    const s = shipSuiviDe(l.id) || {}, ot = shipOtDuLot(l.id), ltds = finLtdsDuLot(l.id), r = 5+k, site = lotsSiteParCode(l.site_code);
+    const sortie = n(l.poids_sortie_kg), pese = n(l.poids_entrepot_kg), sortieEnt = n(s.poids_sortie_entrepot_kg), emp = n(s.poids_empotage_kg);
+    const v = [d(l.date_production), l.periode_execution||'', l.ville_entrepot||(site?site.ville:''), site ? site.nom : (l.site||l.site_code||''), Number(l.numero)||l.numero, [l.type_cacao, l.client].filter(Boolean).join('/'), sortie,
+      ltds.map(x=>x.numero).join(', '), ltds.map(x=>x.banque).filter(Boolean).join(', '), d(ltds[0]&&ltds[0].date_transmission_docs), d(ltds[0]&&ltds[0].date_reception_fonds),
+      sortie, d(l.date_pesee_entrepot), pese, (sortie&&pese) ? (sortie-pese)/sortie : null, l.entrepot||'', ot ? ot.numero : '', l.client||'', s.contrat_client||'', d(s.date_presentation), d(s.date_sondage), d(l.agree_le), s.agreage_resultat ? (SHIP_AGREAGE[s.agreage_resultat]||[0,s.agreage_resultat])[1] : (l.agree_le?'Agréé':''),
+      d(s.date_sortie_entrepot), sortieEnt, (pese&&sortieEnt) ? (pese-sortieEnt)/pese : null, emp, (sortieEnt&&emp) ? (sortieEnt-emp)/sortieEnt : null, ot ? (ot.bl_numero||'') : '', ot ? (ot.port_destination||'') : '', s.cv_ccc||'', s.cv_deblocage||'', s.commentaire||''];
+    v.forEach((x,i)=>{ const c = S.getCell(r,i+1); if (x!==null && x!=='' && x!==undefined) c.value = x; c.border = cadre; c.font = { name:'Arial', size:9 }; if (x instanceof Date) c.numFmt = 'dd/mm/yyyy'; if ([6,11,13,24,26].includes(i)) c.numFmt = '#,##0'; if ([14,25,27].includes(i)) c.numFmt = '0.00%'; });
+  });
+  const fin = 4+lots.length;
+  if (lots.length){ ['G','N','Y','AA'].forEach(col=>{ const c = S.getCell(col+(fin+1)); c.value = { formula:'SUBTOTAL(9,'+col+'5:'+col+fin+')' }; c.numFmt = '#,##0'; c.font = { name:'Arial', size:9, bold:true }; }); S.getCell('E'+(fin+1)).value = { formula:'SUBTOTAL(3,E5:E'+fin+')' }; S.getCell('E'+(fin+1)).font = { name:'Arial', size:9, bold:true }; }
+  S.autoFilter = { from:{ row:4, column:1 }, to:{ row:Math.max(fin,5), column:cols.length } };
+  await qcTelechargerClasseur(wb, 'TRACKING_EXPORT_'+new Date().toISOString().slice(0,10)+'.xlsx');
+  showToast('Tracking exporté : '+lots.length+' lot(s).', 'success');
+}
+
 function renderShippingTab(){
   if (!state.lotsCharges) chargerLots().then(()=>render());
   if (!state.shipCharge){ shipChargerSuivi().then(()=>render()); }
@@ -6995,7 +7052,9 @@ function renderShippingTab(){
     + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 14px">'
     + '<button class="btn'+(filtre===''?' btn-primary':'')+'" onclick="shipFiltrer(\'\')">Tous <b>'+lots.length+'</b></button>'
     + SHIP_ETAPES.map(e=>'<button class="btn'+(filtre===e[0]?' btn-primary':'')+'" title="'+esc(e[2])+'" onclick="shipFiltrer(\''+e[0]+'\')">'+esc(e[1])+' <b>'+par[e[0]]+'</b></button>').join('')
-    + '<span class="hint" style="margin:0 0 0 auto;align-self:center">'+lots.length+' lot'+(lots.length>1?'s':'')+' · <b>'+fmtKg(kg)+'</b></span></div>';
+    + '<span class="hint" style="margin:0 0 0 auto;align-self:center">'+lots.length+' lot'+(lots.length>1?'s':'')+' · <b>'+fmtKg(kg)+'</b></span>'
+    + '<button class="btn" title="Classeur Excel au format du tracking export (achats / finances / export)" onclick="shipTrackingExporter()">⭳ Tracking (Excel)</button></div>'
+    + renderShipAlertes(lots);
   const vus = lots.filter(l=>!filtre || shipEtape(l)===filtre);
   if (!vus.length) return html + '<div class="hint">Aucun lot à cette étape.</div></div></div>';
   html += '<div class="achats-defile" style="max-height:66vh;overflow:auto"><table class="tbl-fiches tbl-dense"><thead><tr><th>N° lot</th><th>Usine</th><th>Client</th><th>Étape</th><th class="num">Sortie usine</th><th>Entrée entrepôt</th><th class="num">Poids entrepôt</th><th class="num">Freinte</th><th>SAIGIC</th><th>LTD</th><th>Présenté</th><th>Agréage</th><th>OT</th><th>BL</th><th></th></tr></thead><tbody>';
@@ -11433,9 +11492,9 @@ function lotsModalsHtml(){
     const dispo = (state.lotsUsinage||[]).filter(u=>(u.id in pl.choix) || lotsUsinageSoldeExport(u, pl.lotId)>0);
     const total = Object.values(pl.choix).reduce((s,v)=>s+(Number(v)||0), 0);
     return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal xl"><h3>Composer l\'OT '+esc(lot.numero)+'</h3>'
-      + '<div class="hint" style="margin-bottom:10px">Coche les lots d\'usinage qui partent dans cet OT ; le poids proposé est le solde disponible de chaque lot (sortie d\'usinage moins ce qui est déjà affecté à un autre OT).</div>'
+      + '<div class="hint" style="margin-bottom:10px">Coche les lots d\'usinage qui partent dans cet OT ; le poids proposé est le solde disponible de chaque lot (sortie d\'usinage moins ce qui est déjà affecté à un autre OT). L\'OT se crée normalement après l\'agréage du client et la réception des instructions d\'embarquement : les lots sans agréage enregistré sont signalés <span class="badge warn">non agréé</span>.</div>'
       + '<div id="modal-fields"><div class="achats-defile" style="max-height:52vh;overflow:auto"><table class="tbl-fiches"><thead><tr><th></th><th>N° lot</th><th>Période</th><th>Type</th><th>Livraisons</th><th>Sortie</th><th>Disponible</th><th>Dans ce lot (kg)</th></tr></thead><tbody>'
-      + (dispo.length ? dispo.map(u=>{ const coche = u.id in pl.choix, solde = lotsUsinageSoldeExport(u, pl.lotId); return '<tr><td><input type="checkbox" '+(coche?'checked':'')+' onchange="lotExportCompoCocher(\''+esc(u.id)+'\', this.checked)"></td><td><b>'+esc(u.numero)+'</b> '+lotsBadge(LOTS_STATUTS_USINAGE, u.statut)+'</td><td>'+esc((dateFr(u.date_debut)||'—')+(u.date_fin?' → '+dateFr(u.date_fin):''))+'</td><td>'+esc(u.type_cacao||'—')+'</td><td>'+lotsUsinageCompo(u.id).length+'</td><td>'+fmtKg(lotsUsinageSortie(u))+'</td><td>'+fmtKg(solde)+'</td><td>'+(coche ? '<input type="number" value="'+esc(pl.choix[u.id])+'" min="0" max="'+solde+'" step="1" style="width:120px;margin:0" oninput="lotExportCompoPoids(\''+esc(u.id)+'\', this.value)">' : '—')+'</td></tr>'; }).join('') : '<tr><td colspan="8" class="hint">Aucun lot d\'usinage disponible : compose d\'abord des lots d\'usinage.</td></tr>')
+      + (dispo.length ? dispo.map(u=>{ const coche = u.id in pl.choix, solde = lotsUsinageSoldeExport(u, pl.lotId); return '<tr><td><input type="checkbox" '+(coche?'checked':'')+' onchange="lotExportCompoCocher(\''+esc(u.id)+'\', this.checked)"></td><td><b>'+esc(u.numero)+'</b> '+(function(){ const sv = (typeof shipSuiviDe==='function') ? (shipSuiviDe(u.id)||{}) : {}; return (sv.agreage_resultat==='agree' || (u.agree_le && !sv.agreage_resultat)) ? '' : '<span class="badge warn" title="Pas d\'agréage enregistré dans Shipping › Suivi">non agréé</span> '; })()+lotsBadge(LOTS_STATUTS_USINAGE, u.statut)+'</td><td>'+esc((dateFr(u.date_debut)||'—')+(u.date_fin?' → '+dateFr(u.date_fin):''))+'</td><td>'+esc(u.type_cacao||'—')+'</td><td>'+lotsUsinageCompo(u.id).length+'</td><td>'+fmtKg(lotsUsinageSortie(u))+'</td><td>'+fmtKg(solde)+'</td><td>'+(coche ? '<input type="number" value="'+esc(pl.choix[u.id])+'" min="0" max="'+solde+'" step="1" style="width:120px;margin:0" oninput="lotExportCompoPoids(\''+esc(u.id)+'\', this.value)">' : '—')+'</td></tr>'; }).join('') : '<tr><td colspan="8" class="hint">Aucun lot d\'usinage disponible : compose d\'abord des lots d\'usinage.</td></tr>')
       + '</tbody></table></div></div>'
       + '<div class="actions"><span style="margin-right:auto;font-weight:600">Total : <span id="le-compo-total">'+fmtKg(total)+'</span></span><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="lotExportCompoEnregistrer()">Enregistrer la composition</button></div></div></div>';
   }
