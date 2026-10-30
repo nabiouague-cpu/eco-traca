@@ -4497,7 +4497,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-30-363';
+const APP_VERSION = '2026-10-30-364';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -6237,7 +6237,7 @@ function ocAllerProducteur(id){
 // ---- Barre laterale v2 ----
 const SIDEBAR_GROUPES = [
   { titre:'Pilotage',       items:[ ['dashboard','ICON_DASHBOARD','Tableau de bord'], ['tracage','ICON_TRACAGE','Traçage de volume'], ['saisieobc','ICON_OBC','Saisie OBC'] ] },
-  { titre:'Opérations',     items:[ ['cooperatives','ICON_COOPS','Coopératives'], ['demandes','ICON_DEMANDES','Demandes coopératives'], ['lots','ICON_LOTS','Lots d\'usinage'], ['shipping','ICON_SHIP','Shipping'], ['prefinancements','ICON_PREFI','Financement'], ['sacherie','ICON_SACH','Sacherie'] ] },
+  { titre:'Opérations',     items:[ ['cooperatives','ICON_COOPS','Coopératives'], ['demandes','ICON_DEMANDES','Demandes coopératives'], ['shipping','ICON_SHIP','Shipping'], ['prefinancements','ICON_PREFI','Finance'] ] },
   { titre:'Conformité',     items:[ ['conformite','ICON_CONFORMITE','Conformité & documents'], ['basedonnees','ICON_BASEDONNEES','Base de données coop.'], ['cartes','ICON_CARTE','Cartes & déforestation'] ] },
   { titre:'Administration', items:[ ['acces','ICON_ACCES','Accès coopératives'], ['stockage','ICON_STOCKAGE','Stockage'], ['sauvegardes','ICON_SAUVEGARDES','Sauvegardes'] ] },
 ];
@@ -6472,7 +6472,7 @@ async function chargerLots(){
   state.lotsCharges = true;
 }
 function lotsSousOnglet(){ return state.lotsSousOnglet || 'contrats'; }
-function lotsSetSousOnglet(id){ state.lotsSousOnglet = id; render(); }
+function lotsSetSousOnglet(id){ state.lotsSousOnglet = id; state.shipSous = id; state.tab = 'shipping'; render(); }
 function lotsNumeroSuivant(prefixe, liste){
   const annee = new Date().getFullYear();
   const base = prefixe+'-'+annee+'-';
@@ -7047,9 +7047,15 @@ function renderShippingTab(){
   const filtre = state.shipFiltre || '';
   const kg = lots.reduce((s,l)=>s+(lotsUsinagePese(l)||lotsUsinageSortie(l)||0), 0);
   const sous = state.shipSous || 'suivi';
-  let html = '<div class="panel"><div class="panel-head"><div><h2>Shipping</h2><p class="hint" style="margin:4px 0 0">Production des lots → déclaration au SAIGIC → entrepôt export → agréage du client → instructions d\'embarquement et OT → formules SAIGIC (BV, Fo1, D6) → embarquement (BL).</p></div></div>'
-    + '<div style="padding:0 18px 18px">'
-    + '<div class="oc-subtabs">'+[['suivi','Suivi des lots'],['saigic','Déclaration SAIGIC'],['ot','OT & embarquement']].map(([k,l])=>'<button class="'+(sous===k?'active':'')+'" onclick="state.shipSous=\''+k+'\';render()">'+l+'</button>').join('')+'</div>';
+  const SOUS = [['sacherie','Sacherie'],['contrats','Contrats clients'],['series','Séries de numérotation'],['achats_clients','Suivi achats clients'],['usinage','Lots d\'usinage'],['suivi','Suivi des lots'],['saigic','Déclaration SAIGIC'],['ot','OT & embarquement'],['chaine','Chaîne de traçabilité']];
+  const barre = '<div class="oc-subtabs">'+SOUS.map(([k,l])=>'<button class="'+(sous===k?'active':'')+'" onclick="state.shipSous=\''+k+'\';state.lotsSousOnglet=\''+k+'\';render()">'+l+'</button>').join('')+'</div>';
+  if (sous==='sacherie') return '<div class="panel" style="padding:0 18px 4px">'+barre+'</div>' + renderSacherieTab();
+  let html = '<div class="panel"><div class="panel-head"><div><h2>Shipping</h2><p class="hint" style="margin:4px 0 0">Sacherie → contrats et séries → lots d\'usinage → déclaration au SAIGIC → entrepôt export → agréage du client → instructions d\'embarquement et OT → formules SAIGIC (BV, Fo1, D6) → embarquement (BL).</p></div></div>'
+    + '<div style="padding:0 18px 18px">' + barre;
+  if (['contrats','series','achats_clients','usinage','chaine'].includes(sous)){
+    if (!state.lotsCharges) return html + '<div class="hint">Chargement des lots…</div></div></div>';
+    return html + (sous==='contrats' ? renderContratsClients() : sous==='achats_clients' ? renderAchatsClientsDashboard() : sous==='series' ? renderLotsSeries() : sous==='usinage' ? renderLotsUsinage() : renderLotsChaine()) + '</div></div>';
+  }
   if (sous==='saigic') return html + renderLotsSaigic() + '</div></div>';
   if (sous==='ot') return html + renderLotsExport() + '</div></div>';
   html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 14px">'
@@ -7200,7 +7206,7 @@ function finSetSous(v){ state.finSous = v; render(); }
 function renderFinancementTab(){
   const actif = finSousOnglet();
   let html = '<div class="oc-subtabs" style="margin:0 0 12px">'
-    + [['coops','Coopératives'],['partenaires','Partenaires'],['prefi','Préfinancements'],['ltd','LTD & nantissement']].map(([k,l])=>'<button class="'+(actif===k?'active':'')+'" onclick="finSetSous(\''+k+'\')">'+l+'</button>').join('')+'</div>';
+    + [['coops','Paiements coopératives'],['partenaires','Paiements partenaires'],['prefi','Préfinancements'],['ltd','LTD & nantissement']].map(([k,l])=>'<button class="'+(actif===k?'active':'')+'" onclick="finSetSous(\''+k+'\')">'+l+'</button>').join('')+'</div>';
   return html + (actif==='ltd' ? renderFinLtd() : actif==='coops' ? renderFinCoops() : actif==='partenaires' ? renderFinPartenaires() : renderPrefinancementsTab());
 }
 function renderFinLtd(){
@@ -10007,7 +10013,7 @@ function renderLotsExport(){
   return html + '</tbody></table></div>';
 }
 // ---- Chaine de tracabilite d'un lot d'export ----
-function lotsVoirChaine(id){ state.lotChaineId = id; state.lotsSousOnglet = 'chaine'; state.tab = 'lots'; render(); }
+function lotsVoirChaine(id){ state.lotChaineId = id; state.lotsSousOnglet = 'chaine'; state.shipSous = 'chaine'; state.tab = 'shipping'; render(); }
 function lotsChaineDe(lot){
   const usinages = lotsExportCompo(lot.id).map(c=>({ lot: lotUsinageParId(c.lot_usinage_id), kg: Number(c.poids_kg)||0 })).filter(x=>x.lot);
   const livraisons = [];
@@ -23580,7 +23586,7 @@ const AIDE_ECRANS = {
 };
 function aideCleEcran(){
   if (state.coopDashboardId) return 'cooperatives';
-  if (state.tab==='lots') return 'lots_'+(lotsSousOnglet()||'contrats');
+  if (state.tab==='shipping'){ const k = state.shipSous||'suivi'; return ['contrats','series','achats_clients','usinage','chaine'].includes(k) ? 'lots_'+k : (k==='sacherie' ? 'sacherie' : 'shipping'); }
   return state.tab || 'dashboard';
 }
 function aideBasculer(){ state.aideOuverte = !state.aideOuverte; render(); }
@@ -26708,10 +26714,10 @@ function _renderBrut(){
     else if (state.tab==='basedonnees') html += renderBaseDonneesTab();
     else if (state.tab==='stockage') html += renderStockageTab();
     else if (state.tab==='tracage') html += renderTracageTab();
-    else if (state.tab==='lots') html += renderLotsTab();
+    else if (state.tab==='lots'){ state.tab = 'shipping'; if (!state.shipSous || !['contrats','series','achats_clients','usinage','chaine'].includes(state.shipSous)) state.shipSous = lotsSousOnglet(); html += renderShippingTab(); }
     else if (state.tab==='shipping') html += renderShippingTab();
     else if (state.tab==='prefinancements') html += renderFinancementTab();
-    else if (state.tab==='sacherie') html += renderSacherieTab();
+    else if (state.tab==='sacherie'){ state.tab = 'shipping'; state.shipSous = 'sacherie'; html += renderShippingTab(); }
     else if (state.tab==='saisieobc') html += renderSaisieObcTab();
     else if (state.tab==='cartes') html += renderCartesTab();
     else if (state.tab==='demandes') html += renderDemandesTab();
