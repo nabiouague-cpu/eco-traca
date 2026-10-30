@@ -4496,7 +4496,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-30-359';
+const APP_VERSION = '2026-10-30-360';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -6236,7 +6236,7 @@ function ocAllerProducteur(id){
 // ---- Barre laterale v2 ----
 const SIDEBAR_GROUPES = [
   { titre:'Pilotage',       items:[ ['dashboard','ICON_DASHBOARD','Tableau de bord'], ['tracage','ICON_TRACAGE','Traçage de volume'], ['saisieobc','ICON_OBC','Saisie OBC'] ] },
-  { titre:'Opérations',     items:[ ['cooperatives','ICON_COOPS','Coopératives'], ['demandes','ICON_DEMANDES','Demandes coopératives'], ['lots','ICON_LOTS','Lots & export'], ['shipping','ICON_SHIP','Shipping'], ['prefinancements','ICON_PREFI','Préfinancements'], ['sacherie','ICON_SACH','Sacherie'] ] },
+  { titre:'Opérations',     items:[ ['cooperatives','ICON_COOPS','Coopératives'], ['demandes','ICON_DEMANDES','Demandes coopératives'], ['lots','ICON_LOTS','Lots & export'], ['shipping','ICON_SHIP','Shipping'], ['prefinancements','ICON_PREFI','Financement'], ['sacherie','ICON_SACH','Sacherie'] ] },
   { titre:'Conformité',     items:[ ['conformite','ICON_CONFORMITE','Conformité & documents'], ['basedonnees','ICON_BASEDONNEES','Base de données coop.'], ['cartes','ICON_CARTE','Cartes & déforestation'] ] },
   { titre:'Administration', items:[ ['acces','ICON_ACCES','Accès coopératives'], ['stockage','ICON_STOCKAGE','Stockage'], ['sauvegardes','ICON_SAUVEGARDES','Sauvegardes'] ] },
 ];
@@ -6983,6 +6983,7 @@ function shipBadgeSaigic(lib, val, aide){
 function renderShippingTab(){
   if (!state.lotsCharges) chargerLots().then(()=>render());
   if (!state.shipCharge){ shipChargerSuivi().then(()=>render()); }
+  if (!state.finLtdCharge) finChargerLtd().then(()=>render());
   if (!state.lotsCharges || !state.shipCharge) return '<div class="panel"><div class="hint" style="padding:18px">Chargement du suivi des lots…</div></div>';
   const lots = (state.lotsUsinage||[]).slice().sort((a,b)=>String(b.numero).localeCompare(String(a.numero),'fr',{numeric:true}));
   const par = {}; SHIP_ETAPES.forEach(e=>par[e[0]] = 0); lots.forEach(l=>{ par[shipEtape(l)]++; });
@@ -6996,7 +6997,7 @@ function renderShippingTab(){
     + '<span class="hint" style="margin:0 0 0 auto;align-self:center">'+lots.length+' lot'+(lots.length>1?'s':'')+' · <b>'+fmtKg(kg)+'</b></span></div>';
   const vus = lots.filter(l=>!filtre || shipEtape(l)===filtre);
   if (!vus.length) return html + '<div class="hint">Aucun lot à cette étape.</div></div></div>';
-  html += '<div class="achats-defile" style="max-height:66vh;overflow:auto"><table class="tbl-fiches tbl-dense"><thead><tr><th>N° lot</th><th>Usine</th><th>Client</th><th>Étape</th><th class="num">Sortie usine</th><th>Entrée entrepôt</th><th class="num">Poids entrepôt</th><th class="num">Freinte</th><th>SAIGIC</th><th>Présenté</th><th>Agréage</th><th>OT</th><th>BL</th><th></th></tr></thead><tbody>';
+  html += '<div class="achats-defile" style="max-height:66vh;overflow:auto"><table class="tbl-fiches tbl-dense"><thead><tr><th>N° lot</th><th>Usine</th><th>Client</th><th>Étape</th><th class="num">Sortie usine</th><th>Entrée entrepôt</th><th class="num">Poids entrepôt</th><th class="num">Freinte</th><th>SAIGIC</th><th>LTD</th><th>Présenté</th><th>Agréage</th><th>OT</th><th>BL</th><th></th></tr></thead><tbody>';
   vus.forEach(l=>{
     const s = shipSuiviDe(l.id) || {}, ot = shipOtDuLot(l.id), et = shipEtape(l), sortie = Number(l.poids_sortie_kg)>0 ? Number(l.poids_sortie_kg) : null, pese = lotsUsinagePese(l)||null, fr = shipFreinte(sortie, pese);
     const agree = s.agreage_resultat || (l.agree_le ? 'agree' : '');
@@ -7005,6 +7006,7 @@ function renderShippingTab(){
       + '<td class="num">'+(sortie ? fmtNum(sortie) : '—')+'</td><td>'+(l.date_pesee_entrepot ? esc(dateFr(l.date_pesee_entrepot)) : '—')+(l.entrepot ? ' <span class="hint" style="margin:0">'+esc(l.entrepot)+'</span>' : '')+'</td>'
       + '<td class="num">'+(pese ? fmtNum(pese) : '—')+'</td><td class="num">'+(fr===null ? '—' : '<span class="'+(fr>1?'txt-danger':'')+'">'+String(fr).replace('.',',')+' %</span>')+'</td>'
       + '<td style="white-space:nowrap">'+shipBadgeSaigic('Lot', l.saigic_date_fab, 'Déclaré au SAIGIC')+shipBadgeSaigic('BV', l.saigic_numero_bv, 'Bulletin de vérification')+shipBadgeSaigic('Fo1', l.saigic_fo1||l.saigic_fo1_provisoire, 'Formule Fo1')+shipBadgeSaigic('D6', l.saigic_d6, 'D6')+shipBadgeSaigic('Emb', l.saigic_vu_emb, 'Vu embarqué')+'</td>'
+      + '<td>'+(function(){ const t = finLtdDuLot(l.id); return t ? '<b>'+esc(t.numero)+'</b>'+(t.banque?' <span class="hint" style="margin:0">'+esc(t.banque)+'</span>':'') : '—'; })()+'</td>'
       + '<td>'+(s.date_presentation ? esc(dateFr(s.date_presentation)) : '—')+'</td>'
       + '<td>'+(agree ? lotsBadge(SHIP_AGREAGE, agree)+(l.agree_le ? ' <span class="hint" style="margin:0">'+esc(dateFr(l.agree_le))+'</span>' : '') : '—')+'</td>'
       + '<td>'+(ot ? '<b>'+esc(ot.numero)+'</b>' : '—')+'</td><td>'+(ot && ot.bl_numero ? esc(ot.bl_numero) : '—')+'</td>'
@@ -7112,6 +7114,124 @@ function renderSacherieTab(){
 }
 
 // ---- Onglet ----
+// ================== Financement : préfinancements des coopératives + LTD (nantissement de lots) ==================
+// Une LTD est établie sur la base de certains lots, qui sont nantis auprès de la banque ; les fonds reçus servent à payer les partenaires.
+// Suivi : banque, lots nantis, montant, transmission des documents, réception des fonds, remboursement.
+async function finChargerLtd(){
+  if (!supabaseClient || state.finLtdChargement) return; state.finLtdChargement = true;
+  try{
+    const [a, b] = await Promise.all([ supabaseClient.from('financements_ltd').select('*').order('date_emission', {ascending:false}).order('created_at', {ascending:false}), supabaseClient.from('financements_ltd_lots').select('*') ]);
+    state.finLtd = (a && !a.error) ? (a.data||[]) : (state.finLtd||[]);
+    state.finLtdLots = (b && !b.error) ? (b.data||[]) : (state.finLtdLots||[]);
+  } finally { state.finLtdChargement = false; state.finLtdCharge = true; }
+}
+function finLtdDuLot(lotId){ const lien = (state.finLtdLots||[]).find(x=>x.lot_id===lotId); return lien ? ((state.finLtd||[]).find(x=>x.id===lien.ltd_id)||null) : null; }
+function finLtdLotsDe(ltdId){ return (state.finLtdLots||[]).filter(x=>x.ltd_id===ltdId).map(x=>lotUsinageParId(x.lot_id)).filter(Boolean).sort((a,b)=>String(a.numero).localeCompare(String(b.numero),'fr',{numeric:true})); }
+function finLtdPoidsLot(l){ return lotsUsinagePese(l) || (Number(l.poids_sortie_kg)>0 ? Number(l.poids_sortie_kg) : 0) || lotsUsinageSortie(l) || 0; }
+function finLtdStatut(x){
+  if (x.date_remboursement) return ['neutral','Remboursée'];
+  if (x.date_reception_fonds) return ['ok','Fonds reçus'];
+  if (x.date_transmission_docs) return ['info','Documents transmis'];
+  return ['warn','En préparation'];
+}
+function finSousOnglet(){ return state.finSous || 'prefi'; }
+function finSetSous(v){ state.finSous = v; render(); }
+function renderFinancementTab(){
+  const actif = finSousOnglet();
+  let html = '<div class="oc-subtabs" style="margin:0 0 12px">'
+    + [['prefi','Préfinancements des coopératives'],['ltd','LTD & nantissement']].map(([k,l])=>'<button class="'+(actif===k?'active':'')+'" onclick="finSetSous(\''+k+'\')">'+l+'</button>').join('')+'</div>';
+  return html + (actif==='ltd' ? renderFinLtd() : renderPrefinancementsTab());
+}
+function renderFinLtd(){
+  if (!state.lotsCharges) chargerLots().then(()=>render());
+  if (!state.finLtdCharge) finChargerLtd().then(()=>render());
+  if (!state.lotsCharges || !state.finLtdCharge) return '<div class="panel"><div class="hint" style="padding:18px">Chargement des LTD…</div></div>';
+  const ltds = state.finLtd||[];
+  const nantis = new Set((state.finLtdLots||[]).map(x=>x.lot_id)), libres = (state.lotsUsinage||[]).filter(l=>!nantis.has(l.id)).length;
+  const totalFin = ltds.reduce((s,x)=>s+(Number(x.montant_fcfa)||0),0), totalRemb = ltds.reduce((s,x)=>s+(Number(x.montant_rembourse_fcfa)||0),0);
+  let html = '<div class="panel"><div class="panel-head"><div><h2>LTD &amp; nantissement</h2><p class="hint" style="margin:4px 0 0">Une LTD est établie sur la base de lots qui sont nantis auprès de la banque ; les fonds reçus servent à payer les partenaires. On suit ici la banque, les lots nantis, le montant, la transmission des documents, la réception des fonds et le remboursement.</p></div></div>'
+    + '<div style="padding:0 18px 18px"><div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px"><button class="btn btn-primary" onclick="finLtdOuvrir()">+ Nouvelle LTD</button>'
+    + '<span class="hint" style="margin:0">'+ltds.length+' LTD · financé <b>'+prefFmt(totalFin)+' FCFA</b> · remboursé <b>'+prefFmt(totalRemb)+' FCFA</b> · '+libres+' lot'+(libres>1?'s':'')+' non nanti'+(libres>1?'s':'')+'</span></div>';
+  if (!ltds.length) return html + '<div class="hint">Aucune LTD. Crée la première, puis choisis les lots qu\'elle nantit.</div></div></div>';
+  html += '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th>N° LTD</th><th>Banque</th><th>Émise le</th><th>Lots nantis</th><th class="num">Poids</th><th class="num">Montant (FCFA)</th><th>Documents transmis</th><th>Fonds reçus</th><th>Remboursement</th><th>Statut</th><th></th></tr></thead><tbody>';
+  ltds.forEach(x=>{
+    const lots = finLtdLotsDe(x.id), kg = lots.reduce((s,l)=>s+finLtdPoidsLot(l),0), st = finLtdStatut(x);
+    html += '<tr><td><b>'+esc(x.numero)+'</b></td><td>'+esc(x.banque||'—')+'</td><td>'+(x.date_emission?esc(dateFr(x.date_emission)):'—')+'</td>'
+      + '<td>'+(lots.length ? '<b>'+lots.length+'</b> <span class="hint" style="margin:0">'+esc(lots.map(l=>l.numero).slice(0,12).join(', ')+(lots.length>12?'…':''))+'</span>' : '<span class="badge warn">aucun lot</span>')+'</td>'
+      + '<td class="num">'+(kg?fmtKg(kg):'—')+'</td><td class="num">'+(x.montant_fcfa!=null ? prefFmt(x.montant_fcfa) : '—')+'</td>'
+      + '<td>'+(x.date_transmission_docs?esc(dateFr(x.date_transmission_docs)):'—')+'</td><td>'+(x.date_reception_fonds?esc(dateFr(x.date_reception_fonds)):'—')+'</td>'
+      + '<td>'+(x.date_remboursement?esc(dateFr(x.date_remboursement))+(x.montant_rembourse_fcfa!=null?' <span class="hint" style="margin:0">'+prefFmt(x.montant_rembourse_fcfa)+'</span>':''):'—')+'</td>'
+      + '<td><span class="badge '+st[0]+'">'+st[1]+'</span></td>'
+      + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="finLtdOuvrir(\''+esc(x.id)+'\')">Modifier</button> <button class="btn-ghost btn-compact" onclick="finLtdComposer(\''+esc(x.id)+'\')">Lots</button> <button class="btn-danger-text btn-compact" onclick="finLtdSupprimer(\''+esc(x.id)+'\')">Supprimer</button></td></tr>';
+  });
+  return html + '</tbody></table></div></div></div>';
+}
+function finLtdOuvrir(id){
+  const x = id ? (state.finLtd||[]).find(y=>y.id===id) : null;
+  state.modal = { type:'finLtd', payload: x ? Object.assign({}, x) : { numero:'', banque:'', date_emission:aujourdhuiIso(), montant_fcfa:'', date_transmission_docs:'', date_reception_fonds:'', date_remboursement:'', montant_rembourse_fcfa:'', notes:'' } };
+  render();
+}
+function renderFinLtdModal(m){
+  const pl = m.payload, f = (lib, nom, type, val, extra)=>'<label class="field">'+lib+'<input type="'+type+'" name="'+nom+'" value="'+esc(val==null?'':val)+'"'+(extra||'')+'></label>';
+  const g = (...c)=>'<div style="display:grid;grid-template-columns:repeat('+c.length+',1fr);gap:0 12px">'+c.join('')+'</div>';
+  return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal wide"><h3>'+(pl.id?'Modifier la LTD':'Nouvelle LTD')+'</h3><div id="modal-fields">'
+    + g(f('N° de LTD','fl_numero','text',pl.numero), f('Banque','fl_banque','text',pl.banque), f('Émise le','fl_emission','date',pl.date_emission))
+    + g(f('Montant financé (FCFA)','fl_montant','number',pl.montant_fcfa,' min="0" step="1"'), f('Documents transmis le','fl_transmission','date',pl.date_transmission_docs), f('Fonds reçus le','fl_fonds','date',pl.date_reception_fonds))
+    + g(f('Remboursée le','fl_remb_date','date',pl.date_remboursement), f('Montant remboursé (FCFA)','fl_remb_montant','number',pl.montant_rembourse_fcfa,' min="0" step="1"'))
+    + '<label class="field">Notes<textarea name="fl_notes" rows="2">'+esc(pl.notes||'')+'</textarea></label>'
+    + '<div class="hint">Les lots nantis se choisissent ensuite avec le bouton « Lots ».</div>'
+    + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="finLtdEnregistrer()">Enregistrer</button></div></div></div>';
+}
+async function finLtdEnregistrer(){
+  const pl = state.modal && state.modal.type==='finLtd' ? state.modal.payload : null; if (!pl) return;
+  const numero = fv('fl_numero').trim(); if (!numero){ showToast('Indique le numéro de la LTD.'); return; }
+  const n = k=>{ const v = fv(k); return v==='' ? null : Number(v); }, d = k=>fv(k)||null;
+  const ligne = { numero, banque:fv('fl_banque').trim()||null, date_emission:d('fl_emission'), montant_fcfa:n('fl_montant'), date_transmission_docs:d('fl_transmission'), date_reception_fonds:d('fl_fonds'), date_remboursement:d('fl_remb_date'), montant_rembourse_fcfa:n('fl_remb_montant'), notes:fv('fl_notes').trim()||null, updated_at:new Date().toISOString() };
+  try{
+    if (pl.id){ const { error } = await supabaseClient.from('financements_ltd').update(ligne).eq('id', pl.id); if (error) throw error; }
+    else { ligne.id = genId('ltd'); const { error } = await supabaseClient.from('financements_ltd').insert(ligne); if (error) throw error; }
+    await finChargerLtd(); closeModal(); render(); showToast('LTD enregistrée.', 'success');
+  }catch(e){ showToast('Échec : '+e.message); }
+}
+function finLtdSupprimer(id){
+  const x = (state.finLtd||[]).find(y=>y.id===id); if (!x) return;
+  askConfirm('Supprimer la LTD '+x.numero+' ? Ses lots ne sont plus nantis (les lots eux-mêmes ne sont pas touchés).', async()=>{
+    const { error } = await supabaseClient.from('financements_ltd').delete().eq('id', id);
+    if (error){ showToast('Échec : '+error.message); return; }
+    await finChargerLtd(); render(); showToast('LTD supprimée.', 'success');
+  });
+}
+function finLtdComposer(id){
+  const x = (state.finLtd||[]).find(y=>y.id===id); if (!x) return;
+  state.modal = { type:'finLtdLots', payload:{ ltdId:id, choix:new Set(finLtdLotsDe(id).map(l=>l.id)) } }; render();
+}
+function finLtdCocher(lotId, v){
+  const pl = state.modal && state.modal.type==='finLtdLots' ? state.modal.payload : null; if (!pl) return;
+  if (v) pl.choix.add(lotId); else pl.choix.delete(lotId);
+  const lots = Array.from(pl.choix).map(lotUsinageParId).filter(Boolean), kg = lots.reduce((s,l)=>s+finLtdPoidsLot(l),0), t = document.getElementById('fl-total');
+  if (t) t.textContent = lots.length+' lot'+(lots.length>1?'s':'')+' · '+fmtKg(kg);
+}
+function renderFinLtdLotsModal(m){
+  const pl = m.payload, x = (state.finLtd||[]).find(y=>y.id===pl.ltdId); if (!x) return '';
+  const pris = new Map((state.finLtdLots||[]).filter(l=>l.ltd_id!==pl.ltdId).map(l=>[l.lot_id, (state.finLtd||[]).find(y=>y.id===l.ltd_id)]));
+  const dispo = (state.lotsUsinage||[]).filter(l=>!pris.has(l.id)).sort((a,b)=>String(a.numero).localeCompare(String(b.numero),'fr',{numeric:true}));
+  const lots = Array.from(pl.choix).map(lotUsinageParId).filter(Boolean), kg = lots.reduce((s,l)=>s+finLtdPoidsLot(l),0);
+  return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal xl"><h3>Lots nantis par la LTD '+esc(x.numero)+'</h3>'
+    + '<div class="hint" style="margin-bottom:10px">Coche les lots qui servent de garantie à cette LTD. Un lot ne peut être nanti que par une seule LTD à la fois ; ceux déjà pris par une autre LTD n\'apparaissent pas.</div>'
+    + '<div id="modal-fields"><div class="achats-defile" style="max-height:52vh;overflow:auto"><table class="tbl-fiches tbl-dense"><thead><tr><th></th><th>N° lot</th><th>Client</th><th>Type</th><th class="num">Poids</th></tr></thead><tbody>'
+    + (dispo.length ? dispo.map(l=>'<tr><td><input type="checkbox" '+(pl.choix.has(l.id)?'checked':'')+' onchange="finLtdCocher(\''+esc(l.id)+'\', this.checked)"></td><td><b>'+esc(l.numero)+'</b></td><td>'+esc(l.client||'—')+'</td><td>'+esc(l.type_cacao||'—')+'</td><td class="num">'+fmtKg(finLtdPoidsLot(l))+'</td></tr>').join('') : '<tr><td colspan="5" class="hint">Aucun lot disponible.</td></tr>')
+    + '</tbody></table></div></div><div class="actions"><span style="margin-right:auto;font-weight:600" id="fl-total">'+lots.length+' lot'+(lots.length>1?'s':'')+' · '+fmtKg(kg)+'</span><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="finLtdLotsEnregistrer()">Enregistrer</button></div></div></div>';
+}
+async function finLtdLotsEnregistrer(){
+  const pl = state.modal && state.modal.type==='finLtdLots' ? state.modal.payload : null; if (!pl) return;
+  try{
+    const { error:e1 } = await supabaseClient.from('financements_ltd_lots').delete().eq('ltd_id', pl.ltdId); if (e1) throw e1;
+    const lignes = Array.from(pl.choix).map(lotId=>({ id:genId('ll'), ltd_id:pl.ltdId, lot_id:lotId }));
+    if (lignes.length){ const { error:e2 } = await supabaseClient.from('financements_ltd_lots').insert(lignes); if (e2) throw e2; }
+    await finChargerLtd(); closeModal(); render(); showToast('Lots nantis enregistrés.', 'success');
+  }catch(e){ showToast('Échec : '+e.message+' (un lot est peut-être déjà nanti par une autre LTD)'); await finChargerLtd(); }
+}
+
 function renderPrefinancementsTab(){
   if (!state.prefCharge){ chargerPrefinancements().then(()=>render()); return '<div class="panel"><div class="hint" style="padding:18px">Chargement des préfinancements…</div></div>'; }
   const campId = prefCampagneActive();
@@ -11100,6 +11220,8 @@ function lotsModalsHtml(){
   }
   if (m.type==='saigicImport') return renderSaigicImportModal(m);
   if (m.type==='shipSuivi') return renderShipSuiviModal(m);
+  if (m.type==='finLtd') return renderFinLtdModal(m);
+  if (m.type==='finLtdLots') return renderFinLtdLotsModal(m);
   if (m.type==='lotsPoidsEntrepot'){
     const pl = m.payload, lots = lotsPoidsEntrepotLots(pl);
     const entrepots = Array.from(new Set((state.lotsUsinage||[]).map(l=>l.entrepot||'').filter(Boolean))).sort();
@@ -26365,7 +26487,7 @@ function _renderBrut(){
     else if (state.tab==='tracage') html += renderTracageTab();
     else if (state.tab==='lots') html += renderLotsTab();
     else if (state.tab==='shipping') html += renderShippingTab();
-    else if (state.tab==='prefinancements') html += renderPrefinancementsTab();
+    else if (state.tab==='prefinancements') html += renderFinancementTab();
     else if (state.tab==='sacherie') html += renderSacherieTab();
     else if (state.tab==='saisieobc') html += renderSaisieObcTab();
     else if (state.tab==='cartes') html += renderCartesTab();
