@@ -2091,6 +2091,27 @@
   .shipc-tuile .seg{display:flex;gap:4px;margin-top:12px;} .shipc-tuile .seg i{flex:1;height:5px;border-radius:3px;background:#E6ECE9;} .shipc-tuile .seg i.f{background:#1F6E5C;} .shipc-tuile .seg i.c{background:#F2B705;}
   .shipc-tuile .etat{font-size:11.5px;color:#8A5406;margin-top:6px;font-weight:500;}
   @media (max-width:900px){.shipc-piste{flex-wrap:wrap;margin:-24px 0 16px;} .shipc-piste button{flex:1 1 30%;}}
+  .shipc-circ{display:block;width:100%;height:auto;margin-top:6px;overflow:visible;}
+  .shipc-st{cursor:pointer;outline:none;} .shipc-st:focus-visible .shipc-nd,.shipc-st.sel .shipc-nd{stroke:#fff;stroke-width:3;}
+  .shipc-st:hover .shipc-nd{stroke:#fff;stroke-width:2;}
+  .shipc-nd.f{fill:#F2B705;} .shipc-nd.t{fill:#18544A;stroke:rgba(255,255,255,.4);stroke-dasharray:3 3;stroke-width:2;}
+  .shipc-lb{font:500 12px var(--sans);fill:#fff;text-anchor:middle;} .shipc-lb.d{fill:rgba(255,255,255,.5);}
+  .shipc-nb{font:700 11px var(--mono);fill:#0A2A26;text-anchor:middle;}
+  .shipc-pulse{animation:shipcP 2s ease-out infinite;transform-box:fill-box;transform-origin:center;}
+  @keyframes shipcP{from{transform:scale(.7);opacity:.9}to{transform:scale(2.2);opacity:0}}
+  .shipc-vague{animation:shipcH 4s linear infinite;} .shipc-vague.r{animation-duration:3s;animation-direction:reverse;}
+  @keyframes shipcH{to{transform:translateX(-88px)}}
+  @media (prefers-reduced-motion: reduce){.shipc-pulse,.shipc-vague{animation:none;}}
+  .shipc-sel{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;}
+  .shipc-sel button{border:0;border-radius:9px;padding:6px 12px;font:500 12.5px var(--sans);background:rgba(255,255,255,.12);color:rgba(255,255,255,.85);cursor:pointer;}
+  .shipc-sel button.on{background:#fff;color:#0A2A26;font-weight:600;}
+  .shipc-stn{background:rgba(255,255,255,.1);border-radius:12px;padding:12px 14px;margin-top:6px;}
+  .shipc-stn-t{display:flex;align-items:baseline;gap:10px;} .shipc-stn-t span{font-size:12.5px;color:rgba(255,255,255,.72);}
+  .shipc-x{margin-left:auto;border:0;background:transparent;color:rgba(255,255,255,.8);cursor:pointer;font:500 12.5px var(--sans);}
+  .shipc-stn-l{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center;}
+  .shipc-ot{border:0;background:#fff;color:#0A2A26;border-radius:10px;padding:8px 12px;text-align:left;cursor:pointer;font-family:inherit;} .shipc-ot b{display:block;font-size:14px;} .shipc-ot span{font-size:12px;color:#5B6B68;}
+  .shipc-lot{border:0;background:rgba(255,255,255,.18);color:#fff;border-radius:8px;padding:5px 10px;font:600 12.5px var(--mono);cursor:pointer;} .shipc-hors{font-size:12px;color:rgba(255,255,255,.72);}
+  .shipc-vide{font-size:12.5px;color:rgba(255,255,255,.72);margin-top:8px;}
 </style>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet"></head>
 <body>
@@ -4610,7 +4631,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-30-368';
+const APP_VERSION = '2026-10-30-369';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7090,6 +7111,87 @@ function shipEtape(l){
   return 'produit';
 }
 function shipProchaine(et){ return ({ produit:'à déclarer au SAIGIC', declare:'à peser en entrepôt', entrepot:'à présenter au client', presente:'agréage en attente', agree:'instructions à recevoir', ot:'embarquement à venir' })[et] || ''; }
+// ==================== Circuit du cacao (bandeau Shipping) : stations cliquables, un trajet par OT ====================
+const SHIP_STATIONS = [
+  { k:'usine',   ic:'produit',  x:90,   y:70, lib:'Usine' },
+  { k:'entrepot',ic:'entrepot', x:330,  y:70, lib:'Entrepôt export' },
+  { k:'agreage', ic:'presente', x:570,  y:70, lib:'Agréage client' },
+  { k:'instr',   ic:'ot',       x:810,  y:70, lib:'OT et instructions' },
+  { k:'port',    ic:'agree',    x:1000, y:96, lib:'Port' },
+  { k:'mer',     ic:'embarque', x:1170, y:96, lib:'En mer' },
+];
+const SHIP_ICONES = {
+  produit:'<path d="M3 21V10l6 3V10l6 3V6h3l1 15z"/><path d="M7 17h2M12 17h2M17 17h1"/>',
+  entrepot:'<path d="M3 10l9-6 9 6v11H3z"/><path d="M8 21v-7h8v7"/><path d="M8 17.5h8"/>',
+  presente:'<circle cx="11" cy="11" r="6"/><path d="M21 21l-5-5"/><path d="M8.5 11l2 2 3-3.5"/>',
+  ot:'<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1"/><path d="M8.5 10h7M8.5 14h7M8.5 18h4"/>',
+  agree:'<path d="M12 3v13"/><path d="M8 7h8"/><path d="M5 14a7 7 0 0 0 14 0"/><path d="M3 14h3M18 14h3"/>',
+  embarque:'<path d="M3 17l2 3h14l2-3z"/><path d="M5 17V12h14v5"/><path d="M8 12V8h6v4"/><path d="M11 8V5h2"/>'
+};
+function shipStationDuLot(l){
+  const et = shipEtape(l), ot = shipOtDuLot(l.id);
+  if (et==='produit' || et==='declare') return 'usine';
+  if (et==='entrepot') return 'entrepot';
+  if (et==='presente') return 'agreage';
+  if (et==='agree') return 'instr';
+  if (et==='embarque') return 'mer';
+  return (ot && (ot.si_date || ot.si_reference)) ? 'port' : 'instr';
+}
+function shipOtStation(ot, lots){
+  const idx = lots.filter(l=>{ const o = shipOtDuLot(l.id); return o && o.id===ot.id; }).map(l=>SHIP_STATIONS.findIndex(s=>s.k===shipStationDuLot(l)));
+  return idx.length ? Math.min.apply(null, idx) : 3;
+}
+function shipOtPort(ot){
+  if (ot && ot.port_embarquement) return ot.port_embarquement;
+  const n = String(ot && ot.numero || '').toUpperCase();
+  return n.startsWith('ABJ') ? 'Abidjan' : (n.startsWith('SP') ? 'San Pedro' : 'Port');
+}
+function shipNoms(arr, un, plusieurs){ const u = Array.from(new Set(arr.filter(Boolean))); return u.length===1 ? u[0] : (u.length ? u.length+' '+plusieurs : un); }
+function shipCircuitHtml(lots){
+  const ots = (state.lotsExport||[]).filter(o=>lots.some(l=>{ const x = shipOtDuLot(l.id); return x && x.id===o.id; }));
+  const otSel = ots.find(o=>o.id===state.shipOtSel) || null;
+  const portage = lots.filter(l=>!otSel || (shipOtDuLot(l.id)||{}).id===otSel.id);
+  const cur = otSel ? shipOtStation(otSel, lots) : -1;
+  const cnt = {}; SHIP_STATIONS.forEach(s=>cnt[s.k]=0); portage.forEach(l=>{ cnt[shipStationDuLot(l)]++; });
+  const sites = portage.map(l=>{ const s = lotsSiteParCode(l.site_code); return (s && s.nom) || l.site_code || l.site; });
+  const lib = { usine: shipNoms(sites,'Usine','usines'), entrepot: shipNoms(portage.map(l=>l.entrepot),'Entrepôt export','entrepôts'), port: 'Port', mer:'En mer' };
+  if (otSel){ const pp = shipOtPort(otSel); lib.port = 'Port '+(/^[AEIOUYH]/i.test(pp)?'d\'':'de ')+pp; }
+  const d = 'M90 70H810C900 70 920 96 1000 96H1170';
+  let s = '<svg class="shipc-circ" viewBox="0 0 1260 170" role="group" aria-label="Circuit du cacao">'
+    + '<defs><path id="shipc-r" d="'+d+'"/><clipPath id="shipc-mer"><rect x="860" y="104" width="400" height="66"/></clipPath></defs>'
+    + '<use href="#shipc-r" fill="none" stroke="rgba(255,255,255,.28)" stroke-width="3" stroke-linecap="round" stroke-dasharray="2 9"/>';
+  if (otSel){ const L = [0,240,480,720,920,1090][cur]; s += '<use href="#shipc-r" fill="none" stroke="#F2B705" stroke-width="4" stroke-linecap="round" stroke-dasharray="'+L+' 4000"/>'; }
+  else s += '<circle r="5" fill="#F2B705"><animateMotion dur="9s" repeatCount="indefinite"><mpath href="#shipc-r"/></animateMotion></circle>';
+  s += '<g clip-path="url(#shipc-mer)"><g class="shipc-vague"><path d="M850 112q22 -9 44 0t44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0V170H850z" fill="rgba(255,255,255,.10)"/></g><g class="shipc-vague r"><path d="M850 126q22 -9 44 0t44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0V170H850z" fill="rgba(31,110,92,.6)"/></g></g>';
+  SHIP_STATIONS.forEach((st,i)=>{
+    const sel = state.shipStation===st.k, n = cnt[st.k], fait = otSel && i<cur, now = otSel && i===cur;
+    const nom = lib[st.k] || st.lib;
+    s += '<g class="shipc-st'+(sel?' sel':'')+'" tabindex="0" role="button" aria-label="'+esc(nom)+' : '+n+' lot'+(n>1?'s':'')+'" onclick="shipStationClic(\''+st.k+'\')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();shipStationClic(\''+st.k+'\')}">'
+      + '<circle cx="'+st.x+'" cy="'+st.y+'" r="30" fill="transparent"/>'
+      + (now ? '' : '<circle cx="'+st.x+'" cy="'+st.y+'" r="21" class="shipc-nd '+(fait||(!otSel&&n)?'f':'t')+'"/><g transform="translate('+(st.x-13)+','+(st.y-13)+')"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="'+(fait||(!otSel&&n)?'#0A2A26':'rgba(255,255,255,.6)')+'" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'+SHIP_ICONES[st.ic]+'</svg></g>')
+      + (now ? '<circle class="shipc-pulse" cx="'+st.x+'" cy="'+st.y+'" r="20" fill="none" stroke="#F2B705" stroke-width="3"/><circle cx="'+st.x+'" cy="'+st.y+'" r="22" fill="#0A2A26" stroke="#fff" stroke-width="3.2"/><circle cx="'+st.x+'" cy="'+st.y+'" r="13.5" fill="none" stroke="#fff" stroke-width="3.4"/><circle cx="'+st.x+'" cy="'+st.y+'" r="4.8" fill="#F2B705"/>' : '')
+      + (!otSel && n ? '<circle cx="'+(st.x+17)+'" cy="'+(st.y-17)+'" r="11" fill="#fff"/><text x="'+(st.x+17)+'" y="'+(st.y-13)+'" class="shipc-nb">'+n+'</text>' : '')
+      + '<text class="shipc-lb'+(otSel&&i>cur?' d':'')+'" x="'+st.x+'" y="'+(st.y+44)+'">'+esc(nom)+'</text>'
+      + '</g>';
+  });
+  return s + '</svg>';
+}
+function shipStationClic(k){ state.shipStation = (state.shipStation===k) ? '' : k; render(); }
+function shipOtChoisir(id){ state.shipOtSel = id||''; state.shipStation = ''; render(); }
+function shipStationPanneau(lots){
+  const k = state.shipStation; if (!k) return '';
+  const st = SHIP_STATIONS.find(x=>x.k===k); if (!st) return '';
+  const otSel = (state.lotsExport||[]).find(o=>o.id===state.shipOtSel) || null;
+  const ici = lots.filter(l=>shipStationDuLot(l)===k && (!otSel || (shipOtDuLot(l.id)||{}).id===otSel.id));
+  const ots = []; const seen = {}; let horsOt = [];
+  ici.forEach(l=>{ const o = shipOtDuLot(l.id); if (o){ if (!seen[o.id]){ seen[o.id] = { ot:o, lots:[] }; ots.push(seen[o.id]); } seen[o.id].lots.push(l); } else horsOt.push(l); });
+  const kg = a=>a.reduce((t,l)=>t+(lotsUsinagePese(l)||lotsUsinageSortie(l)||0),0);
+  let h = '<div class="shipc-stn"><div class="shipc-stn-t"><b>'+esc(st.lib)+'</b><span>'+ici.length+' lot'+(ici.length>1?'s':'')+' · '+ots.length+' OT</span><button class="shipc-x" onclick="shipStationClic(\''+k+'\')" aria-label="Fermer">Fermer</button></div>';
+  if (!ici.length) return h + '<div class="shipc-vide">Aucun lot à cette étape.</div></div>';
+  if (ots.length) h += '<div class="shipc-stn-l">'+ots.map(x=>'<button class="shipc-ot" onclick="shipOtChoisir(\''+esc(x.ot.id)+'\')"><b>'+esc(x.ot.numero)+'</b><span>'+esc(x.ot.client||'')+' · '+x.lots.length+' lot'+(x.lots.length>1?'s':'')+' · '+fmtKg(kg(x.lots))+'</span></button>').join('')+'</div>';
+  if (horsOt.length) h += '<div class="shipc-stn-l"><span class="shipc-hors">Hors OT :</span>'+horsOt.map(l=>'<button class="shipc-lot" onclick="ocPanneauOuvrir(\'lot\',\''+esc(l.id)+'\')">'+esc(l.numero)+'</button>').join('')+'</div>';
+  return h + '</div>';
+}
 function shipFreinte(a, b){ a = Number(a); b = Number(b); return (a>0 && b>0) ? Math.round((a-b)/a*10000)/100 : null; }
 function shipBadgeSaigic(lib, val, aide){
   const ok = String(val||'').trim()!=='';
@@ -7243,7 +7345,10 @@ function renderShippingTab(){
   const _sousOt = lots.filter(l=>shipOtDuLot(l.id)).length, _bloc = new Set(shipAlertes(lots).filter(x=>x[0]!=='info').map(x=>x[1])).size;
   const _t = v=>fmtNum(Math.round(v/1000));
   let html = '<div class="shipc-hero"><div class="ligne"><span>Campagne '+esc((state.campagnes||[]).map(c=>c.nom).join(', ')||'')+' · Shipping</span><span style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="shipTrackingExporter()">Tracking Excel</button><button class="btn" onclick="state.shipSous=\'saigic\';render()">Fiche SAIGIC</button><button class="btn btn-primary" onclick="state.shipSous=\'ot\';render()">Nouvel OT</button></span></div>'
-    + '<h1>Du camion au bateau</h1><div class="gros"><div><div class="v">'+_t(_ent)+'<small>t</small></div><div class="l">en entrepôt export</div></div><div><div class="v">'+_sousOt+'</div><div class="l">lot'+(_sousOt>1?'s':'')+' sous OT</div></div><div><div class="v">'+_t(_emb)+'<small>t</small></div><div class="l">embarquées</div></div><div><div class="v" style="color:#F2B705">'+_bloc+'</div><div class="l">lot'+(_bloc>1?'s':'')+' à surveiller</div></div></div></div>'
+    + '<div class="gros"><div><div class="v">'+_t(_ent)+'<small>t</small></div><div class="l">en entrepôt export</div></div><div><div class="v">'+_sousOt+'</div><div class="l">lot'+(_sousOt>1?'s':'')+' sous OT</div></div><div><div class="v">'+_t(_emb)+'<small>t</small></div><div class="l">embarquées</div></div><div><div class="v" style="color:#F2B705">'+_bloc+'</div><div class="l">lot'+(_bloc>1?'s':'')+' à surveiller</div></div></div>'
+    + shipCircuitHtml(lots)
+    + '<div class="shipc-sel"><button class="'+(state.shipOtSel?'':'on')+'" onclick="shipOtChoisir(\'\')">Tous les OT</button>'+(state.lotsExport||[]).filter(o=>lots.some(l=>(shipOtDuLot(l.id)||{}).id===o.id)).map(o=>'<button class="'+(state.shipOtSel===o.id?'on':'')+'" onclick="shipOtChoisir(\''+esc(o.id)+'\')">'+esc(o.numero)+'</button>').join('')+'</div>'
+    + shipStationPanneau(lots) + '</div>'
     + '<div class="panel" style="margin-top:0"><div style="padding:6px 18px 18px">' + barre;
   if (['contrats','series','achats_clients','usinage','chaine'].includes(sous)){
     if (!state.lotsCharges) return html + '<div class="hint">Chargement des lots…</div></div></div>';
