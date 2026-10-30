@@ -4497,7 +4497,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-30-365';
+const APP_VERSION = '2026-10-30-366';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -6989,7 +6989,7 @@ function shipAlertes(lots){
     const sortie = Number(l.poids_sortie_kg)>0 ? Number(l.poids_sortie_kg) : null, pese = lotsUsinagePese(l)||null, fr = shipFreinte(sortie, pese);
     const agree = s.agreage_resultat || (l.agree_le ? 'agree' : '');
     if (fr!==null && fr>1) al.push(['danger', num, 'Freinte usine → entrepôt de '+String(fr).replace('.',',')+' % (au-delà de 1 %)']);
-    if (pese && l.saigic_poids_reel_kg && Math.abs(Number(l.saigic_poids_reel_kg)-pese)>0.5) al.push(['warn', num, 'Poids déclaré au SAIGIC '+fmtNum(l.saigic_poids_reel_kg)+' kg ≠ poids du ticket '+fmtNum(pese)+' kg (correction à demander au Conseil)']);
+    if (pese && l.saigic_poids_reel_kg && Math.abs(Number(l.saigic_poids_reel_kg)-pese)>0.5 && !s.ecart_saigic_accepte) al.push(['warn', num, 'Poids déclaré au SAIGIC '+fmtNum(l.saigic_poids_reel_kg)+' kg ≠ poids du ticket '+fmtNum(pese)+' kg']);
     if (ot && agree!=='agree') al.push(['warn', num, 'Rattaché à l\'OT '+ot.numero+' sans agréage enregistré']);
     if (ot && !(ot.si_date || ot.si_reference)) al.push(['info', num, 'OT '+ot.numero+' : instructions d\'embarquement non enregistrées (fiche de l\'OT)']);
     if (agree==='refuse') al.push(['danger', num, 'Lot refusé par le client']);
@@ -7086,7 +7086,7 @@ function shipFiltrer(f){ state.shipFiltre = f; render(); }
 function shipSuiviOuvrir(lotId){
   const l = lotUsinageParId(lotId); if (!l) return;
   const s = shipSuiviDe(lotId) || {};
-  state.modal = { type:'shipSuivi', payload:{ lotId, numero:l.numero, contrat_client:s.contrat_client||'', date_presentation:s.date_presentation||'', date_sondage:s.date_sondage||'', agree_le:l.agree_le||'', agreage_resultat:s.agreage_resultat||(l.agree_le?'agree':''), si_recue_le:s.si_recue_le||'', si_reference:s.si_reference||'', date_sortie_entrepot:s.date_sortie_entrepot||'', poids_sortie_entrepot_kg:s.poids_sortie_entrepot_kg||'', poids_empotage_kg:s.poids_empotage_kg||'', cv_ccc:s.cv_ccc||'', cv_deblocage:s.cv_deblocage||'', commentaire:s.commentaire||'' } };
+  state.modal = { type:'shipSuivi', payload:{ lotId, numero:l.numero, contrat_client:s.contrat_client||'', date_presentation:s.date_presentation||'', date_sondage:s.date_sondage||'', agree_le:l.agree_le||'', agreage_resultat:s.agreage_resultat||(l.agree_le?'agree':''), si_recue_le:s.si_recue_le||'', si_reference:s.si_reference||'', date_sortie_entrepot:s.date_sortie_entrepot||'', poids_sortie_entrepot_kg:s.poids_sortie_entrepot_kg||'', poids_empotage_kg:s.poids_empotage_kg||'', cv_ccc:s.cv_ccc||'', cv_deblocage:s.cv_deblocage||'', commentaire:s.commentaire||'', ecart_saigic_accepte:!!s.ecart_saigic_accepte } };
   render();
 }
 function renderShipSuiviModal(m){
@@ -7101,6 +7101,7 @@ function renderShipSuiviModal(m){
     + g(f('Date de sortie de l\'entrepôt','sv_sortie_date','date',pl.date_sortie_entrepot), f('Poids net sortie entrepôt (kg)','sv_sortie_kg','number',pl.poids_sortie_entrepot_kg,' min="0" step="1"'), f('Poids net empotage (kg)','sv_empotage_kg','number',pl.poids_empotage_kg,' min="0" step="1"'))
     + g(f('CV CCC','sv_cv_ccc','text',pl.cv_ccc), f('CV de déblocage','sv_cv_deb','text',pl.cv_deblocage))
     + '<label class="field">Commentaire<textarea name="sv_comm" rows="2">'+esc(pl.commentaire)+'</textarea></label>'
+    + '<label class="field" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" name="sv_ecart_ok" '+(pl.ecart_saigic_accepte?'checked':'')+'> Écart de poids avec le SAIGIC accepté (ne plus alerter pour ce lot)</label>'
     + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="shipSuiviEnregistrer()">Enregistrer</button></div></div></div>';
 }
 async function shipSuiviEnregistrer(){
@@ -7109,7 +7110,7 @@ async function shipSuiviEnregistrer(){
   const agree = d('sv_agree_le'), res = d('sv_agreage');
   const ligne = { lot_id:pl.lotId, contrat_client:fv('sv_contrat').trim()||null, date_presentation:d('sv_presentation'), date_sondage:d('sv_sondage'), agreage_resultat:res,
     date_sortie_entrepot:d('sv_sortie_date'), poids_sortie_entrepot_kg:k('sv_sortie_kg'), poids_empotage_kg:k('sv_empotage_kg'),
-    cv_ccc:fv('sv_cv_ccc').trim()||null, cv_deblocage:fv('sv_cv_deb').trim()||null, commentaire:fv('sv_comm').trim()||null, updated_at:new Date().toISOString() };
+    cv_ccc:fv('sv_cv_ccc').trim()||null, cv_deblocage:fv('sv_cv_deb').trim()||null, commentaire:fv('sv_comm').trim()||null, ecart_saigic_accepte:!!(document.querySelector('[name="sv_ecart_ok"]')||{}).checked, updated_at:new Date().toISOString() };
   try{
     const r1 = await supabaseClient.from('lots_suivi').upsert(ligne, { onConflict:'lot_id' }); if (r1.error) throw r1.error;
     const l = lotUsinageParId(pl.lotId);
