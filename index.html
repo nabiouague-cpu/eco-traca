@@ -596,6 +596,7 @@
   .pa-auto dt{color:var(--ink-soft);} .pa-auto dd{margin:0;font-weight:600;text-align:right;}
   .pa-note{display:none;margin:0 0 10px;padding:8px 10px;border-radius:6px;background:var(--warn-bg);color:var(--warn);font-size:12.5px;}
   .pa-note.rouge{background:var(--danger-bg);color:var(--danger);}
+  .txt-danger{color:var(--danger);}
   .detail-bloc .lien-param, .modal .lien-param{font:inherit;font-size:12px;background:none;border:none;color:var(--accent);text-decoration:underline;cursor:pointer;padding:0;margin-left:6px;}
   .modal .hint{display:block;margin:6px 0 10px;}
   .modal input.invalide{border-color:var(--danger);box-shadow:0 0 0 2px var(--danger-bg);}
@@ -4496,7 +4497,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-30-360';
+const APP_VERSION = '2026-10-30-361';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7006,7 +7007,7 @@ function renderShippingTab(){
       + '<td class="num">'+(sortie ? fmtNum(sortie) : '—')+'</td><td>'+(l.date_pesee_entrepot ? esc(dateFr(l.date_pesee_entrepot)) : '—')+(l.entrepot ? ' <span class="hint" style="margin:0">'+esc(l.entrepot)+'</span>' : '')+'</td>'
       + '<td class="num">'+(pese ? fmtNum(pese) : '—')+'</td><td class="num">'+(fr===null ? '—' : '<span class="'+(fr>1?'txt-danger':'')+'">'+String(fr).replace('.',',')+' %</span>')+'</td>'
       + '<td style="white-space:nowrap">'+shipBadgeSaigic('Lot', l.saigic_date_fab, 'Déclaré au SAIGIC')+shipBadgeSaigic('BV', l.saigic_numero_bv, 'Bulletin de vérification')+shipBadgeSaigic('Fo1', l.saigic_fo1||l.saigic_fo1_provisoire, 'Formule Fo1')+shipBadgeSaigic('D6', l.saigic_d6, 'D6')+shipBadgeSaigic('Emb', l.saigic_vu_emb, 'Vu embarqué')+'</td>'
-      + '<td>'+(function(){ const t = finLtdDuLot(l.id); return t ? '<b>'+esc(t.numero)+'</b>'+(t.banque?' <span class="hint" style="margin:0">'+esc(t.banque)+'</span>':'') : '—'; })()+'</td>'
+      + '<td>'+(function(){ const ts = finLtdsDuLot(l.id); return ts.length ? ts.map(t=>'<b>'+esc(t.numero)+'</b>'+(t.banque?' <span class="hint" style="margin:0">'+esc(t.banque)+'</span>':'')).join('<br>') : '—'; })()+'</td>'
       + '<td>'+(s.date_presentation ? esc(dateFr(s.date_presentation)) : '—')+'</td>'
       + '<td>'+(agree ? lotsBadge(SHIP_AGREAGE, agree)+(l.agree_le ? ' <span class="hint" style="margin:0">'+esc(dateFr(l.agree_le))+'</span>' : '') : '—')+'</td>'
       + '<td>'+(ot ? '<b>'+esc(ot.numero)+'</b>' : '—')+'</td><td>'+(ot && ot.bl_numero ? esc(ot.bl_numero) : '—')+'</td>'
@@ -7125,7 +7126,8 @@ async function finChargerLtd(){
     state.finLtdLots = (b && !b.error) ? (b.data||[]) : (state.finLtdLots||[]);
   } finally { state.finLtdChargement = false; state.finLtdCharge = true; }
 }
-function finLtdDuLot(lotId){ const lien = (state.finLtdLots||[]).find(x=>x.lot_id===lotId); return lien ? ((state.finLtd||[]).find(x=>x.id===lien.ltd_id)||null) : null; }
+function finLtdsDuLot(lotId){ return (state.finLtdLots||[]).filter(x=>x.lot_id===lotId).map(x=>(state.finLtd||[]).find(y=>y.id===x.ltd_id)).filter(Boolean); }
+function finLtdDuLot(lotId){ return finLtdsDuLot(lotId)[0] || null; }
 function finLtdLotsDe(ltdId){ return (state.finLtdLots||[]).filter(x=>x.ltd_id===ltdId).map(x=>lotUsinageParId(x.lot_id)).filter(Boolean).sort((a,b)=>String(a.numero).localeCompare(String(b.numero),'fr',{numeric:true})); }
 function finLtdPoidsLot(l){ return lotsUsinagePese(l) || (Number(l.poids_sortie_kg)>0 ? Number(l.poids_sortie_kg) : 0) || lotsUsinageSortie(l) || 0; }
 function finLtdStatut(x){
@@ -7134,13 +7136,13 @@ function finLtdStatut(x){
   if (x.date_transmission_docs) return ['info','Documents transmis'];
   return ['warn','En préparation'];
 }
-function finSousOnglet(){ return state.finSous || 'prefi'; }
+function finSousOnglet(){ return state.finSous || 'coops'; }
 function finSetSous(v){ state.finSous = v; render(); }
 function renderFinancementTab(){
   const actif = finSousOnglet();
   let html = '<div class="oc-subtabs" style="margin:0 0 12px">'
-    + [['prefi','Préfinancements des coopératives'],['ltd','LTD & nantissement']].map(([k,l])=>'<button class="'+(actif===k?'active':'')+'" onclick="finSetSous(\''+k+'\')">'+l+'</button>').join('')+'</div>';
-  return html + (actif==='ltd' ? renderFinLtd() : renderPrefinancementsTab());
+    + [['coops','Coopératives'],['partenaires','Partenaires'],['prefi','Préfinancements'],['ltd','LTD & nantissement']].map(([k,l])=>'<button class="'+(actif===k?'active':'')+'" onclick="finSetSous(\''+k+'\')">'+l+'</button>').join('')+'</div>';
+  return html + (actif==='ltd' ? renderFinLtd() : actif==='coops' ? renderFinCoops() : actif==='partenaires' ? renderFinPartenaires() : renderPrefinancementsTab());
 }
 function renderFinLtd(){
   if (!state.lotsCharges) chargerLots().then(()=>render());
@@ -7213,13 +7215,13 @@ function finLtdCocher(lotId, v){
 }
 function renderFinLtdLotsModal(m){
   const pl = m.payload, x = (state.finLtd||[]).find(y=>y.id===pl.ltdId); if (!x) return '';
-  const pris = new Map((state.finLtdLots||[]).filter(l=>l.ltd_id!==pl.ltdId).map(l=>[l.lot_id, (state.finLtd||[]).find(y=>y.id===l.ltd_id)]));
-  const dispo = (state.lotsUsinage||[]).filter(l=>!pris.has(l.id)).sort((a,b)=>String(a.numero).localeCompare(String(b.numero),'fr',{numeric:true}));
+  const autres = lotId=>(state.finLtdLots||[]).filter(l=>l.lot_id===lotId && l.ltd_id!==pl.ltdId).map(l=>{ const t = (state.finLtd||[]).find(y=>y.id===l.ltd_id); return t ? t.numero+(t.banque?' ('+t.banque+')':'') : ''; }).filter(Boolean);
+  const dispo = (state.lotsUsinage||[]).slice().sort((a,b)=>String(a.numero).localeCompare(String(b.numero),'fr',{numeric:true}));
   const lots = Array.from(pl.choix).map(lotUsinageParId).filter(Boolean), kg = lots.reduce((s,l)=>s+finLtdPoidsLot(l),0);
   return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal xl"><h3>Lots nantis par la LTD '+esc(x.numero)+'</h3>'
-    + '<div class="hint" style="margin-bottom:10px">Coche les lots qui servent de garantie à cette LTD. Un lot ne peut être nanti que par une seule LTD à la fois ; ceux déjà pris par une autre LTD n\'apparaissent pas.</div>'
-    + '<div id="modal-fields"><div class="achats-defile" style="max-height:52vh;overflow:auto"><table class="tbl-fiches tbl-dense"><thead><tr><th></th><th>N° lot</th><th>Client</th><th>Type</th><th class="num">Poids</th></tr></thead><tbody>'
-    + (dispo.length ? dispo.map(l=>'<tr><td><input type="checkbox" '+(pl.choix.has(l.id)?'checked':'')+' onchange="finLtdCocher(\''+esc(l.id)+'\', this.checked)"></td><td><b>'+esc(l.numero)+'</b></td><td>'+esc(l.client||'—')+'</td><td>'+esc(l.type_cacao||'—')+'</td><td class="num">'+fmtKg(finLtdPoidsLot(l))+'</td></tr>').join('') : '<tr><td colspan="5" class="hint">Aucun lot disponible.</td></tr>')
+    + '<div class="hint" style="margin-bottom:10px">Coche les lots qui servent de garantie à cette LTD. Un même lot peut être nanti chez plusieurs partenaires : les autres LTD qui le nantissent déjà sont indiquées.</div>'
+    + '<div id="modal-fields"><div class="achats-defile" style="max-height:52vh;overflow:auto"><table class="tbl-fiches tbl-dense"><thead><tr><th></th><th>N° lot</th><th>Client</th><th>Type</th><th class="num">Poids</th><th>Déjà nanti par</th></tr></thead><tbody>'
+    + (dispo.length ? dispo.map(l=>{ const au = autres(l.id); return '<tr><td><input type="checkbox" '+(pl.choix.has(l.id)?'checked':'')+' onchange="finLtdCocher(\''+esc(l.id)+'\', this.checked)"></td><td><b>'+esc(l.numero)+'</b></td><td>'+esc(l.client||'—')+'</td><td>'+esc(l.type_cacao||'—')+'</td><td class="num">'+fmtKg(finLtdPoidsLot(l))+'</td><td>'+(au.length?'<span class="badge warn">'+esc(au.join(', '))+'</span>':'—')+'</td></tr>'; }).join('') : '<tr><td colspan="6" class="hint">Aucun lot.</td></tr>')
     + '</tbody></table></div></div><div class="actions"><span style="margin-right:auto;font-weight:600" id="fl-total">'+lots.length+' lot'+(lots.length>1?'s':'')+' · '+fmtKg(kg)+'</span><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="finLtdLotsEnregistrer()">Enregistrer</button></div></div></div>';
 }
 async function finLtdLotsEnregistrer(){
@@ -7229,7 +7231,165 @@ async function finLtdLotsEnregistrer(){
     const lignes = Array.from(pl.choix).map(lotId=>({ id:genId('ll'), ltd_id:pl.ltdId, lot_id:lotId }));
     if (lignes.length){ const { error:e2 } = await supabaseClient.from('financements_ltd_lots').insert(lignes); if (e2) throw e2; }
     await finChargerLtd(); closeModal(); render(); showToast('Lots nantis enregistrés.', 'success');
-  }catch(e){ showToast('Échec : '+e.message+' (un lot est peut-être déjà nanti par une autre LTD)'); await finChargerLtd(); }
+  }catch(e){ showToast('Échec : '+e.message); await finChargerLtd(); }
+}
+
+// ---- Financement › Coopératives : ce qu'on doit à chaque coopérative depuis le début de la campagne (cacao + prime), ce qui est payé, ce qui reste ----
+async function finChargerPaiementsAnnexes(){
+  if (!supabaseClient || state.finPaChargement) return; state.finPaChargement = true;
+  try{
+    const [a, b] = await Promise.all([ supabaseClient.from('paiements_primes').select('*').order('date_paiement', {ascending:false}), supabaseClient.from('paiements_partenaires').select('*').order('date_paiement', {ascending:false}) ]);
+    state.paiementsPrimes = (a && !a.error) ? (a.data||[]) : (state.paiementsPrimes||[]);
+    state.paiementsPartenaires = (b && !b.error) ? (b.data||[]) : (state.paiementsPartenaires||[]);
+  } finally { state.finPaChargement = false; state.finPaCharge = true; }
+}
+function finCampagneId(){ return state.campagneFilter && state.campagneFilter!=='all' ? state.campagneFilter : null; }
+function finAchatsCampagne(){ const c = finCampagneId(); return (state.achats||[]).filter(a=>!a.producteur_id && !a.refoulee && (!c || (a.campagne_id||'')===c)); }
+// Situation d'une coopérative : cacao dû (montant figé au premier paiement, sinon calcul courant), payé (chèques + retenues revolving), prime due (RA / FT) et prime payée.
+function finSituationCoop(coopId){
+  const achats = finAchatsCampagne().filter(a=>a.cooperative_id===coopId);
+  const s = { achats, livraisons:achats.length, pesees:0, kg:0, cacaoDu:0, cacaoPaye:0, sansPrix:0, payeParClient:0, primeDue:0, primeKg:0, primePayee:0 };
+  achats.forEach(a=>{
+    const kg = Number(a.poids_net_produit)||0; if (kg>0){ s.pesees++; s.kg += kg; }
+    if (clientPayeCoop(a)){ s.payeParClient++; return; }
+    if (kg<=0) return;
+    const fige = aPayerFige(a.id), m = calcMontantPaiement(a);
+    if (fige!==null) s.cacaoDu += fige; else if (m && m.montant!==null) s.cacaoDu += m.montant; else s.sansPrix++;
+    s.cacaoPaye += paiementsDeAchat(a.id).reduce((t,p)=>t+(Number(p.montant_paye)||0),0) + (Number(a.pref_remb_montant)||0);
+    const pr = calcPrime(a); if (pr>0){ s.primeDue += pr; s.primeKg += kg; }
+  });
+  const c = finCampagneId();
+  s.primePayee = (state.paiementsPrimes||[]).filter(p=>p.cooperative_id===coopId && (!c || (p.campagne_id||'')===c)).reduce((t,p)=>t+(Number(p.montant_fcfa)||0),0);
+  s.cacaoReste = Math.max(0, s.cacaoDu - s.cacaoPaye); s.primeReste = Math.max(0, s.primeDue - s.primePayee);
+  return s;
+}
+function renderFinCoops(){
+  if (!state.finPaCharge){ finChargerPaiementsAnnexes().then(()=>render()); return '<div class="panel"><div class="hint" style="padding:18px">Chargement des paiements…</div></div>'; }
+  if (!state.prefCharge) chargerPrefinancements().then(()=>render());
+  const camp = (state.campagnes||[]).find(x=>x.id===finCampagneId());
+  const coops = Array.from(new Set(finAchatsCampagne().map(a=>a.cooperative_id))).map(id=>({ coop:coopById(id), id, s:finSituationCoop(id) })).filter(x=>x.coop)
+    .sort((a,b)=>String(a.coop.nom).localeCompare(String(b.coop.nom),'fr',{sensitivity:'base'}));
+  const tot = coops.reduce((t,x)=>{ ['kg','cacaoDu','cacaoPaye','cacaoReste','primeDue','primePayee','primeReste'].forEach(k=>t[k]=(t[k]||0)+x.s[k]); return t; }, {});
+  let html = '<div class="panel"><div class="panel-head"><div><h2>Coopératives — cacao et primes</h2><p class="hint" style="margin:4px 0 0">Depuis le début de la campagne'+(camp?' <b>'+esc(camp.nom)+'</b>':' (toutes campagnes)')+' : montant du cacao dû sur le poids net pesé à l\'usine (prix d\'entrée usine + TKM + commission − BIC), ce qui a été payé (chèques et retenues de préfinancement), et la prime due sur les volumes Rainforest Alliance / Fairtrade.</p></div></div>'
+    + '<div style="padding:0 18px 18px"><div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">'
+    + '<button class="btn" onclick="ouvrirParametresPaiement(finCampagneId()||\'\')">Paramètres de paiement</button><button class="btn" onclick="openModal(\'primes\')">Taux des primes</button>'
+    + '<span class="hint" style="margin:0 0 0 auto">'+(state.campagneFilter==='all' ? 'Choisis une campagne dans le tableau de bord pour une situation par campagne.' : '')+'</span></div>';
+  if (!coops.length) return html + '<div class="hint">Aucune livraison enregistrée sur cette campagne.</div></div></div>';
+  html += '<div class="achats-defile"><table class="tbl-fiches tbl-dense"><thead><tr><th>Coopérative</th><th class="num">Livraisons</th><th class="num">Poids net payé (kg)</th><th class="num">Cacao dû</th><th class="num">Cacao payé</th><th class="num">Reste cacao</th><th class="num">Prime due</th><th class="num">Prime payée</th><th class="num">Reste prime</th><th></th></tr></thead><tbody>';
+  coops.forEach(x=>{ const s = x.s;
+    const note = (s.sansPrix ? '<span class="badge warn" title="Prix d\'entrée usine ou TKM manquant : montant non calculable">'+s.sansPrix+' sans prix</span> ' : '') + (s.payeParClient ? '<span class="badge neutral" title="Livraisons payées par le client ou loco-magasin : rien à payer par ECORIGINE">'+s.payeParClient+' hors paiement</span>' : '');
+    html += '<tr><td><b>'+esc(x.coop.nom)+'</b>'+(note?'<div style="margin-top:3px">'+note+'</div>':'')+'</td><td class="num">'+s.livraisons+(s.pesees<s.livraisons?' <span class="hint" style="margin:0">('+s.pesees+' pesée'+(s.pesees>1?'s':'')+')</span>':'')+'</td><td class="num">'+fmtNum(s.kg)+'</td>'
+      + '<td class="num">'+fmtNum(s.cacaoDu)+'</td><td class="num">'+fmtNum(s.cacaoPaye)+'</td><td class="num"><b class="'+(s.cacaoReste>0?'txt-danger':'')+'">'+fmtNum(s.cacaoReste)+'</b></td>'
+      + '<td class="num">'+(s.primeDue?fmtNum(s.primeDue):'—')+'</td><td class="num">'+(s.primePayee?fmtNum(s.primePayee):'—')+'</td><td class="num"><b class="'+(s.primeReste>0?'txt-danger':'')+'">'+(s.primeDue?fmtNum(s.primeReste):'—')+'</b></td>'
+      + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="finCoopDetail(\''+esc(x.id)+'\')">Livraisons</button> '
+      + (s.primeDue ? '<button class="btn-ghost btn-compact" onclick="finPrimeOuvrir(\''+esc(x.id)+'\')">Prime payée</button> ' : '')
+      + (s.achats.some(a=>paiementsDeAchat(a.id).length) ? '<button class="btn-ghost btn-compact" title="Attestation de paiement des livraisons, envoyée à la coopérative pour signature" onclick="genererAttestation(\''+esc(s.achats.find(a=>paiementsDeAchat(a.id).length).id)+'\')">Attestation</button>' : '')+'</td></tr>';
+  });
+  html += '<tr style="font-weight:600;background:var(--bg-soft,#f6f6f4)"><td>Total</td><td></td><td class="num">'+fmtNum(tot.kg||0)+'</td><td class="num">'+fmtNum(tot.cacaoDu||0)+'</td><td class="num">'+fmtNum(tot.cacaoPaye||0)+'</td><td class="num">'+fmtNum(tot.cacaoReste||0)+'</td><td class="num">'+fmtNum(tot.primeDue||0)+'</td><td class="num">'+fmtNum(tot.primePayee||0)+'</td><td class="num">'+fmtNum(tot.primeReste||0)+'</td><td></td></tr>';
+  return html + '</tbody></table></div><div class="hint" style="margin-top:8px">Montants en FCFA. Le paiement d\'une livraison se saisit depuis « Livraisons » (même écran que le détail du connaissement).</div></div></div>';
+}
+function finCoopDetail(coopId){ state.modal = { type:'finCoopDetail', payload:{ coopId } }; render(); }
+function renderFinCoopDetailModal(m){
+  const coop = coopById(m.payload.coopId); if (!coop) return ''; const s = finSituationCoop(coop.id);
+  const prs = (state.paiementsPrimes||[]).filter(p=>p.cooperative_id===coop.id && (!finCampagneId() || (p.campagne_id||'')===finCampagneId()));
+  return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal xl"><h3>'+esc(coop.nom)+' — livraisons et paiements</h3><div id="modal-fields">'
+    + '<div class="achats-defile" style="max-height:46vh;overflow:auto"><table class="tbl-fiches tbl-dense"><thead><tr><th>Date</th><th>Connaissement</th><th>Usine</th><th>Type</th><th class="num">Poids net (kg)</th><th class="num">À payer</th><th class="num">Payé</th><th class="num">Reste</th><th class="num">Prime</th><th></th></tr></thead><tbody>'
+    + s.achats.slice().sort((a,b)=>String(a.date).localeCompare(String(b.date))).map(a=>{
+        const kg = Number(a.poids_net_produit)||0, sd = soldeAchat(a), m2 = calcMontantPaiement(a), du = sd ? sd.du : (m2 && m2.montant!==null ? m2.montant : null), hors = clientPayeCoop(a);
+        return '<tr><td>'+esc(dateFr(a.date))+'</td><td><b>'+esc(a.connaissement||'—')+'</b></td><td>'+esc(a.usine_dechargement||'—')+'</td><td>'+esc(a.type_cacao||'—')+'</td><td class="num">'+(kg?fmtNum(kg):'<span class="hint" style="margin:0">en attente</span>')+'</td>'
+          + (hors ? '<td colspan="3" class="hint">payé par le client / loco-magasin</td>' : '<td class="num">'+(du!==null?fmtNum(du):'<span class="badge warn">prix ?</span>')+'</td><td class="num">'+(sd?fmtNum(sd.paye):'—')+'</td><td class="num"><b>'+(sd?fmtNum(sd.reste):(du!==null?fmtNum(du):'—'))+'</b></td>')
+          + '<td class="num">'+(calcPrime(a)>0?fmtNum(calcPrime(a)):'—')+'</td><td style="white-space:nowrap">'+(!hors && kg>0 && !(sd && sd.complet) ? '<button class="btn-ghost btn-compact" onclick="closeModal();ouvrirPaiement(\''+esc(a.id)+'\')">Paiement</button>' : '')+'</td></tr>'; }).join('')
+    + '</tbody></table></div>'
+    + '<div style="font-weight:600;margin:12px 0 6px">Prime '+(s.primeDue?'due : '+fmtNum(s.primeDue)+' FCFA sur '+fmtNum(s.primeKg)+' kg':'')+'</div>'
+    + (prs.length ? '<table class="tbl-fiches tbl-dense"><thead><tr><th>Date</th><th class="num">Montant</th><th>Référence</th><th>Notes</th><th></th></tr></thead><tbody>'+prs.map(p=>'<tr><td>'+esc(dateFr(p.date_paiement))+'</td><td class="num">'+fmtNum(p.montant_fcfa)+'</td><td>'+esc(p.reference||'—')+'</td><td>'+esc(p.notes||'')+'</td><td><button class="btn-danger-text btn-compact" onclick="finPrimeSupprimer(\''+esc(p.id)+'\')">Retirer</button></td></tr>').join('')+'</tbody></table>' : '<div class="hint">Aucun paiement de prime enregistré.</div>')
+    + '</div><div class="actions"><button class="btn" onclick="closeModal()">Fermer</button>'+(s.primeDue?'<button class="btn btn-primary" onclick="finPrimeOuvrir(\''+esc(coop.id)+'\')">+ Paiement de prime</button>':'')+'</div></div></div>';
+}
+function finPrimeOuvrir(coopId){ state.modal = { type:'finPrime', payload:{ coopId, date:aujourdhuiIso() } }; render(); }
+function renderFinPrimeModal(m){
+  const coop = coopById(m.payload.coopId); if (!coop) return ''; const s = finSituationCoop(coop.id);
+  return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>Paiement de prime — '+esc(coop.nom)+'</h3><div id="modal-fields">'
+    + '<div class="hint" style="margin-bottom:8px">Prime due '+fmtNum(s.primeDue)+' FCFA · déjà payée '+fmtNum(s.primePayee)+' FCFA · reste <b>'+fmtNum(s.primeReste)+'</b> FCFA</div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Date<input type="date" name="pp_date" value="'+esc(m.payload.date)+'"></label><label class="field">Montant payé (FCFA)<input type="number" name="pp_montant" min="0" step="1" value="'+(s.primeReste||'')+'"></label></div>'
+    + '<label class="field">Référence (chèque, virement…)<input type="text" name="pp_ref"></label><label class="field">Notes<input type="text" name="pp_notes"></label>'
+    + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="finPrimeEnregistrer()">Enregistrer</button></div></div></div>';
+}
+async function finPrimeEnregistrer(){
+  const pl = state.modal && state.modal.type==='finPrime' ? state.modal.payload : null; if (!pl) return;
+  const montant = Math.round(Number(fv('pp_montant'))||0); if (!(montant>0)){ showToast('Indique le montant payé.'); return; }
+  const ligne = { id:genId('ppr'), cooperative_id:pl.coopId, campagne_id:finCampagneId(), date_paiement:fv('pp_date')||null, montant_fcfa:montant, reference:fv('pp_ref').trim()||null, notes:fv('pp_notes').trim()||null };
+  const { error } = await supabaseClient.from('paiements_primes').insert(ligne); if (error){ showToast('Échec : '+error.message); return; }
+  await finChargerPaiementsAnnexes(); closeModal(); render(); showToast('Paiement de prime enregistré.', 'success');
+}
+async function finPrimeSupprimer(id){
+  if (!confirm('Retirer ce paiement de prime ?')) return;
+  const { error } = await supabaseClient.from('paiements_primes').delete().eq('id', id); if (error){ showToast('Échec : '+error.message); return; }
+  await finChargerPaiementsAnnexes(); render();
+}
+// ---- Financement › Partenaires (usiniers / traitants : Awahus, Sitapa, Bobby Vo…) : ce qu'on leur doit sur le cacao qu'ils ont livré ----
+// Base de paiement : poids constaté à l'entrée du magasin export (AGL) pour les usines loco-magasin ; sinon le poids net pesé à l'usine.
+function finPartenaires(){
+  const sites = (state.sitesUsinage||[]).filter(s=>s.traitant && !/^coops?\s/i.test(String(s.traitant).trim()));
+  const parTraitant = {};
+  sites.forEach(s=>{ const k = String(s.traitant).trim(); (parTraitant[k] = parTraitant[k] || { traitant:k, sites:[], achats:[] }).sites.push(s); });
+  finAchatsCampagne().forEach(a=>{ const u = String(a.usine_dechargement||'').trim().toUpperCase(); if (!u) return; const s = sites.find(x=>x.code && u.indexOf(String(x.code).toUpperCase())===0); if (s) parTraitant[String(s.traitant).trim()].achats.push({ a, s }); });
+  const c = finCampagneId();
+  return Object.values(parTraitant).map(p=>{
+    let kgUsine = 0, kgAgl = 0, du = 0, sansPrix = 0, sansPoids = 0;
+    p.achats.forEach(({a, s})=>{
+      const ku = Number(a.poids_net_produit)||0, ka = Number(a.poids_agl_kg)||0; kgUsine += ku; kgAgl += ka;
+      const loco = Number(s.prix_loco_fcfa_kg)||0, sac = Number(s.cout_sacherie_fcfa_kg)||0, prix = Math.round((loco-sac)*1000)/1000, base = s.tracabilite_externe ? ka : ku;
+      if (!(prix>0)) sansPrix++; else if (!(base>0)) sansPoids++; else du += Math.round(prix*base);
+    });
+    const paye = (state.paiementsPartenaires||[]).filter(x=>x.traitant===p.traitant && (!c || (x.campagne_id||'')===c)).reduce((t,x)=>t+(Number(x.montant_fcfa)||0),0);
+    return Object.assign(p, { kgUsine, kgAgl, du, paye, reste:Math.max(0, du-paye), sansPrix, sansPoids, base: p.sites.some(s=>s.tracabilite_externe) ? 'magasin export (AGL)' : 'pesée usine' });
+  }).sort((a,b)=>a.traitant.localeCompare(b.traitant,'fr'));
+}
+function renderFinPartenaires(){
+  if (!state.finPaCharge){ finChargerPaiementsAnnexes().then(()=>render()); return '<div class="panel"><div class="hint" style="padding:18px">Chargement…</div></div>'; }
+  const ps = finPartenaires();
+  let html = '<div class="panel"><div class="panel-head"><div><h2>Partenaires — usiniers et traitants</h2><p class="hint" style="margin:4px 0 0">Cacao livré par chaque partenaire (Awahus, Sitapa, Bobby Vo…) et ce qu\'on leur doit : prix loco-magasin moins la sacherie fournie par ECORIGINE, sur le poids pesé à l\'entrée du magasin export pour les usines loco-magasin, sinon sur le poids net pesé à l\'usine. Les prix se règlent dans la fiche de chaque usine (Lots &amp; export › Usines).</p></div></div><div style="padding:0 18px 18px">';
+  if (!ps.length) return html + '<div class="hint">Aucun partenaire : renseigne le traitant des usines dans leur fiche.</div></div></div>';
+  html += '<div class="achats-defile"><table class="tbl-fiches tbl-dense"><thead><tr><th>Partenaire</th><th>Usines</th><th class="num">Livraisons</th><th class="num">Poids usine (kg)</th><th class="num">Poids magasin export (kg)</th><th>Base</th><th class="num">Dû</th><th class="num">Payé</th><th class="num">Reste</th><th></th></tr></thead><tbody>';
+  ps.forEach(p=>{
+    const note = (p.sansPrix ? '<span class="badge warn" title="Prix loco-magasin non renseigné sur l\'usine">'+p.sansPrix+' sans prix</span> ' : '')+(p.sansPoids ? '<span class="badge neutral" title="Poids de base pas encore saisi">'+p.sansPoids+' sans poids</span>' : '');
+    html += '<tr><td><b>'+esc(p.traitant)+'</b>'+(note?'<div style="margin-top:3px">'+note+'</div>':'')+'</td><td>'+esc(p.sites.map(s=>s.code).join(', '))+'</td><td class="num">'+p.achats.length+'</td><td class="num">'+fmtNum(p.kgUsine)+'</td><td class="num">'+(p.kgAgl?fmtNum(p.kgAgl):'—')+'</td><td>'+esc(p.base)+'</td>'
+      + '<td class="num">'+fmtNum(p.du)+'</td><td class="num">'+fmtNum(p.paye)+'</td><td class="num"><b class="'+(p.reste>0?'txt-danger':'')+'">'+fmtNum(p.reste)+'</b></td>'
+      + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="finPartenaireDetail(\''+esc(encodeURIComponent(p.traitant))+'\')">Détail</button> <button class="btn-ghost btn-compact" onclick="finPartPaiementOuvrir(\''+esc(encodeURIComponent(p.traitant))+'\')">Paiement</button></td></tr>';
+  });
+  return html + '</tbody></table></div><div class="hint" style="margin-top:8px">Montants en FCFA.</div></div></div>';
+}
+function finPartenaireDetail(t){ state.modal = { type:'finPartDetail', payload:{ traitant:decodeURIComponent(t) } }; render(); }
+function renderFinPartDetailModal(m){
+  const p = finPartenaires().find(x=>x.traitant===m.payload.traitant); if (!p) return '';
+  const c = finCampagneId(), pays = (state.paiementsPartenaires||[]).filter(x=>x.traitant===p.traitant && (!c || (x.campagne_id||'')===c));
+  return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal xl"><h3>'+esc(p.traitant)+' — livraisons et paiements</h3><div id="modal-fields">'
+    + '<div class="achats-defile" style="max-height:44vh;overflow:auto"><table class="tbl-fiches tbl-dense"><thead><tr><th>Date</th><th>Connaissement</th><th>Coopérative</th><th>Usine</th><th class="num">Poids usine</th><th class="num">Poids AGL</th><th class="num">Prix net</th><th class="num">Dû</th></tr></thead><tbody>'
+    + p.achats.slice().sort((x,y)=>String(x.a.date).localeCompare(String(y.a.date))).map(({a,s})=>{ const co = coopById(a.cooperative_id), loco = Number(s.prix_loco_fcfa_kg)||0, sac = Number(s.cout_sacherie_fcfa_kg)||0, prix = Math.round((loco-sac)*1000)/1000, base = s.tracabilite_externe ? (Number(a.poids_agl_kg)||0) : (Number(a.poids_net_produit)||0);
+        return '<tr><td>'+esc(dateFr(a.date))+'</td><td><b>'+esc(a.connaissement||'—')+'</b></td><td>'+esc(co?co.nom:'—')+'</td><td>'+esc(s.code)+'</td><td class="num">'+(Number(a.poids_net_produit)>0?fmtNum(a.poids_net_produit):'—')+'</td><td class="num">'+(Number(a.poids_agl_kg)>0?fmtNum(a.poids_agl_kg):'—')+'</td><td class="num">'+(prix>0?fmtNum(prix):'<span class="badge warn">à régler</span>')+'</td><td class="num">'+((prix>0&&base>0)?fmtNum(Math.round(prix*base)):'—')+'</td></tr>'; }).join('')
+    + '</tbody></table></div><div style="font-weight:600;margin:12px 0 6px">Paiements</div>'
+    + (pays.length ? '<table class="tbl-fiches tbl-dense"><thead><tr><th>Date</th><th class="num">Montant</th><th>Référence</th><th>Notes</th><th></th></tr></thead><tbody>'+pays.map(x=>'<tr><td>'+esc(dateFr(x.date_paiement))+'</td><td class="num">'+fmtNum(x.montant_fcfa)+'</td><td>'+esc(x.reference||'—')+'</td><td>'+esc(x.notes||'')+'</td><td><button class="btn-danger-text btn-compact" onclick="finPartPaiementSupprimer(\''+esc(x.id)+'\')">Retirer</button></td></tr>').join('')+'</tbody></table>' : '<div class="hint">Aucun paiement enregistré.</div>')
+    + '</div><div class="actions"><button class="btn" onclick="closeModal()">Fermer</button><button class="btn btn-primary" onclick="finPartPaiementOuvrir(\''+esc(encodeURIComponent(p.traitant))+'\')">+ Paiement</button></div></div></div>';
+}
+function finPartPaiementOuvrir(t){ state.modal = { type:'finPartPaiement', payload:{ traitant:decodeURIComponent(t), date:aujourdhuiIso() } }; render(); }
+function renderFinPartPaiementModal(m){
+  const p = finPartenaires().find(x=>x.traitant===m.payload.traitant); if (!p) return '';
+  return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>Paiement — '+esc(p.traitant)+'</h3><div id="modal-fields">'
+    + '<div class="hint" style="margin-bottom:8px">Dû '+fmtNum(p.du)+' FCFA · déjà payé '+fmtNum(p.paye)+' FCFA · reste <b>'+fmtNum(p.reste)+'</b> FCFA</div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Date<input type="date" name="pa_date" value="'+esc(m.payload.date)+'"></label><label class="field">Montant payé (FCFA)<input type="number" name="pa_montant" min="0" step="1" value="'+(p.reste||'')+'"></label></div>'
+    + '<label class="field">Référence (chèque, virement…)<input type="text" name="pa_ref"></label><label class="field">Notes<input type="text" name="pa_notes"></label>'
+    + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="finPartPaiementEnregistrer()">Enregistrer</button></div></div></div>';
+}
+async function finPartPaiementEnregistrer(){
+  const pl = state.modal && state.modal.type==='finPartPaiement' ? state.modal.payload : null; if (!pl) return;
+  const montant = Math.round(Number(fv('pa_montant'))||0); if (!(montant>0)){ showToast('Indique le montant payé.'); return; }
+  const ligne = { id:genId('ppa'), traitant:pl.traitant, campagne_id:finCampagneId(), date_paiement:fv('pa_date')||null, montant_fcfa:montant, reference:fv('pa_ref').trim()||null, notes:fv('pa_notes').trim()||null };
+  const { error } = await supabaseClient.from('paiements_partenaires').insert(ligne); if (error){ showToast('Échec : '+error.message); return; }
+  await finChargerPaiementsAnnexes(); closeModal(); render(); showToast('Paiement enregistré.', 'success');
+}
+async function finPartPaiementSupprimer(id){
+  if (!confirm('Retirer ce paiement ?')) return;
+  const { error } = await supabaseClient.from('paiements_partenaires').delete().eq('id', id); if (error){ showToast('Échec : '+error.message); return; }
+  await finChargerPaiementsAnnexes(); render();
 }
 
 function renderPrefinancementsTab(){
@@ -11221,6 +11381,10 @@ function lotsModalsHtml(){
   if (m.type==='saigicImport') return renderSaigicImportModal(m);
   if (m.type==='shipSuivi') return renderShipSuiviModal(m);
   if (m.type==='finLtd') return renderFinLtdModal(m);
+  if (m.type==='finCoopDetail') return renderFinCoopDetailModal(m);
+  if (m.type==='finPrime') return renderFinPrimeModal(m);
+  if (m.type==='finPartDetail') return renderFinPartDetailModal(m);
+  if (m.type==='finPartPaiement') return renderFinPartPaiementModal(m);
   if (m.type==='finLtdLots') return renderFinLtdLotsModal(m);
   if (m.type==='lotsPoidsEntrepot'){
     const pl = m.payload, lots = lotsPoidsEntrepotLots(pl);
@@ -26185,8 +26349,7 @@ function renderDashboardTab(){
     + '<option value="intermediaire"'+(state.periodeFilter==='intermediaire'?' selected':'')+'>Intermédiaire (continuité, plafond 100%)</option>'
     + '</select></label>'
     + '<button class="btn" onclick="openModal(\'campagnes\')">Gérer les campagnes</button>'
-    + '<button class="btn" onclick="openModal(\'primes\')">Gérer les primes</button>'
-    + '<button class="btn" onclick="ouvrirParametresPaiement(state.campagneFilter!==\'all\' ? state.campagneFilter : \'\')">Paramètres de paiement</button>'
+    // « Gérer les primes » et « Paramètres de paiement » sont désormais dans Financement › Coopératives.
     // Bouton "Parametres de paiement" retire de l'affichage -- desactive avec
     // le reste de l'attestation, fonction/modale conservees pour plus tard.
     + '<div style="display:flex;align-items:flex-end;gap:6px;">'
