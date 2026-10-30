@@ -2281,6 +2281,7 @@ function certificationLogoHtml(certifications){
 const ICON_COOPS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M2.5 20c0-3 2.5-5.5 5.5-5.5s5.5 2.5 5.5 5.5"/><path d="M14.5 15.2c2.3.4 4 2.3 4 4.8"/></svg>';
 const ICON_GUIDE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h7a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H4z"/><path d="M20 4h-7a3 3 0 0 0-3 3v13a2 2 0 0 1 2-2h8z"/></svg>';
 const ICON_OBC = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 12l3 3 5-6"/></svg>';
+const ICON_SHIP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l1.5 3h15L21 17"/><path d="M4 17l2-6h12l2 6"/><path d="M12 11V4h4"/><path d="M8 11V8h3"/></svg>';
 const ICON_SACH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3h8l2 4v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V7z"/><path d="M6 7h12"/><path d="M10 12h4"/></svg>';
 const ICON_PREFI = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="2.6"/><path d="M6 9.5v.01M18 14.5v.01"/></svg>';
 const ICON_DASHBOARD = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10"/><path d="M12 20V4"/><path d="M20 20v-7"/></svg>';
@@ -4495,7 +4496,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-30-358';
+const APP_VERSION = '2026-10-30-359';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -6235,7 +6236,7 @@ function ocAllerProducteur(id){
 // ---- Barre laterale v2 ----
 const SIDEBAR_GROUPES = [
   { titre:'Pilotage',       items:[ ['dashboard','ICON_DASHBOARD','Tableau de bord'], ['tracage','ICON_TRACAGE','Traçage de volume'], ['saisieobc','ICON_OBC','Saisie OBC'] ] },
-  { titre:'Opérations',     items:[ ['cooperatives','ICON_COOPS','Coopératives'], ['demandes','ICON_DEMANDES','Demandes coopératives'], ['lots','ICON_LOTS','Lots & export'], ['prefinancements','ICON_PREFI','Préfinancements'], ['sacherie','ICON_SACH','Sacherie'] ] },
+  { titre:'Opérations',     items:[ ['cooperatives','ICON_COOPS','Coopératives'], ['demandes','ICON_DEMANDES','Demandes coopératives'], ['lots','ICON_LOTS','Lots & export'], ['shipping','ICON_SHIP','Shipping'], ['prefinancements','ICON_PREFI','Préfinancements'], ['sacherie','ICON_SACH','Sacherie'] ] },
   { titre:'Conformité',     items:[ ['conformite','ICON_CONFORMITE','Conformité & documents'], ['basedonnees','ICON_BASEDONNEES','Base de données coop.'], ['cartes','ICON_CARTE','Cartes & déforestation'] ] },
   { titre:'Administration', items:[ ['acces','ICON_ACCES','Accès coopératives'], ['stockage','ICON_STOCKAGE','Stockage'], ['sauvegardes','ICON_SAUVEGARDES','Sauvegardes'] ] },
 ];
@@ -6941,6 +6942,114 @@ function sachDechargeHtml(P, spl, tpl, spp){
     + '<p class="hint" style="margin-top:10px">Déchargé = poids net pesé à l\'usine, tous clients. ACT = connaissements attribués au client ACT (attribution faite sur chaque achat) ; les lots de SUCDEN à SUV ne comptent pas. Reste à usiner = ACT déchargé − ce qui est déjà affecté à un lot d\'usinage (onglet Lots &amp; export). Sacs et palettes requis = lots à former (reste ÷ '+sachNb(tpl)+' t, arrondi au-dessus) × '+sachNb(spl)+' sacs et × '+sachNb(palLot)+' palettes. Camions à usiner = camions ACT dont la livraison n\'est pas encore entièrement affectée à un lot (un camion = un numéro de connaissement) : l\'usinage est à demander dès que le seuil en tonnes OU les '+SACH_SEUIL_CAMIONS+' camions sont atteints. Rythme = tonnes ACT reçues sur les 14 derniers jours ÷ 14.</p></div></div>';
   return h;
 }
+// ================== Onglet Shipping : suivi des lots export, de la production à l'embarquement ==================
+// Parcours d'un lot : produit → déclaré au SAIGIC → en entrepôt export → présenté au client → agréé → OT / instructions d'embarquement → embarqué.
+// Les formules du SAIGIC (BV, Fo1, D6) et la création de l'OT ne se font qu'après l'agréage du client et la réception des instructions d'embarquement.
+const SHIP_ETAPES = [
+  ['produit','Produit','Lot fabriqué à l\'usine'],
+  ['declare','Déclaré SAIGIC','Lot créé dans le SAIGIC'],
+  ['entrepot','En entrepôt','Pesé à l\'entrée de l\'entrepôt export'],
+  ['presente','Présenté','Présenté au client pour agréage'],
+  ['agree','Agréé','Agréé par le client : les formules SAIGIC et l\'OT se débloquent'],
+  ['ot','OT','Rattaché à un OT (instructions d\'embarquement reçues)'],
+  ['embarque','Embarqué','BL émis / OT embarqué'],
+];
+const SHIP_AGREAGE = { agree:['ok','Agréé'], refuse:['danger','Refusé'], declasse:['warn','Déclassé'] };
+async function shipChargerSuivi(){
+  if (!supabaseClient || state.shipChargement) return; state.shipChargement = true;
+  try{ const r = await supabaseClient.from('lots_suivi').select('*'); state.lotsSuivi = (r && !r.error) ? (r.data||[]) : (state.lotsSuivi||[]); }
+  finally { state.shipChargement = false; state.shipCharge = true; }
+}
+function shipSuiviDe(lotId){ return (state.lotsSuivi||[]).find(x=>x.lot_id===lotId) || null; }
+function shipOtDuLot(lotId){
+  const lien = (state.lotsExportUsinage||[]).find(x=>x.lot_usinage_id===lotId);
+  return lien ? ((state.lotsExport||[]).find(o=>o.id===lien.lot_export_id) || null) : null;
+}
+function shipEtape(l){
+  const s = shipSuiviDe(l.id), ot = shipOtDuLot(l.id);
+  if (ot && (ot.statut==='embarque' || ot.bl_numero)) return 'embarque';
+  if (ot) return 'ot';
+  if ((s && s.agreage_resultat==='agree') || (l.agree_le && !(s && s.agreage_resultat))) return 'agree';
+  if (s && s.date_presentation) return 'presente';
+  if (lotsUsinagePese(l)>0 || l.date_pesee_entrepot) return 'entrepot';
+  if (l.saigic_date_fab) return 'declare';
+  return 'produit';
+}
+function shipFreinte(a, b){ a = Number(a); b = Number(b); return (a>0 && b>0) ? Math.round((a-b)/a*10000)/100 : null; }
+function shipBadgeSaigic(lib, val, aide){
+  const ok = String(val||'').trim()!=='';
+  return '<span class="badge '+(ok?'ok':'neutral')+'" title="'+esc(aide+(ok?' : '+val:' : pas encore'))+'" style="margin-right:3px">'+esc(lib)+'</span>';
+}
+function renderShippingTab(){
+  if (!state.lotsCharges) chargerLots().then(()=>render());
+  if (!state.shipCharge){ shipChargerSuivi().then(()=>render()); }
+  if (!state.lotsCharges || !state.shipCharge) return '<div class="panel"><div class="hint" style="padding:18px">Chargement du suivi des lots…</div></div>';
+  const lots = (state.lotsUsinage||[]).slice().sort((a,b)=>String(b.numero).localeCompare(String(a.numero),'fr',{numeric:true}));
+  const par = {}; SHIP_ETAPES.forEach(e=>par[e[0]] = 0); lots.forEach(l=>{ par[shipEtape(l)]++; });
+  const filtre = state.shipFiltre || '';
+  const kg = lots.reduce((s,l)=>s+(lotsUsinagePese(l)||lotsUsinageSortie(l)||0), 0);
+  let html = '<div class="panel"><div class="panel-head"><div><h2>Shipping</h2><p class="hint" style="margin:4px 0 0">Suivi des lots export, de la production à l\'embarquement. Les formules SAIGIC (BV, Fo1, D6) et l\'OT se débloquent après l\'agréage du client et la réception des instructions d\'embarquement.</p></div></div>'
+    + '<div style="padding:0 18px 18px">'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 14px">'
+    + '<button class="btn'+(filtre===''?' btn-primary':'')+'" onclick="shipFiltrer(\'\')">Tous <b>'+lots.length+'</b></button>'
+    + SHIP_ETAPES.map(e=>'<button class="btn'+(filtre===e[0]?' btn-primary':'')+'" title="'+esc(e[2])+'" onclick="shipFiltrer(\''+e[0]+'\')">'+esc(e[1])+' <b>'+par[e[0]]+'</b></button>').join('')
+    + '<span class="hint" style="margin:0 0 0 auto;align-self:center">'+lots.length+' lot'+(lots.length>1?'s':'')+' · <b>'+fmtKg(kg)+'</b></span></div>';
+  const vus = lots.filter(l=>!filtre || shipEtape(l)===filtre);
+  if (!vus.length) return html + '<div class="hint">Aucun lot à cette étape.</div></div></div>';
+  html += '<div class="achats-defile" style="max-height:66vh;overflow:auto"><table class="tbl-fiches tbl-dense"><thead><tr><th>N° lot</th><th>Usine</th><th>Client</th><th>Étape</th><th class="num">Sortie usine</th><th>Entrée entrepôt</th><th class="num">Poids entrepôt</th><th class="num">Freinte</th><th>SAIGIC</th><th>Présenté</th><th>Agréage</th><th>OT</th><th>BL</th><th></th></tr></thead><tbody>';
+  vus.forEach(l=>{
+    const s = shipSuiviDe(l.id) || {}, ot = shipOtDuLot(l.id), et = shipEtape(l), sortie = Number(l.poids_sortie_kg)>0 ? Number(l.poids_sortie_kg) : null, pese = lotsUsinagePese(l)||null, fr = shipFreinte(sortie, pese);
+    const agree = s.agreage_resultat || (l.agree_le ? 'agree' : '');
+    html += '<tr><td><b>'+esc(l.numero)+'</b></td><td>'+esc(l.site_code||l.site||'—')+'</td><td>'+esc(l.client||'—')+'</td>'
+      + '<td><span class="badge '+(et==='embarque'?'ok':et==='produit'?'neutral':'info')+'">'+esc(SHIP_ETAPES.find(e=>e[0]===et)[1])+'</span></td>'
+      + '<td class="num">'+(sortie ? fmtNum(sortie) : '—')+'</td><td>'+(l.date_pesee_entrepot ? esc(dateFr(l.date_pesee_entrepot)) : '—')+(l.entrepot ? ' <span class="hint" style="margin:0">'+esc(l.entrepot)+'</span>' : '')+'</td>'
+      + '<td class="num">'+(pese ? fmtNum(pese) : '—')+'</td><td class="num">'+(fr===null ? '—' : '<span class="'+(fr>1?'txt-danger':'')+'">'+String(fr).replace('.',',')+' %</span>')+'</td>'
+      + '<td style="white-space:nowrap">'+shipBadgeSaigic('Lot', l.saigic_date_fab, 'Déclaré au SAIGIC')+shipBadgeSaigic('BV', l.saigic_numero_bv, 'Bulletin de vérification')+shipBadgeSaigic('Fo1', l.saigic_fo1||l.saigic_fo1_provisoire, 'Formule Fo1')+shipBadgeSaigic('D6', l.saigic_d6, 'D6')+shipBadgeSaigic('Emb', l.saigic_vu_emb, 'Vu embarqué')+'</td>'
+      + '<td>'+(s.date_presentation ? esc(dateFr(s.date_presentation)) : '—')+'</td>'
+      + '<td>'+(agree ? lotsBadge(SHIP_AGREAGE, agree)+(l.agree_le ? ' <span class="hint" style="margin:0">'+esc(dateFr(l.agree_le))+'</span>' : '') : '—')+'</td>'
+      + '<td>'+(ot ? '<b>'+esc(ot.numero)+'</b>' : '—')+'</td><td>'+(ot && ot.bl_numero ? esc(ot.bl_numero) : '—')+'</td>'
+      + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="shipSuiviOuvrir(\''+esc(l.id)+'\')">Suivi</button></td></tr>';
+  });
+  return html + '</tbody></table></div></div></div>';
+}
+function shipFiltrer(f){ state.shipFiltre = f; render(); }
+function shipSuiviOuvrir(lotId){
+  const l = lotUsinageParId(lotId); if (!l) return;
+  const s = shipSuiviDe(lotId) || {};
+  state.modal = { type:'shipSuivi', payload:{ lotId, numero:l.numero, contrat_client:s.contrat_client||'', date_presentation:s.date_presentation||'', date_sondage:s.date_sondage||'', agree_le:l.agree_le||'', agreage_resultat:s.agreage_resultat||(l.agree_le?'agree':''), si_recue_le:s.si_recue_le||'', si_reference:s.si_reference||'', date_sortie_entrepot:s.date_sortie_entrepot||'', poids_sortie_entrepot_kg:s.poids_sortie_entrepot_kg||'', poids_empotage_kg:s.poids_empotage_kg||'', cv_ccc:s.cv_ccc||'', cv_deblocage:s.cv_deblocage||'', commentaire:s.commentaire||'' } };
+  render();
+}
+function renderShipSuiviModal(m){
+  const pl = m.payload, f = (lib, nom, type, val, extra)=>'<label class="field">'+lib+'<input type="'+type+'" name="'+nom+'" value="'+esc(val)+'"'+(extra||'')+'></label>';
+  const g = (...c)=>'<div style="display:grid;grid-template-columns:repeat('+c.length+',1fr);gap:0 12px">'+c.join('')+'</div>';
+  return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal wide"><h3>Suivi du lot '+esc(pl.numero)+'</h3><div id="modal-fields">'
+    + '<div style="font-weight:600;margin:2px 0 6px">Présentation et agréage</div>'
+    + g(f('Contrat client','sv_contrat','text',pl.contrat_client), f('Date de présentation au client','sv_presentation','date',pl.date_presentation), f('Date de sondage','sv_sondage','date',pl.date_sondage))
+    + g(f('Date d\'agréage','sv_agree_le','date',pl.agree_le), '<label class="field">Résultat<select name="sv_agreage"><option value="">—</option>'+Object.entries(SHIP_AGREAGE).map(([k,v])=>'<option value="'+k+'"'+(k===pl.agreage_resultat?' selected':'')+'>'+v[1]+'</option>').join('')+'</select></label>')
+    + '<div style="font-weight:600;margin:10px 0 6px">Instructions d\'embarquement</div>'
+    + g(f('Reçues le','sv_si_date','date',pl.si_recue_le), f('Référence','sv_si_ref','text',pl.si_reference,' placeholder="ex : SI Ecorigine 2026-P…"'))
+    + '<div class="hint" style="margin:0 0 6px">À partir de l\'agréage et des instructions reçues, tu peux éditer les formules SAIGIC et créer l\'OT (Lots &amp; export › OT).</div>'
+    + '<div style="font-weight:600;margin:10px 0 6px">Sortie d\'entrepôt et empotage</div>'
+    + g(f('Date de sortie de l\'entrepôt','sv_sortie_date','date',pl.date_sortie_entrepot), f('Poids net sortie entrepôt (kg)','sv_sortie_kg','number',pl.poids_sortie_entrepot_kg,' min="0" step="1"'), f('Poids net empotage (kg)','sv_empotage_kg','number',pl.poids_empotage_kg,' min="0" step="1"'))
+    + g(f('CV CCC','sv_cv_ccc','text',pl.cv_ccc), f('CV de déblocage','sv_cv_deb','text',pl.cv_deblocage))
+    + '<label class="field">Commentaire<textarea name="sv_comm" rows="2">'+esc(pl.commentaire)+'</textarea></label>'
+    + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="shipSuiviEnregistrer()">Enregistrer</button></div></div></div>';
+}
+async function shipSuiviEnregistrer(){
+  const pl = state.modal && state.modal.type==='shipSuivi' ? state.modal.payload : null; if (!pl) return;
+  const d = n=>fv(n)||null, k = n=>{ const v = Number(fv(n)); return v>0 ? v : null; };
+  const agree = d('sv_agree_le'), res = d('sv_agreage');
+  const ligne = { lot_id:pl.lotId, contrat_client:fv('sv_contrat').trim()||null, date_presentation:d('sv_presentation'), date_sondage:d('sv_sondage'), agreage_resultat:res,
+    si_recue_le:d('sv_si_date'), si_reference:fv('sv_si_ref').trim()||null, date_sortie_entrepot:d('sv_sortie_date'), poids_sortie_entrepot_kg:k('sv_sortie_kg'), poids_empotage_kg:k('sv_empotage_kg'),
+    cv_ccc:fv('sv_cv_ccc').trim()||null, cv_deblocage:fv('sv_cv_deb').trim()||null, commentaire:fv('sv_comm').trim()||null, updated_at:new Date().toISOString() };
+  try{
+    const r1 = await supabaseClient.from('lots_suivi').upsert(ligne, { onConflict:'lot_id' }); if (r1.error) throw r1.error;
+    const l = lotUsinageParId(pl.lotId);
+    if (l && String(l.agree_le||'')!==String(agree||'')){ const r2 = await supabaseClient.from('lots_usinage').update({ agree_le:agree, updated_at:ligne.updated_at }).eq('id', pl.lotId); if (r2.error) throw r2.error; await chargerLots(); }
+    await shipChargerSuivi(); closeModal(); render(); showToast('Suivi enregistré.', 'success');
+  }catch(e){ showToast('Échec : '+e.message); }
+}
+
 function renderSacherieTab(){
   if (!state.sachCharge){ chargerSacherie().then(()=>render()); return '<div class="panel"><div class="hint" style="padding:18px">Chargement de la sacherie…</div></div>'; }
   const P = state.sachParam || { sacs_par_lot:385, tonnes_par_lot:25, sacs_par_palette:40 };
@@ -10990,6 +11099,7 @@ function lotsModalsHtml(){
       + '<div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" id="lpi-btn" onclick="lotsPoidsImportValider()">Appliquer '+n+' poids</button></div></div></div>';
   }
   if (m.type==='saigicImport') return renderSaigicImportModal(m);
+  if (m.type==='shipSuivi') return renderShipSuiviModal(m);
   if (m.type==='lotsPoidsEntrepot'){
     const pl = m.payload, lots = lotsPoidsEntrepotLots(pl);
     const entrepots = Array.from(new Set((state.lotsUsinage||[]).map(l=>l.entrepot||'').filter(Boolean))).sort();
@@ -26254,6 +26364,7 @@ function _renderBrut(){
     else if (state.tab==='stockage') html += renderStockageTab();
     else if (state.tab==='tracage') html += renderTracageTab();
     else if (state.tab==='lots') html += renderLotsTab();
+    else if (state.tab==='shipping') html += renderShippingTab();
     else if (state.tab==='prefinancements') html += renderPrefinancementsTab();
     else if (state.tab==='sacherie') html += renderSacherieTab();
     else if (state.tab==='saisieobc') html += renderSaisieObcTab();
