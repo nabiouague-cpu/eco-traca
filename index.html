@@ -4495,7 +4495,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-30-357';
+const APP_VERSION = '2026-10-30-358';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7928,7 +7928,7 @@ function renderLotsTab(){
     // « État des CV » est retiré de la navigation pour le moment (temporaire, cf. renderCvVentes et la
     // table cv_ventes conservees intactes plus bas : rattacher le sous-onglet suffira a tout remettre en
     // place quand on reprendra ce chantier avec plus d'elements).
-    + [['contrats','Contrats clients'],['series','Séries de numérotation'],['achats_clients','Suivi achats clients'],['usinage','Lots d\'usinage'],['export','OT (ordres de transit)'],['saigic','Déclaration SAIGIC'],['chaine','Chaîne de traçabilité']].map(([id,l])=>'<button class="'+(actif===id?'active':'')+'" onclick="lotsSetSousOnglet(\''+id+'\')">'+l+'</button>').join('')
+    + [['contrats','Contrats clients'],['series','Séries de numérotation'],['achats_clients','Suivi achats clients'],['usinage','Lots d\'usinage'],['export','OT (ordres de transit)'],['chaine','Chaîne de traçabilité']].map(([id,l])=>'<button class="'+(actif===id?'active':'')+'" onclick="lotsSetSousOnglet(\''+id+'\')">'+l+'</button>').join('')
     + '</div>';
   if (!state.lotsCharges) html += '<div class="hint">Chargement des lots…</div>';
   else if (actif==='cv') html += renderCvVentes();
@@ -7937,7 +7937,6 @@ function renderLotsTab(){
   else if (actif==='series') html += renderLotsSeries();
   else if (actif==='usinage') html += renderLotsUsinage();
   else if (actif==='export') html += renderLotsExport();
-  else if (actif==='saigic') html += renderLotsSaigic();
   else html += renderLotsChaine();
   return html + '</div></div>';
 }
@@ -9523,11 +9522,15 @@ function renderLotsUsinage(){
     + '<input type="file" id="lu-import-transfert" accept=".xlsx,.xls,.csv" style="display:none" onchange="lotsTransfertImporter(this)">'
     + (lots.length ? '<button class="btn btn-primary" title="Excel avec les numéros de lot et leurs poids pesés à l\'entrée de l\'entrepôt export (poids définitif ; le format du tableau de transfert convient)" onclick="lotsPoidsChoisirFichier()">⭱ Importer les poids pesés (Excel)</button><input type="file" id="lu-import-poids" accept=".xlsx,.xls,.csv" style="display:none" onchange="lotsPoidsImporter(this)"><button class="btn" onclick="lotsPoidsEntrepotOuvrir()">⚖ Saisir les poids pesés</button>' : '')
     + ((lots||[]).some(l=>l.origine==='transfert') ? '<button class="btn" onclick="lotsTransfertExporter()">⭳ Exporter le tableau de transfert</button>' : '')
+    + '<button class="btn" title="Fiche Excel préremplie des lots à déclarer au SAIGIC (le shipping y ajoute le choix du poids et le poids réel)" onclick="saigicFicheExporter()">⭳ Fiche de déclaration SAIGIC</button>'
+    + '<button class="btn" title="Importer la fiche remplie : contrôles, propositions de noms, préparation de la déclaration (rien n\'est envoyé au SAIGIC)" onclick="document.getElementById(\'sg-import-input\').click()">⭱ Importer la fiche SAIGIC</button>'
+    + '<input type="file" id="sg-import-input" accept=".xlsx,.xls" style="display:none" onchange="saigicFicheImporter(this)">'
     + (lots.length ? '<button class="btn-danger-text" onclick="lotsUsinageSupprimerTout()">Tout supprimer</button>' : '')
     + '<span class="hint" style="margin:0">'+recus.length+' livraison'+(recus.length>1?'s':'')+' reçue'+(recus.length>1?'s':'')+' à l\'usine · <b>'+fmtKg(dispo)+'</b> pas encore affectés à un lot</span></div>'
     + '<div class="hint" style="margin:-6px 0 14px">Le rapport d\'usinage reprend les numéros déjà attribués par les séries de numérotation : le client de chaque lot importé est retrouvé automatiquement à partir de son numéro.</div>';
   html += renderLotsRepartitionClients(campagneId);
   html += renderLotsPeses(campagneId);
+  html += renderLotsSaigic();
   if (!lots.length) return html + '<div class="hint">Aucun lot d\'usinage. Crée le premier, ou importe le rapport d\'usinage de l\'usinier.</div>';
   html += '<div class="achats-defile"><table class="tbl-fiches tbl-dense"><thead><tr><th>N° lot</th><th>Campagne</th><th>Client</th><th>Période</th><th>Site · traitant</th><th>Entrepôt</th><th>Type</th><th>Niveau</th><th>Livraisons</th><th>Entrée</th><th>Sortie usine</th><th>Pesé entrepôt</th><th>Dispo. export</th><th>Statut</th><th></th></tr></thead><tbody>';
   lots.forEach(l=>{
@@ -10245,8 +10248,7 @@ async function saigicDeclCharger(){
     state.saigicRef = (r && !r.error) ? (r.data||[]) : (state.saigicRef||[]);
     state.saigicCorr = (c && !c.error) ? (c.data||[]) : (state.saigicCorr||[]);
     state.saigicDecl = (d && !d.error) ? (d.data||[]) : (state.saigicDecl||[]);
-    state.saigicDeclCharge = true;
-  } finally { state.saigicDeclChargement = false; }
+  } finally { state.saigicDeclChargement = false; state.saigicDeclCharge = true; }
 }
 function saigicRefListe(cat){ return (state.saigicRef||[]).filter(x=>x.categorie===cat); }
 function saigicLibelleAffiche(cat, x){
@@ -10293,14 +10295,11 @@ function saigicLotsADeclarer(){
 }
 const SAIGIC_STATUTS = { prepare:['warn','préparée'], valide:['info','validée'], envoye:['ok','envoyée'], erreur:['danger','erreur'], annule:['neutral','annulée'] };
 function renderLotsSaigic(){
-  if (!state.saigicDeclCharge){ saigicDeclCharger().then(()=>render()); return '<div class="hint">Chargement des listes du SAIGIC…</div>'; }
+  if (!state.saigicDeclCharge){ saigicDeclCharger().then(()=>render()); return ''; }
   const lots = saigicLotsADeclarer(), decl = state.saigicDecl||[];
-  let html = '<div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">'
-    + '<button class="btn btn-primary" onclick="saigicFicheExporter()">⭳ Exporter la fiche SAIGIC</button>'
-    + '<button class="btn" onclick="document.getElementById(\'sg-import-input\').click()">⭱ Importer la fiche remplie</button>'
-    + '<input type="file" id="sg-import-input" accept=".xlsx,.xls" style="display:none" onchange="saigicFicheImporter(this)">'
-    + '<span class="hint" style="margin:0">'+lots.length+' lot'+(lots.length>1?'s':'')+' à déclarer · '+decl.filter(d=>d.statut==='prepare').length+' déclaration(s) préparée(s)</span></div>'
-    + '<div class="hint" style="margin:-6px 0 14px">La fiche est préremplie avec les lots non déclarés (usine, magasin, certificat d\'après les correspondances ci-dessous). Le shipping ajoute le <b>choix du poids</b> et le <b>poids réel</b> ; l\'import contrôle chaque ligne et prépare la déclaration. <b>Rien n\'est envoyé au SAIGIC</b> avant validation.</div>';
+  const nPrep = decl.filter(d=>d.statut==='prepare').length;
+  let html = '<details class="saigic-decl" style="margin:0 0 14px"'+(state.saigicOuvert?' open':'')+' ontoggle="state.saigicOuvert=this.open"><summary style="cursor:pointer;font-weight:600">Déclaration des lots au SAIGIC <span class="hint" style="margin:0 0 0 6px;font-weight:400">'+lots.length+' lot'+(lots.length>1?'s':'')+' à déclarer · '+nPrep+' déclaration'+(nPrep>1?'s':'')+' préparée'+(nPrep>1?'s':'')+'</span></summary>'
+    + '<div class="hint" style="margin:8px 0 12px">La fiche est préremplie avec les lots non déclarés (usine, magasin, certificat d\'après les correspondances ci-dessous). Le shipping ajoute le <b>choix du poids</b> et le <b>poids réel</b> ; l\'import contrôle chaque ligne et prépare la déclaration. <b>Rien n\'est envoyé au SAIGIC</b> avant validation.</div>';
   // lots à déclarer
   html += '<div style="font-weight:600;margin:6px 0">Lots à déclarer au SAIGIC</div>';
   if (!lots.length) html += '<div class="hint">Aucun lot en attente : tous les lots d\'ORIGEN sont déclarés ou préparés.</div>';
@@ -10324,7 +10323,7 @@ function renderLotsSaigic(){
       + '</tbody></table></div>';
   }
   html += renderSaigicCorrespondances();
-  return html;
+  return html + '</details>';
 }
 function saigicCorrCles(){
   const certs = new Set(), mags = new Set();
