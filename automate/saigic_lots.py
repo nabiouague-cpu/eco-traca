@@ -13,6 +13,10 @@ Options :
   --listes       affiche le contenu réel des listes : sites, magasins, récoltes, traites, exportateurs, états.
   --outils       lit le script de la page (/Scripts/public/saigic.tools.core.js) et affiche comment les listes
                  Site, Magasin, Récolte, Traite, Exportateur, Liste des États sont remplies (adresses des appels).
+  --menu         lit la page d'accueil du SAIGIC et affiche tous les liens du menu (adresse = libellé) : sert à repérer l'écran de saisie des lots.
+                 Option : --filtre lot  (ne garde que les liens dont le libellé ou l'adresse contient ce mot)
+  --ecran /Chemin   LIT (GET seulement) une page du SAIGIC et affiche ses formulaires et leurs champs ; l'enregistre dans /root/saigic_ecran.html.
+                 Ne remplit et n'envoie rien.
   --apercu       reproduit le bouton « Aperçu » (campagne en cours, traite principale, exportateur 009, du 1er sept. à aujourd'hui),
                  lit le rapport reçu (/Rapport/AfficherEtat), l'enregistre dans /root/saigic_lots_apercu.* et en affiche le contenu.
                  Options : --format XLS|PDF (défaut XLS)  --etat <valeur>  --recolte  --traite  --du jj/mm/aaaa  --au jj/mm/aaaa  --site UA55  --magasin <code>  --lot 3700
@@ -132,9 +136,35 @@ def main():
         lire_xls(option(sys.argv, '--lire', SORTIE_APERCU + '.xls')); return 0
     if '--aide' in sys.argv or '-h' in sys.argv:
         print(__doc__); return 0
-    if not any(o in sys.argv for o in ('--formulaire', '--apercu', '--outils', '--listes')):
+    if not any(o in sys.argv for o in ('--formulaire', '--apercu', '--outils', '--listes', '--menu', '--ecran')):
         return passage()
     c = ouvrir_session()
+    if '--menu' in sys.argv:
+        mot = (option(sys.argv, '--filtre', '') or '').lower()
+        st, page, _ = c.req('/')
+        P.log('accueil : HTTP %s, %d caractères' % (st, len(page)))
+        vus = set()
+        for href, lib in re.findall(r'<a\b[^>]*?href="([^"#][^"]*)"[^>]*>(.*?)</a>', page, flags=re.S | re.I):
+            lib = re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]+>', ' ', lib))).strip()
+            if (href, lib) in vus or href.lower().startswith(('javascript', 'mailto')): continue
+            vus.add((href, lib))
+            if not mot or mot in (href + ' ' + lib).lower(): print('%-55s = %s' % (href, lib))
+        open('/root/saigic_accueil.html', 'w', encoding='utf-8').write(page)
+        print('\nPage enregistrée : /root/saigic_accueil.html (%d liens)' % len(vus))
+        return 0
+    if '--ecran' in sys.argv:
+        chemin = option(sys.argv, '--ecran', '')
+        if not chemin.startswith('/'): print('Donne une adresse qui commence par /, par exemple --ecran /Lot/Index'); return 1
+        st, page, _ = c.req(chemin)
+        P.log('page %s : HTTP %s, %d caractères' % (chemin, st, len(page)))
+        if st != 200: return 1
+        open('/root/saigic_ecran.html', 'w', encoding='utf-8').write(page)
+        forms = [f for f in lire_formulaires(page) if f['champs']]
+        if not forms: print('aucun formulaire dans cette page (les champs sont peut-être créés par script)'); 
+        afficher_formulaire(forms)
+        for src in sorted(set(re.findall(r'<script[^>]+src="([^"]+)"', page))): print('script :', src)
+        print('\nPage enregistrée : /root/saigic_ecran.html')
+        return 0
     if '--outils' in sys.argv:
         st, js, _ = c.req('/Scripts/public/saigic.tools.core.js')
         P.log('saigic.tools.core.js : HTTP %s, %d caractères' % (st, len(js)))
