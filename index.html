@@ -4495,7 +4495,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-29-356';
+const APP_VERSION = '2026-10-30-357';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7928,7 +7928,7 @@ function renderLotsTab(){
     // « État des CV » est retiré de la navigation pour le moment (temporaire, cf. renderCvVentes et la
     // table cv_ventes conservees intactes plus bas : rattacher le sous-onglet suffira a tout remettre en
     // place quand on reprendra ce chantier avec plus d'elements).
-    + [['contrats','Contrats clients'],['series','Séries de numérotation'],['achats_clients','Suivi achats clients'],['usinage','Lots d\'usinage'],['export','OT (ordres de transit)'],['chaine','Chaîne de traçabilité']].map(([id,l])=>'<button class="'+(actif===id?'active':'')+'" onclick="lotsSetSousOnglet(\''+id+'\')">'+l+'</button>').join('')
+    + [['contrats','Contrats clients'],['series','Séries de numérotation'],['achats_clients','Suivi achats clients'],['usinage','Lots d\'usinage'],['export','OT (ordres de transit)'],['saigic','Déclaration SAIGIC'],['chaine','Chaîne de traçabilité']].map(([id,l])=>'<button class="'+(actif===id?'active':'')+'" onclick="lotsSetSousOnglet(\''+id+'\')">'+l+'</button>').join('')
     + '</div>';
   if (!state.lotsCharges) html += '<div class="hint">Chargement des lots…</div>';
   else if (actif==='cv') html += renderCvVentes();
@@ -7937,6 +7937,7 @@ function renderLotsTab(){
   else if (actif==='series') html += renderLotsSeries();
   else if (actif==='usinage') html += renderLotsUsinage();
   else if (actif==='export') html += renderLotsExport();
+  else if (actif==='saigic') html += renderLotsSaigic();
   else html += renderLotsChaine();
   return html + '</div></div>';
 }
@@ -10226,6 +10227,346 @@ async function lotsPoidsImportValider(){
   }catch(e){ showToast('Échec : '+e.message); }
 }
 
+// ================== Déclaration des lots au SAIGIC : fiche Excel → ORIGEN → (robot, après validation) ==================
+// La fiche est préremplie par ORIGEN (N° lot, usine, magasin, certificat d'après les correspondances) ; le shipping n'ajoute que le
+// choix du poids et le poids réel. L'import contrôle chaque ligne, propose les noms les plus proches du SAIGIC et prépare la déclaration.
+// Rien n'est envoyé au SAIGIC ici : les déclarations restent « préparées » tant qu'elles ne sont pas validées.
+const SAIGIC_CHOIX_POIDS = ['Poids sortie usine', 'Poids magasin export'];
+const SAIGIC_RECOLTE = '2026 - 2027', SAIGIC_TRAITE = 'Principale';
+async function saigicDeclCharger(){
+  if (!supabaseClient || state.saigicDeclChargement) return;
+  state.saigicDeclChargement = true;
+  try{
+    const [r, c, d] = await Promise.all([
+      supabaseClient.from('saigic_referentiel').select('categorie, code, libelle').order('libelle').range(0, 999),
+      supabaseClient.from('saigic_correspondances').select('*'),
+      supabaseClient.from('saigic_declarations').select('*').order('numero'),
+    ]);
+    state.saigicRef = (r && !r.error) ? (r.data||[]) : (state.saigicRef||[]);
+    state.saigicCorr = (c && !c.error) ? (c.data||[]) : (state.saigicCorr||[]);
+    state.saigicDecl = (d && !d.error) ? (d.data||[]) : (state.saigicDecl||[]);
+    state.saigicDeclCharge = true;
+  } finally { state.saigicDeclChargement = false; }
+}
+function saigicRefListe(cat){ return (state.saigicRef||[]).filter(x=>x.categorie===cat); }
+function saigicLibelleAffiche(cat, x){
+  // nom exact du SAIGIC ; le code n'est ajouté que si le même nom existe deux fois
+  const n = saigicRefListe(cat).filter(y=>y.libelle===x.libelle).length;
+  return n>1 ? x.libelle+' ('+x.code+')' : x.libelle;
+}
+function saigicProposer(cat, saisie){
+  const liste = saigicRefListe(cat).map(x=>({ x, affiche:saigicLibelleAffiche(cat, x) }));
+  const s = String(saisie==null?'':saisie).trim(), n = qcNormaliserTexte(s);
+  if (!n) return { statut:'vide', ref:null, propositions:[] };
+  let ex = liste.filter(y=>y.affiche===s); if (ex.length===1) return { statut:'ok', ref:ex[0].x, propositions:[] };
+  ex = liste.filter(y=>qcNormaliserTexte(y.affiche)===n); if (ex.length===1) return { statut:'ok', ref:ex[0].x, propositions:[] };
+  ex = liste.filter(y=>qcNormaliserTexte(y.x.libelle)===n);
+  if (ex.length===1) return { statut:'ok', ref:ex[0].x, propositions:[] };
+  if (ex.length>1) return { statut:'choix', ref:null, propositions:ex.map(y=>y.x) };
+  const mots = n.split(' ').filter(Boolean);
+  const notes = liste.map(y=>{ const t = qcNormaliserTexte(y.affiche), mt = t.split(' '); let sc = 0; if (t.includes(n)) sc += 5; mots.forEach(m=>{ if (mt.includes(m)) sc += 2; else if (m.length>2 && t.includes(m)) sc += 1; }); return { y, sc }; })
+    .filter(o=>o.sc>0).sort((a,b)=>b.sc-a.sc).slice(0,5).map(o=>o.y.x);
+  return { statut:'choix', ref:null, propositions:notes };
+}
+function saigicUsineDeLot(lot){ return saigicRefListe('usine').find(x=>x.code===lot.site_code) || null; }
+function saigicCertDeLot(lot){
+  const t = lot.type_cacao||'', p = lot.programme||'';
+  for (const k of [t&&p ? t+'|'+p : '', t].filter(Boolean)){
+    const c = (state.saigicCorr||[]).find(x=>x.categorie==='certificat' && x.cle_origen===k && x.code_saigic);
+    if (c) return saigicRefListe('certificat').find(x=>x.code===c.code_saigic) || null;
+  }
+  return null;
+}
+function saigicCorrMagasin(nom){
+  const n = qcNormaliserTexte(nom); if (!n) return null;
+  return (state.saigicCorr||[]).find(x=>x.categorie==='magasin' && qcNormaliserTexte(x.cle_origen)===n) || null;
+}
+function saigicMagasinDeLot(lot){
+  const nom = String(lot.entrepot||'').trim(), c = saigicCorrMagasin(nom);
+  if (c && c.code_saigic) return { nom, ref: saigicRefListe('magasin').find(x=>x.code===c.code_saigic && x.libelle===c.libelle_saigic) || saigicRefListe('magasin').find(x=>x.code===c.code_saigic) || null, defini:true };
+  return { nom, ref:null, defini:!!c };
+}
+function saigicLotsADeclarer(){
+  const actives = new Set((state.saigicDecl||[]).filter(d=>d.statut!=='annule').map(d=>String(d.numero)));
+  return (state.lotsUsinage||[]).filter(l=>!l.saigic_date_fab && l.origine!=='saigic' && !actives.has(String(l.numero)))
+    .slice().sort((a,b)=>String(a.numero).localeCompare(String(b.numero),'fr',{numeric:true}));
+}
+const SAIGIC_STATUTS = { prepare:['warn','préparée'], valide:['info','validée'], envoye:['ok','envoyée'], erreur:['danger','erreur'], annule:['neutral','annulée'] };
+function renderLotsSaigic(){
+  if (!state.saigicDeclCharge){ saigicDeclCharger().then(()=>render()); return '<div class="hint">Chargement des listes du SAIGIC…</div>'; }
+  const lots = saigicLotsADeclarer(), decl = state.saigicDecl||[];
+  let html = '<div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">'
+    + '<button class="btn btn-primary" onclick="saigicFicheExporter()">⭳ Exporter la fiche SAIGIC</button>'
+    + '<button class="btn" onclick="document.getElementById(\'sg-import-input\').click()">⭱ Importer la fiche remplie</button>'
+    + '<input type="file" id="sg-import-input" accept=".xlsx,.xls" style="display:none" onchange="saigicFicheImporter(this)">'
+    + '<span class="hint" style="margin:0">'+lots.length+' lot'+(lots.length>1?'s':'')+' à déclarer · '+decl.filter(d=>d.statut==='prepare').length+' déclaration(s) préparée(s)</span></div>'
+    + '<div class="hint" style="margin:-6px 0 14px">La fiche est préremplie avec les lots non déclarés (usine, magasin, certificat d\'après les correspondances ci-dessous). Le shipping ajoute le <b>choix du poids</b> et le <b>poids réel</b> ; l\'import contrôle chaque ligne et prépare la déclaration. <b>Rien n\'est envoyé au SAIGIC</b> avant validation.</div>';
+  // lots à déclarer
+  html += '<div style="font-weight:600;margin:6px 0">Lots à déclarer au SAIGIC</div>';
+  if (!lots.length) html += '<div class="hint">Aucun lot en attente : tous les lots d\'ORIGEN sont déclarés ou préparés.</div>';
+  else {
+    html += '<div class="achats-defile" style="max-height:34vh;overflow:auto"><table class="tbl-fiches tbl-dense"><thead><tr><th>N° lot</th><th>Client</th><th>Usine (SAIGIC)</th><th>Magasin</th><th>Certificat (SAIGIC)</th><th class="num">Sortie usine</th><th class="num">Entrée magasin export</th></tr></thead><tbody>';
+    lots.forEach(l=>{
+      const u = saigicUsineDeLot(l), c = saigicCertDeLot(l), m = saigicMagasinDeLot(l);
+      html += '<tr><td><b>'+esc(l.numero)+'</b></td><td>'+esc(l.client||'—')+'</td><td>'+(u ? esc(saigicLibelleAffiche('usine', u)) : '<span class="badge warn">à définir</span>')+'</td>'
+        + '<td>'+(m.nom ? esc(m.nom)+(m.ref ? ' <span class="hint" style="margin:0">→ '+esc(m.ref.libelle)+'</span>' : (m.defini ? ' <span class="hint" style="margin:0">(aucun magasin SAIGIC)</span>' : ' <span class="badge warn" title="Pas de correspondance : le champ restera vide au SAIGIC">sans correspondance</span>')) : '—')+'</td>'
+        + '<td>'+(c ? esc(saigicLibelleAffiche('certificat', c)) : '<span class="badge warn">à définir</span>')+'</td>'
+        + '<td class="num">'+(Number(l.poids_sortie_kg)>0 ? fmtNum(l.poids_sortie_kg) : '—')+'</td><td class="num">'+(Number(l.poids_entrepot_kg)>0 ? fmtNum(l.poids_entrepot_kg) : '—')+'</td></tr>';
+    });
+    html += '</tbody></table></div>';
+  }
+  // déclarations préparées
+  html += '<div style="font-weight:600;margin:16px 0 6px">Déclarations préparées</div>';
+  if (!decl.length) html += '<div class="hint">Aucune déclaration préparée. Exporte la fiche, fais-la compléter par le shipping, puis importe-la.</div>';
+  else {
+    html += '<div class="achats-defile" style="max-height:30vh;overflow:auto"><table class="tbl-fiches tbl-dense"><thead><tr><th>N° lot</th><th>Usine</th><th>Magasin</th><th>Certificat</th><th>Choix du poids</th><th class="num">Poids réel</th><th>Statut</th><th></th></tr></thead><tbody>'
+      + decl.map(d=>'<tr><td><b>'+esc(d.numero)+'</b></td><td>'+esc(d.usine_libelle)+' <span class="hint" style="margin:0">'+esc(d.usine_code)+'</span></td><td>'+esc(d.magasin_libelle||d.magasin_origen||'—')+(d.magasin_libelle?'':(d.magasin_origen?' <span class="hint" style="margin:0">(vide au SAIGIC)</span>':''))+'</td><td>'+esc(d.certificat_libelle)+'</td><td>'+esc(d.choix_poids)+'</td><td class="num"><b>'+fmtNum(d.poids_reel_kg)+'</b></td><td>'+lotsBadge(SAIGIC_STATUTS, d.statut)+(d.message?' <span class="hint" style="margin:0">'+esc(d.message)+'</span>':'')+'</td><td>'+(d.statut==='prepare' ? '<button class="btn-danger-text btn-compact" onclick="saigicDeclRetirer('+d.id+')">Retirer</button>' : '')+'</td></tr>').join('')
+      + '</tbody></table></div>';
+  }
+  html += renderSaigicCorrespondances();
+  return html;
+}
+function saigicCorrCles(){
+  const certs = new Set(), mags = new Set();
+  (state.lotsSeries||[]).forEach(s=>{ if (s.type_cacao){ certs.add(s.type_cacao); if (s.programme) certs.add(s.type_cacao+'|'+s.programme); } });
+  (state.lotsUsinage||[]).forEach(l=>{ if (l.type_cacao){ certs.add(l.type_cacao); if (l.programme) certs.add(l.type_cacao+'|'+l.programme); } if (String(l.entrepot||'').trim()) mags.add(String(l.entrepot).trim()); });
+  (state.saigicCorr||[]).forEach(c=>{ if (c.categorie==='certificat') certs.add(c.cle_origen); if (c.categorie==='magasin') mags.add(c.cle_origen); });
+  return { certs:Array.from(certs).sort((a,b)=>a.localeCompare(b,'fr')), mags:Array.from(mags).sort((a,b)=>a.localeCompare(b,'fr')) };
+}
+function renderSaigicCorrespondances(){
+  const { certs, mags } = saigicCorrCles();
+  const opt = (cat, sel)=>saigicRefListe(cat).map(x=>{ const v = x.code+'||'+x.libelle; return '<option value="'+esc(v)+'"'+(sel && sel.code===x.code && sel.libelle===x.libelle ? ' selected':'')+'>'+esc(saigicLibelleAffiche(cat,x))+(cat==='certificat'?' ('+esc(x.code)+')':'')+'</option>'; }).join('');
+  let html = '<div style="font-weight:600;margin:18px 0 6px">Correspondances ORIGEN → SAIGIC</div><div class="hint" style="margin:0 0 8px">À régler une fois. L\'usine se déduit du code d\'usine d\'ORIGEN (même code que le SAIGIC : SICOCOA = UA55). Un magasin sans équivalent au SAIGIC reste vide à la déclaration.</div>'
+    + '<div class="achats-defile"><table class="tbl-fiches tbl-dense"><thead><tr><th>Élément d\'ORIGEN</th><th>Nom dans le SAIGIC</th></tr></thead><tbody>';
+  certs.forEach(k=>{
+    const c = (state.saigicCorr||[]).find(x=>x.categorie==='certificat' && x.cle_origen===k), sel = c && c.code_saigic ? { code:c.code_saigic, libelle:c.libelle_saigic } : null;
+    html += '<tr><td>Certificat · <b>'+esc(k.replace('|',' · '))+'</b></td><td><select onchange="saigicCorrChanger(\'certificat\',\''+encodeURIComponent(k)+'\',this.value)"><option value="">— à choisir —</option>'+opt('certificat', sel)+'</select></td></tr>';
+  });
+  mags.forEach(k=>{
+    const c = saigicCorrMagasin(k), sel = c && c.code_saigic ? { code:c.code_saigic, libelle:c.libelle_saigic } : null;
+    html += '<tr><td>Magasin · <b>'+esc(k)+'</b></td><td><select onchange="saigicCorrChanger(\'magasin\',\''+encodeURIComponent(k)+'\',this.value)"><option value=""'+(c && !c.code_saigic ? ' selected':'')+'>'+(c ? 'Aucun magasin SAIGIC (champ vide)' : '— à choisir —')+'</option>'+opt('magasin', sel)+'</select></td></tr>';
+  });
+  (state.sitesUsinage||[]).filter(s=>s.actif!==false).forEach(s=>{
+    const r = saigicRefListe('usine').find(x=>x.code===s.code);
+    html += '<tr><td>Usine · <b>'+esc(s.nom)+'</b> <span class="hint" style="margin:0">'+esc(s.code)+'</span></td><td>'+(r ? esc(saigicLibelleAffiche('usine', r))+' <span class="hint" style="margin:0">'+esc(r.code)+'</span>' : '<span class="badge warn">code inconnu au SAIGIC</span>')+'</td></tr>';
+  });
+  return html + '</tbody></table></div>';
+}
+async function saigicCorrChanger(cat, cleEnc, valeur){
+  const cle = decodeURIComponent(cleEnc), [code, libelle] = String(valeur||'').split('||');
+  try{
+    const ligne = { categorie:cat, cle_origen:cle, code_saigic: valeur ? code : null, libelle_saigic: valeur ? libelle : null, updated_at:new Date().toISOString() };
+    if (!valeur && cat==='certificat'){ const { error } = await supabaseClient.from('saigic_correspondances').delete().eq('categorie', cat).eq('cle_origen', cle); if (error) throw error; }
+    else { const { error } = await supabaseClient.from('saigic_correspondances').upsert(ligne, { onConflict:'categorie,cle_origen' }); if (error) throw error; }
+    await saigicDeclCharger(); render(); showToast('Correspondance enregistrée.', 'success');
+  }catch(e){ showToast('Échec : '+e.message); }
+}
+async function saigicDeclRetirer(id){
+  if (!confirm('Retirer cette déclaration préparée ? (rien n\'a été envoyé au SAIGIC)')) return;
+  const { error } = await supabaseClient.from('saigic_declarations').delete().eq('id', id).eq('statut', 'prepare');
+  if (error){ showToast('Échec : '+error.message); return; }
+  await saigicDeclCharger(); render();
+}
+
+// ---- Export de la fiche (ExcelJS) ----
+async function saigicFicheExporter(){
+  let ExcelJS; try{ ExcelJS = await qcChargerExcelJS(); }catch(e){ showToast('Impossible de préparer le classeur : '+e.message, 'error'); return; }
+  if (!state.saigicDeclCharge) await saigicDeclCharger();
+  const lots = saigicLotsADeclarer();
+  const usines = saigicRefListe('usine'), certs = saigicRefListe('certificat'), mags = saigicRefListe('magasin');
+  const wb = new ExcelJS.Workbook(); wb.creator = 'ORIGEN · ECORIGINE'; wb.created = new Date();
+  const VERT = 'FF1F4E3D', GRIS = 'FFEDEDED', JAUNE = 'FFFFF2CC', BL = { argb:'FF0000FF' };
+  const bord = { style:'thin', color:{ argb:'FFBFBFBF' } }, cadre = { top:bord, bottom:bord, left:bord, right:bord };
+  const enTete = c=>{ c.font = { name:'Arial', size:10, bold:true, color:{ argb:'FFFFFFFF' } }; c.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:VERT } }; c.alignment = { horizontal:'center', vertical:'middle', wrapText:true }; c.border = cadre; };
+  // Listes
+  const S = wb.addWorksheet('Déclaration lots', { views:[{ state:'frozen', ySplit:6 }] });
+  const L = wb.addWorksheet('Listes');
+  ['Usine (nom du SAIGIC)','Code usine','Type certificat (nom du SAIGIC)','Code certificat','Choix du poids','Magasin (nom du SAIGIC)'].forEach((h,i)=>{ const c = L.getCell(1,i+1); c.value = h; enTete(c); });
+  usines.forEach((x,i)=>{ L.getCell(i+2,1).value = saigicLibelleAffiche('usine',x); L.getCell(i+2,2).value = x.code; });
+  certs.forEach((x,i)=>{ L.getCell(i+2,3).value = saigicLibelleAffiche('certificat',x); L.getCell(i+2,4).value = x.code; });
+  SAIGIC_CHOIX_POIDS.forEach((x,i)=>{ L.getCell(i+2,5).value = x; });
+  const noms = []; mags.forEach(x=>{ const a = saigicLibelleAffiche('magasin',x); if (!noms.includes(a)) noms.push(a); });
+  noms.forEach((x,i)=>{ L.getCell(i+2,6).value = x; });
+  L.columns = [36,12,36,14,24,36].map(w=>({ width:w }));
+  for (let r=2; r<=Math.max(usines.length, certs.length, noms.length)+1; r++) for (let c=1; c<=6; c++) L.getCell(r,c).font = { name:'Arial', size:10 };
+  // Déclaration lots
+  S.getCell('A1').value = 'Déclaration des lots fabriqués — SAIGIC'; S.getCell('A1').font = { name:'Arial', size:14, bold:true };
+  S.getCell('A3').value = 'Récolte'; S.getCell('A4').value = 'Traite'; S.getCell('B3').value = SAIGIC_RECOLTE; S.getCell('B4').value = SAIGIC_TRAITE;
+  ['A3','A4'].forEach(a=>S.getCell(a).font = { name:'Arial', size:10, bold:true });
+  ['B3','B4'].forEach(a=>{ const c = S.getCell(a); c.font = { name:'Arial', size:10, color:BL }; c.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:JAUNE } }; c.border = cadre; });
+  const cols = [['N° lot',12],['Usine',30],['Magasin (nom)',22],['Type certificat',32],['Choix du poids',24],['Poids réel (kg)',16]];
+  S.columns = cols.map(c=>({ width:c[1] }));
+  cols.forEach((c,i)=>{ const x = S.getCell(6,i+1); x.value = c[0]; enTete(x); }); S.getRow(6).height = 32;
+  const lignes = lots.map(l=>{ const u = saigicUsineDeLot(l), c = saigicCertDeLot(l), m = saigicMagasinDeLot(l);
+    return [String(l.numero), u ? saigicLibelleAffiche('usine',u) : '', m.nom || '', c ? saigicLibelleAffiche('certificat',c) : '', '', null]; });
+  const exemple = !lignes.length;
+  if (exemple) lignes.push(['3704','SICOCOA (UA55)','STAMVIE 2','RAINFOREST','Poids magasin export',25399]);
+  const total = Math.max(lignes.length + 15, 40), n1 = 7;
+  for (let k=0; k<total; k++){
+    const r = n1+k, v = lignes[k];
+    for (let c=1; c<=6; c++){
+      const x = S.getCell(r,c); x.border = cadre; x.alignment = { vertical:'middle', wrapText:true };
+      const grise = exemple && k===0;
+      x.font = grise ? { name:'Arial', size:10, italic:true, color:{ argb:'FF7F7F7F' } } : { name:'Arial', size:10, color:BL };
+      if (grise) x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:GRIS } };
+      if (v && v[c-1]!=='' && v[c-1]!=null) x.value = v[c-1];
+    }
+    S.getCell(r,6).numFmt = '#,##0';
+    const lst = (col, formule, libre)=>{ S.getCell(r,col).dataValidation = { type:'list', allowBlank:true, formulae:[formule], showErrorMessage:true, errorStyle: libre?'warning':'stop', errorTitle: libre?'Nom non reconnu':'Valeur non reconnue', error: libre ? 'Ce nom ne figure pas dans la liste du SAIGIC. Le garder quand même ? (ORIGEN cherchera le nom à l\'import.)' : 'Choisis une valeur de la liste.' }; };
+    lst(2, 'Listes!$A$2:$A$'+(usines.length+1), true); lst(3, 'Listes!$F$2:$F$'+(noms.length+1), true); lst(4, 'Listes!$C$2:$C$'+(certs.length+1), true); lst(5, 'Listes!$E$2:$E$3', false);
+    S.getCell(r,6).dataValidation = { type:'whole', operator:'between', formulae:[1000,100000], allowBlank:true, showErrorMessage:true, errorTitle:'Poids', error:'Poids entier en kg, sans espace.' };
+  }
+  if (exemple) { S.getCell(n1,7).value = 'EXEMPLE — à supprimer'; S.getCell(n1,7).font = { name:'Arial', size:10, italic:true, color:{ argb:'FF7F7F7F' } }; }
+  // Légende
+  const G = wb.addWorksheet('Légende'); G.getColumn(1).width = 120;
+  G.getCell('A1').value = 'Mode d\'emploi'; G.getCell('A1').font = { name:'Arial', size:14, bold:true };
+  [ 'Une ligne = un lot. Le N° de lot est celui écrit sur le ticket de pesée de réception (chiffres, comme dans le SAIGIC), pas l\'ordre des tickets.',
+    'Usine, magasin et type certificat sont préremplis par ORIGEN. On peut les changer : choisir dans la liste (en tapant quelques lettres du nom, Excel propose les noms correspondants) ou saisir le nom ; ORIGEN cherche le nom dans la liste du SAIGIC à l\'import et signale tout nom introuvable ou ambigu.',
+    'Magasin : nom du magasin où le lot est entreposé (ex. STAMVIE 2). Un magasin export absent de la liste du SAIGIC reste dans ORIGEN ; le champ Magasin du SAIGIC est alors laissé vide.',
+    'Choix du poids : « Poids sortie usine » pour les opérations en propre (ECORIGINE) ; « Poids magasin export » pour les opérations externes (AWAHUS, SICOCOA, SITAPA et autres).',
+    'Poids réel : le poids correspondant au choix. Sortie usine = poids déclaré du ticket ; magasin export = poids net du ticket de pesée.',
+    'Récolte et traite se choisissent une fois, en haut. Fixes pour tous les lots : produit cacao, qualité Fèves Good fermented-1, emballage Sac KkoExport, marque ECORIGINE, 385 sacs, queue 0.',
+    'À remplir par le shipping : « Choix du poids » et « Poids réel ». Supprimer la ligne grise d\'exemple s\'il y en a une.',
+    'Un lot déclaré ne se modifie que par demande au Conseil du Café-Cacao : vérifier avant l\'import.'
+  ].forEach((t,i)=>{ const c = G.getCell(i+3,1); c.value = t; c.font = { name:'Arial', size:10 }; c.alignment = { wrapText:true, vertical:'middle' }; G.getRow(i+3).height = 32; });
+  await qcTelechargerClasseur(wb, 'FICHE_DECLARATION_LOTS_SAIGIC_'+new Date().toISOString().slice(0,10)+'.xlsx');
+  showToast(lots.length ? 'Fiche exportée : '+lots.length+' lot(s) prérempli(s).' : 'Aucun lot en attente : fiche vierge exportée.', 'success');
+}
+
+// ---- Import de la fiche remplie ----
+function saigicNumeroLot(v){ const s = String(v==null?'':v).trim().replace(/\.0+$/,''); return /^\d+$/.test(s) ? s : ''; }
+async function saigicFicheImporter(input){
+  const fichier = input.files && input.files[0]; input.value = ''; if (!fichier) return;
+  if (typeof XLSX === 'undefined'){ showToast('La bibliothèque Excel ne s\'est pas chargée (connexion internet requise).'); return; }
+  if (!state.lotsCharges) await chargerLots();
+  if (!state.saigicDeclCharge) await saigicDeclCharger();
+  let wb; try{ wb = XLSX.read(await fichier.arrayBuffer(), { type:'array', cellDates:true }); }catch(e){ showToast('Fichier illisible : '+e.message, 'error'); return; }
+  const nomFeuille = wb.SheetNames.find(n=>qcNormaliserTexte(n)==='declaration lots') || wb.SheetNames[0];
+  const aoa = XLSX.utils.sheet_to_json(wb.Sheets[nomFeuille], { header:1, defval:'' });
+  const he = aoa.findIndex(r=>(r||[]).some(x=>qcNormaliserTexte(x)==='n lot'));
+  if (he<0){ showToast('En-tête « N° lot » introuvable : utilise la fiche exportée par ORIGEN.', 'error'); return; }
+  const norm = (aoa[he]||[]).map(qcNormaliserTexte);
+  const col = f=>norm.findIndex(f);
+  const cL = col(x=>x==='n lot'), cU = col(x=>x==='usine'), cM = col(x=>x.startsWith('magasin')), cC = col(x=>x.startsWith('type certificat')), cX = col(x=>x.startsWith('choix')), cP = col(x=>x.startsWith('poids reel'));
+  if ([cL,cU,cC,cX,cP].some(c=>c<0)){ showToast('Colonnes manquantes : il faut N° lot, Usine, Type certificat, Choix du poids et Poids réel.', 'error'); return; }
+  const lire = lib=>{ for (const r of aoa.slice(0, he)){ const i = (r||[]).findIndex(x=>qcNormaliserTexte(x)===lib); if (i>=0) return String(r[i+1]||'').trim(); } return ''; };
+  const pl = { nomFichier:fichier.name, feuille:nomFeuille, recolte:lire('recolte')||SAIGIC_RECOLTE, traite:lire('traite')||SAIGIC_TRAITE, lignes:[] };
+  aoa.slice(he+1).forEach((r,k)=>{
+    r = r||[]; const cellules = [cL,cU,cM,cC,cX,cP].filter(c=>c>=0).map(c=>String(r[c]==null?'':r[c]).trim());
+    if (!cellules.some(x=>x)) return;
+    if (r.some(x=>/exemple/i.test(String(x)))) return;
+    const numero = saigicNumeroLot(r[cL]);
+    pl.lignes.push({ ligneXl: he+k+2, numeroBrut:String(r[cL]==null?'':r[cL]).trim(), numero, usineSaisie:String(r[cU]||'').trim(), magasinSaisie: cM>=0 ? String(r[cM]||'').trim() : '', certSaisie:String(r[cC]||'').trim(), choix:String(r[cX]||'').trim(), poidsBrut:r[cP], inclure:true });
+  });
+  if (!pl.lignes.length){ showToast('Aucune ligne de lot dans ce fichier.', 'error'); return; }
+  pl.lignes.forEach(saigicLigneResoudre);
+  saigicImportEvaluer(pl);
+  state.modal = { type:'saigicImport', payload:pl }; render();
+}
+function saigicLigneResoudre(l){
+  const lot = (state.lotsUsinage||[]).find(x=>String(x.numero).trim()===l.numero) || null; l.lotId = lot ? lot.id : null;
+  l.usine = saigicProposer('usine', l.usineSaisie); l.usineRef = l.usine.ref;
+  l.cert = saigicProposer('certificat', l.certSaisie); l.certRef = l.cert.ref;
+  if (!l.magasinSaisie){ l.magasin = { statut:'vide', ref:null, propositions:[] }; l.magasinRef = null; l.magasinGarde = true; }
+  else {
+    const m = saigicProposer('magasin', l.magasinSaisie), corr = saigicCorrMagasin(l.magasinSaisie), entrepotLot = lot && qcNormaliserTexte(lot.entrepot)===qcNormaliserTexte(l.magasinSaisie);
+    if (m.statut==='ok'){ l.magasin = m; l.magasinRef = m.ref; l.magasinGarde = false; }
+    else if (corr || entrepotLot || !m.propositions.length){ l.magasin = { statut:'hors', ref:null, propositions:[] }; l.magasinRef = null; l.magasinGarde = true; }
+    else { l.magasin = m; l.magasinRef = null; l.magasinGarde = false; }
+  }
+}
+function saigicImportEvaluer(pl){
+  const vus = new Set();
+  pl.lignes.forEach(l=>{
+    l.erreurs = []; l.infos = [];
+    const lot = l.lotId ? (state.lotsUsinage||[]).find(x=>x.id===l.lotId) : null;
+    if (!l.numero) l.erreurs.push('N° de lot illisible (« '+l.numeroBrut+' »)');
+    else {
+      if (vus.has(l.numero)) l.erreurs.push('numéro en double dans le fichier'); vus.add(l.numero);
+      if (!lot) l.erreurs.push('lot absent d\'ORIGEN');
+      else {
+        if (lot.saigic_date_fab) l.erreurs.push('déjà déclaré au SAIGIC');
+        const d = (state.saigicDecl||[]).find(x=>String(x.numero)===l.numero && x.statut!=='annule');
+        if (d && d.statut!=='prepare') l.erreurs.push('déclaration déjà '+(SAIGIC_STATUTS[d.statut]||[0,d.statut])[1]);
+        else if (d) l.infos.push('remplace la déclaration préparée');
+      }
+    }
+    if (!l.usineRef) l.erreurs.push('usine à choisir'); else if (lot && lot.site_code && lot.site_code!==l.usineRef.code) l.infos.push('⚠ ORIGEN : usine '+lot.site_code);
+    if (!l.certRef) l.erreurs.push('certificat à choisir'); else if (lot){ const att = saigicCertDeLot(lot); if (att && att.code!==l.certRef.code) l.infos.push('⚠ ORIGEN attend '+att.libelle+' ('+att.code+')'); }
+    if (l.magasin && l.magasin.statut==='choix' && !l.magasinRef && !l.magasinGarde) l.erreurs.push('magasin à choisir');
+    if (!SAIGIC_CHOIX_POIDS.includes(l.choix)) l.erreurs.push('choix du poids invalide');
+    const kg = Math.round(Number(String(l.poidsBrut).replace(/\s/g,'').replace(',','.')));
+    l.kg = Number.isFinite(kg) && kg>=1000 && kg<=100000 ? kg : null;
+    if (!l.kg) l.erreurs.push('poids réel invalide');
+    else if (lot && SAIGIC_CHOIX_POIDS.includes(l.choix)){
+      const actuel = Number(l.choix==='Poids sortie usine' ? lot.poids_sortie_kg : lot.poids_entrepot_kg)||0;
+      if (actuel>0 && actuel!==l.kg) l.infos.push('ORIGEN '+fmtNum(actuel)+' → '+fmtNum(l.kg)+' kg');
+    }
+    if (l.erreurs.length) l.inclure = false;
+  });
+  pl.nOk = pl.lignes.filter(l=>!l.erreurs.length).length;
+}
+function saigicImportChoisir(i, champ, v){
+  const pl = state.modal && state.modal.type==='saigicImport' ? state.modal.payload : null; if (!pl) return; const l = pl.lignes[i]; if (!l) return;
+  const src = champ==='usine' ? l.usine : champ==='cert' ? l.cert : l.magasin;
+  if (v==='' ){ if (champ==='magasin'){ l.magasinRef = null; l.magasinGarde = true; } else l[champ+'Ref'] = null; }
+  else { const r = src.propositions[Number(v)] || null; l[champ+'Ref'] = r; if (champ==='magasin') l.magasinGarde = false; }
+  const avant = l.inclure; saigicImportEvaluer(pl); if (!l.erreurs.length) l.inclure = true; else l.inclure = false; render();
+}
+function saigicImportCocher(i, v){
+  const pl = state.modal && state.modal.type==='saigicImport' ? state.modal.payload : null; if (!pl) return;
+  if (pl.lignes[i] && !pl.lignes[i].erreurs.length) pl.lignes[i].inclure = v;
+  const b = document.getElementById('sgi-btn'); if (b){ const n = pl.lignes.filter(x=>x.inclure && !x.erreurs.length).length; b.textContent = 'Préparer '+n+' déclaration'+(n>1?'s':''); b.disabled = !n; }
+}
+async function saigicImportValider(){
+  const pl = state.modal && state.modal.type==='saigicImport' ? state.modal.payload : null; if (!pl) return;
+  const retenues = pl.lignes.filter(l=>l.inclure && !l.erreurs.length);
+  if (!retenues.length){ showToast('Aucune ligne valide à préparer.'); return; }
+  const maintenant = new Date().toISOString();
+  try{
+    const lignes = retenues.map(l=>({
+      numero:l.numero, lot_id:l.lotId, recolte:pl.recolte, traite:pl.traite,
+      usine_code:l.usineRef.code, usine_libelle:l.usineRef.libelle,
+      magasin_code: l.magasinRef ? l.magasinRef.code : null, magasin_libelle: l.magasinRef ? l.magasinRef.libelle : null, magasin_origen: l.magasinSaisie||null,
+      certificat_code:l.certRef.code, certificat_libelle:l.certRef.libelle,
+      choix_poids:l.choix, poids_reel_kg:l.kg, statut:'prepare', message:null, prepare_le:maintenant, updated_at:maintenant }));
+    const { error } = await supabaseClient.from('saigic_declarations').upsert(lignes, { onConflict:'numero' }); if (error) throw error;
+    // le poids saisi est aussi rangé dans ORIGEN, selon le choix du poids
+    for (const l of retenues){
+      const maj = { updated_at:maintenant };
+      if (l.choix==='Poids sortie usine') maj.poids_sortie_kg = l.kg; else maj.poids_entrepot_kg = l.kg;
+      const { error:e2 } = await supabaseClient.from('lots_usinage').update(maj).eq('id', l.lotId); if (e2) throw e2;
+    }
+    await Promise.all([chargerLots(), saigicDeclCharger()]); closeModal(); render();
+    showToast(retenues.length+' déclaration'+(retenues.length>1?'s préparées':' préparée')+' (rien n\'est envoyé au SAIGIC).', 'success');
+  }catch(e){ showToast('Échec : '+e.message); }
+}
+function renderSaigicImportModal(m){
+  const pl = m.payload, n = pl.lignes.filter(l=>l.inclure && !l.erreurs.length).length, nErr = pl.lignes.filter(l=>l.erreurs.length).length;
+  const select = (i, champ, src, courant, gardeLabel)=>{
+    if (src.statut==='ok' || src.statut==='hors' || src.statut==='vide') return null;
+    const sel = courant ? src.propositions.findIndex(x=>x.code===courant.code && x.libelle===courant.libelle) : -1;
+    return '<select onchange="saigicImportChoisir('+i+',\''+champ+'\',this.value)"><option value="">'+(gardeLabel||'— choisir un nom proposé —')+'</option>'+src.propositions.map((x,k)=>'<option value="'+k+'"'+(k===sel?' selected':'')+'>'+esc(saigicLibelleAffiche(champ==='usine'?'usine':champ==='cert'?'certificat':'magasin', x))+' ('+esc(x.code)+')</option>').join('')+'</select>';
+  };
+  const cel = (i, champ, saisie, src, ref, garde)=>{
+    const s = select(i, champ, src, ref, champ==='magasin' ? 'Garder tel quel (vide au SAIGIC)' : null);
+    const lib = champ==='usine'?'usine':champ==='cert'?'certificat':'magasin';
+    if (s) return '<div class="hint" style="margin:0 0 3px">« '+esc(saisie||'—')+' » — '+(src.propositions.length ? 'propositions :' : 'aucun nom proche')+'</div>'+s;
+    if (src.statut==='hors') return esc(saisie)+' <span class="hint" style="margin:0">(hors SAIGIC : vide)</span>';
+    if (src.statut==='vide') return '<span class="hint" style="margin:0">—</span>';
+    return esc(ref ? saigicLibelleAffiche(lib, ref) : saisie)+' <span class="hint" style="margin:0">'+esc(ref?ref.code:'')+'</span>';
+  };
+  return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal xl"><h3>Importer la fiche de déclaration SAIGIC</h3>'
+    + '<div class="hint" style="margin-bottom:10px">Fichier : <b>'+esc(pl.nomFichier)+'</b> (feuille « '+esc(pl.feuille)+' ») — récolte <b>'+esc(pl.recolte)+'</b>, traite <b>'+esc(pl.traite)+'</b>. <b>'+pl.lignes.length+'</b> ligne(s), <b>'+nErr+'</b> à corriger. Les noms sont comparés à la liste du SAIGIC ; pour un nom introuvable ou ambigu, ORIGEN propose les plus proches. <b>Rien n\'est envoyé au SAIGIC</b> : la déclaration est seulement préparée.</div>'
+    + '<div id="modal-fields"><div class="achats-defile" style="max-height:52vh;overflow:auto"><table class="tbl-fiches"><thead><tr><th></th><th>N° lot</th><th>Usine</th><th>Magasin</th><th>Certificat</th><th>Choix du poids</th><th class="num">Poids réel</th><th>Contrôle</th></tr></thead><tbody>'
+    + pl.lignes.map((l,i)=>'<tr'+(l.erreurs.length?' style="background:#FDF3F2"':'')+'><td><input type="checkbox" '+(l.inclure?'checked':'')+(l.erreurs.length?' disabled':'')+' onchange="saigicImportCocher('+i+', this.checked)"></td><td><b>'+esc(l.numero||l.numeroBrut||'—')+'</b></td>'
+      + '<td>'+cel(i,'usine',l.usineSaisie,l.usine,l.usineRef)+'</td><td>'+cel(i,'magasin',l.magasinSaisie,l.magasin,l.magasinRef)+'</td><td>'+cel(i,'cert',l.certSaisie,l.cert,l.certRef)+'</td>'
+      + '<td>'+(SAIGIC_CHOIX_POIDS.includes(l.choix) ? esc(l.choix) : '<span class="badge warn">'+esc(l.choix||'vide')+'</span>')+'</td><td class="num">'+(l.kg ? '<b>'+fmtNum(l.kg)+'</b>' : '<span class="badge warn">'+esc(String(l.poidsBrut||'vide'))+'</span>')+'</td>'
+      + '<td>'+(l.erreurs.length ? l.erreurs.map(e=>'<span class="badge danger">'+esc(e)+'</span>').join(' ') : '<span class="badge ok">prête</span>')+(l.infos.length ? '<div class="hint" style="margin:3px 0 0">'+l.infos.map(esc).join(' · ')+'</div>' : '')+'</td></tr>').join('')
+    + '</tbody></table></div><div class="hint" style="margin-top:8px">Le poids de chaque ligne est aussi rangé dans le lot d\'ORIGEN : « Poids sortie usine » → poids de sortie d\'usine ; « Poids magasin export » → poids pesé à l\'entrée du magasin export.</div></div>'
+    + '<div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" id="sgi-btn" '+(n?'':'disabled ')+'onclick="saigicImportValider()">Préparer '+n+' déclaration'+(n>1?'s':'')+'</button></div></div></div>';
+}
+
 // Saisie des poids réels pesés à l'entrée de l'entrepôt (un lot précis ou tous les lots de transfert)
 function lotsPoidsEntrepotOuvrir(lotId){
   const lots = (state.lotsUsinage||[]).filter(l=>!lotId || l.id===lotId);
@@ -10649,6 +10990,7 @@ function lotsModalsHtml(){
       + '</tbody></table></div><div class="hint" style="margin-top:8px">Total coché : <b>'+fmtKg(tot)+'</b>'+(t?' (poids lus en tonnes et convertis en kg)':'')+'</div></div>'
       + '<div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" id="lpi-btn" onclick="lotsPoidsImportValider()">Appliquer '+n+' poids</button></div></div></div>';
   }
+  if (m.type==='saigicImport') return renderSaigicImportModal(m);
   if (m.type==='lotsPoidsEntrepot'){
     const pl = m.payload, lots = lotsPoidsEntrepotLots(pl);
     const entrepots = Array.from(new Set((state.lotsUsinage||[]).map(l=>l.entrepot||'').filter(Boolean))).sort();
