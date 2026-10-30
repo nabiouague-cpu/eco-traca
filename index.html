@@ -2092,16 +2092,19 @@
   .shipc-tuile .etat{font-size:11.5px;color:#8A5406;margin-top:6px;font-weight:500;}
   @media (max-width:900px){.shipc-piste{flex-wrap:wrap;margin:-24px 0 16px;} .shipc-piste button{flex:1 1 30%;}}
   .shipc-circ{display:block;width:100%;height:auto;margin-top:6px;overflow:visible;}
-  .shipc-st{cursor:pointer;outline:none;} .shipc-st:focus-visible .shipc-nd,.shipc-st.sel .shipc-nd{stroke:#fff;stroke-width:3;}
+  .shipc-st{cursor:pointer;outline:none;} .shipc-st:focus-visible .shipc-zone{stroke:#fff;stroke-width:2;}
   .shipc-st:hover .shipc-nd{stroke:#fff;stroke-width:2;}
   .shipc-nd.f{fill:#F2B705;} .shipc-nd.t{fill:#18544A;stroke:rgba(255,255,255,.4);stroke-dasharray:3 3;stroke-width:2;}
-  .shipc-lb{font:500 12px var(--sans);fill:#fff;text-anchor:middle;} .shipc-lb.d{fill:rgba(255,255,255,.5);}
+  .shipc-lb{font:500 12.5px var(--sans);fill:#fff;text-anchor:middle;} .shipc-lb.pt{font-size:11px;fill:rgba(255,255,255,.8);} .shipc-st.apres{opacity:.45;}
+  .shipc-st:hover .shipc-zone{fill:rgba(255,255,255,.07);} .shipc-st.sel .shipc-zone{fill:rgba(255,255,255,.12);}
+  .shipc-camion{animation:shipcC 1.1s ease-in-out infinite;} @keyframes shipcC{0%,100%{transform:translateY(0)}50%{transform:translateY(-1.5px)}}
+  .shipc-navire{animation:shipcT 3.2s ease-in-out infinite;transform-box:fill-box;transform-origin:center;} @keyframes shipcT{0%,100%{transform:translateY(0) rotate(-1.2deg)}50%{transform:translateY(-4px) rotate(1.2deg)}}
   .shipc-nb{font:700 11px var(--mono);fill:#0A2A26;text-anchor:middle;}
   .shipc-pulse{animation:shipcP 2s ease-out infinite;transform-box:fill-box;transform-origin:center;}
   @keyframes shipcP{from{transform:scale(.7);opacity:.9}to{transform:scale(2.2);opacity:0}}
   .shipc-vague{animation:shipcH 4s linear infinite;} .shipc-vague.r{animation-duration:3s;animation-direction:reverse;}
   @keyframes shipcH{to{transform:translateX(-88px)}}
-  @media (prefers-reduced-motion: reduce){.shipc-pulse,.shipc-vague{animation:none;}}
+  @media (prefers-reduced-motion: reduce){.shipc-pulse,.shipc-vague,.shipc-camion,.shipc-navire{animation:none;}}
   .shipc-sel{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;}
   .shipc-sel button{border:0;border-radius:9px;padding:6px 12px;font:500 12.5px var(--sans);background:rgba(255,255,255,.12);color:rgba(255,255,255,.85);cursor:pointer;}
   .shipc-sel button.on{background:#fff;color:#0A2A26;font-weight:600;}
@@ -4631,7 +4634,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-30-369';
+const APP_VERSION = '2026-10-30-370';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7113,12 +7116,12 @@ function shipEtape(l){
 function shipProchaine(et){ return ({ produit:'à déclarer au SAIGIC', declare:'à peser en entrepôt', entrepot:'à présenter au client', presente:'agréage en attente', agree:'instructions à recevoir', ot:'embarquement à venir' })[et] || ''; }
 // ==================== Circuit du cacao (bandeau Shipping) : stations cliquables, un trajet par OT ====================
 const SHIP_STATIONS = [
-  { k:'usine',   ic:'produit',  x:90,   y:70, lib:'Usine' },
-  { k:'entrepot',ic:'entrepot', x:330,  y:70, lib:'Entrepôt export' },
-  { k:'agreage', ic:'presente', x:570,  y:70, lib:'Agréage client' },
-  { k:'instr',   ic:'ot',       x:810,  y:70, lib:'OT et instructions' },
-  { k:'port',    ic:'agree',    x:1000, y:96, lib:'Port' },
-  { k:'mer',     ic:'embarque', x:1170, y:96, lib:'En mer' },
+  { k:'usine',   ic:'produit',  x:90,   lib:'Usine' },
+  { k:'entrepot',ic:'entrepot', x:330,  lib:'Entrepôt export' },
+  { k:'agreage', ic:'presente', x:520,  lib:'Agréage' },
+  { k:'instr',   ic:'ot',       x:610,  lib:'Instructions' },
+  { k:'port',    ic:'agree',    x:770,  lib:'Port' },
+  { k:'mer',     ic:'embarque', x:1020, lib:'En mer' },
 ];
 const SHIP_ICONES = {
   produit:'<path d="M3 21V10l6 3V10l6 3V6h3l1 15z"/><path d="M7 17h2M12 17h2M17 17h1"/>',
@@ -7156,23 +7159,28 @@ function shipCircuitHtml(lots){
   const sites = portage.map(l=>{ const s = lotsSiteParCode(l.site_code); return (s && s.nom) || l.site_code || l.site; });
   const lib = { usine: shipNoms(sites,'Usine','usines'), entrepot: shipNoms(portage.map(l=>l.entrepot),'Entrepôt export','entrepôts'), port: 'Port', mer:'En mer' };
   if (otSel){ const pp = shipOtPort(otSel); lib.port = 'Port '+(/^[AEIOUYH]/i.test(pp)?'d\'':'de ')+pp; }
-  const d = 'M90 70H810C900 70 920 96 1000 96H1170';
-  let s = '<svg class="shipc-circ" viewBox="0 0 1260 170" role="group" aria-label="Circuit du cacao">'
-    + '<defs><path id="shipc-r" d="'+d+'"/><clipPath id="shipc-mer"><rect x="860" y="104" width="400" height="66"/></clipPath></defs>'
-    + '<use href="#shipc-r" fill="none" stroke="rgba(255,255,255,.28)" stroke-width="3" stroke-linecap="round" stroke-dasharray="2 9"/>';
-  if (otSel){ const L = [0,240,480,720,920,1090][cur]; s += '<use href="#shipc-r" fill="none" stroke="#F2B705" stroke-width="4" stroke-linecap="round" stroke-dasharray="'+L+' 4000"/>'; }
-  else s += '<circle r="5" fill="#F2B705"><animateMotion dur="9s" repeatCount="indefinite"><mpath href="#shipc-r"/></animateMotion></circle>';
-  s += '<g clip-path="url(#shipc-mer)"><g class="shipc-vague"><path d="M850 112q22 -9 44 0t44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0V170H850z" fill="rgba(255,255,255,.10)"/></g><g class="shipc-vague r"><path d="M850 126q22 -9 44 0t44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0V170H850z" fill="rgba(31,110,92,.6)"/></g></g>';
-  SHIP_STATIONS.forEach((st,i)=>{
-    const sel = state.shipStation===st.k, n = cnt[st.k], fait = otSel && i<cur, now = otSel && i===cur;
-    const nom = lib[st.k] || st.lib;
-    s += '<g class="shipc-st'+(sel?' sel':'')+'" tabindex="0" role="button" aria-label="'+esc(nom)+' : '+n+' lot'+(n>1?'s':'')+'" onclick="shipStationClic(\''+st.k+'\')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();shipStationClic(\''+st.k+'\')}">'
-      + '<circle cx="'+st.x+'" cy="'+st.y+'" r="30" fill="transparent"/>'
-      + (now ? '' : '<circle cx="'+st.x+'" cy="'+st.y+'" r="21" class="shipc-nd '+(fait||(!otSel&&n)?'f':'t')+'"/><g transform="translate('+(st.x-13)+','+(st.y-13)+')"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="'+(fait||(!otSel&&n)?'#0A2A26':'rgba(255,255,255,.6)')+'" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'+SHIP_ICONES[st.ic]+'</svg></g>')
-      + (now ? '<circle class="shipc-pulse" cx="'+st.x+'" cy="'+st.y+'" r="20" fill="none" stroke="#F2B705" stroke-width="3"/><circle cx="'+st.x+'" cy="'+st.y+'" r="22" fill="#0A2A26" stroke="#fff" stroke-width="3.2"/><circle cx="'+st.x+'" cy="'+st.y+'" r="13.5" fill="none" stroke="#fff" stroke-width="3.4"/><circle cx="'+st.x+'" cy="'+st.y+'" r="4.8" fill="#F2B705"/>' : '')
-      + (!otSel && n ? '<circle cx="'+(st.x+17)+'" cy="'+(st.y-17)+'" r="11" fill="#fff"/><text x="'+(st.x+17)+'" y="'+(st.y-13)+'" class="shipc-nb">'+n+'</text>' : '')
-      + '<text class="shipc-lb'+(otSel&&i>cur?' d':'')+'" x="'+st.x+'" y="'+(st.y+44)+'">'+esc(nom)+'</text>'
-      + '</g>';
+  const g = (k)=>{ const st = SHIP_STATIONS.find(x=>x.k===k); return st; };
+  const dessins = {
+    usine:(x)=>'<g class="shipc-camion" transform="translate('+(x-90)+',0)" stroke="#fff" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="52" y="62" width="52" height="30" rx="3" fill="rgba(255,255,255,.1)"/><path d="M104 70h18l9 11v11h-27z" fill="rgba(255,255,255,.1)"/><path d="M112 74h8l5 7h-13z"/><circle cx="70" cy="96" r="7" fill="#0F3F38"/><circle cx="118" cy="96" r="7" fill="#0F3F38"/><path d="M60 72h34M60 78h34" opacity=".5"/></g>',
+    entrepot:(x)=>'<g transform="translate('+(x-460)+',0)" stroke="#fff" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M400 104V66l60-26 60 26v38" fill="rgba(255,255,255,.08)"/><rect x="432" y="76" width="56" height="28" rx="2" fill="rgba(242,183,5,.18)" stroke="#F2B705"/><path d="M432 90h56M460 76v28" stroke="#F2B705" opacity=".8"/></g>',
+    port:(x)=>'<g transform="translate('+(x-675)+',0)"><path d="M640 104h70v14h-70z" fill="rgba(255,255,255,.12)" stroke="rgba(255,255,255,.45)" stroke-width="2"/><g stroke="rgba(255,255,255,.8)" stroke-width="2.2" fill="none" stroke-linecap="round"><path d="M668 104V52h40M668 52l-14 14M708 52v14"/></g></g>',
+    mer:(x)=>'<g transform="translate('+(x-955)+',9)"><g class="shipc-navire" stroke="#fff" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M880 100h150l-14 20h-120z" fill="rgba(255,255,255,.14)"/><path d="M900 100V86h70v14M930 86V72h28v14" fill="rgba(255,255,255,.1)"/><path d="M944 72V60h8"/><rect x="990" y="88" width="14" height="12" fill="#F2B705" stroke="#F2B705"/><rect x="976" y="88" width="14" height="12" fill="rgba(242,183,5,.55)" stroke="#F2B705"/></g></g>'
+  };
+  const halo = { usine:[90,78,58,34], entrepot:[330,76,62,44], agreage:[520,92,22,22], instr:[610,92,22,22], port:[770,82,50,38], mer:[1020,92,78,36] };
+  let s = '<svg class="shipc-circ" viewBox="0 0 1260 166" role="group" aria-label="Circuit du cacao">'
+    + '<defs><clipPath id="shipc-mer"><rect x="840" y="108" width="420" height="68"/></clipPath></defs>'
+    + '<line x1="40" y1="104" x2="800" y2="104" stroke="rgba(255,255,255,.22)" stroke-width="2"/>'
+    + '<g clip-path="url(#shipc-mer)"><g class="shipc-vague"><path d="M830 114q22 -9 44 0t44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0V176H830z" fill="rgba(255,255,255,.10)"/></g></g>';
+  const ordre = ['usine','entrepot','agreage','instr','port','mer'];
+  ordre.forEach((k,i)=>{
+    const st = g(k), n = cnt[k], sel = state.shipStation===k, nom = lib[k] || st.lib, h = halo[k];
+    const fait = otSel && i<cur, now = otSel && i===cur, apres = otSel && i>cur, petit = (k==='agreage'||k==='instr');
+    s += '<g class="shipc-st'+(sel?' sel':'')+(apres?' apres':'')+'" tabindex="0" role="button" aria-label="'+esc(nom)+' : '+n+' lot'+(n>1?'s':'')+'" onclick="shipStationClic(\''+k+'\')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();shipStationClic(\''+k+'\')}">'
+      + '<ellipse class="shipc-zone" cx="'+h[0]+'" cy="'+h[1]+'" rx="'+(h[2]+10)+'" ry="'+(h[3]+10)+'" fill="transparent"/>'
+      + (now ? '<ellipse cx="'+h[0]+'" cy="'+h[1]+'" rx="'+h[2]+'" ry="'+h[3]+'" fill="rgba(242,183,5,.14)" stroke="#F2B705" stroke-width="2.5"/><ellipse class="shipc-pulse" cx="'+h[0]+'" cy="'+h[1]+'" rx="'+h[2]+'" ry="'+h[3]+'" fill="rgba(242,183,5,.12)" stroke="#F2B705" stroke-width="3"/>' : '')
+      + (petit ? '<circle cx="'+st.x+'" cy="92" r="15" class="shipc-nd '+((now||fait||(!otSel&&n))?'f':'t')+'"/><g transform="translate('+(st.x-9)+',83) scale(.75)"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="'+((now||fait||(!otSel&&n))?'#0A2A26':'rgba(255,255,255,.6)')+'" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">'+SHIP_ICONES[st.ic]+'</svg></g>' : dessins[k](st.x))
+      + (!otSel && n ? '<circle cx="'+(h[0]+h[2]*.62)+'" cy="'+(h[1]-h[3]*.9)+'" r="11" fill="#F2B705"/><text x="'+(h[0]+h[2]*.62)+'" y="'+(h[1]-h[3]*.9+4)+'" class="shipc-nb">'+n+'</text>' : '')
+      + '<text class="shipc-lb'+(petit?' pt':'')+'" x="'+st.x+'" y="'+(petit?122:(k==='mer'?154:140))+'">'+esc(nom)+'</text></g>';
   });
   return s + '</svg>';
 }
