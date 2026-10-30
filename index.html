@@ -4497,7 +4497,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-30-362';
+const APP_VERSION = '2026-10-30-363';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -6237,7 +6237,7 @@ function ocAllerProducteur(id){
 // ---- Barre laterale v2 ----
 const SIDEBAR_GROUPES = [
   { titre:'Pilotage',       items:[ ['dashboard','ICON_DASHBOARD','Tableau de bord'], ['tracage','ICON_TRACAGE','Traçage de volume'], ['saisieobc','ICON_OBC','Saisie OBC'] ] },
-  { titre:'Opérations',     items:[ ['cooperatives','ICON_COOPS','Coopératives'], ['demandes','ICON_DEMANDES','Demandes coopératives'], ['lots','ICON_LOTS','Lots & export'], ['shipping','ICON_SHIP','Shipping'], ['prefinancements','ICON_PREFI','Financement'], ['sacherie','ICON_SACH','Sacherie'] ] },
+  { titre:'Opérations',     items:[ ['cooperatives','ICON_COOPS','Coopératives'], ['demandes','ICON_DEMANDES','Demandes coopératives'], ['lots','ICON_LOTS','Lots d\'usinage'], ['shipping','ICON_SHIP','Shipping'], ['prefinancements','ICON_PREFI','Financement'], ['sacherie','ICON_SACH','Sacherie'] ] },
   { titre:'Conformité',     items:[ ['conformite','ICON_CONFORMITE','Conformité & documents'], ['basedonnees','ICON_BASEDONNEES','Base de données coop.'], ['cartes','ICON_CARTE','Cartes & déforestation'] ] },
   { titre:'Administration', items:[ ['acces','ICON_ACCES','Accès coopératives'], ['stockage','ICON_STOCKAGE','Stockage'], ['sauvegardes','ICON_SAUVEGARDES','Sauvegardes'] ] },
 ];
@@ -6991,7 +6991,7 @@ function shipAlertes(lots){
     if (fr!==null && fr>1) al.push(['danger', num, 'Freinte usine → entrepôt de '+String(fr).replace('.',',')+' % (au-delà de 1 %)']);
     if (pese && l.saigic_poids_reel_kg && Math.abs(Number(l.saigic_poids_reel_kg)-pese)>0.5) al.push(['warn', num, 'Poids déclaré au SAIGIC '+fmtNum(l.saigic_poids_reel_kg)+' kg ≠ poids du ticket '+fmtNum(pese)+' kg (correction à demander au Conseil)']);
     if (ot && agree!=='agree') al.push(['warn', num, 'Rattaché à l\'OT '+ot.numero+' sans agréage enregistré']);
-    if (ot && !s.si_recue_le) al.push(['info', num, 'OT '+ot.numero+' : instructions d\'embarquement non enregistrées']);
+    if (ot && !(ot.si_date || ot.si_reference)) al.push(['info', num, 'OT '+ot.numero+' : instructions d\'embarquement non enregistrées (fiche de l\'OT)']);
     if (agree==='refuse') al.push(['danger', num, 'Lot refusé par le client']);
     if (pese && !l.saigic_date_fab) al.push(['warn', num, 'En entrepôt mais pas encore déclaré au SAIGIC']);
     if (ot && ot.bl_numero && !l.saigic_vu_emb) al.push(['info', num, 'BL émis mais « vu embarqué » absent du SAIGIC']);
@@ -7041,15 +7041,18 @@ async function shipTrackingExporter(){
 function renderShippingTab(){
   if (!state.lotsCharges) chargerLots().then(()=>render());
   if (!state.shipCharge){ shipChargerSuivi().then(()=>render()); }
-  if (!state.finLtdCharge) finChargerLtd().then(()=>render());
   if (!state.lotsCharges || !state.shipCharge) return '<div class="panel"><div class="hint" style="padding:18px">Chargement du suivi des lots…</div></div>';
   const lots = (state.lotsUsinage||[]).slice().sort((a,b)=>String(b.numero).localeCompare(String(a.numero),'fr',{numeric:true}));
   const par = {}; SHIP_ETAPES.forEach(e=>par[e[0]] = 0); lots.forEach(l=>{ par[shipEtape(l)]++; });
   const filtre = state.shipFiltre || '';
   const kg = lots.reduce((s,l)=>s+(lotsUsinagePese(l)||lotsUsinageSortie(l)||0), 0);
-  let html = '<div class="panel"><div class="panel-head"><div><h2>Shipping</h2><p class="hint" style="margin:4px 0 0">Suivi des lots export, de la production à l\'embarquement. Les formules SAIGIC (BV, Fo1, D6) et l\'OT se débloquent après l\'agréage du client et la réception des instructions d\'embarquement.</p></div></div>'
+  const sous = state.shipSous || 'suivi';
+  let html = '<div class="panel"><div class="panel-head"><div><h2>Shipping</h2><p class="hint" style="margin:4px 0 0">Production des lots → déclaration au SAIGIC → entrepôt export → agréage du client → instructions d\'embarquement et OT → formules SAIGIC (BV, Fo1, D6) → embarquement (BL).</p></div></div>'
     + '<div style="padding:0 18px 18px">'
-    + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 14px">'
+    + '<div class="oc-subtabs">'+[['suivi','Suivi des lots'],['saigic','Déclaration SAIGIC'],['ot','OT & embarquement']].map(([k,l])=>'<button class="'+(sous===k?'active':'')+'" onclick="state.shipSous=\''+k+'\';render()">'+l+'</button>').join('')+'</div>';
+  if (sous==='saigic') return html + renderLotsSaigic() + '</div></div>';
+  if (sous==='ot') return html + renderLotsExport() + '</div></div>';
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 14px">'
     + '<button class="btn'+(filtre===''?' btn-primary':'')+'" onclick="shipFiltrer(\'\')">Tous <b>'+lots.length+'</b></button>'
     + SHIP_ETAPES.map(e=>'<button class="btn'+(filtre===e[0]?' btn-primary':'')+'" title="'+esc(e[2])+'" onclick="shipFiltrer(\''+e[0]+'\')">'+esc(e[1])+' <b>'+par[e[0]]+'</b></button>').join('')
     + '<span class="hint" style="margin:0 0 0 auto;align-self:center">'+lots.length+' lot'+(lots.length>1?'s':'')+' · <b>'+fmtKg(kg)+'</b></span>'
@@ -7057,7 +7060,7 @@ function renderShippingTab(){
     + renderShipAlertes(lots);
   const vus = lots.filter(l=>!filtre || shipEtape(l)===filtre);
   if (!vus.length) return html + '<div class="hint">Aucun lot à cette étape.</div></div></div>';
-  html += '<div class="achats-defile" style="max-height:66vh;overflow:auto"><table class="tbl-fiches tbl-dense"><thead><tr><th>N° lot</th><th>Usine</th><th>Client</th><th>Étape</th><th class="num">Sortie usine</th><th>Entrée entrepôt</th><th class="num">Poids entrepôt</th><th class="num">Freinte</th><th>SAIGIC</th><th>LTD</th><th>Présenté</th><th>Agréage</th><th>OT</th><th>BL</th><th></th></tr></thead><tbody>';
+  html += '<div class="achats-defile" style="max-height:66vh;overflow:auto"><table class="tbl-fiches tbl-dense"><thead><tr><th>N° lot</th><th>Usine</th><th>Client</th><th>Étape</th><th class="num">Sortie usine</th><th>Entrée entrepôt</th><th class="num">Poids entrepôt</th><th class="num">Freinte</th><th>SAIGIC</th><th>Présenté</th><th>Agréage</th><th>OT</th><th>BL</th><th></th></tr></thead><tbody>';
   vus.forEach(l=>{
     const s = shipSuiviDe(l.id) || {}, ot = shipOtDuLot(l.id), et = shipEtape(l), sortie = Number(l.poids_sortie_kg)>0 ? Number(l.poids_sortie_kg) : null, pese = lotsUsinagePese(l)||null, fr = shipFreinte(sortie, pese);
     const agree = s.agreage_resultat || (l.agree_le ? 'agree' : '');
@@ -7066,7 +7069,6 @@ function renderShippingTab(){
       + '<td class="num">'+(sortie ? fmtNum(sortie) : '—')+'</td><td>'+(l.date_pesee_entrepot ? esc(dateFr(l.date_pesee_entrepot)) : '—')+(l.entrepot ? ' <span class="hint" style="margin:0">'+esc(l.entrepot)+'</span>' : '')+'</td>'
       + '<td class="num">'+(pese ? fmtNum(pese) : '—')+'</td><td class="num">'+(fr===null ? '—' : '<span class="'+(fr>1?'txt-danger':'')+'">'+String(fr).replace('.',',')+' %</span>')+'</td>'
       + '<td style="white-space:nowrap">'+shipBadgeSaigic('Lot', l.saigic_date_fab, 'Déclaré au SAIGIC')+shipBadgeSaigic('BV', l.saigic_numero_bv, 'Bulletin de vérification')+shipBadgeSaigic('Fo1', l.saigic_fo1||l.saigic_fo1_provisoire, 'Formule Fo1')+shipBadgeSaigic('D6', l.saigic_d6, 'D6')+shipBadgeSaigic('Emb', l.saigic_vu_emb, 'Vu embarqué')+'</td>'
-      + '<td>'+(function(){ const ts = finLtdsDuLot(l.id); return ts.length ? ts.map(t=>'<b>'+esc(t.numero)+'</b>'+(t.banque?' <span class="hint" style="margin:0">'+esc(t.banque)+'</span>':'')).join('<br>') : '—'; })()+'</td>'
       + '<td>'+(s.date_presentation ? esc(dateFr(s.date_presentation)) : '—')+'</td>'
       + '<td>'+(agree ? lotsBadge(SHIP_AGREAGE, agree)+(l.agree_le ? ' <span class="hint" style="margin:0">'+esc(dateFr(l.agree_le))+'</span>' : '') : '—')+'</td>'
       + '<td>'+(ot ? '<b>'+esc(ot.numero)+'</b>' : '—')+'</td><td>'+(ot && ot.bl_numero ? esc(ot.bl_numero) : '—')+'</td>'
@@ -7088,9 +7090,7 @@ function renderShipSuiviModal(m){
     + '<div style="font-weight:600;margin:2px 0 6px">Présentation et agréage</div>'
     + g(f('Contrat client','sv_contrat','text',pl.contrat_client), f('Date de présentation au client','sv_presentation','date',pl.date_presentation), f('Date de sondage','sv_sondage','date',pl.date_sondage))
     + g(f('Date d\'agréage','sv_agree_le','date',pl.agree_le), '<label class="field">Résultat<select name="sv_agreage"><option value="">—</option>'+Object.entries(SHIP_AGREAGE).map(([k,v])=>'<option value="'+k+'"'+(k===pl.agreage_resultat?' selected':'')+'>'+v[1]+'</option>').join('')+'</select></label>')
-    + '<div style="font-weight:600;margin:10px 0 6px">Instructions d\'embarquement</div>'
-    + g(f('Reçues le','sv_si_date','date',pl.si_recue_le), f('Référence','sv_si_ref','text',pl.si_reference,' placeholder="ex : SI Ecorigine 2026-P…"'))
-    + '<div class="hint" style="margin:0 0 6px">À partir de l\'agréage et des instructions reçues, tu peux éditer les formules SAIGIC et créer l\'OT (Lots &amp; export › OT).</div>'
+    + '<div class="hint" style="margin:0 0 6px">Les instructions d\'embarquement se renseignent sur l\'OT (Shipping › OT &amp; embarquement). À partir de l\'agréage et des instructions reçues, tu peux éditer les formules SAIGIC et créer l\'OT.</div>'
     + '<div style="font-weight:600;margin:10px 0 6px">Sortie d\'entrepôt et empotage</div>'
     + g(f('Date de sortie de l\'entrepôt','sv_sortie_date','date',pl.date_sortie_entrepot), f('Poids net sortie entrepôt (kg)','sv_sortie_kg','number',pl.poids_sortie_entrepot_kg,' min="0" step="1"'), f('Poids net empotage (kg)','sv_empotage_kg','number',pl.poids_empotage_kg,' min="0" step="1"'))
     + g(f('CV CCC','sv_cv_ccc','text',pl.cv_ccc), f('CV de déblocage','sv_cv_deb','text',pl.cv_deblocage))
@@ -7102,7 +7102,7 @@ async function shipSuiviEnregistrer(){
   const d = n=>fv(n)||null, k = n=>{ const v = Number(fv(n)); return v>0 ? v : null; };
   const agree = d('sv_agree_le'), res = d('sv_agreage');
   const ligne = { lot_id:pl.lotId, contrat_client:fv('sv_contrat').trim()||null, date_presentation:d('sv_presentation'), date_sondage:d('sv_sondage'), agreage_resultat:res,
-    si_recue_le:d('sv_si_date'), si_reference:fv('sv_si_ref').trim()||null, date_sortie_entrepot:d('sv_sortie_date'), poids_sortie_entrepot_kg:k('sv_sortie_kg'), poids_empotage_kg:k('sv_empotage_kg'),
+    date_sortie_entrepot:d('sv_sortie_date'), poids_sortie_entrepot_kg:k('sv_sortie_kg'), poids_empotage_kg:k('sv_empotage_kg'),
     cv_ccc:fv('sv_cv_ccc').trim()||null, cv_deblocage:fv('sv_cv_deb').trim()||null, commentaire:fv('sv_comm').trim()||null, updated_at:new Date().toISOString() };
   try{
     const r1 = await supabaseClient.from('lots_suivi').upsert(ligne, { onConflict:'lot_id' }); if (r1.error) throw r1.error;
@@ -8370,13 +8370,13 @@ async function rattacherAchatsSaigic(coop, codeFourn, memoriserCcc){
 function renderLotsTab(){
   if (!state.lotsCharges){ chargerLots().then(()=>render()); }
   const actif = lotsSousOnglet();
-  let html = '<div class="panel"><div class="panel-head"><div><h2>Lots & export</h2><p class="hint" style="margin:4px 0 0">Livraisons reçues à l\'usine → lots d\'usinage (numérotés par série) → OT · ordres de transit (un ou plusieurs lots regroupés pour un client, numéro attribué par le service shipping) → connaissement maritime (B/L). Chaque maillon garde la trace exacte de ce qui le compose.</p></div></div>'
+  let html = '<div class="panel"><div class="panel-head"><div><h2>Lots d\'usinage</h2><p class="hint" style="margin:4px 0 0">Livraisons reçues à l\'usine → lots d\'usinage (numérotés par série) → OT · ordres de transit (un ou plusieurs lots regroupés pour un client, numéro attribué par le service shipping) → connaissement maritime (B/L). Chaque maillon garde la trace exacte de ce qui le compose.</p></div></div>'
     + '<div style="padding:0 18px 18px">'
     + '<div class="oc-subtabs">'
     // « État des CV » est retiré de la navigation pour le moment (temporaire, cf. renderCvVentes et la
     // table cv_ventes conservees intactes plus bas : rattacher le sous-onglet suffira a tout remettre en
     // place quand on reprendra ce chantier avec plus d'elements).
-    + [['contrats','Contrats clients'],['series','Séries de numérotation'],['achats_clients','Suivi achats clients'],['usinage','Lots d\'usinage'],['export','OT (ordres de transit)'],['chaine','Chaîne de traçabilité']].map(([id,l])=>'<button class="'+(actif===id?'active':'')+'" onclick="lotsSetSousOnglet(\''+id+'\')">'+l+'</button>').join('')
+    + [['contrats','Contrats clients'],['series','Séries de numérotation'],['achats_clients','Suivi achats clients'],['usinage','Lots d\'usinage'],['chaine','Chaîne de traçabilité']].map(([id,l])=>'<button class="'+(actif===id?'active':'')+'" onclick="lotsSetSousOnglet(\''+id+'\')">'+l+'</button>').join('')
     + '</div>';
   if (!state.lotsCharges) html += '<div class="hint">Chargement des lots…</div>';
   else if (actif==='cv') html += renderCvVentes();
@@ -8384,7 +8384,6 @@ function renderLotsTab(){
   else if (actif==='achats_clients') html += renderAchatsClientsDashboard();
   else if (actif==='series') html += renderLotsSeries();
   else if (actif==='usinage') html += renderLotsUsinage();
-  else if (actif==='export') html += renderLotsExport();
   else html += renderLotsChaine();
   return html + '</div></div>';
 }
@@ -9970,15 +9969,11 @@ function renderLotsUsinage(){
     + '<input type="file" id="lu-import-transfert" accept=".xlsx,.xls,.csv" style="display:none" onchange="lotsTransfertImporter(this)">'
     + (lots.length ? '<button class="btn btn-primary" title="Excel avec les numéros de lot et leurs poids pesés à l\'entrée de l\'entrepôt export (poids définitif ; le format du tableau de transfert convient)" onclick="lotsPoidsChoisirFichier()">⭱ Importer les poids pesés (Excel)</button><input type="file" id="lu-import-poids" accept=".xlsx,.xls,.csv" style="display:none" onchange="lotsPoidsImporter(this)"><button class="btn" onclick="lotsPoidsEntrepotOuvrir()">⚖ Saisir les poids pesés</button>' : '')
     + ((lots||[]).some(l=>l.origine==='transfert') ? '<button class="btn" onclick="lotsTransfertExporter()">⭳ Exporter le tableau de transfert</button>' : '')
-    + '<button class="btn" title="Fiche Excel préremplie des lots à déclarer au SAIGIC (le shipping y ajoute le choix du poids et le poids réel)" onclick="saigicFicheExporter()">⭳ Fiche de déclaration SAIGIC</button>'
-    + '<button class="btn" title="Importer la fiche remplie : contrôles, propositions de noms, préparation de la déclaration (rien n\'est envoyé au SAIGIC)" onclick="document.getElementById(\'sg-import-input\').click()">⭱ Importer la fiche SAIGIC</button>'
-    + '<input type="file" id="sg-import-input" accept=".xlsx,.xls" style="display:none" onchange="saigicFicheImporter(this)">'
     + (lots.length ? '<button class="btn-danger-text" onclick="lotsUsinageSupprimerTout()">Tout supprimer</button>' : '')
     + '<span class="hint" style="margin:0">'+recus.length+' livraison'+(recus.length>1?'s':'')+' reçue'+(recus.length>1?'s':'')+' à l\'usine · <b>'+fmtKg(dispo)+'</b> pas encore affectés à un lot</span></div>'
     + '<div class="hint" style="margin:-6px 0 14px">Le rapport d\'usinage reprend les numéros déjà attribués par les séries de numérotation : le client de chaque lot importé est retrouvé automatiquement à partir de son numéro.</div>';
   html += renderLotsRepartitionClients(campagneId);
   html += renderLotsPeses(campagneId);
-  html += renderLotsSaigic();
   if (!lots.length) return html + '<div class="hint">Aucun lot d\'usinage. Crée le premier, ou importe le rapport d\'usinage de l\'usinier.</div>';
   html += '<div class="achats-defile"><table class="tbl-fiches tbl-dense"><thead><tr><th>N° lot</th><th>Campagne</th><th>Client</th><th>Période</th><th>Site · traitant</th><th>Entrepôt</th><th>Type</th><th>Niveau</th><th>Livraisons</th><th>Entrée</th><th>Sortie usine</th><th>Pesé entrepôt</th><th>Dispo. export</th><th>Statut</th><th></th></tr></thead><tbody>';
   lots.forEach(l=>{
@@ -9998,21 +9993,21 @@ function renderLotsExport(){
   let html = '<div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px"><button class="btn btn-primary" onclick="lotExportOuvrir()">+ Nouvel OT (ordre de transit)</button>'
     + '<span class="hint" style="margin:0">Un OT regroupe un ou plusieurs lots d\'usinage pour un client ; son numéro (ex. ABJ-0101) est attribué par le service shipping, pas par ORIGEN.</span></div>';
   if (!lots.length) return html + '<div class="hint">Aucun OT. Crée-le avec son numéro (attribué par le service shipping), compose-le à partir des lots d\'usinage, puis renseigne le connaissement maritime et les conteneurs.</div>';
-  html += '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th>N° OT</th><th>Client</th><th>Navire</th><th>B/L</th><th>Réf. vendeur</th><th>Niveau</th><th>Embarquement</th><th>Conteneurs</th><th>Poids (lots)</th><th>Poids (conteneurs)</th><th>Statut</th><th></th></tr></thead><tbody>';
+  html += '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th>N° OT</th><th>Client</th><th>Instr. d\'embarquement</th><th>Navire</th><th>B/L</th><th>Réf. vendeur</th><th>Niveau</th><th>Embarquement</th><th>Conteneurs</th><th>Poids (lots)</th><th>Poids (conteneurs)</th><th>Statut</th><th></th></tr></thead><tbody>';
   lots.forEach(l=>{
     const compo = lotsExportCompo(l.id), poids = lotsExportPoids(l), pc = lotsConteneursPoids(l), nc = lotsConteneurs(l).length;
     const ecart = (poids>0 && pc>0 && Math.abs(poids-pc)>1) ? ' <span class="badge warn" title="Le poids des conteneurs diffère du poids des lots affectés">écart '+fmtKg(pc-poids)+'</span>' : '';
-    html += '<tr><td><b>'+esc(l.numero)+'</b></td><td>'+esc(l.client||'—')+'</td><td>'+esc(l.navire||'—')+'</td><td>'+esc(l.bl_numero||'—')+(l.bl_date?' <span class="hint" style="margin:0">'+esc(dateFr(l.bl_date))+'</span>':'')+'</td><td>'+esc(l.ref_vendeur||'—')+'</td><td>'+esc(l.niveau_tracabilite||'—')+'</td><td>'+esc(dateFr(l.date_embarquement)||'—')+(l.port_embarquement?' <span class="hint" style="margin:0">'+esc(l.port_embarquement)+(l.port_destination?' → '+esc(l.port_destination):'')+'</span>':'')+'</td>'
+    html += '<tr><td><b>'+esc(l.numero)+'</b></td><td>'+esc(l.client||'—')+'</td><td>'+(l.si_reference||l.si_date ? esc(l.si_reference||'')+(l.si_date?' <span class="hint" style="margin:0">'+esc(dateFr(l.si_date))+'</span>':'') : '<span class="badge warn" title="À renseigner dans la fiche de l\'OT">à recevoir</span>')+'</td><td>'+esc(l.navire||'—')+'</td><td>'+esc(l.bl_numero||'—')+(l.bl_date?' <span class="hint" style="margin:0">'+esc(dateFr(l.bl_date))+'</span>':'')+'</td><td>'+esc(l.ref_vendeur||'—')+'</td><td>'+esc(l.niveau_tracabilite||'—')+'</td><td>'+esc(dateFr(l.date_embarquement)||'—')+(l.port_embarquement?' <span class="hint" style="margin:0">'+esc(l.port_embarquement)+(l.port_destination?' → '+esc(l.port_destination):'')+'</span>':'')+'</td>'
       + '<td>'+nc+'</td><td>'+fmtKg(poids)+'</td><td>'+(nc?fmtKg(pc):'—')+ecart+'</td><td>'+lotsBadge(LOTS_STATUTS_EXPORT, l.statut)+'</td>'
       + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="lotExportComposer(\''+esc(l.id)+'\')">Composer</button> <button class="btn-ghost btn-compact" onclick="lotExportConteneurs(\''+esc(l.id)+'\')">Conteneurs</button> <button class="btn-ghost btn-compact" onclick="lotExportOuvrir(\''+esc(l.id)+'\')">Modifier</button> <button class="btn-ghost btn-compact" onclick="lotsVoirChaine(\''+esc(l.id)+'\')">Chaîne</button> <button class="btn-danger-text btn-compact" onclick="lotExportSupprimer(\''+esc(l.id)+'\')">Supprimer</button></td></tr>';
     if (compo.length){
-      html += '<tr class="lots-detail"><td colspan="12"><div class="lots-compo">'+compo.map(c=>{ const u = lotUsinageParId(c.lot_usinage_id); return '<span class="lots-puce">'+esc(u ? u.numero : c.lot_usinage_id)+' — <b>'+fmtKg(c.poids_kg)+'</b></span>'; }).join('')+'</div></td></tr>';
+      html += '<tr class="lots-detail"><td colspan="13"><div class="lots-compo">'+compo.map(c=>{ const u = lotUsinageParId(c.lot_usinage_id); return '<span class="lots-puce">'+esc(u ? u.numero : c.lot_usinage_id)+' — <b>'+fmtKg(c.poids_kg)+'</b></span>'; }).join('')+'</div></td></tr>';
     }
   });
   return html + '</tbody></table></div>';
 }
 // ---- Chaine de tracabilite d'un lot d'export ----
-function lotsVoirChaine(id){ state.lotChaineId = id; state.lotsSousOnglet = 'chaine'; render(); }
+function lotsVoirChaine(id){ state.lotChaineId = id; state.lotsSousOnglet = 'chaine'; state.tab = 'lots'; render(); }
 function lotsChaineDe(lot){
   const usinages = lotsExportCompo(lot.id).map(c=>({ lot: lotUsinageParId(c.lot_usinage_id), kg: Number(c.poids_kg)||0 })).filter(x=>x.lot);
   const livraisons = [];
@@ -10743,11 +10738,15 @@ function saigicLotsADeclarer(){
 }
 const SAIGIC_STATUTS = { prepare:['warn','préparée'], valide:['info','validée'], envoye:['ok','envoyée'], erreur:['danger','erreur'], annule:['neutral','annulée'] };
 function renderLotsSaigic(){
-  if (!state.saigicDeclCharge){ saigicDeclCharger().then(()=>render()); return ''; }
+  if (!state.saigicDeclCharge){ saigicDeclCharger().then(()=>render()); return '<div class="hint">Chargement des listes du SAIGIC…</div>'; }
   const lots = saigicLotsADeclarer(), decl = state.saigicDecl||[];
   const nPrep = decl.filter(d=>d.statut==='prepare').length;
-  let html = '<details class="saigic-decl" style="margin:0 0 14px"'+(state.saigicOuvert?' open':'')+' ontoggle="state.saigicOuvert=this.open"><summary style="cursor:pointer;font-weight:600">Déclaration des lots au SAIGIC <span class="hint" style="margin:0 0 0 6px;font-weight:400">'+lots.length+' lot'+(lots.length>1?'s':'')+' à déclarer · '+nPrep+' déclaration'+(nPrep>1?'s':'')+' préparée'+(nPrep>1?'s':'')+'</span></summary>'
-    + '<div class="hint" style="margin:8px 0 12px">La fiche est préremplie avec les lots non déclarés (usine, magasin, certificat d\'après les correspondances ci-dessous). Le shipping ajoute le <b>choix du poids</b> et le <b>poids réel</b> ; l\'import contrôle chaque ligne et prépare la déclaration. <b>Rien n\'est envoyé au SAIGIC</b> avant validation.</div>';
+  let html = '<div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">'
+    + '<button class="btn btn-primary" title="Fiche Excel préremplie des lots à déclarer au SAIGIC (le shipping y ajoute le choix du poids et le poids réel)" onclick="saigicFicheExporter()">⭳ Exporter la fiche SAIGIC</button>'
+    + '<button class="btn" title="Importer la fiche remplie : contrôles, propositions de noms, préparation de la déclaration (rien n\'est envoyé au SAIGIC)" onclick="document.getElementById(\'sg-import-input\').click()">⭱ Importer la fiche remplie</button>'
+    + '<input type="file" id="sg-import-input" accept=".xlsx,.xls" style="display:none" onchange="saigicFicheImporter(this)">'
+    + '<span class="hint" style="margin:0">'+lots.length+' lot'+(lots.length>1?'s':'')+' à déclarer · '+nPrep+' déclaration'+(nPrep>1?'s':'')+' préparée'+(nPrep>1?'s':'')+'</span></div>'
+    + '<div class="hint" style="margin:-6px 0 14px">La fiche est préremplie avec les lots non déclarés (usine, magasin, certificat d\'après les correspondances ci-dessous). Le shipping ajoute le <b>choix du poids</b> et le <b>poids réel</b> ; l\'import contrôle chaque ligne et prépare la déclaration. <b>Rien n\'est envoyé au SAIGIC</b> avant validation.</div>';
   // lots à déclarer
   html += '<div style="font-weight:600;margin:6px 0">Lots à déclarer au SAIGIC</div>';
   if (!lots.length) html += '<div class="hint">Aucun lot en attente : tous les lots d\'ORIGEN sont déclarés ou préparés.</div>';
@@ -10771,7 +10770,7 @@ function renderLotsSaigic(){
       + '</tbody></table></div>';
   }
   html += renderSaigicCorrespondances();
-  return html + '</details>';
+  return html;
 }
 function saigicCorrCles(){
   const certs = new Set(), mags = new Set();
@@ -11207,7 +11206,7 @@ function lotExportOuvrir(id){
 async function lotExportEnregistrer(){
   const pl = state.modal && state.modal.type==='lotExport' ? state.modal.payload : null; if (!pl) return;
   const numero = fv('le_numero').trim(); if (!numero){ showToast('Indique le numéro de l\'OT (attribué par le service shipping).'); return; }
-  const ligne = { numero, campagne_id: fv('le_campagne')||null, client: fv('le_client').trim()||null, navire: fv('le_navire').trim()||null, port_embarquement: fv('le_port_emb').trim()||null, port_destination: fv('le_port_dest').trim()||null, date_embarquement: fv('le_date_emb')||null, bl_numero: fv('le_bl').trim()||null, bl_date: fv('le_bl_date')||null, ref_vendeur: fv('le_ref_vendeur').trim()||null, niveau_tracabilite: fv('le_niveau')||null, statut: fv('le_statut')||'preparation', notes: fv('le_notes').trim()||null, updated_at: new Date().toISOString() };
+  const ligne = { numero, si_reference: fv('le_si_ref').trim()||null, si_date: fv('le_si_date')||null, agreage_date: fv('le_agreage')||null, campagne_id: fv('le_campagne')||null, client: fv('le_client').trim()||null, navire: fv('le_navire').trim()||null, port_embarquement: fv('le_port_emb').trim()||null, port_destination: fv('le_port_dest').trim()||null, date_embarquement: fv('le_date_emb')||null, bl_numero: fv('le_bl').trim()||null, bl_date: fv('le_bl_date')||null, ref_vendeur: fv('le_ref_vendeur').trim()||null, niveau_tracabilite: fv('le_niveau')||null, statut: fv('le_statut')||'preparation', notes: fv('le_notes').trim()||null, updated_at: new Date().toISOString() };
   try{
     if (pl.id){ const { error } = await supabaseClient.from('lots_export').update(ligne).eq('id', pl.id); if (error) throw error; }
     else { ligne.id = genId('le'); ligne.conteneurs = []; const { error } = await supabaseClient.from('lots_export').insert(ligne); if (error) throw error; }
@@ -11479,6 +11478,8 @@ function lotsModalsHtml(){
     return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal wide"><h3>'+(pl.id?'Modifier l\'OT':'Nouvel OT (ordre de transit)')+'</h3><div id="modal-fields">'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">N° d\'OT<input type="text" name="le_numero" value="'+esc(pl.numero||'')+'" placeholder="ex : ABJ-0101"></label><label class="field">Campagne<select name="le_campagne">'+lotsCampagneOptions(pl.campagne_id)+'</select></label></div>'
       + '<div class="hint" style="margin:6px 0 10px">Le numéro d\'OT est attribué par le service shipping (port d\'embarquement + leur propre code) — ORIGEN ne le génère pas, saisis-le tel quel.</div>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 12px"><label class="field">Instructions d\'embarquement — référence<input type="text" name="le_si_ref" value="'+esc(pl.si_reference||'')+'" placeholder="ex : SI Ecorigine 2026-P0473"></label><label class="field">Reçues le<input type="date" name="le_si_date" value="'+esc(pl.si_date||'')+'"></label><label class="field">Agréage des lots le<input type="date" name="le_agreage" value="'+esc(pl.agreage_date||'')+'"></label></div>'
+      + '<div class="hint" style="margin:-4px 0 10px">L\'OT se crée après l\'agréage du client et la réception de ses instructions d\'embarquement ; les formules SAIGIC (BV, Fo1, D6) s\'éditent à partir de là.</div>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Client / acheteur<input type="text" name="le_client" value="'+esc(pl.client||'')+'" placeholder="ex : CARGILL"></label><label class="field">Navire<input type="text" name="le_navire" value="'+esc(pl.navire||'')+'"></label></div>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Port d\'embarquement<input type="text" name="le_port_emb" value="'+esc(pl.port_embarquement||'')+'"></label><label class="field">Port de destination<input type="text" name="le_port_dest" value="'+esc(pl.port_destination||'')+'"></label></div>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 12px"><label class="field">N° connaissement maritime (B/L)<input type="text" name="le_bl" value="'+esc(pl.bl_numero||'')+'"></label><label class="field">Date du B/L<input type="date" name="le_bl_date" value="'+esc(pl.bl_date||'')+'"></label><label class="field">Date d\'embarquement<input type="date" name="le_date_emb" value="'+esc(pl.date_embarquement||'')+'"></label></div>'
@@ -23657,7 +23658,7 @@ function renderGuideTab(){
     ['Usine','Pesée : poids net payé, refoulés ; site de déchargement = port','Tableau de bord › Achats','Usines'],
     ['Paiement','Prix, prime, cheque ; remboursement du préfinancement (total / partiel)','Tableau de bord › Paiements · Préfinancements','Finance · Commercial'],
     ['Lot d\'usinage','25 T = 385 sacs export = 10 palettes, numéroté par série, agréé','Lots & export › Lots d\'usinage · Sacherie','Usines · Shipping'],
-    ['OT / embarquement','Numéro OT, navire, date d\'embarquement, BL','Lots & export › OT','Shipping'],
+    ['OT / embarquement','Numéro OT, navire, date d\'embarquement, BL','Shipping › OT & embarquement','Shipping'],
     ['Client','Contrat (volume, période OD/JM), suivi contrat → acheté → usiné → agréé → embarqué','Lots & export › Contrats clients · Suivi achats clients','Commercial'],
   ];
   let h = '<div class="panel"><div class="panel-head"><h2>Guide ORIGEN — la chaîne du cacao, du producteur à l\'embarquement</h2><p class="hint" style="margin:4px 0 0">Chaque maillon : ce qu\'on y enregistre, où dans ORIGEN, et qui le remplit. Le bouton « ? » en bas à droite explique chaque écran.</p></div>';
