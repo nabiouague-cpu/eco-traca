@@ -4652,7 +4652,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-31-391';
+const APP_VERSION = '2026-10-31-392';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -11820,13 +11820,18 @@ async function otDocChoisi(inp){
     const tc = v=> v ? String(v).toLowerCase().replace(/(^|[\s\-])([a-zà-ÿ])/g, (m,a,b)=>a+b.toUpperCase()) : '';
     const rempli = [];
     if (maj('le_numero', i.numero_ot)) rempli.push('n° d\'OT');
-    if (maj('le_navire', i.navire)) rempli.push('navire');
-    if (maj('le_port_emb', tc(i.port_chargement))) rempli.push('port d\'embarquement');
-    if (maj('le_port_dest', i.port_destination)) rempli.push('port de destination');
-    ['transitaire','superintendant','compagnie_maritime','booking_maritime','eta_port_chargement','etd_port_chargement','contrat_achat','poids_net_kg','poids_brut_kg','nombre_sacs','magasin_stockage','date_empotage','consignee','notify_1','notify_2','notify_3'].forEach(k=>{ if (i[k]!=null && i[k]!=='') maj('oti_'+k, String(i[k])); });
-    rempli.push('informations de l\'OT (transitaire, navire, dates, poids…)');
-    const lots = (i.lots||[]).filter(Boolean);
-    dire('Document lu. Rempli : '+(rempli.length ? rempli.join(', ') : 'rien de nouveau (champs déjà remplis)')+'.'+(lots.length ? ' Lots indiqués : '+lots.join(', ')+' (à composer après l\'enregistrement).' : '')+' Vérifie puis enregistre ; les autres informations sont conservées avec l\'OT.');
+    if (maj('oti_contrat_achat', i.contrat_achat)) rempli.push('contrat d\'achat');
+    if (maj('oti_contrat_refs', (i.contrat_refs||[]).filter(Boolean).join(', '))) rempli.push('références de contrat');
+    if (maj('oti_magasin_stockage', i.magasin_stockage)) rempli.push('magasin de stockage');
+    const lots = (i.lots||[]).map(x=>String(x).replace(/\D/g,'')).filter(Boolean);
+    const connus = lots.map(n=>(state.lotsUsinage||[]).find(l=>String(l.numero)===n)).filter(Boolean);
+    const dejaIci = pl.id ? lotsExportCompo(pl.id).map(c=>c.lot_usinage_id) : [];
+    const aRattacher = connus.filter(u=>!dejaIci.includes(u.id) && lotsUsinageSoldeExport(u, pl.id||'')>0);
+    const inconnus = lots.filter(n=>!(state.lotsUsinage||[]).some(l=>String(l.numero)===n));
+    pl.ot_lots_a_rattacher = aRattacher.map(u=>u.id);
+    const zone = document.getElementById('le-doc-lots');
+    if (zone) zone.innerHTML = lots.length ? ('<label style="display:flex;gap:8px;align-items:flex-start;margin-top:8px;font-size:13px"><input type="checkbox" id="le_lots_auto" '+(aRattacher.length?'checked':'disabled')+' style="width:18px;height:18px;flex:none;margin:0"><span><b>Lots lus dans le document : '+esc(lots.join(', '))+'</b><br>'+(aRattacher.length ? 'Rattacher à cet OT les '+aRattacher.length+' lot'+(aRattacher.length>1?'s':'')+' d\'ORIGEN pas encore dans l\'OT ('+esc(aRattacher.map(u=>u.numero).join(', '))+') au moment de l\'enregistrement.' : 'Tous les lots d\'ORIGEN lus sont déjà dans cet OT.')+(inconnus.length ? '<br><span style="color:#a8281c">Pas encore dans ORIGEN : '+esc(inconnus.join(', '))+'</span>' : '')+'</span></label>') : '';
+    dire('Document lu. Rempli : '+(rempli.length ? rempli.join(', ') : 'rien de nouveau (champs déjà remplis)')+'. Vérifie puis enregistre.');
   }catch(e){ dire('Lecture impossible : '+(e.message||e), false); }
 }
 function lotExportOuvrir(id){
@@ -11840,12 +11845,17 @@ async function lotExportEnregistrer(){
   const pl = state.modal && state.modal.type==='lotExport' ? state.modal.payload : null; if (!pl) return;
   const numero = fv('le_numero').trim(); if (!numero){ showToast('Indique le numéro de l\'OT (attribué par le service shipping).'); return; }
   const ligne = { numero, si_reference: fv('le_si_ref').trim()||null, si_date: fv('le_si_date')||null, agreage_date: fv('le_agreage')||null, campagne_id: fv('le_campagne')||null, client: fv('le_client').trim()||null, navire: fv('le_navire').trim()||null, port_embarquement: fv('le_port_emb').trim()||null, port_destination: fv('le_port_dest').trim()||null, date_embarquement: fv('le_date_emb')||null, bl_numero: fv('le_bl').trim()||null, bl_date: fv('le_bl_date')||null, ref_vendeur: fv('le_ref_vendeur').trim()||null, niveau_tracabilite: fv('le_niveau')||null, statut: fv('le_statut')||'preparation', notes: fv('le_notes').trim()||null, updated_at: new Date().toISOString() };
-  { const base = Object.assign({}, pl.ot_infos||{}, pl.ot_nouveau_infos||{}), mod = {}; document.querySelectorAll('#modal-fields [name^="oti_"]').forEach(el=>{ const k = el.name.slice(4), v = String(el.value||'').trim(); mod[k] = (el.type==='number' && v!=='') ? Number(v) : (v||null); });
+  { const base = Object.assign({}, pl.ot_infos||{}, pl.ot_nouveau_infos||{}), mod = {}; document.querySelectorAll('#modal-fields [name^="oti_"]').forEach(el=>{ const k = el.name.slice(4), v = String(el.value||'').trim(); mod[k] = (k==='contrat_refs') ? (v ? v.split(',').map(x=>x.trim()).filter(Boolean) : null) : ((el.type==='number' && v!=='') ? Number(v) : (v||null)); });
     const infos = Object.assign(base, mod); if (Object.values(infos).some(v=>v!=null && v!=='' && !(Array.isArray(v)&&!v.length))){ ligne.ot_infos = infos; if (!pl.ot_nouveau_infos && !pl.ot_lu_le) ligne.ot_lu_le = null; } }
   if (pl.ot_nouveau_path){ ligne.ot_document_path = pl.ot_nouveau_path; if (pl.ot_nouveau_infos) ligne.ot_lu_le = new Date().toISOString(); }
   try{
     if (pl.id){ const { error } = await supabaseClient.from('lots_export').update(ligne).eq('id', pl.id); if (error) throw error; }
     else { ligne.id = genId('le'); ligne.conteneurs = []; const { error } = await supabaseClient.from('lots_export').insert(ligne); if (error) throw error; }
+    { const cb = document.getElementById('le_lots_auto'); const idOt = pl.id || ligne.id;
+      if (cb && cb.checked && (pl.ot_lots_a_rattacher||[]).length){
+        const rows = (pl.ot_lots_a_rattacher||[]).map(uid=>{ const u = lotUsinageParId(uid); const kg = u ? lotsUsinageSoldeExport(u, idOt) : 0; return kg>0 ? { id:genId('leu'), lot_export_id:idOt, lot_usinage_id:uid, poids_kg:kg } : null; }).filter(Boolean);
+        if (rows.length){ const { error: eR } = await supabaseClient.from('lots_export_usinage').insert(rows); if (eR) throw eR; }
+      } }
     if (pl.ot_nouveau_path && pl.ot_document_path && pl.ot_document_path!==pl.ot_nouveau_path) await supabaseClient.storage.from('documents-coop').remove([pl.ot_document_path]);
     await chargerLots(); closeModal(); showToast('OT enregistré.', 'success');
   }catch(e){ showToast('Échec : '+e.message); }
@@ -12117,6 +12127,7 @@ function lotsModalsHtml(){
       + '<div class="field" style="background:#f4f8f6;border:1px dashed #1F6E5C;border-radius:10px;padding:12px 14px;margin-bottom:12px"><b style="display:block;margin-bottom:6px">Document de l\'OT (PDF ou photo)</b>'
       + '<input type="file" id="le_doc" accept="application/pdf,image/*" onchange="otDocChoisi(this)">'
       + '<div id="le-doc-statut" class="hint" style="margin:8px 0 0">'+(pl.ot_document_path ? 'Un document est déjà joint. ' : 'Choisis le document : ORIGEN le lit et remplit la fiche.')+'</div>'
+      + '<div id="le-doc-lots"></div>'
       + (pl.ot_document_path && pl.id ? '<div style="margin-top:6px"><button type="button" class="btn-ghost btn-compact" onclick="otDocTelecharger(\''+esc(pl.id)+'\')">Télécharger</button> <button type="button" class="btn-ghost btn-compact" onclick="otDocLire(\''+esc(pl.id)+'\')">'+(pl.ot_infos?'Infos de l\'OT':'Lire l\'OT')+'</button></div>' : '')
       + '</div>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">N° d\'OT<input type="text" name="le_numero" value="'+esc(pl.numero||'')+'" placeholder="ex : ABJ-0101"></label><label class="field">Campagne<select name="le_campagne">'+lotsCampagneOptions(pl.campagne_id)+'</select></label></div>'
@@ -12128,13 +12139,9 @@ function lotsModalsHtml(){
       + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 12px"><label class="field">N° connaissement maritime (B/L)<input type="text" name="le_bl" value="'+esc(pl.bl_numero||'')+'"></label><label class="field">Date du B/L<input type="date" name="le_bl_date" value="'+esc(pl.bl_date||'')+'"></label><label class="field">Date d\'embarquement<input type="date" name="le_date_emb" value="'+esc(pl.date_embarquement||'')+'"></label></div>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Réf. vendeur<input type="text" name="le_ref_vendeur" value="'+esc(pl.ref_vendeur||'')+'" placeholder="ex : SP-0015A/25-26/000648"></label><label class="field">Niveau de traçabilité<select name="le_niveau"><option value="">—</option>'+OC_NIVEAUX_TRACABILITE.map(n=>'<option value="'+esc(n)+'"'+(n===(pl.niveau_tracabilite||'')?' selected':'')+'>'+esc(n)+'</option>').join('')+'</select></label></div>'
       + '<label class="field">Statut<select name="le_statut">'+Object.entries(LOTS_STATUTS_EXPORT).map(([k,v])=>'<option value="'+k+'"'+(k===(pl.statut||'preparation')?' selected':'')+'>'+v[1]+'</option>').join('')+'</select></label>'
-      + (()=>{ const I = pl.ot_infos||{}, f = (lib,k,type,ph)=>'<label class="field">'+lib+'<input type="'+(type||'text')+'" name="oti_'+k+'" value="'+esc(I[k]==null?'':I[k])+'"'+(ph?' placeholder="'+esc(ph)+'"':'')+'></label>', g3 = x=>'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 12px">'+x+'</div>';
-        return '<div style="font-weight:600;margin:12px 0 6px">Informations de l\'ordre de transit <span class="hint" style="margin:0 0 0 6px">remplies à la lecture du document, modifiables</span></div>'
-          + g3(f('Transitaire','transitaire')+f('Superintendant','superintendant')+f('Compagnie maritime','compagnie_maritime'))
-          + g3(f('Booking maritime','booking_maritime')+f('ETA port de chargement','eta_port_chargement','date')+f('ETD port de chargement','etd_port_chargement','date'))
-          + g3(f('Contrat d\'achat','contrat_achat')+f('Poids net (kg)','poids_net_kg','number')+f('Poids brut (kg)','poids_brut_kg','number'))
-          + g3(f('Nombre de sacs','nombre_sacs','number')+f('Magasin de stockage','magasin_stockage')+f('Date d\'empotage','date_empotage','date'))
-          + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px">'+f('Consignee','consignee')+f('Notify 1','notify_1')+f('Notify 2','notify_2')+f('Notify 3','notify_3')+'</div>'; })()
+      + (()=>{ const I = pl.ot_infos||{}, v = k=>esc(Array.isArray(I[k]) ? I[k].filter(Boolean).join(', ') : (I[k]==null?'':I[k]));
+        return '<div style="font-weight:600;margin:12px 0 6px">Références de l\'OT <span class="hint" style="margin:0 0 0 6px">lues dans le document, modifiables</span></div>'
+          + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 12px"><label class="field">Contrat d\'achat<input type="text" name="oti_contrat_achat" value="'+v('contrat_achat')+'"></label><label class="field">Références de contrat (CV)<input type="text" name="oti_contrat_refs" value="'+v('contrat_refs')+'" placeholder="séparées par une virgule"></label><label class="field">Magasin de stockage<input type="text" name="oti_magasin_stockage" value="'+v('magasin_stockage')+'"></label></div>'; })()
       + '<label class="field">Notes<textarea name="le_notes" rows="2">'+esc(pl.notes||'')+'</textarea></label>'
       + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="lotExportEnregistrer()">Enregistrer</button></div></div></div>';
   }
