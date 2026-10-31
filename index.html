@@ -2098,6 +2098,7 @@
   .shipc-serie summary span{opacity:.85;font-size:13px;} .shipc-serie summary em{color:#F2B705;font-style:normal;font-weight:600;}
   .shipc-serie-l{margin-top:8px;display:grid;gap:4px;font-size:13px;}
   .shipc-serie-l>div:not(.hint){display:grid;grid-template-columns:1fr 110px 260px;gap:10px;} .shipc-serie-l i{font-style:normal;}
+  .shipc-villes{margin:18px 0 0 !important;} .shipc-villes button{font-size:15px;padding:9px 22px;}
   .shipc-circ{display:block;width:100%;height:auto;margin-top:24px;overflow:visible;}
   .shipc-st{cursor:pointer;outline:none;} .shipc-st:focus-visible .shipc-zone{stroke:#fff;stroke-width:2;}
   .shipc-st:hover .shipc-nd{stroke:#fff;stroke-width:2;}
@@ -4651,7 +4652,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-31-385';
+const APP_VERSION = '2026-10-31-386';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7197,12 +7198,7 @@ function shipVilleCourante(lots){
 }
 function shipVilleChoisir(v){ state.shipVille = v; state.shipOtSel = ''; state.shipLotSolo = ''; state.shipStation = ''; state.panneau = null; render(); }
 // Un circuit par ville, l'un sous l'autre ; avec un OT (ou un lot) choisi, seul le circuit de sa ville reste
-function shipCircuitsVilles(lots){
-  const vs = shipVilles(); if (!vs.length) return shipCircuitHtml(lots);
-  const sel = state.shipOtSel ? lots.filter(l=>(shipOtDuLot(l.id)||{}).id===state.shipOtSel) : (state.shipLotSolo ? lots.filter(l=>l.id===state.shipLotSolo) : null);
-  const cible = sel && sel.length ? sel.map(shipVilleDuLot).find(Boolean) : '';
-  return vs.filter(v=>!cible || v===cible).map(v=>shipCircuitHtml(lots, v)).join('');
-}
+function shipCircuitsVilles(lots){ return shipCircuitHtml(lots); }
 function shipCircuitHtml(lots, villeArg){
   const ots = (state.lotsExport||[]).filter(o=>lots.some(l=>{ const x = shipOtDuLot(l.id); return x && x.id===o.id; }));
   const otSel = ots.find(o=>o.id===state.shipOtSel) || null;
@@ -7503,8 +7499,8 @@ function shipSeriesPretes(){
     return { site:g.site, client:g.client, kg:Math.max(0,g.kg), lots, bobivo, coops };
   }).filter(x=>x.lots>0).sort((a,b)=>b.kg-a.kg);
 }
-function shipSeriesHtml(){
-  const L = shipSeriesPretes(); if (!L.length) return '';
+function shipSeriesHtml(ville){
+  const L = shipSeriesPretes().filter(x=>!ville || x.site.ville===ville); if (!L.length) return '';
   const ET = { atracer:['à tracer','#F2B705'], client:['géré par le client','rgba(255,255,255,.45)'], ailleurs:['tracé sur une autre coopérative','rgba(255,255,255,.45)'], ok:['déjà tracé','#7fd6a8'] };
   return '<div class="shipc-series">' + L.map(x=>{
     const aTr = x.coops.filter(c=>c.etat==='atracer');
@@ -7516,7 +7512,8 @@ function renderShippingTab(){
   if (!state.lotsCharges) chargerLots().then(()=>render());
   if (!state.shipCharge){ shipChargerSuivi().then(()=>render()); }
   if (!state.lotsCharges || !state.shipCharge) return '<div class="panel"><div class="hint" style="padding:18px">Chargement du suivi des lots…</div></div>';
-  const lots = (state.lotsUsinage||[]).slice().sort((a,b)=>String(b.numero).localeCompare(String(a.numero),'fr',{numeric:true}));
+  const _ville = shipVilleCourante([]);
+  const lots = (state.lotsUsinage||[]).filter(l=>!_ville || shipVilleDuLot(l)===_ville).slice().sort((a,b)=>String(b.numero).localeCompare(String(a.numero),'fr',{numeric:true}));
   const _usel = (state.shipStation||'').startsWith('usine:') ? state.shipStation.slice(6) : '';
   const lotsP = _usel ? lots.filter(l=>l.site_code===_usel) : lots;
   const par = {}; SHIP_ETAPES.forEach(e=>par[e[0]] = 0); lotsP.forEach(l=>{ par[shipEtape(l)]++; });
@@ -7532,7 +7529,8 @@ function renderShippingTab(){
   const _t = v=>fmtNum(Math.round(v/1000));
   let html = '<div class="shipc-hero"><div class="ligne"><span>Campagne '+esc((state.campagnes||[]).map(c=>c.nom).join(', ')||'')+' · Shipping</span><span style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="shipTrackingExporter()">Tracking Excel</button><button class="btn" onclick="state.shipSous=\'saigic\';render()">Fiche SAIGIC</button><button class="btn btn-primary" onclick="state.shipSous=\'ot\';render()">Nouvel OT</button></span></div>'
     + '<div class="gros"><div><div class="v">'+_t(_ent)+'<small>t</small></div><div class="l">en entrepôt export</div></div><div><div class="v">'+_sousOt+'</div><div class="l">lot'+(_sousOt>1?'s':'')+' sous OT</div></div><div><div class="v">'+_t(_emb)+'<small>t</small></div><div class="l">embarquées</div></div><div><div class="v" style="color:#F2B705">'+_bloc+'</div><div class="l">lot'+(_bloc>1?'s':'')+' à surveiller</div></div></div>'
-    + shipSeriesHtml() + shipCircuitsVilles(lots)
+    + '<div class="shipc-sel shipc-villes">'+shipVilles().map(v=>'<button class="'+(_ville===v?'on':'')+'" onclick="shipVilleChoisir(\''+esc(v)+'\')">'+esc(v)+'</button>').join('')+'</div>'
+    + shipSeriesHtml(_ville) + shipCircuitsVilles(lots)
     + '<div class="shipc-sel">'+'<span style="width:10px"></span><button class="'+(state.shipOtSel||state.shipLotSolo?'':'on')+'" onclick="shipOtChoisir(\'\')">Tous les OT</button>'+(state.lotsExport||[]).filter(o=>lots.some(l=>(shipOtDuLot(l.id)||{}).id===o.id)).map(o=>'<button class="'+(state.shipOtSel===o.id?'on':'')+'" onclick="shipOtChoisir(\''+esc(o.id)+'\')">'+esc(o.numero)+'</button>').join('')+'</div>'
     + shipStationPanneau(lots) + '</div>'
     + '<div class="panel" style="margin-top:0"><div style="padding:6px 18px 18px">' + barre;
