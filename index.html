@@ -4652,7 +4652,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-31-392';
+const APP_VERSION = '2026-10-31-393';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7305,6 +7305,8 @@ function shipStationPanneau(lots){
     const scope = lots.filter(l=>state.shipLotSolo ? l.id===state.shipLotSolo : (!otSel || (shipOtDuLot(l.id)||{}).id===otSel.id)).filter(l=>shipStationDuLot(l)!=='usine');
     const faits = scope.filter(l=>shipSatFait(e.k,l)), afaire = scope.filter(l=>!shipSatFait(e.k,l));
     let h = '<div class="shipc-stn"><div class="shipc-stn-t"><b>'+esc(e.lib)+'</b><span>'+faits.length+' fait'+(faits.length>1?'s':'')+' · '+afaire.length+' à faire'+(otSel?' · OT '+esc(otSel.numero):'')+'</span><button class="shipc-x" onclick="shipStationClic(\''+k+'\')" aria-label="Fermer">Fermer</button></div>';
+    if (afaire.length && (e.k==='presente' || e.k==='agree')){ state.shipBulkIds = afaire.map(l=>l.id);
+      h += '<div class="shipc-stn-l" style="align-items:center"><span class="shipc-hors">'+(e.k==='agree' ? 'Le client a agréé les '+afaire.length+' lots le :' : 'Présentés au client le :')+'</span><input type="date" id="shipc-bulk-date" style="border:0;border-radius:8px;padding:5px 8px;font:inherit"><button class="btn btn-primary btn-compact" onclick="shipEtapeEnMasse(\''+e.k+'\')">'+(e.k==='agree' ? 'Marquer agréés' : 'Marquer présentés')+'</button></div>'; }
     if (afaire.length) h += '<div class="shipc-stn-l"><span class="shipc-hors">À faire :</span>'+afaire.slice(0,30).map(l=>'<button class="shipc-lot" onclick="shipLotClic(\''+esc(l.id)+'\')">'+esc(l.numero)+'</button>').join('')+(afaire.length>30?'<span class="shipc-hors">+ '+(afaire.length-30)+' autres</span>':'')+'</div>';
     return h + '</div>';
   }
@@ -7592,29 +7594,42 @@ function shipSuiviOuvrir(lotId){
   state.modal = { type:'shipSuivi', payload:{ lotId, numero:l.numero, contrat_client:s.contrat_client||'', date_presentation:s.date_presentation||'', date_sondage:s.date_sondage||'', date_ordre_transit:s.date_ordre_transit||'', date_phyto:s.date_phyto||'', date_fumigation:s.date_fumigation||'', agree_le:l.agree_le||'', agreage_resultat:s.agreage_resultat||(l.agree_le?'agree':''), si_recue_le:s.si_recue_le||'', si_reference:s.si_reference||'', date_sortie_entrepot:s.date_sortie_entrepot||'', poids_sortie_entrepot_kg:s.poids_sortie_entrepot_kg||'', poids_empotage_kg:s.poids_empotage_kg||'', cv_ccc:s.cv_ccc||'', cv_deblocage:s.cv_deblocage||'', commentaire:s.commentaire||'', ecart_saigic_accepte:!!s.ecart_saigic_accepte } };
   render();
 }
+// Présentation / agréage pour tous les lots « à faire » du panneau (un client agrée en général toute la série d'un coup)
+async function shipEtapeEnMasse(k){
+  const ids = (state.shipBulkIds||[]).slice(), d = (document.getElementById('shipc-bulk-date')||{}).value;
+  if (!ids.length) return; if (!d){ showToast('Choisis la date.'); return; }
+  const ag = k==='agree';
+  askConfirm((ag ? 'Marquer '+ids.length+' lot'+(ids.length>1?'s':'')+' comme agréé'+(ids.length>1?'s':'')+' par le client le ' : 'Marquer '+ids.length+' lot'+(ids.length>1?'s':'')+' comme présenté'+(ids.length>1?'s':'')+' au client le ')+dateFr(d)+' ?', async()=>{
+    try{
+      const maj = new Date().toISOString();
+      const rows = ids.map(id=>Object.assign({ lot_id:id, updated_at:maj }, ag ? { agreage_resultat:'agree' } : { date_presentation:d }));
+      const r1 = await supabaseClient.from('lots_suivi').upsert(rows, { onConflict:'lot_id' }); if (r1.error) throw r1.error;
+      if (ag){ const r2 = await supabaseClient.from('lots_usinage').update({ agree_le:d, updated_at:maj }).in('id', ids); if (r2.error) throw r2.error; await chargerLots(); }
+      await shipChargerSuivi(); render(); showToast(ids.length+' lot'+(ids.length>1?'s':'')+' mis à jour.', 'success');
+    }catch(e){ showToast('Échec : '+(e.message||e)); }
+  });
+}
 function renderShipSuiviModal(m){
   const pl = m.payload, f = (lib, nom, type, val, extra)=>'<label class="field">'+lib+'<input type="'+type+'" name="'+nom+'" value="'+esc(val)+'"'+(extra||'')+'></label>';
   const g = (...c)=>'<div style="display:grid;grid-template-columns:repeat('+c.length+',1fr);gap:0 12px">'+c.join('')+'</div>';
   return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal wide"><h3>Suivi du lot '+esc(pl.numero)+'</h3><div id="modal-fields">'
     + '<div style="font-weight:600;margin:2px 0 6px">Présentation et agréage</div>'
-    + g(f('Contrat client','sv_contrat','text',pl.contrat_client), f('Date de présentation au client','sv_presentation','date',pl.date_presentation), f('Date de sondage','sv_sondage','date',pl.date_sondage))
-    + g(f('Date d\'agréage','sv_agree_le','date',pl.agree_le), '<label class="field">Résultat<select name="sv_agreage"><option value="">—</option>'+Object.entries(SHIP_AGREAGE).map(([k,v])=>'<option value="'+k+'"'+(k===pl.agreage_resultat?' selected':'')+'>'+v[1]+'</option>').join('')+'</select></label>')
-    + '<div class="hint" style="margin:0 0 6px">Les instructions d\'embarquement se renseignent sur l\'OT (Shipping › OT &amp; embarquement). À partir de l\'agréage et des instructions reçues, tu peux éditer les formules SAIGIC et créer l\'OT.</div>'
-    + '<div style="font-weight:600;margin:10px 0 6px">Documents d\'exportation</div>'
-    + g(f('Ordre de transit','sv_ordre_transit','date',pl.date_ordre_transit), f('Certificat phytosanitaire','sv_phyto','date',pl.date_phyto), f('Fumigation (certificat)','sv_fumig','date',pl.date_fumigation))
-    + '<div style="font-weight:600;margin:10px 0 6px">Sortie d\'entrepôt et empotage</div>'
-    + g(f('Date de sortie de l\'entrepôt','sv_sortie_date','date',pl.date_sortie_entrepot), f('Poids net sortie entrepôt (kg)','sv_sortie_kg','number',pl.poids_sortie_entrepot_kg,' min="0" step="1"'), f('Poids net empotage (kg)','sv_empotage_kg','number',pl.poids_empotage_kg,' min="0" step="1"'))
+    + g(f('Date de présentation au client','sv_presentation','date',pl.date_presentation), f('Date d\'agréage','sv_agree_le','date',pl.agree_le), '<label class="field">Le client a<select name="sv_agreage"><option value="">— pas encore répondu —</option>'+Object.entries(SHIP_AGREAGE).map(([k,v])=>'<option value="'+k+'"'+(k===pl.agreage_resultat?' selected':'')+'>'+v[1]+'</option>').join('')+'</select></label>')
+    + '<div class="hint" style="margin:0 0 6px">L\'agréage, c\'est seulement : le client accepte le lot, et à quelle date. Le poids qui figure sur le B/L est celui de la dernière pesée avant l\'embarquement.</div>'
+    + '<div style="font-weight:600;margin:12px 0 6px">Étapes avant l\'embarquement</div>'
+    + g(f('Ordre de transit (date)','sv_ordre_transit','date',pl.date_ordre_transit), f('Fumigation (date)','sv_fumig','date',pl.date_fumigation), f('Phyto (date)','sv_phyto','date',pl.date_phyto))
+    + g(f('Pesée finale avant embarquement (kg)','sv_empotage_kg','number',pl.poids_empotage_kg,' min="0" step="1"'), '<div></div>', '<div></div>')
+    + '<details style="margin-top:10px"'+((pl.cv_ccc||pl.cv_deblocage||pl.commentaire||pl.ecart_saigic_accepte)?' open':'')+'><summary style="cursor:pointer;font-weight:600;margin-bottom:8px">Autres informations (facultatif)</summary>'
     + g(f('CV CCC','sv_cv_ccc','text',pl.cv_ccc), f('CV de déblocage','sv_cv_deb','text',pl.cv_deblocage))
     + '<label class="field">Commentaire<textarea name="sv_comm" rows="2">'+esc(pl.commentaire)+'</textarea></label>'
-    + '<label class="field" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" name="sv_ecart_ok" '+(pl.ecart_saigic_accepte?'checked':'')+'> Écart de poids avec le SAIGIC accepté (ne plus alerter pour ce lot)</label>'
+    + '<label class="field" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" name="sv_ecart_ok" '+(pl.ecart_saigic_accepte?'checked':'')+'> Écart de poids avec le SAIGIC accepté (ne plus alerter pour ce lot)</label></details>'
     + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="shipSuiviEnregistrer()">Enregistrer</button></div></div></div>';
 }
 async function shipSuiviEnregistrer(){
   const pl = state.modal && state.modal.type==='shipSuivi' ? state.modal.payload : null; if (!pl) return;
   const d = n=>fv(n)||null, k = n=>{ const v = Number(fv(n)); return v>0 ? v : null; };
   const agree = d('sv_agree_le'), res = d('sv_agreage');
-  const ligne = { lot_id:pl.lotId, contrat_client:fv('sv_contrat').trim()||null, date_presentation:d('sv_presentation'), date_sondage:d('sv_sondage'), agreage_resultat:res, date_ordre_transit:d('sv_ordre_transit'), date_phyto:d('sv_phyto'), date_fumigation:d('sv_fumig'),
-    date_sortie_entrepot:d('sv_sortie_date'), poids_sortie_entrepot_kg:k('sv_sortie_kg'), poids_empotage_kg:k('sv_empotage_kg'),
+  const ligne = { lot_id:pl.lotId, date_presentation:d('sv_presentation'), agreage_resultat:res, date_ordre_transit:d('sv_ordre_transit'), date_phyto:d('sv_phyto'), date_fumigation:d('sv_fumig'), poids_empotage_kg:k('sv_empotage_kg'),
     cv_ccc:fv('sv_cv_ccc').trim()||null, cv_deblocage:fv('sv_cv_deb').trim()||null, commentaire:fv('sv_comm').trim()||null, ecart_saigic_accepte:!!(document.querySelector('[name="sv_ecart_ok"]')||{}).checked, updated_at:new Date().toISOString() };
   try{
     const r1 = await supabaseClient.from('lots_suivi').upsert(ligne, { onConflict:'lot_id' }); if (r1.error) throw r1.error;
