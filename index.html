@@ -4644,7 +4644,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-31-383';
+const APP_VERSION = '2026-10-31-384';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7189,11 +7189,18 @@ function shipVilleCourante(lots){
   return v.includes('Abidjan') ? 'Abidjan' : (v[0] || '');
 }
 function shipVilleChoisir(v){ state.shipVille = v; state.shipOtSel = ''; state.shipLotSolo = ''; state.shipStation = ''; state.panneau = null; render(); }
-function shipCircuitHtml(lots){
+// Un circuit par ville, l'un sous l'autre ; avec un OT (ou un lot) choisi, seul le circuit de sa ville reste
+function shipCircuitsVilles(lots){
+  const vs = shipVilles(); if (!vs.length) return shipCircuitHtml(lots);
+  const sel = state.shipOtSel ? lots.filter(l=>(shipOtDuLot(l.id)||{}).id===state.shipOtSel) : (state.shipLotSolo ? lots.filter(l=>l.id===state.shipLotSolo) : null);
+  const cible = sel && sel.length ? sel.map(shipVilleDuLot).find(Boolean) : '';
+  return vs.filter(v=>!cible || v===cible).map(v=>shipCircuitHtml(lots, v)).join('');
+}
+function shipCircuitHtml(lots, villeArg){
   const ots = (state.lotsExport||[]).filter(o=>lots.some(l=>{ const x = shipOtDuLot(l.id); return x && x.id===o.id; }));
   const otSel = ots.find(o=>o.id===state.shipOtSel) || null;
   const solo = !otSel ? lots.find(l=>l.id===state.shipLotSolo) : null;
-  const ville = shipVilleCourante(lots);
+  const ville = villeArg || shipVilleCourante(lots);
   const mode = !!(otSel || solo);
   const portageVille = lots.filter(l=>shipVilleDuLot(l)===ville && (solo ? l.id===solo.id : (!otSel || (shipOtDuLot(l.id)||{}).id===otSel.id)));
   // usine cliquée : le circuit (lien, entrepôt, étapes) ne montre que ses lots ; les autres usines restent visibles mais sans lien
@@ -7216,7 +7223,8 @@ function shipCircuitHtml(lots){
   const apresOp = (idx)=> (mode && idx>cur) ? ' apres' : '';
   const entreeNom = ville ? 'Entrepôt export' : 'Entrepôt export';
   let s = '<svg class="shipc-circ" viewBox="0 -112 1260 '+(H+132)+'" role="group" aria-label="Circuit du cacao, '+esc(ville)+'">'
-    + '<defs><clipPath id="shipc-mer"><rect x="960" y="'+(ym+30)+'" width="300" height="90"/></clipPath></defs>';
+    + '<text x="40" y="-62" style="font:600 22px \'IBM Plex Sans\',sans-serif;fill:#fff;letter-spacing:.2px">'+esc(ville)+'</text>'
+    + '<defs><clipPath id="shipc-mer-'+esc(ville).replace(/[^a-zA-Z0-9]/g,'')+'"><rect x="960" y="'+(ym+30)+'" width="300" height="90"/></clipPath></defs>';
   // passerelles usine -> entrepôt (déduites des lots)
   const liens = {}; portage.forEach(l=>{ if (l.entrepot) liens[l.site_code+'|'+l.entrepot] = (liens[l.site_code+'|'+l.entrepot]||0)+1; });
   usines.forEach((u,i)=>{
@@ -7226,7 +7234,7 @@ function shipCircuitHtml(lots){
   });
   entrepots.forEach((n,j)=>{ const wy = ys[j]; s += '<path d="M'+(wx+64)+' '+wy+' C '+(wx+170)+' '+wy+', '+(px-150)+' '+ym+', '+(px-40)+' '+ym+'" fill="none" stroke="rgba(255,255,255,.28)" stroke-width="2" stroke-dasharray="3 6" stroke-linecap="round"/>'; });
   // vagues
-  s += '<g clip-path="url(#shipc-mer)"><g class="shipc-vague"><path d="M950 '+(ym+44)+'q22 -9 44 0t44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0V'+(ym+120)+'H950z" fill="rgba(255,255,255,.10)"/></g></g>';
+  s += '<g clip-path="url(#shipc-mer-'+esc(ville).replace(/[^a-zA-Z0-9]/g,'')+')"><g class="shipc-vague"><path d="M950 '+(ym+44)+'q22 -9 44 0t44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0V'+(ym+120)+'H950z" fill="rgba(255,255,255,.10)"/></g></g>';
   // usines
   usines.forEach((u,i)=>{
     const uy = 30 + i*54, n = nUs[u.code]||0, sel = state.shipStation==='usine:'+u.code;
@@ -7480,8 +7488,8 @@ function renderShippingTab(){
   const _t = v=>fmtNum(Math.round(v/1000));
   let html = '<div class="shipc-hero"><div class="ligne"><span>Campagne '+esc((state.campagnes||[]).map(c=>c.nom).join(', ')||'')+' · Shipping</span><span style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="shipTrackingExporter()">Tracking Excel</button><button class="btn" onclick="state.shipSous=\'saigic\';render()">Fiche SAIGIC</button><button class="btn btn-primary" onclick="state.shipSous=\'ot\';render()">Nouvel OT</button></span></div>'
     + '<div class="gros"><div><div class="v">'+_t(_ent)+'<small>t</small></div><div class="l">en entrepôt export</div></div><div><div class="v">'+_sousOt+'</div><div class="l">lot'+(_sousOt>1?'s':'')+' sous OT</div></div><div><div class="v">'+_t(_emb)+'<small>t</small></div><div class="l">embarquées</div></div><div><div class="v" style="color:#F2B705">'+_bloc+'</div><div class="l">lot'+(_bloc>1?'s':'')+' à surveiller</div></div></div>'
-    + shipCircuitHtml(lots)
-    + '<div class="shipc-sel">'+shipVilles().map(v=>'<button class="'+(shipVilleCourante(lots)===v?'on':'')+'" onclick="shipVilleChoisir(\''+esc(v)+'\')">'+esc(v)+'</button>').join('')+'<span style="width:10px"></span><button class="'+(state.shipOtSel||state.shipLotSolo?'':'on')+'" onclick="shipOtChoisir(\'\')">Tous les OT</button>'+(state.lotsExport||[]).filter(o=>lots.some(l=>(shipOtDuLot(l.id)||{}).id===o.id)).map(o=>'<button class="'+(state.shipOtSel===o.id?'on':'')+'" onclick="shipOtChoisir(\''+esc(o.id)+'\')">'+esc(o.numero)+'</button>').join('')+'</div>'
+    + shipCircuitsVilles(lots)
+    + '<div class="shipc-sel">'+'<span style="width:10px"></span><button class="'+(state.shipOtSel||state.shipLotSolo?'':'on')+'" onclick="shipOtChoisir(\'\')">Tous les OT</button>'+(state.lotsExport||[]).filter(o=>lots.some(l=>(shipOtDuLot(l.id)||{}).id===o.id)).map(o=>'<button class="'+(state.shipOtSel===o.id?'on':'')+'" onclick="shipOtChoisir(\''+esc(o.id)+'\')">'+esc(o.numero)+'</button>').join('')+'</div>'
     + shipStationPanneau(lots) + '</div>'
     + '<div class="panel" style="margin-top:0"><div style="padding:6px 18px 18px">' + barre;
   if (['contrats','series','achats_clients','usinage','chaine'].includes(sous)){
