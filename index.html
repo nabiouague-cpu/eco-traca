@@ -4652,7 +4652,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-31-390';
+const APP_VERSION = '2026-10-31-391';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -11823,6 +11823,8 @@ async function otDocChoisi(inp){
     if (maj('le_navire', i.navire)) rempli.push('navire');
     if (maj('le_port_emb', tc(i.port_chargement))) rempli.push('port d\'embarquement');
     if (maj('le_port_dest', i.port_destination)) rempli.push('port de destination');
+    ['transitaire','superintendant','compagnie_maritime','booking_maritime','eta_port_chargement','etd_port_chargement','contrat_achat','poids_net_kg','poids_brut_kg','nombre_sacs','magasin_stockage','date_empotage','consignee','notify_1','notify_2','notify_3'].forEach(k=>{ if (i[k]!=null && i[k]!=='') maj('oti_'+k, String(i[k])); });
+    rempli.push('informations de l\'OT (transitaire, navire, dates, poids…)');
     const lots = (i.lots||[]).filter(Boolean);
     dire('Document lu. Rempli : '+(rempli.length ? rempli.join(', ') : 'rien de nouveau (champs déjà remplis)')+'.'+(lots.length ? ' Lots indiqués : '+lots.join(', ')+' (à composer après l\'enregistrement).' : '')+' Vérifie puis enregistre ; les autres informations sont conservées avec l\'OT.');
   }catch(e){ dire('Lecture impossible : '+(e.message||e), false); }
@@ -11838,7 +11840,9 @@ async function lotExportEnregistrer(){
   const pl = state.modal && state.modal.type==='lotExport' ? state.modal.payload : null; if (!pl) return;
   const numero = fv('le_numero').trim(); if (!numero){ showToast('Indique le numéro de l\'OT (attribué par le service shipping).'); return; }
   const ligne = { numero, si_reference: fv('le_si_ref').trim()||null, si_date: fv('le_si_date')||null, agreage_date: fv('le_agreage')||null, campagne_id: fv('le_campagne')||null, client: fv('le_client').trim()||null, navire: fv('le_navire').trim()||null, port_embarquement: fv('le_port_emb').trim()||null, port_destination: fv('le_port_dest').trim()||null, date_embarquement: fv('le_date_emb')||null, bl_numero: fv('le_bl').trim()||null, bl_date: fv('le_bl_date')||null, ref_vendeur: fv('le_ref_vendeur').trim()||null, niveau_tracabilite: fv('le_niveau')||null, statut: fv('le_statut')||'preparation', notes: fv('le_notes').trim()||null, updated_at: new Date().toISOString() };
-  if (pl.ot_nouveau_path){ ligne.ot_document_path = pl.ot_nouveau_path; ligne.ot_infos = pl.ot_nouveau_infos||null; ligne.ot_lu_le = pl.ot_nouveau_infos ? new Date().toISOString() : null; }
+  { const base = Object.assign({}, pl.ot_infos||{}, pl.ot_nouveau_infos||{}), mod = {}; document.querySelectorAll('#modal-fields [name^="oti_"]').forEach(el=>{ const k = el.name.slice(4), v = String(el.value||'').trim(); mod[k] = (el.type==='number' && v!=='') ? Number(v) : (v||null); });
+    const infos = Object.assign(base, mod); if (Object.values(infos).some(v=>v!=null && v!=='' && !(Array.isArray(v)&&!v.length))){ ligne.ot_infos = infos; if (!pl.ot_nouveau_infos && !pl.ot_lu_le) ligne.ot_lu_le = null; } }
+  if (pl.ot_nouveau_path){ ligne.ot_document_path = pl.ot_nouveau_path; if (pl.ot_nouveau_infos) ligne.ot_lu_le = new Date().toISOString(); }
   try{
     if (pl.id){ const { error } = await supabaseClient.from('lots_export').update(ligne).eq('id', pl.id); if (error) throw error; }
     else { ligne.id = genId('le'); ligne.conteneurs = []; const { error } = await supabaseClient.from('lots_export').insert(ligne); if (error) throw error; }
@@ -12124,6 +12128,13 @@ function lotsModalsHtml(){
       + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 12px"><label class="field">N° connaissement maritime (B/L)<input type="text" name="le_bl" value="'+esc(pl.bl_numero||'')+'"></label><label class="field">Date du B/L<input type="date" name="le_bl_date" value="'+esc(pl.bl_date||'')+'"></label><label class="field">Date d\'embarquement<input type="date" name="le_date_emb" value="'+esc(pl.date_embarquement||'')+'"></label></div>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Réf. vendeur<input type="text" name="le_ref_vendeur" value="'+esc(pl.ref_vendeur||'')+'" placeholder="ex : SP-0015A/25-26/000648"></label><label class="field">Niveau de traçabilité<select name="le_niveau"><option value="">—</option>'+OC_NIVEAUX_TRACABILITE.map(n=>'<option value="'+esc(n)+'"'+(n===(pl.niveau_tracabilite||'')?' selected':'')+'>'+esc(n)+'</option>').join('')+'</select></label></div>'
       + '<label class="field">Statut<select name="le_statut">'+Object.entries(LOTS_STATUTS_EXPORT).map(([k,v])=>'<option value="'+k+'"'+(k===(pl.statut||'preparation')?' selected':'')+'>'+v[1]+'</option>').join('')+'</select></label>'
+      + (()=>{ const I = pl.ot_infos||{}, f = (lib,k,type,ph)=>'<label class="field">'+lib+'<input type="'+(type||'text')+'" name="oti_'+k+'" value="'+esc(I[k]==null?'':I[k])+'"'+(ph?' placeholder="'+esc(ph)+'"':'')+'></label>', g3 = x=>'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 12px">'+x+'</div>';
+        return '<div style="font-weight:600;margin:12px 0 6px">Informations de l\'ordre de transit <span class="hint" style="margin:0 0 0 6px">remplies à la lecture du document, modifiables</span></div>'
+          + g3(f('Transitaire','transitaire')+f('Superintendant','superintendant')+f('Compagnie maritime','compagnie_maritime'))
+          + g3(f('Booking maritime','booking_maritime')+f('ETA port de chargement','eta_port_chargement','date')+f('ETD port de chargement','etd_port_chargement','date'))
+          + g3(f('Contrat d\'achat','contrat_achat')+f('Poids net (kg)','poids_net_kg','number')+f('Poids brut (kg)','poids_brut_kg','number'))
+          + g3(f('Nombre de sacs','nombre_sacs','number')+f('Magasin de stockage','magasin_stockage')+f('Date d\'empotage','date_empotage','date'))
+          + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px">'+f('Consignee','consignee')+f('Notify 1','notify_1')+f('Notify 2','notify_2')+f('Notify 3','notify_3')+'</div>'; })()
       + '<label class="field">Notes<textarea name="le_notes" rows="2">'+esc(pl.notes||'')+'</textarea></label>'
       + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="lotExportEnregistrer()">Enregistrer</button></div></div></div>';
   }
