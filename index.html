@@ -4644,7 +4644,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-31-376';
+const APP_VERSION = '2026-10-31-377';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7135,17 +7135,21 @@ const SHIP_STATIONS = [
 const SHIP_SAT = [
   { k:'declare',  lib:'Déclaré SAIGIC', ic:'<path d="M6 3h9l4 4v14H6z"/><path d="M15 3v4h4"/><path d="M9 13l2 2 4-4"/>' },
   { k:'pesee',    lib:'Pesée',          ic:'<path d="M12 4v15M8 19h8M5 7h14"/><path d="M5 7l-3 6h6zM19 7l-3 6h6z"/>' },
-  { k:'fumig',    lib:'Fumigation',     ic:'<path d="M7 16a4 4 0 0 1 0-8 5 5 0 0 1 9.5-1A4 4 0 0 1 17 16z"/><path d="M9 19v2M12 19v2M15 19v2"/>' },
   { k:'presente', lib:'Présentation',   ic:'<circle cx="11" cy="11" r="6"/><path d="M21 21l-5-5"/><path d="M8.5 11l2 2 3-3.5"/>' },
   { k:'agree',    lib:'Agréage',        ic:'<circle cx="12" cy="10" r="6"/><path d="M9.5 10l2 2 3-3.5"/><path d="M8.5 15l-1.5 6 5-3 5 3-1.5-6"/>' },
   { k:'instr',    lib:'Instructions',   ic:'<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1"/><path d="M8.5 10h7M8.5 14h7M8.5 18h4"/>' },
+  { k:'ordre',    lib:'Ordre de transit', ic:'<path d="M3 7h11v9H3zM14 10h4l3 3v3h-7z"/><circle cx="7" cy="17.5" r="1.8"/><circle cx="17" cy="17.5" r="1.8"/>' },
   { k:'formules', lib:'BV · Fo1 · D6',  ic:'<path d="M5 21h14"/><path d="M8 21v-3h8v3"/><path d="M12 18v-4"/><circle cx="12" cy="9" r="4.5"/>' },
+  { k:'phyto',    lib:'Phyto',          ic:'<path d="M12 21V11"/><path d="M12 11c0-4 3-6 7-6 0 4-3 6-7 6z"/><path d="M12 15c0-3-2-5-6-5 0 3 2 5 6 5z"/>' },
+  { k:'fumig',    lib:'Fumigation',     ic:'<path d="M7 16a4 4 0 0 1 0-8 5 5 0 0 1 9.5-1A4 4 0 0 1 17 16z"/><path d="M9 19v2M12 19v2M15 19v2"/>' },
 ];
 function shipSatFait(k, l){
   const sv = shipSuiviDe(l.id) || {}, ot = shipOtDuLot(l.id);
   if (k==='declare') return !!l.saigic_date_fab;
   if (k==='pesee') return (lotsUsinagePese(l)>0) || !!l.date_pesee_entrepot;
   if (k==='fumig') return !!sv.date_fumigation;
+  if (k==='phyto') return !!sv.date_phyto;
+  if (k==='ordre') return !!sv.date_ordre_transit;
   if (k==='presente') return !!sv.date_presentation;
   if (k==='agree') return sv.agreage_resultat==='agree' || !!(l.agree_le && !sv.agreage_resultat);
   if (k==='instr') return !!(ot && (ot.si_date || ot.si_reference));
@@ -7206,7 +7210,7 @@ function shipCircuitHtml(lots){
   const pulseCls = 'shipc-pulse';
   const apresOp = (idx)=> (mode && idx>cur) ? ' apres' : '';
   const entreeNom = ville ? 'Entrepôt export' : 'Entrepôt export';
-  let s = '<svg class="shipc-circ" viewBox="0 -85 1260 '+(H+105)+'" role="group" aria-label="Circuit du cacao, '+esc(ville)+'">'
+  let s = '<svg class="shipc-circ" viewBox="0 -112 1260 '+(H+132)+'" role="group" aria-label="Circuit du cacao, '+esc(ville)+'">'
     + '<defs><clipPath id="shipc-mer"><rect x="960" y="'+(ym+30)+'" width="300" height="90"/></clipPath></defs>';
   // passerelles usine -> entrepôt (déduites des lots)
   const liens = {}; portage.forEach(l=>{ if (l.entrepot) liens[l.site_code+'|'+l.entrepot] = (liens[l.site_code+'|'+l.entrepot]||0)+1; });
@@ -7231,23 +7235,24 @@ function shipCircuitHtml(lots){
   });
   // entrepôts + étapes documentaires autour de celui qu'on regarde
   const dEnt = (x,y)=>'<g transform="translate('+(x-460)+','+(y-72)+')" stroke="#fff" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M400 104V66l60-26 60 26v38" fill="rgba(255,255,255,.08)"/><rect x="432" y="76" width="56" height="28" rx="2" fill="rgba(242,183,5,.18)" stroke="#F2B705"/><path d="M432 90h56M460 76v28" stroke="#F2B705" opacity=".8"/><rect x="438" y="52" width="44" height="14" rx="2" fill="#F2B705" stroke="none"/><text x="460" y="62.5" text-anchor="middle" font-size="9" font-weight="700" fill="#2A1E00" stroke="none" style="font-family:var(--sans)">EXPORT</text></g>';
-  // satellites (focus)
+  // étapes du magasin export : bande au-dessus de la scène, dans l'ordre du processus, sans trait vers l'entrepôt
   const scopeF = portage.filter(l=>focus ? l.entrepot===focus : false);
-  let satTop = '', sat = '';
-  const CX = wx, CY = wyF, RX = 150, RY = 118;
+  const NS = SHIP_SAT.length, X0 = 400, PAS = 92, SY = -50;
+  let satTop = '', sat = '<rect x="'+(X0-62)+'" y="-104" width="'+((NS-1)*PAS+124)+'" height="100" rx="14" fill="rgba(255,255,255,.07)"/><text class="shipc-lb pt" x="'+(X0-48)+'" y="-86" style="text-anchor:start">Au magasin export'+(focus && entrepots.length>1 ? ' · '+esc(focus) : '')+'</text>';
   SHIP_SAT.forEach((e,i)=>{
-    const th = Math.PI*(1 - i/(SHIP_SAT.length-1)), qx = Math.round(CX + RX*Math.cos(th)), qy = Math.round(CY - 40 - RY*Math.sin(th));
+    const qx = X0 + i*PAS, qy = SY;
     const fait = scopeF.filter(l=>shipSatFait(e.k,l)).length, tot = scopeF.length;
     const etat = !mode ? 'n' : (tot && fait===tot ? 'f' : (fait>0 ? 'p' : 't'));
     const sel = state.shipStation==='sat:'+e.k;
-    sat += '<line x1="'+CX+'" y1="'+(CY-8)+'" x2="'+qx+'" y2="'+qy+'" stroke="'+(etat==='f'?'rgba(242,183,5,.55)':'rgba(255,255,255,.14)')+'" stroke-width="'+(etat==='f'?2:1.5)+'" stroke-dasharray="'+(etat==='f'?'0':'3 4')+'"/>';
+    if (i<NS-1) sat += '<path d="M'+(qx+24)+' '+qy+'h'+(PAS-48)+'" stroke="'+(mode && etat==='f' ? 'rgba(242,183,5,.7)':'rgba(255,255,255,.18)')+'" stroke-width="2" stroke-linecap="round"/>';
     satTop += '<g class="shipc-st shipc-sat '+etat+(sel?' sel':'')+'" tabindex="0" role="button" aria-label="'+esc(e.lib+(mode?' : '+fait+' lot'+(fait>1?'s':'')+' sur '+tot:''))+'" onclick="shipStationClic(\'sat:'+e.k+'\')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();shipStationClic(\'sat:'+e.k+'\')}">'
-      + '<circle class="shipc-zone" cx="'+qx+'" cy="'+qy+'" r="26" fill="transparent"/>'
-      + (etat==='f' ? '<circle cx="'+qx+'" cy="'+qy+'" r="21" fill="rgba(242,183,5,.25)"/>' : '')
-      + '<circle class="shipc-sd '+etat+'" cx="'+qx+'" cy="'+qy+'" r="16"/>'
-      + '<g transform="translate('+(qx-9)+','+(qy-9)+') scale(.75)"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="'+(etat==='f'?'#0A2A26':etat==='p'?'#F2B705':'rgba(255,255,255,'+(etat==='n'?'.9':'.45')+')')+'" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">'+e.ic+'</svg></g>'
-      + (etat==='p' ? '<text class="shipc-nb2" x="'+qx+'" y="'+(qy+30)+'">'+fait+'/'+tot+'</text>' : '')
-      + '<text class="shipc-lb pt'+(etat==='t'?' d':'')+'" x="'+qx+'" y="'+(qy-22)+'">'+esc(e.lib)+'</text></g>';
+      + '<rect class="shipc-zone" x="'+(qx-44)+'" y="'+(qy-28)+'" width="88" height="70" rx="10" fill="transparent"/>'
+      + (etat==='f' ? '<circle cx="'+qx+'" cy="'+qy+'" r="23" fill="rgba(242,183,5,.25)"/>' : '')
+      + '<circle class="shipc-sd '+etat+'" cx="'+qx+'" cy="'+qy+'" r="18"/>'
+      + '<g transform="translate('+(qx-10)+','+(qy-10)+') scale(.83)"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="'+(etat==='f'?'#0A2A26':etat==='p'?'#F2B705':'rgba(255,255,255,'+(etat==='n'?'.9':'.45')+')')+'" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">'+e.ic+'</svg></g>'
+      + '<text class="shipc-lb pt'+(etat==='t'?' d':'')+'" x="'+qx+'" y="'+(qy+36)+'">'+esc(e.lib)+'</text>'
+      + (etat==='p' ? '<text class="shipc-nb2" x="'+qx+'" y="'+(qy+49)+'">'+fait+'/'+tot+'</text>' : '')
+      + '</g>';
   });
   s += sat;
   entrepots.forEach((n,j)=>{ const wy = ys[j], nb = nEn[n]||0, sel = state.shipStation==='entrepot:'+n, now = mode && cur===1 && portage.some(l=>l.entrepot===n && shipStationDuLot(l)==='entrepot');
@@ -7284,7 +7289,6 @@ function shipStationPanneau(lots){
     const scope = lots.filter(l=>state.shipLotSolo ? l.id===state.shipLotSolo : (!otSel || (shipOtDuLot(l.id)||{}).id===otSel.id)).filter(l=>shipStationDuLot(l)!=='usine');
     const faits = scope.filter(l=>shipSatFait(e.k,l)), afaire = scope.filter(l=>!shipSatFait(e.k,l));
     let h = '<div class="shipc-stn"><div class="shipc-stn-t"><b>'+esc(e.lib)+'</b><span>'+faits.length+' fait'+(faits.length>1?'s':'')+' · '+afaire.length+' à faire'+(otSel?' · OT '+esc(otSel.numero):'')+'</span><button class="shipc-x" onclick="shipStationClic(\''+k+'\')" aria-label="Fermer">Fermer</button></div>';
-    if (e.k==='fumig' && !faits.length) h += '<div class="shipc-vide">La date de fumigation n\'est pas encore saisie dans la fiche de suivi des lots.</div>';
     if (afaire.length) h += '<div class="shipc-stn-l"><span class="shipc-hors">À faire :</span>'+afaire.slice(0,30).map(l=>'<button class="shipc-lot" onclick="shipLotClic(\''+esc(l.id)+'\')">'+esc(l.numero)+'</button>').join('')+(afaire.length>30?'<span class="shipc-hors">+ '+(afaire.length-30)+' autres</span>':'')+'</div>';
     return h + '</div>';
   }
@@ -7528,7 +7532,7 @@ function shipFiltrer(f){ state.shipFiltre = f; render(); }
 function shipSuiviOuvrir(lotId){
   const l = lotUsinageParId(lotId); if (!l) return;
   const s = shipSuiviDe(lotId) || {};
-  state.modal = { type:'shipSuivi', payload:{ lotId, numero:l.numero, contrat_client:s.contrat_client||'', date_presentation:s.date_presentation||'', date_sondage:s.date_sondage||'', agree_le:l.agree_le||'', agreage_resultat:s.agreage_resultat||(l.agree_le?'agree':''), si_recue_le:s.si_recue_le||'', si_reference:s.si_reference||'', date_sortie_entrepot:s.date_sortie_entrepot||'', poids_sortie_entrepot_kg:s.poids_sortie_entrepot_kg||'', poids_empotage_kg:s.poids_empotage_kg||'', cv_ccc:s.cv_ccc||'', cv_deblocage:s.cv_deblocage||'', commentaire:s.commentaire||'', ecart_saigic_accepte:!!s.ecart_saigic_accepte } };
+  state.modal = { type:'shipSuivi', payload:{ lotId, numero:l.numero, contrat_client:s.contrat_client||'', date_presentation:s.date_presentation||'', date_sondage:s.date_sondage||'', date_ordre_transit:s.date_ordre_transit||'', date_phyto:s.date_phyto||'', date_fumigation:s.date_fumigation||'', agree_le:l.agree_le||'', agreage_resultat:s.agreage_resultat||(l.agree_le?'agree':''), si_recue_le:s.si_recue_le||'', si_reference:s.si_reference||'', date_sortie_entrepot:s.date_sortie_entrepot||'', poids_sortie_entrepot_kg:s.poids_sortie_entrepot_kg||'', poids_empotage_kg:s.poids_empotage_kg||'', cv_ccc:s.cv_ccc||'', cv_deblocage:s.cv_deblocage||'', commentaire:s.commentaire||'', ecart_saigic_accepte:!!s.ecart_saigic_accepte } };
   render();
 }
 function renderShipSuiviModal(m){
@@ -7539,6 +7543,8 @@ function renderShipSuiviModal(m){
     + g(f('Contrat client','sv_contrat','text',pl.contrat_client), f('Date de présentation au client','sv_presentation','date',pl.date_presentation), f('Date de sondage','sv_sondage','date',pl.date_sondage))
     + g(f('Date d\'agréage','sv_agree_le','date',pl.agree_le), '<label class="field">Résultat<select name="sv_agreage"><option value="">—</option>'+Object.entries(SHIP_AGREAGE).map(([k,v])=>'<option value="'+k+'"'+(k===pl.agreage_resultat?' selected':'')+'>'+v[1]+'</option>').join('')+'</select></label>')
     + '<div class="hint" style="margin:0 0 6px">Les instructions d\'embarquement se renseignent sur l\'OT (Shipping › OT &amp; embarquement). À partir de l\'agréage et des instructions reçues, tu peux éditer les formules SAIGIC et créer l\'OT.</div>'
+    + '<div style="font-weight:600;margin:10px 0 6px">Documents d\'exportation</div>'
+    + g(f('Ordre de transit','sv_ordre_transit','date',pl.date_ordre_transit), f('Certificat phytosanitaire','sv_phyto','date',pl.date_phyto), f('Fumigation (certificat)','sv_fumig','date',pl.date_fumigation))
     + '<div style="font-weight:600;margin:10px 0 6px">Sortie d\'entrepôt et empotage</div>'
     + g(f('Date de sortie de l\'entrepôt','sv_sortie_date','date',pl.date_sortie_entrepot), f('Poids net sortie entrepôt (kg)','sv_sortie_kg','number',pl.poids_sortie_entrepot_kg,' min="0" step="1"'), f('Poids net empotage (kg)','sv_empotage_kg','number',pl.poids_empotage_kg,' min="0" step="1"'))
     + g(f('CV CCC','sv_cv_ccc','text',pl.cv_ccc), f('CV de déblocage','sv_cv_deb','text',pl.cv_deblocage))
@@ -7550,7 +7556,7 @@ async function shipSuiviEnregistrer(){
   const pl = state.modal && state.modal.type==='shipSuivi' ? state.modal.payload : null; if (!pl) return;
   const d = n=>fv(n)||null, k = n=>{ const v = Number(fv(n)); return v>0 ? v : null; };
   const agree = d('sv_agree_le'), res = d('sv_agreage');
-  const ligne = { lot_id:pl.lotId, contrat_client:fv('sv_contrat').trim()||null, date_presentation:d('sv_presentation'), date_sondage:d('sv_sondage'), agreage_resultat:res,
+  const ligne = { lot_id:pl.lotId, contrat_client:fv('sv_contrat').trim()||null, date_presentation:d('sv_presentation'), date_sondage:d('sv_sondage'), agreage_resultat:res, date_ordre_transit:d('sv_ordre_transit'), date_phyto:d('sv_phyto'), date_fumigation:d('sv_fumig'),
     date_sortie_entrepot:d('sv_sortie_date'), poids_sortie_entrepot_kg:k('sv_sortie_kg'), poids_empotage_kg:k('sv_empotage_kg'),
     cv_ccc:fv('sv_cv_ccc').trim()||null, cv_deblocage:fv('sv_cv_deb').trim()||null, commentaire:fv('sv_comm').trim()||null, ecart_saigic_accepte:!!(document.querySelector('[name="sv_ecart_ok"]')||{}).checked, updated_at:new Date().toISOString() };
   try{
