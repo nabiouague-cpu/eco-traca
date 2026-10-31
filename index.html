@@ -4644,7 +4644,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-31-381';
+const APP_VERSION = '2026-10-31-382';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7195,10 +7195,13 @@ function shipCircuitHtml(lots){
   const solo = !otSel ? lots.find(l=>l.id===state.shipLotSolo) : null;
   const ville = shipVilleCourante(lots);
   const mode = !!(otSel || solo);
-  const portage = lots.filter(l=>shipVilleDuLot(l)===ville && (solo ? l.id===solo.id : (!otSel || (shipOtDuLot(l.id)||{}).id===otSel.id)));
+  const portageVille = lots.filter(l=>shipVilleDuLot(l)===ville && (solo ? l.id===solo.id : (!otSel || (shipOtDuLot(l.id)||{}).id===otSel.id)));
+  // usine cliquée : le circuit (lien, entrepôt, étapes) ne montre que ses lots ; les autres usines restent visibles mais sans lien
+  const usel = (state.shipStation||'').startsWith('usine:') ? state.shipStation.slice(6) : '';
+  const portage = usel ? portageVille.filter(l=>l.site_code===usel) : portageVille;
   const cur = otSel ? shipOtStation(otSel, lots) : (solo ? SHIP_STATIONS.findIndex(x=>x.k===shipStationDuLot(solo)) : -1);
   // usines de la ville (celles qui ont des lots d'abord)
-  const nUs = {}; portage.forEach(l=>{ nUs[l.site_code] = (nUs[l.site_code]||0)+1; });
+  const nUs = {}; portageVille.forEach(l=>{ nUs[l.site_code] = (nUs[l.site_code]||0)+1; });
   const usines = (state.sitesUsinage||[]).filter(x=>x.ville===ville && (x.actif!==false || nUs[x.code])).sort((a,b)=>(nUs[b.code]||0)-(nUs[a.code]||0) || String(a.code).localeCompare(String(b.code)));
   // entrepôts connus par les lots déclarés
   const nEn = {}; portage.forEach(l=>{ if (l.entrepot) nEn[l.entrepot] = (nEn[l.entrepot]||0)+1; });
@@ -7462,8 +7465,11 @@ function renderShippingTab(){
   if (!state.shipCharge){ shipChargerSuivi().then(()=>render()); }
   if (!state.lotsCharges || !state.shipCharge) return '<div class="panel"><div class="hint" style="padding:18px">Chargement du suivi des lots…</div></div>';
   const lots = (state.lotsUsinage||[]).slice().sort((a,b)=>String(b.numero).localeCompare(String(a.numero),'fr',{numeric:true}));
-  const par = {}; SHIP_ETAPES.forEach(e=>par[e[0]] = 0); lots.forEach(l=>{ par[shipEtape(l)]++; });
+  const _usel = (state.shipStation||'').startsWith('usine:') ? state.shipStation.slice(6) : '';
+  const lotsP = _usel ? lots.filter(l=>l.site_code===_usel) : lots;
+  const par = {}; SHIP_ETAPES.forEach(e=>par[e[0]] = 0); lotsP.forEach(l=>{ par[shipEtape(l)]++; });
   const filtre = state.shipFiltre || '';
+  const _kgP = lotsP.reduce((t,l)=>t+(lotsUsinagePese(l)||lotsUsinageSortie(l)||0), 0);
   const kg = lots.reduce((s,l)=>s+(lotsUsinagePese(l)||lotsUsinageSortie(l)||0), 0);
   const sous = state.shipSous || 'suivi';
   const SOUS = [['sacherie','Sacherie'],['contrats','Contrats clients'],['series','Séries de numérotation'],['achats_clients','Suivi achats clients'],['usinage','Lots d\'usinage'],['suivi','Suivi des lots'],['saigic','Déclaration SAIGIC'],['ot','OT & embarquement'],['chaine','Chaîne de traçabilité']];
@@ -7485,16 +7491,16 @@ function renderShippingTab(){
   if (sous==='saigic') return html + renderLotsSaigic() + '</div></div>';
   if (sous==='ot') return html + renderLotsExport() + '</div></div>';
   const _otF = (state.lotsExport||[]).find(o=>o.id===state.shipOtSel) || null, vue = (_otF || state.shipLotSolo) ? 'tableau' : (state.shipVue || 'tuiles'), sel = state.panneau && state.panneau.type==='lot' ? state.panneau.id : null;
-  const _idxMax = Math.max(-1, ...lots.map(l=>SHIP_ETAPES.findIndex(e=>e[0]===shipEtape(l))));
+  const _idxMax = Math.max(-1, ...lotsP.map(l=>SHIP_ETAPES.findIndex(e=>e[0]===shipEtape(l))));
   html = html.replace('<div class="panel" style="margin-top:0"><div style="padding:6px 18px 18px">', '<div class="shipc-piste">'
     + SHIP_ETAPES.map((e,i)=>'<button class="'+(par[e[0]]>0 ? (i===_idxMax ? 'now' : 'fait') : '')+(filtre===e[0]?' active':'')+'" title="'+esc(e[2])+'" onclick="shipFiltrer(\''+(filtre===e[0]?'':e[0])+'\')"><span class="n">'+par[e[0]]+'</span><span class="t">'+esc(e[1])+'</span><i></i></button>').join('')
     + '</div><div class="panel" style="margin-top:0"><div style="padding:6px 18px 18px">');
   html += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 12px">'
-    + '<span class="hint" style="margin:0">'+lots.length+' lot'+(lots.length>1?'s':'')+' · <b>'+fmtKg(kg)+'</b>'+(filtre?' · filtre : '+esc(SHIP_ETAPES.find(e=>e[0]===filtre)[1])+' (clique à nouveau sur l\'étape pour l\'enlever)':'')+'</span>'
+    + '<span class="hint" style="margin:0">'+lotsP.length+' lot'+(lotsP.length>1?'s':'')+' · <b>'+fmtKg(_kgP)+'</b>'+(filtre?' · filtre : '+esc(SHIP_ETAPES.find(e=>e[0]===filtre)[1])+' (clique à nouveau sur l\'étape pour l\'enlever)':'')+'</span>'
     + '<span style="flex:1"></span>'
     + '<div class="oc-subtabs" style="margin:0;border:none;gap:12px">'+[['tuiles','Tuiles'],['tableau','Tableau'],['colonnes','Colonnes']].map(([k,l])=>'<button class="'+(vue===k?'active':'')+'" onclick="state.shipVue=\''+k+'\';render()">'+l+'</button>').join('')+'</div></div>'
     + renderShipAlertes(lots);
-  let vus = lots.filter(l=>!filtre || shipEtape(l)===filtre);
+  let vus = lotsP.filter(l=>!filtre || shipEtape(l)===filtre);
   if (_otF) vus = vus.filter(l=>(shipOtDuLot(l.id)||{}).id===_otF.id); else if (state.shipLotSolo) vus = vus.filter(l=>l.id===state.shipLotSolo);
   if (_otF){ const _kg = vus.reduce((t,l)=>t+(lotsUsinagePese(l)||lotsUsinageSortie(l)||0),0);
     html += '<div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:0 0 10px"><h3 style="margin:0;font-size:17px">OT '+esc(_otF.numero)+'</h3><span class="hint" style="margin:0">'+esc(_otF.client||'')+' · '+esc(shipOtPort(_otF))+' · '+vus.length+' lot'+(vus.length>1?'s':'')+' · '+fmtKg(_kg)+'</span><button class="btn-ghost btn-compact" onclick="lotExportOuvrir(\''+esc(_otF.id)+'\')">Ouvrir l\'OT</button></div>'; }
