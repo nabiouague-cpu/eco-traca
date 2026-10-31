@@ -2123,6 +2123,8 @@
   .shipc-sd.f{fill:#F2B705;stroke:#fff;stroke-dasharray:0;stroke-width:2;} .shipc-sd.p{fill:#18544A;stroke:#F2B705;stroke-dasharray:0;stroke-width:2.5;}
   .shipc-sat:hover .shipc-sd{stroke:#fff;} .shipc-sat.sel .shipc-sd{stroke:#fff;stroke-width:3;stroke-dasharray:0;}
   .shipc-nb2{font:700 10px var(--mono);fill:#F2B705;text-anchor:middle;}
+  .shipc-etapes{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-top:10px;}
+  .shipc-et{background:rgba(255,255,255,.1);border-radius:10px;padding:8px 10px;position:relative;overflow:hidden;} .shipc-et .n{font:600 20px var(--mono);display:block;line-height:1;} .shipc-et .l{font-size:12px;color:rgba(255,255,255,.8);} .shipc-et i{display:block;height:3px;border-radius:2px;background:#F2B705;margin-top:6px;}
 </style>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet"></head>
 <body>
@@ -4642,7 +4644,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-31-375';
+const APP_VERSION = '2026-10-31-376';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7174,67 +7176,106 @@ function shipOtPort(ot){
   return n.startsWith('ABJ') ? 'Abidjan' : (n.startsWith('SP') ? 'San Pedro' : 'Port');
 }
 function shipNoms(arr, un, plusieurs){ const u = Array.from(new Set(arr.filter(Boolean))); return u.length===1 ? u[0] : (u.length ? u.length+' '+plusieurs : un); }
+function shipVilleDuLot(l){ const s = lotsSiteParCode(l.site_code); return s ? s.ville : ''; }
+function shipVilles(){ return Array.from(new Set((state.sitesUsinage||[]).map(s=>s.ville).filter(Boolean))); }
+function shipVilleCourante(lots){
+  const v = shipVilles(); if (state.shipVille && v.includes(state.shipVille)) return state.shipVille;
+  return v.includes('Abidjan') ? 'Abidjan' : (v[0] || '');
+}
+function shipVilleChoisir(v){ state.shipVille = v; state.shipOtSel = ''; state.shipLotSolo = ''; state.shipStation = ''; state.panneau = null; render(); }
 function shipCircuitHtml(lots){
   const ots = (state.lotsExport||[]).filter(o=>lots.some(l=>{ const x = shipOtDuLot(l.id); return x && x.id===o.id; }));
   const otSel = ots.find(o=>o.id===state.shipOtSel) || null;
   const solo = !otSel ? lots.find(l=>l.id===state.shipLotSolo) : null;
-  const portage = lots.filter(l=>solo ? l.id===solo.id : (!otSel || (shipOtDuLot(l.id)||{}).id===otSel.id));
+  const ville = shipVilleCourante(lots);
+  const mode = !!(otSel || solo);
+  const portage = lots.filter(l=>shipVilleDuLot(l)===ville && (solo ? l.id===solo.id : (!otSel || (shipOtDuLot(l.id)||{}).id===otSel.id)));
   const cur = otSel ? shipOtStation(otSel, lots) : (solo ? SHIP_STATIONS.findIndex(x=>x.k===shipStationDuLot(solo)) : -1);
-  const mode = !!(otSel || solo), lotCourant = state.panneau && state.panneau.type==='lot' ? state.panneau.id : '';
-  const cnt = {}; SHIP_STATIONS.forEach(s=>cnt[s.k]=0); portage.forEach(l=>{ cnt[shipStationDuLot(l)]++; });
-  const sites = portage.map(l=>{ const s = lotsSiteParCode(l.site_code); return (s && s.nom) || l.site_code || l.site; });
-  const lib = { usine: shipNoms(sites,'Site d\'usinage','sites d\'usinage'), entrepot: shipNoms(portage.map(l=>l.entrepot),'Entrepôt export','entrepôts'), port: 'Port', mer:'En mer' };
-  if (otSel){ const pp = shipOtPort(otSel); lib.port = 'Port '+(/^[AEIOUYH]/i.test(pp)?'d\'':'de ')+pp; }
-  const g = (k)=>{ const st = SHIP_STATIONS.find(x=>x.k===k); return st; };
-  const dessins = {
-    usine:(x)=>'<g transform="translate('+(x-45)+',0)" stroke="#fff" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M0 104V64l25-14v14l25-14v14l25-14v14h15v40z" fill="rgba(255,255,255,.08)"/><rect x="78" y="30" width="11" height="36" fill="rgba(255,255,255,.08)"/><path d="M8 104V88h16v16M36 82h14v8H36M58 82h14v8H58" stroke="#F2B705" opacity=".9"/><g class="shipc-fumee" fill="rgba(255,255,255,.35)" stroke="none"><circle cx="84" cy="24" r="4"/><circle cx="90" cy="14" r="3"/></g></g>',
-    entrepot:(x)=>'<g transform="translate('+(x-460)+',0)" stroke="#fff" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M400 104V66l60-26 60 26v38" fill="rgba(255,255,255,.08)"/><rect x="432" y="76" width="56" height="28" rx="2" fill="rgba(242,183,5,.18)" stroke="#F2B705"/><path d="M432 90h56M460 76v28" stroke="#F2B705" opacity=".8"/><rect x="438" y="52" width="44" height="14" rx="2" fill="#F2B705" stroke="none"/><text x="460" y="62.5" text-anchor="middle" font-size="9" font-weight="700" fill="#2A1E00" stroke="none" style="font-family:var(--sans)">EXPORT</text></g>',
-    port:(x)=>'<g transform="translate('+(x-675)+',0)"><path d="M640 104h70v14h-70z" fill="rgba(255,255,255,.12)" stroke="rgba(255,255,255,.45)" stroke-width="2"/><g stroke="rgba(255,255,255,.8)" stroke-width="2.2" fill="none" stroke-linecap="round"><path d="M668 104V52h40M668 52l-14 14M708 52v14"/></g></g>',
-    mer:(x)=>'<g transform="translate('+(x-955)+',9)"><g class="shipc-navire" stroke="#fff" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M880 100h150l-14 20h-120z" fill="rgba(255,255,255,.14)"/><path d="M900 100V86h70v14M930 86V72h28v14" fill="rgba(255,255,255,.1)"/><path d="M944 72V60h8"/><rect x="990" y="88" width="14" height="12" fill="#F2B705" stroke="#F2B705"/><rect x="976" y="88" width="14" height="12" fill="rgba(242,183,5,.55)" stroke="#F2B705"/></g></g>'
-  };
-  const halo = { usine:[150,78,62,42], entrepot:[470,76,62,44], port:[800,82,50,38], mer:[1040,92,78,36] };
-  let s = '<svg class="shipc-circ" viewBox="0 -62 1260 228" role="group" aria-label="Circuit du cacao">'
-    + '<defs><clipPath id="shipc-mer"><rect x="890" y="108" width="370" height="68"/></clipPath></defs>'
-    + '<line x1="60" y1="104" x2="890" y2="104" stroke="rgba(255,255,255,.22)" stroke-width="2"/>'
-
-    + '<g clip-path="url(#shipc-mer)"><g class="shipc-vague"><path d="M880 114q22 -9 44 0t44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0V176H880z" fill="rgba(255,255,255,.10)"/></g></g>';
-  const ordre = ['usine','entrepot','port','mer'];
-  // satellites autour du magasin export
-  const CX = 470, CY = 72, RX = 150, RY = 104;
-  let sat = '<g>'; let satTop = '';
+  // usines de la ville (celles qui ont des lots d'abord)
+  const nUs = {}; portage.forEach(l=>{ nUs[l.site_code] = (nUs[l.site_code]||0)+1; });
+  const usines = (state.sitesUsinage||[]).filter(x=>x.ville===ville && (x.actif!==false || nUs[x.code])).sort((a,b)=>(nUs[b.code]||0)-(nUs[a.code]||0) || String(a.code).localeCompare(String(b.code)));
+  // entrepôts connus par les lots déclarés
+  const nEn = {}; portage.forEach(l=>{ if (l.entrepot) nEn[l.entrepot] = (nEn[l.entrepot]||0)+1; });
+  const entrepots = Object.keys(nEn).sort((a,b)=>nEn[b]-nEn[a]);
+  const vide = !entrepots.length; if (vide) entrepots.push('');
+  const R = Math.max(usines.length, 1), H = Math.max(230, 40 + R*54);
+  const ys = entrepots.map((_,i)=>Math.round(H/(entrepots.length+1)*(i+1))), ym = Math.round(H/2);
+  const wx = 600, ux = 250, px = 910, mx = 1090;
+  const focus = entrepots.includes(state.shipEntrepFocus) ? state.shipEntrepFocus : (entrepots.find(n=>portage.some(l=>l.entrepot===n && shipStationDuLot(l)==='entrepot')) || entrepots[0]);
+  const wyF = ys[entrepots.indexOf(focus)];
+  const pulseCls = 'shipc-pulse';
+  const apresOp = (idx)=> (mode && idx>cur) ? ' apres' : '';
+  const entreeNom = ville ? 'Entrepôt export' : 'Entrepôt export';
+  let s = '<svg class="shipc-circ" viewBox="0 -85 1260 '+(H+105)+'" role="group" aria-label="Circuit du cacao, '+esc(ville)+'">'
+    + '<defs><clipPath id="shipc-mer"><rect x="960" y="'+(ym+30)+'" width="300" height="90"/></clipPath></defs>';
+  // passerelles usine -> entrepôt (déduites des lots)
+  const liens = {}; portage.forEach(l=>{ if (l.entrepot) liens[l.site_code+'|'+l.entrepot] = (liens[l.site_code+'|'+l.entrepot]||0)+1; });
+  usines.forEach((u,i)=>{
+    const uy = 30 + i*54, feeds = Object.keys(liens).filter(k=>k.split('|')[0]===u.code);
+    feeds.forEach(k=>{ const en = k.split('|')[1], wy = ys[entrepots.indexOf(en)], on = mode;
+      s += '<path d="M'+(ux+24)+' '+uy+' C '+(ux+170)+' '+uy+', '+(wx-190)+' '+wy+', '+(wx-64)+' '+wy+'" fill="none" stroke="'+(on?'#F2B705':'rgba(255,255,255,.55)')+'" stroke-width="'+(on?3:2)+'" stroke-linecap="round" opacity="'+(on?1:.8)+'"/>'; });
+  });
+  entrepots.forEach((n,j)=>{ const wy = ys[j]; s += '<path d="M'+(wx+64)+' '+wy+' C '+(wx+170)+' '+wy+', '+(px-150)+' '+ym+', '+(px-40)+' '+ym+'" fill="none" stroke="rgba(255,255,255,.28)" stroke-width="2" stroke-dasharray="3 6" stroke-linecap="round"/>'; });
+  // vagues
+  s += '<g clip-path="url(#shipc-mer)"><g class="shipc-vague"><path d="M950 '+(ym+44)+'q22 -9 44 0t44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0 44 0V'+(ym+120)+'H950z" fill="rgba(255,255,255,.10)"/></g></g>';
+  // usines
+  usines.forEach((u,i)=>{
+    const uy = 30 + i*54, n = nUs[u.code]||0, sel = state.shipStation==='usine:'+u.code;
+    const feed = mode ? n>0 : n>0, atUsine = mode && portage.some(l=>l.site_code===u.code && shipStationDuLot(l)==='usine');
+    const ic = SHIP_ICONES.produit;
+    s += '<g class="shipc-st'+(sel?' sel':'')+(mode && !n ? ' apres':'')+'" tabindex="0" role="button" aria-label="'+esc(u.nom)+' : '+n+' lot'+(n>1?'s':'')+'" onclick="shipStationClic(\'usine:'+esc(u.code)+'\')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();shipStationClic(\'usine:'+esc(u.code)+'\')}">'
+      + '<rect class="shipc-zone" x="'+(ux-220)+'" y="'+(uy-26)+'" width="270" height="52" rx="12" fill="transparent"/>'
+      + (atUsine ? '<circle cx="'+ux+'" cy="'+uy+'" r="22" fill="rgba(242,183,5,.14)" stroke="#F2B705" stroke-width="2.5"/><circle class="'+pulseCls+'" cx="'+ux+'" cy="'+uy+'" r="22" fill="none" stroke="#F2B705" stroke-width="3"/>' : '')
+      + '<circle cx="'+ux+'" cy="'+uy+'" r="20" class="shipc-nd '+(n?'f':'t')+'"/><g transform="translate('+(ux-11)+','+(uy-11)+') scale(.92)"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="'+(n?'#0A2A26':'rgba(255,255,255,.6)')+'" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+ic+'</svg></g>'
+      + '<text class="shipc-lb'+(n?'':' d')+'" x="'+(ux-30)+'" y="'+(uy-1)+'" style="text-anchor:end">'+esc(u.nom)+'</text><text class="shipc-lb pt" x="'+(ux-30)+'" y="'+(uy+13)+'" style="text-anchor:end">'+esc(u.code)+(n?' · '+n+' lot'+(n>1?'s':''):'')+'</text></g>';
+  });
+  // entrepôts + étapes documentaires autour de celui qu'on regarde
+  const dEnt = (x,y)=>'<g transform="translate('+(x-460)+','+(y-72)+')" stroke="#fff" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M400 104V66l60-26 60 26v38" fill="rgba(255,255,255,.08)"/><rect x="432" y="76" width="56" height="28" rx="2" fill="rgba(242,183,5,.18)" stroke="#F2B705"/><path d="M432 90h56M460 76v28" stroke="#F2B705" opacity=".8"/><rect x="438" y="52" width="44" height="14" rx="2" fill="#F2B705" stroke="none"/><text x="460" y="62.5" text-anchor="middle" font-size="9" font-weight="700" fill="#2A1E00" stroke="none" style="font-family:var(--sans)">EXPORT</text></g>';
+  // satellites (focus)
+  const scopeF = portage.filter(l=>focus ? l.entrepot===focus : false);
+  let satTop = '', sat = '';
+  const CX = wx, CY = wyF, RX = 150, RY = 118;
   SHIP_SAT.forEach((e,i)=>{
-    const th = Math.PI*(1 - i/(SHIP_SAT.length-1)), px = Math.round(CX + RX*Math.cos(th)), py = Math.round(CY - RY*Math.sin(th));
-    const fait = portage.filter(l=>shipSatFait(e.k,l)).length, tot = portage.length;
+    const th = Math.PI*(1 - i/(SHIP_SAT.length-1)), qx = Math.round(CX + RX*Math.cos(th)), qy = Math.round(CY - 40 - RY*Math.sin(th));
+    const fait = scopeF.filter(l=>shipSatFait(e.k,l)).length, tot = scopeF.length;
     const etat = !mode ? 'n' : (tot && fait===tot ? 'f' : (fait>0 ? 'p' : 't'));
     const sel = state.shipStation==='sat:'+e.k;
-    sat += '<line x1="'+CX+'" y1="'+(CY+4)+'" x2="'+px+'" y2="'+py+'" stroke="'+(etat==='f'?'rgba(242,183,5,.55)':'rgba(255,255,255,.14)')+'" stroke-width="'+(etat==='f'?2:1.5)+'" stroke-dasharray="'+(etat==='f'?'0':'3 4')+'"/>';
+    sat += '<line x1="'+CX+'" y1="'+(CY-8)+'" x2="'+qx+'" y2="'+qy+'" stroke="'+(etat==='f'?'rgba(242,183,5,.55)':'rgba(255,255,255,.14)')+'" stroke-width="'+(etat==='f'?2:1.5)+'" stroke-dasharray="'+(etat==='f'?'0':'3 4')+'"/>';
     satTop += '<g class="shipc-st shipc-sat '+etat+(sel?' sel':'')+'" tabindex="0" role="button" aria-label="'+esc(e.lib+(mode?' : '+fait+' lot'+(fait>1?'s':'')+' sur '+tot:''))+'" onclick="shipStationClic(\'sat:'+e.k+'\')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();shipStationClic(\'sat:'+e.k+'\')}">'
-      + '<circle class="shipc-zone" cx="'+px+'" cy="'+py+'" r="26" fill="transparent"/>'
-      + (etat==='f' ? '<circle cx="'+px+'" cy="'+py+'" r="21" fill="rgba(242,183,5,.25)"/>' : '')
-      + '<circle class="shipc-sd '+etat+'" cx="'+px+'" cy="'+py+'" r="16"/>'
-      + '<g transform="translate('+(px-9)+','+(py-9)+') scale(.75)"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="'+(etat==='f'?'#0A2A26':etat==='p'?'#F2B705':'rgba(255,255,255,'+(etat==='n'?'.9':'.45')+')')+'" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">'+e.ic+'</svg></g>'
-      + (etat==='p' ? '<text class="shipc-nb2" x="'+px+'" y="'+(py+30)+'">'+fait+'/'+tot+'</text>' : '')
-      + '<text class="shipc-lb pt'+(etat==='t'?' d':'')+'" x="'+px+'" y="'+(py-22)+'">'+esc(e.lib)+'</text></g>';
+      + '<circle class="shipc-zone" cx="'+qx+'" cy="'+qy+'" r="26" fill="transparent"/>'
+      + (etat==='f' ? '<circle cx="'+qx+'" cy="'+qy+'" r="21" fill="rgba(242,183,5,.25)"/>' : '')
+      + '<circle class="shipc-sd '+etat+'" cx="'+qx+'" cy="'+qy+'" r="16"/>'
+      + '<g transform="translate('+(qx-9)+','+(qy-9)+') scale(.75)"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="'+(etat==='f'?'#0A2A26':etat==='p'?'#F2B705':'rgba(255,255,255,'+(etat==='n'?'.9':'.45')+')')+'" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">'+e.ic+'</svg></g>'
+      + (etat==='p' ? '<text class="shipc-nb2" x="'+qx+'" y="'+(qy+30)+'">'+fait+'/'+tot+'</text>' : '')
+      + '<text class="shipc-lb pt'+(etat==='t'?' d':'')+'" x="'+qx+'" y="'+(qy-22)+'">'+esc(e.lib)+'</text></g>';
   });
-  sat += '</g>';
   s += sat;
-  ordre.forEach((k,i)=>{
-    const st = g(k), n = cnt[k], sel = state.shipStation===k, nom = lib[k] || st.lib, h = halo[k];
-    const fait = mode && i<cur, now = mode && i===cur, apres = mode && i>cur, petit = false;
-    s += '<g class="shipc-st'+(sel?' sel':'')+(apres?' apres':'')+'" tabindex="0" role="button" aria-label="'+esc(nom)+' : '+n+' lot'+(n>1?'s':'')+'" onclick="shipStationClic(\''+k+'\')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();shipStationClic(\''+k+'\')}">'
-      + '<ellipse class="shipc-zone" cx="'+h[0]+'" cy="'+h[1]+'" rx="'+(h[2]+10)+'" ry="'+(h[3]+10)+'" fill="transparent"/>'
-      + (now ? '<ellipse cx="'+h[0]+'" cy="'+h[1]+'" rx="'+h[2]+'" ry="'+h[3]+'" fill="rgba(242,183,5,.14)" stroke="#F2B705" stroke-width="2.5"/><ellipse class="shipc-pulse" cx="'+h[0]+'" cy="'+h[1]+'" rx="'+h[2]+'" ry="'+h[3]+'" fill="rgba(242,183,5,.12)" stroke="#F2B705" stroke-width="3"/>' : '')
-      + (petit ? '<circle cx="'+st.x+'" cy="92" r="15" class="shipc-nd '+((now||fait||(!mode&&n))?'f':'t')+'"/><g transform="translate('+(st.x-9)+',83) scale(.75)"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="'+((now||fait||(!mode&&n))?'#0A2A26':'rgba(255,255,255,.6)')+'" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">'+SHIP_ICONES[st.ic]+'</svg></g>' : dessins[k](st.x))
-      + (n ? '<circle cx="'+(h[0]+h[2]*.62)+'" cy="'+(h[1]-h[3]*.9)+'" r="11" fill="#F2B705"/><text x="'+(h[0]+h[2]*.62)+'" y="'+(h[1]-h[3]*.9+4)+'" class="shipc-nb">'+n+'</text>' : '')
-      + '<text class="shipc-lb'+(petit?' pt':'')+'" x="'+st.x+'" y="'+(petit?122:(k==='mer'?154:140))+'">'+esc(nom)+'</text></g>';
-  });
+  entrepots.forEach((n,j)=>{ const wy = ys[j], nb = nEn[n]||0, sel = state.shipStation==='entrepot:'+n, now = mode && cur===1 && portage.some(l=>l.entrepot===n && shipStationDuLot(l)==='entrepot');
+    s += '<g class="shipc-st'+(sel?' sel':'')+apresOp(1)+(vide?' apres':'')+'" tabindex="0" role="button" aria-label="'+esc(n||'Entrepôt export')+' : '+nb+' lot'+(nb>1?'s':'')+'" onclick="'+(vide?'':'shipEntrepotClic(\''+esc(n).replace(/'/g,"\\'")+'\')')+'" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();'+(vide?'':'shipEntrepotClic(\''+esc(n).replace(/'/g,"\\'")+'\')')+'}">'
+      + '<ellipse class="shipc-zone" cx="'+wx+'" cy="'+wy+'" rx="76" ry="56" fill="transparent"/>'
+      + (now ? '<ellipse cx="'+wx+'" cy="'+wy+'" rx="64" ry="46" fill="rgba(242,183,5,.14)" stroke="#F2B705" stroke-width="2.5"/><ellipse class="'+pulseCls+'" cx="'+wx+'" cy="'+wy+'" rx="64" ry="46" fill="none" stroke="#F2B705" stroke-width="3"/>' : '')
+      + dEnt(wx, wy)
+      + (nb ? '<circle cx="'+(wx+44)+'" cy="'+(wy-40)+'" r="11" fill="#F2B705"/><text x="'+(wx+44)+'" y="'+(wy-36)+'" class="shipc-nb">'+nb+'</text>' : '')
+      + '<text class="shipc-lb" x="'+wx+'" y="'+(wy+54)+'">'+esc(n || 'Entrepôt export')+'</text></g>'; });
+  // port + mer
+  const dPort = '<g transform="translate('+(px-675)+','+(ym-72)+')"><path d="M640 104h70v14h-70z" fill="rgba(255,255,255,.12)" stroke="rgba(255,255,255,.45)" stroke-width="2"/><g stroke="rgba(255,255,255,.8)" stroke-width="2.2" fill="none" stroke-linecap="round"><path d="M668 104V52h40M668 52l-14 14M708 52v14"/></g></g>';
+  const dMer = '<g transform="translate('+(mx-955)+','+(ym-72+9)+')"><g class="shipc-navire" stroke="#fff" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M880 100h150l-14 20h-120z" fill="rgba(255,255,255,.14)"/><path d="M900 100V86h70v14M930 86V72h28v14" fill="rgba(255,255,255,.1)"/><path d="M944 72V60h8"/><rect x="990" y="88" width="14" height="12" fill="#F2B705" stroke="#F2B705"/><rect x="976" y="88" width="14" height="12" fill="rgba(242,183,5,.55)" stroke="#F2B705"/></g></g>';
+  const portNom = ville ? 'Port '+(/^[AEIOUYH]/i.test(ville)?'d\'':'de ')+ville : 'Port';
+  [['port',px,dPort,portNom,2],['mer',mx,dMer,'En mer',3]].forEach(([k,x,d,nom,idx])=>{
+    const nb = portage.filter(l=>shipStationDuLot(l)===k).length, sel = state.shipStation===k, now = mode && cur===idx;
+    s += '<g class="shipc-st'+(sel?' sel':'')+apresOp(idx)+'" tabindex="0" role="button" aria-label="'+esc(nom)+' : '+nb+' lot'+(nb>1?'s':'')+'" onclick="shipStationClic(\''+k+'\')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();shipStationClic(\''+k+'\')}">'
+      + '<ellipse class="shipc-zone" cx="'+x+'" cy="'+(ym+8)+'" rx="'+(k==='mer'?84:56)+'" ry="46" fill="transparent"/>'
+      + (now ? '<ellipse cx="'+x+'" cy="'+(ym+8)+'" rx="'+(k==='mer'?78:50)+'" ry="38" fill="rgba(242,183,5,.14)" stroke="#F2B705" stroke-width="2.5"/><ellipse class="'+pulseCls+'" cx="'+x+'" cy="'+(ym+8)+'" rx="'+(k==='mer'?78:50)+'" ry="38" fill="none" stroke="#F2B705" stroke-width="3"/>' : '')
+      + d + (nb ? '<circle cx="'+(x+(k==='mer'?60:34))+'" cy="'+(ym-34)+'" r="11" fill="#F2B705"/><text x="'+(x+(k==='mer'?60:34))+'" y="'+(ym-30)+'" class="shipc-nb">'+nb+'</text>' : '')
+      + '<text class="shipc-lb" x="'+x+'" y="'+(ym+(k==='mer'?64:54))+'">'+esc(nom)+'</text></g>'; });
   s += satTop;
   return s + '</svg>';
 }
+function shipEntrepotClic(n){ state.shipEntrepFocus = n; shipStationClic('entrepot:'+n); }
 function shipStationClic(k){ state.shipStation = (state.shipStation===k) ? '' : k; render(); }
-function shipOtChoisir(id){ state.shipOtSel = id||''; state.shipLotSolo = ''; state.shipStation = ''; state.panneau = null; render(); }
+function shipOtChoisir(id){ if (id){ const lo = (state.lotsUsinage||[]).find(l=>(shipOtDuLot(l.id)||{}).id===id); if (lo && shipVilleDuLot(lo)) state.shipVille = shipVilleDuLot(lo); } state.shipOtSel = id||''; state.shipLotSolo = ''; state.shipStation = ''; state.panneau = null; render(); }
 // Clic sur un lot : on montre le circuit de son OT (ou le sien s'il n'a pas d'OT) et sa fiche
-function shipLotClic(id){ const ot = shipOtDuLot(id); state.shipOtSel = ot ? ot.id : ''; state.shipLotSolo = ot ? '' : id; state.shipStation = ''; state.panneau = { type:'lot', id }; render(); }
+function shipLotClic(id){ const ot = shipOtDuLot(id); { const lo = (state.lotsUsinage||[]).find(l=>l.id===id); if (lo && shipVilleDuLot(lo)) state.shipVille = shipVilleDuLot(lo); } state.shipOtSel = ot ? ot.id : ''; state.shipLotSolo = ot ? '' : id; state.shipStation = ''; state.panneau = { type:'lot', id }; render(); }
 function shipStationPanneau(lots){
   const k = state.shipStation; if (!k) return '';
   const otSel = (state.lotsExport||[]).find(o=>o.id===state.shipOtSel) || null;
@@ -7247,12 +7288,26 @@ function shipStationPanneau(lots){
     if (afaire.length) h += '<div class="shipc-stn-l"><span class="shipc-hors">À faire :</span>'+afaire.slice(0,30).map(l=>'<button class="shipc-lot" onclick="shipLotClic(\''+esc(l.id)+'\')">'+esc(l.numero)+'</button>').join('')+(afaire.length>30?'<span class="shipc-hors">+ '+(afaire.length-30)+' autres</span>':'')+'</div>';
     return h + '</div>';
   }
-  const st = SHIP_STATIONS.find(x=>x.k===k); if (!st) return '';
-  const ici = lots.filter(l=>shipStationDuLot(l)===k && (!otSel || (shipOtDuLot(l.id)||{}).id===otSel.id));
+  if (k.startsWith('usine:')){
+    const u = lotsSiteParCode(k.slice(6)); if (!u) return '';
+    const mes = lots.filter(l=>l.site_code===u.code && (!otSel || (shipOtDuLot(l.id)||{}).id===otSel.id));
+    const par = SHIP_ETAPES.map(e=>[e, mes.filter(l=>shipEtape(l)===e[0])]).filter(x=>x[1].length);
+    const kgT = mes.reduce((t,l)=>t+(lotsUsinagePese(l)||lotsUsinageSortie(l)||0),0);
+    let h = '<div class="shipc-stn"><div class="shipc-stn-t"><b>'+esc(u.nom)+'</b><span>'+esc(u.code)+' · '+esc(u.traitant||'')+' · '+mes.length+' lot'+(mes.length>1?'s':'')+' · '+fmtKg(kgT)+'</span><button class="shipc-x" onclick="shipStationClic(\''+k+'\')" aria-label="Fermer">Fermer</button></div>';
+    if (!mes.length) return h + '<div class="shipc-vide">Aucun lot de cette usine.</div></div>';
+    h += '<div class="shipc-etapes">'+par.map(([e,ls])=>'<div class="shipc-et"><span class="n">'+ls.length+'</span><span class="l">'+esc(e[1])+'</span><i style="width:'+Math.max(6,Math.round(ls.length/mes.length*100))+'%"></i></div>').join('')+'</div>';
+    const ots = []; const seen = {}; mes.forEach(l=>{ const o = shipOtDuLot(l.id); if (o && !seen[o.id]){ seen[o.id] = 1; ots.push(o); } });
+    if (ots.length) h += '<div class="shipc-stn-l"><span class="shipc-hors">OT :</span>'+ots.map(o=>'<button class="shipc-ot" onclick="shipOtChoisir(\''+esc(o.id)+'\')"><b>'+esc(o.numero)+'</b><span>'+esc(o.client||'')+'</span></button>').join('')+'</div>';
+    return h + '</div>';
+  }
+  const nomEntrepot = k.startsWith('entrepot:') ? k.slice(9) : '';
+  const kBase = k.split(':')[0];
+  const st = SHIP_STATIONS.find(x=>x.k===kBase); if (!st) return '';
+  const ici = lots.filter(l=>shipStationDuLot(l)===kBase && (!nomEntrepot || l.entrepot===nomEntrepot) && (!otSel || (shipOtDuLot(l.id)||{}).id===otSel.id));
   const ots = []; const seen = {}; let horsOt = [];
   ici.forEach(l=>{ const o = shipOtDuLot(l.id); if (o){ if (!seen[o.id]){ seen[o.id] = { ot:o, lots:[] }; ots.push(seen[o.id]); } seen[o.id].lots.push(l); } else horsOt.push(l); });
   const kg = a=>a.reduce((t,l)=>t+(lotsUsinagePese(l)||lotsUsinageSortie(l)||0),0);
-  let h = '<div class="shipc-stn"><div class="shipc-stn-t"><b>'+esc(st.lib)+'</b><span>'+ici.length+' lot'+(ici.length>1?'s':'')+' · '+ots.length+' OT</span><button class="shipc-x" onclick="shipStationClic(\''+k+'\')" aria-label="Fermer">Fermer</button></div>';
+  let h = '<div class="shipc-stn"><div class="shipc-stn-t"><b>'+esc(nomEntrepot || st.lib)+'</b><span>'+ici.length+' lot'+(ici.length>1?'s':'')+' · '+ots.length+' OT</span><button class="shipc-x" onclick="shipStationClic(\''+k+'\')" aria-label="Fermer">Fermer</button></div>';
   if (!ici.length) return h + '<div class="shipc-vide">Aucun lot à cette étape.</div></div>';
   if (ots.length) h += '<div class="shipc-stn-l">'+ots.map(x=>'<button class="shipc-ot" onclick="shipOtChoisir(\''+esc(x.ot.id)+'\')"><b>'+esc(x.ot.numero)+'</b><span>'+esc(x.ot.client||'')+' · '+x.lots.length+' lot'+(x.lots.length>1?'s':'')+' · '+fmtKg(kg(x.lots))+'</span></button>').join('')+'</div>';
   if (horsOt.length) h += '<div class="shipc-stn-l"><span class="shipc-hors">Hors OT :</span>'+horsOt.slice(0,30).map(l=>'<button class="shipc-lot" onclick="shipLotClic(\''+esc(l.id)+'\')">'+esc(l.numero)+'</button>').join('')+(horsOt.length>30?'<span class="shipc-hors">+ '+(horsOt.length-30)+' autres, voir la liste en bas</span>':'')+'</div>';
@@ -7414,7 +7469,7 @@ function renderShippingTab(){
   let html = '<div class="shipc-hero"><div class="ligne"><span>Campagne '+esc((state.campagnes||[]).map(c=>c.nom).join(', ')||'')+' · Shipping</span><span style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="shipTrackingExporter()">Tracking Excel</button><button class="btn" onclick="state.shipSous=\'saigic\';render()">Fiche SAIGIC</button><button class="btn btn-primary" onclick="state.shipSous=\'ot\';render()">Nouvel OT</button></span></div>'
     + '<div class="gros"><div><div class="v">'+_t(_ent)+'<small>t</small></div><div class="l">en entrepôt export</div></div><div><div class="v">'+_sousOt+'</div><div class="l">lot'+(_sousOt>1?'s':'')+' sous OT</div></div><div><div class="v">'+_t(_emb)+'<small>t</small></div><div class="l">embarquées</div></div><div><div class="v" style="color:#F2B705">'+_bloc+'</div><div class="l">lot'+(_bloc>1?'s':'')+' à surveiller</div></div></div>'
     + shipCircuitHtml(lots)
-    + '<div class="shipc-sel"><button class="'+(state.shipOtSel||state.shipLotSolo?'':'on')+'" onclick="shipOtChoisir(\'\')">Tous les OT</button>'+(state.lotsExport||[]).filter(o=>lots.some(l=>(shipOtDuLot(l.id)||{}).id===o.id)).map(o=>'<button class="'+(state.shipOtSel===o.id?'on':'')+'" onclick="shipOtChoisir(\''+esc(o.id)+'\')">'+esc(o.numero)+'</button>').join('')+'</div>'
+    + '<div class="shipc-sel">'+shipVilles().map(v=>'<button class="'+(shipVilleCourante(lots)===v?'on':'')+'" onclick="shipVilleChoisir(\''+esc(v)+'\')">'+esc(v)+'</button>').join('')+'<span style="width:10px"></span><button class="'+(state.shipOtSel||state.shipLotSolo?'':'on')+'" onclick="shipOtChoisir(\'\')">Tous les OT</button>'+(state.lotsExport||[]).filter(o=>lots.some(l=>(shipOtDuLot(l.id)||{}).id===o.id)).map(o=>'<button class="'+(state.shipOtSel===o.id?'on':'')+'" onclick="shipOtChoisir(\''+esc(o.id)+'\')">'+esc(o.numero)+'</button>').join('')+'</div>'
     + shipStationPanneau(lots) + '</div>'
     + '<div class="panel" style="margin-top:0"><div style="padding:6px 18px 18px">' + barre;
   if (['contrats','series','achats_clients','usinage','chaine'].includes(sous)){
