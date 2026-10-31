@@ -4652,7 +4652,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-10-31-386';
+const APP_VERSION = '2026-10-31-387';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7553,7 +7553,7 @@ function renderShippingTab(){
   let vus = lotsP.filter(l=>!filtre || shipEtape(l)===filtre);
   if (_otF) vus = vus.filter(l=>(shipOtDuLot(l.id)||{}).id===_otF.id); else if (state.shipLotSolo) vus = vus.filter(l=>l.id===state.shipLotSolo);
   if (_otF){ const _kg = vus.reduce((t,l)=>t+(lotsUsinagePese(l)||lotsUsinageSortie(l)||0),0);
-    html += '<div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:0 0 10px"><h3 style="margin:0;font-size:17px">OT '+esc(_otF.numero)+'</h3><span class="hint" style="margin:0">'+esc(_otF.client||'')+' · '+esc(shipOtPort(_otF))+' · '+vus.length+' lot'+(vus.length>1?'s':'')+' · '+fmtKg(_kg)+'</span><button class="btn-ghost btn-compact" onclick="lotExportOuvrir(\''+esc(_otF.id)+'\')">Ouvrir l\'OT</button></div>'; }
+    html += '<div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:0 0 10px"><h3 style="margin:0;font-size:17px">OT '+esc(_otF.numero)+'</h3><span class="hint" style="margin:0">'+esc(_otF.client||'')+' · '+esc(shipOtPort(_otF))+' · '+vus.length+' lot'+(vus.length>1?'s':'')+' · '+fmtKg(_kg)+'</span><button class="btn-ghost btn-compact" onclick="lotExportOuvrir(\''+esc(_otF.id)+'\')">Ouvrir l\'OT</button>'+otDocBoutons(_otF)+'</div>'; }
   if (vue==='tuiles'){
     const otF = null;
     const liste = vus.slice().sort((a,b)=>SHIP_ETAPES.findIndex(e=>e[0]===shipEtape(a))-SHIP_ETAPES.findIndex(e=>e[0]===shipEtape(b)) || String(a.numero).localeCompare(String(b.numero),'fr',{numeric:true}));
@@ -10516,7 +10516,7 @@ function renderLotsExport(){
     const ecart = (poids>0 && pc>0 && Math.abs(poids-pc)>1) ? ' <span class="badge warn" title="Le poids des conteneurs diffère du poids des lots affectés">écart '+fmtKg(pc-poids)+'</span>' : '';
     html += '<tr><td><b>'+esc(l.numero)+'</b></td><td>'+esc(l.client||'—')+'</td><td>'+(l.si_reference||l.si_date ? esc(l.si_reference||'')+(l.si_date?' <span class="hint" style="margin:0">'+esc(dateFr(l.si_date))+'</span>':'') : '<span class="badge warn" title="À renseigner dans la fiche de l\'OT">à recevoir</span>')+'</td><td>'+esc(l.navire||'—')+'</td><td>'+esc(l.bl_numero||'—')+(l.bl_date?' <span class="hint" style="margin:0">'+esc(dateFr(l.bl_date))+'</span>':'')+'</td><td>'+esc(l.ref_vendeur||'—')+'</td><td>'+esc(l.niveau_tracabilite||'—')+'</td><td>'+esc(dateFr(l.date_embarquement)||'—')+(l.port_embarquement?' <span class="hint" style="margin:0">'+esc(l.port_embarquement)+(l.port_destination?' → '+esc(l.port_destination):'')+'</span>':'')+'</td>'
       + '<td>'+nc+'</td><td>'+fmtKg(poids)+'</td><td>'+(nc?fmtKg(pc):'—')+ecart+'</td><td>'+lotsBadge(LOTS_STATUTS_EXPORT, l.statut)+'</td>'
-      + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="lotExportComposer(\''+esc(l.id)+'\')">Composer</button> <button class="btn-ghost btn-compact" onclick="lotExportConteneurs(\''+esc(l.id)+'\')">Conteneurs</button> <button class="btn-ghost btn-compact" onclick="lotExportOuvrir(\''+esc(l.id)+'\')">Modifier</button> <button class="btn-ghost btn-compact" onclick="lotsVoirChaine(\''+esc(l.id)+'\')">Chaîne</button> <button class="btn-danger-text btn-compact" onclick="lotExportSupprimer(\''+esc(l.id)+'\')">Supprimer</button></td></tr>';
+      + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="lotExportComposer(\''+esc(l.id)+'\')">Composer</button> <button class="btn-ghost btn-compact" onclick="lotExportConteneurs(\''+esc(l.id)+'\')">Conteneurs</button> '+otDocBoutons(l)+' <button class="btn-ghost btn-compact" onclick="lotExportOuvrir(\''+esc(l.id)+'\')">Modifier</button> <button class="btn-ghost btn-compact" onclick="lotsVoirChaine(\''+esc(l.id)+'\')">Chaîne</button> <button class="btn-danger-text btn-compact" onclick="lotExportSupprimer(\''+esc(l.id)+'\')">Supprimer</button></td></tr>';
     if (compo.length){
       html += '<tr class="lots-detail"><td colspan="13"><div class="lots-compo">'+compo.map(c=>{ const u = lotUsinageParId(c.lot_usinage_id); return '<span class="lots-puce">'+esc(u ? u.numero : c.lot_usinage_id)+' — <b>'+fmtKg(c.poids_kg)+'</b></span>'; }).join('')+'</div></td></tr>';
     }
@@ -11713,6 +11713,89 @@ async function lotUsinageCompoEnregistrer(){
   }catch(e){ showToast('Échec : '+e.message); }
 }
 // ---- Lots d'export : fiche, composition, conteneurs, suppression ----
+// ---- Document de l'OT (PDF de l'ordre de transit) : joindre, télécharger, lire pour en tirer les informations ----
+const OT_INFOS_LIBELLES = [['numero_ot','N° OT'],['date_ot','Date de l\'OT'],['transitaire','Transitaire'],['copie_a','Copie à'],['contrat_achat','Contrat d\'achat'],['contrat_refs','Réf. de contrat'],['incoterm','Incoterm'],['qualite','Qualité'],['poids_brut_kg','Poids brut (kg)'],['poids_net_kg','Poids net (kg)'],['conditionnement','Conditionnement'],['nombre_sacs','Nombre de sacs'],['campagne','Campagne'],['recolte','Récolte'],['lots','Lots'],['marque','Marque'],['port_chargement','Port de chargement'],['port_destination','Port de destination'],['compagnie_maritime','Compagnie maritime'],['booking_maritime','Booking'],['chargeur','Chargeur'],['superintendant','Superintendant'],['navire','Navire'],['eta_port_chargement','ETA port de chargement'],['etd_port_chargement','ETD port de chargement'],['eta_destination','ETA destination'],['lieu_livraison_finale','Livraison finale'],['nombre_originaux_bl','Originaux B/L'],['consignee','Consignee'],['notify_1','Notify 1'],['notify_2','Notify 2'],['notify_3','Notify 3'],['bl_emis_a','B/L émis à'],['bl_emis_par','B/L émis par'],['fret_paye_par','Fret payé par'],['documents_export','Documents export demandés'],['magasin_stockage','Magasin de stockage'],['date_empotage','Date d\'empotage'],['termes_expedition','Termes d\'expédition'],['transbordement','Transbordement'],['roll_over','Roll over'],['exigences','Exigences complémentaires'],['mention_bl','Mention à porter sur le B/L'],['responsable_shipping','Responsable shipping'],['remarques','À vérifier']];
+function otDocJoindre(id){
+  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'application/pdf,image/*';
+  inp.onchange = async ()=>{
+    const f = inp.files && inp.files[0]; if (!f) return;
+    if (f.size > 20*1024*1024){ showToast('Fichier trop lourd (20 Mo maximum).'); return; }
+    const l = lotExportParId(id); if (!l) return;
+    try{
+      const ext = (f.name.split('.').pop()||'pdf').toLowerCase().replace(/[^a-z0-9]/g,'');
+      const path = 'ot/'+id+'/'+Date.now()+'.'+ext;
+      const { error: eUp } = await supabaseClient.storage.from('documents-coop').upload(path, f, { upsert:false, contentType:f.type||undefined });
+      if (eUp) throw eUp;
+      const { error: eDb } = await supabaseClient.from('lots_export').update({ ot_document_path:path, ot_infos:null, ot_lu_le:null }).eq('id', id);
+      if (eDb) throw eDb;
+      if (l.ot_document_path) await supabaseClient.storage.from('documents-coop').remove([l.ot_document_path]);
+      await chargerLots(); render(); showToast('Document de l\'OT joint.', 'success');
+    }catch(e){ showToast('Échec : '+(e.message||e)); }
+  };
+  inp.click();
+}
+async function otDocTelecharger(id){
+  const l = lotExportParId(id); if (!l || !l.ot_document_path) return;
+  try{
+    const { data, error } = await supabaseClient.storage.from('documents-coop').download(l.ot_document_path);
+    if (error) throw error;
+    const ext = l.ot_document_path.split('.').pop();
+    const a = document.createElement('a'); a.href = URL.createObjectURL(data); a.download = 'OT_'+String(l.numero).replace(/[^A-Za-z0-9_-]+/g,'_')+'.'+ext;
+    document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  }catch(e){ showToast('Téléchargement impossible : '+(e.message||e)); }
+}
+async function otDocLire(id, relire){
+  const l = lotExportParId(id); if (!l || !l.ot_document_path) return;
+  if (l.ot_infos && !relire){ state.modal = { type:'otInfos', payload:{ id, infos:l.ot_infos, deja:true } }; render(); return; }
+  state.modal = { type:'otInfos', payload:{ id, enCours:true } }; render();
+  try{
+    const { data, error } = await supabaseClient.functions.invoke('lire-ordre-transit', { body:{ path:l.ot_document_path } });
+    if (error) throw error;
+    if (!data || data.error) throw new Error((data && data.error) || 'Réponse vide');
+    state.modal = { type:'otInfos', payload:{ id, infos:data.infos } }; render();
+  }catch(e){
+    let msg = e.message||String(e);
+    try{ if (e.context && e.context.json){ const j = await e.context.json(); if (j && j.error) msg = j.error; } }catch(_e){}
+    state.modal = { type:'otInfos', payload:{ id, erreur:msg } }; render();
+  }
+}
+async function otDocAppliquer(){
+  const pl = state.modal && state.modal.type==='otInfos' ? state.modal.payload : null; if (!pl || !pl.infos) return;
+  const l = lotExportParId(pl.id); if (!l) return; const i = pl.infos;
+  const maj = { ot_infos:i, ot_lu_le:new Date().toISOString() };
+  if (i.navire && !l.navire) maj.navire = i.navire;
+  if (i.port_destination && !l.port_destination) maj.port_destination = i.port_destination;
+  try{
+    const { error } = await supabaseClient.from('lots_export').update(maj).eq('id', pl.id); if (error) throw error;
+    await chargerLots(); closeModal(); showToast('Informations de l\'OT enregistrées.', 'success');
+  }catch(e){ showToast('Échec : '+(e.message||e)); }
+}
+function renderOtInfosModal(m){
+  const pl = m.payload, l = lotExportParId(pl.id) || {};
+  const tete = '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal wide"><h3>Ordre de transit '+esc(l.numero||'')+'</h3>';
+  if (pl.enCours) return tete+'<div class="hint" style="padding:24px 0">Lecture du document en cours… (quelques secondes)</div></div></div>';
+  if (pl.erreur) return tete+'<div class="badge warn" style="white-space:normal">Lecture impossible : '+esc(pl.erreur)+'</div><div class="actions"><button class="btn" onclick="closeModal()">Fermer</button><button class="btn btn-primary" onclick="otDocLire(\''+esc(pl.id)+'\',true)">Réessayer</button></div></div></div>';
+  const i = pl.infos||{}, fmt = v=> Array.isArray(v) ? v.filter(Boolean).join(', ') : (v==null||v==='' ? '' : String(v));
+  const lignes = OT_INFOS_LIBELLES.map(([k,lib])=>{ let v = i[k]; if (k.startsWith('poids_') && v) v = fmtKg(v); else if (/^(date|eta|etd)/.test(k) && v) v = dateFr(v); v = fmt(v); return v ? '<tr><td style="color:var(--muted,#667);width:38%;vertical-align:top">'+esc(lib)+'</td><td>'+esc(v)+'</td></tr>' : ''; }).join('');
+  // concordance avec ce qu'on a déjà dans ORIGEN
+  const mes = lotsExportCompo(l.id).map(c=>{ const u = lotUsinageParId(c.lot_usinage_id); return u ? String(u.numero) : ''; }).filter(Boolean), lus = (i.lots||[]).map(x=>String(x).replace(/\D/g,'')).filter(Boolean);
+  const manque = lus.filter(x=>!mes.includes(x)), enPlus = mes.filter(x=>!lus.includes(x));
+  const pOT = lotsExportPoids(l);
+  const verif = [];
+  verif.push(lus.length ? (!manque.length && !enPlus.length ? '<span class="badge ok">Lots concordants : '+mes.length+' lot'+(mes.length>1?'s':'')+'</span>' : '<span class="badge warn" style="white-space:normal">Lots différents'+(manque.length?' · dans le document, pas dans l\'OT ORIGEN : '+esc(manque.join(', ')):'')+(enPlus.length?' · dans l\'OT ORIGEN, pas dans le document : '+esc(enPlus.join(', ')):'')+'</span>') : '');
+  if (Number(i.poids_net_kg) && pOT) verif.push(Math.abs(Number(i.poids_net_kg)-pOT)<=1 ? '<span class="badge ok">Poids net concordant</span>' : '<span class="badge warn">Poids net du document '+fmtKg(i.poids_net_kg)+' · lots dans ORIGEN '+fmtKg(pOT)+'</span>');
+  return tete
+    + (pl.deja ? '<div class="hint" style="margin:0 0 8px">Informations déjà lues'+(l.ot_lu_le?' le '+esc(dateFr(String(l.ot_lu_le).slice(0,10))):'')+'.</div>' : '<div class="hint" style="margin:0 0 8px">Vérifie ces informations lues dans le document avant de les enregistrer.</div>')
+    + (verif.filter(Boolean).length ? '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:0 0 10px">'+verif.join('')+'</div>' : '')
+    + '<div style="max-height:56vh;overflow:auto"><table class="tbl-fiches"><tbody>'+lignes+'</tbody></table></div>'
+    + '<div class="actions"><button class="btn" onclick="closeModal()">Fermer</button><button class="btn" onclick="otDocLire(\''+esc(pl.id)+'\',true)">Relire le document</button>'+(pl.deja ? '' : '<button class="btn btn-primary" onclick="otDocAppliquer()">Enregistrer dans l\'OT</button>')+'</div></div></div>';
+}
+function otDocBoutons(l){
+  if (!l.ot_document_path) return '<button class="btn-ghost btn-compact" onclick="otDocJoindre(\''+esc(l.id)+'\')">Joindre l\'OT (PDF)</button>';
+  return '<button class="btn-ghost btn-compact" onclick="otDocTelecharger(\''+esc(l.id)+'\')">Télécharger l\'OT</button>'
+    + '<button class="btn-ghost btn-compact" onclick="otDocLire(\''+esc(l.id)+'\')">'+(l.ot_infos?'Infos de l\'OT':'Lire l\'OT')+'</button>'
+    + '<button class="btn-ghost btn-compact" onclick="otDocJoindre(\''+esc(l.id)+'\')">Remplacer</button>';
+}
 function lotExportOuvrir(id){
   const l = id ? lotExportParId(id) : null;
   // Le numero de l'OT (ordre de transit) vient du service shipping (code du port d'embarquement + leur propre
@@ -11955,6 +12038,7 @@ function lotsModalsHtml(){
   }
   if (m.type==='saigicImport') return renderSaigicImportModal(m);
   if (m.type==='shipSuivi') return renderShipSuiviModal(m);
+  if (m.type==='otInfos') return renderOtInfosModal(m);
   if (m.type==='finLtd') return renderFinLtdModal(m);
   if (m.type==='finCoopDetail') return renderFinCoopDetailModal(m);
   if (m.type==='finPrime') return renderFinPrimeModal(m);
