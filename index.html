@@ -4670,7 +4670,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-02-402';
+const APP_VERSION = '2026-11-02-403';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -22308,13 +22308,35 @@ function defoKmlHtml(a){
   return '<div style="margin-top:10px;padding:10px 12px;border:1px solid var(--border);border-radius:8px"><b>Rattachement des noms saisis à la main (KML)</b>'+al
     + '<div style="font-size:12.5px;margin-top:4px">'+lig.map(x=>'<div>'+x+'</div>').join('')+'</div><div class="hint" style="margin:4px 0 0">Détail de chaque polygone (méthode utilisée) dans le rapport Excel, onglets « KML … ».</div></div>';
 }
+function defoLienHtml(a){
+  const r = a.resume || {}, L = r.lien_registre, C = r.coherence_registre, D = r.dates_cartographie;
+  if (!L && !C && !(D && D.annees && Object.keys(D.annees).length)) return '';
+  const n = v=>fmtNum(v||0), l = [];
+  let bord = 'var(--border)', fond = '';
+  if (L){
+    l.push('<b>'+esc(L.verdict||'')+'</b>');
+    if (L.aucun_lien){ bord = '#c0392b'; fond = 'background:#fdecea;'; if (L.conclusion) l.push(esc(L.conclusion));
+      if (L.message_fournisseur) l.push('<details><summary>Message prêt à envoyer au fournisseur</summary><div style="white-space:pre-wrap;margin-top:4px">'+esc(L.message_fournisseur)+'</div></details>'); }
+  }
+  if (C){
+    const rd = C.rendement_kg_ha;
+    l.push('Registre : '+n(C.surface_unites_ha||C.surface_producteurs_ha)+' ha'+(C.surface_registre_vs_polygones_pct!=null ? ' ('+(C.surface_registre_vs_polygones_pct>0?'+':'')+C.surface_registre_vs_polygones_pct+' % par rapport aux polygones)' : '')
+      +(rd ? ' · rendement estimé '+n(rd.min)+' – '+n(rd.mediane)+' – '+n(rd.max)+' kg/ha (min – médiane – max)' : '')
+      +(C.ids_producteurs_en_double ? ' · <b>'+n(C.ids_producteurs_en_double)+'</b> identifiants producteur en double' : '')
+      +(C.coordonnees_repetees ? ' · <b>'+n(C.coordonnees_repetees)+'</b> unités aux coordonnées répétées' : '')
+      +(C.unites_sans_coordonnees ? ' · <b>'+n(C.unites_sans_coordonnees)+'</b> sans coordonnées' : '')
+      +(C.producteurs_sans_nom ? ' · <b>'+n(C.producteurs_sans_nom)+'</b> producteurs sans nom' : ''));
+  }
+  if (D && D.annees && Object.keys(D.annees).length) l.push('Années de cartographie : '+Object.keys(D.annees).map(y=>esc(y)+' ('+n(D.annees[y])+')').join(', '));
+  return '<div style="margin-top:10px;padding:10px 12px;border:1px solid '+bord+';border-radius:8px;'+fond+'"><b>Lien avec le registre, cohérence et dates</b><div style="font-size:12.5px;margin-top:4px">'+l.map(x=>'<div>'+x+'</div>').join('')+'</div></div>';
+}
 function defoAnalyseCarte(a){
   const P = defoAnalyseParties(a);
   let h = '<div style="border:1px solid var(--border);border-radius:10px;padding:12px 14px">' + P.entete + P.erreur;
   if (P.termine){
     const clos = (state.defo||[]).some(z=>z.etape==='base_finale' && z.statut==='terminee' && z.entrees && z.entrees.analyse_id===a.id);
     const pr = clos ? '<details style="margin-top:10px"><summary style="cursor:pointer;color:#2c5fae;font-weight:600">🗄 Base d\'origine de la coopérative : classée (base finale produite) — voir l\'historique des problèmes</summary>'+P.problemes+'</details>' : P.problemes;
-    h += P.resume + defoKmlHtml(a) + P.netInfo + pr + P.apres + defoFinaleHtml(a) + defoProposerHtml(a);
+    h += P.resume + defoLienHtml(a) + defoKmlHtml(a) + P.netInfo + pr + P.apres + defoFinaleHtml(a) + defoProposerHtml(a);
   }
   return h + '</div>';
 }
