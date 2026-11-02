@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.0
+// @version      0.4.1
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.0';
+  const VERSION = '0.4.1';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -930,7 +930,7 @@
       const ok = sans.filter((x) => !x.err && x.l.c[5] !== '0'), zero = sans.filter((x) => x.l.c[5] === '0'), inconnus = sans.filter((x) => x.err);
       if (!sans.length) { alert('Récolte renseignée sur les ' + liste.length + ' pesées de la campagne 26-27. Rien à corriger.'); return; }
       if (!confirm(liste.length + ' pesées contrôlées (campagne 26-27) : ' + sans.length + ' SANS récolte.\n' + (zero.length ? '- ' + zero.length + ' à poids zéro (à refaire, non touchées) : ' + zero.map((x) => x.num).join(', ') + '\n' : '') + (inconnus.length ? '- ' + inconnus.length + ' illisibles (non touchées)\n' : '') + '\nRenseigner la récolte PRINCIPALE sur ' + ok.length + ' pesées (modification, pas de suppression) ?\nLa 1re pesée sert de test : si autre chose qu\'elle change, tout s\'arrête.')) return;
-      const snap = (doc) => { const o = {}; doc.querySelectorAll('#AgroAchatPeseeBrousse input, input, select, textarea').forEach((el) => { if (el.name && !/token|recolte/i.test(el.name)) o[el.name] = el.tagName === 'SELECT' ? ((el.selectedOptions[0] || {}).text || '') : el.value; }); return o; };
+      const snap = (doc) => { const o = {}; doc.querySelectorAll('#AgroAchatPeseeBrousse input, input, select, textarea').forEach((el) => { if (el.name && !/token|recolte|lastupdated|updated_on|modif/i.test(el.name)) o[el.name] = el.tagName === 'SELECT' ? ((el.selectedOptions[0] || {}).text || '') : el.value; }); return o; };
       let corriges = 0; const rates = [];
       for (const x of ok) {
         maj('🌾 Correction ' + (corriges + 1) + '/' + ok.length);
@@ -945,10 +945,11 @@
           const corps = new URLSearchParams(); new FormData(form).forEach((v, k) => { if (typeof v === 'string') corps.append(k, v); });
           const r = await fetch(form.getAttribute('action'), { method: 'POST', credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest', 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' }, body: corps.toString() });
           if (!r.ok) throw new Error('HTTP ' + r.status);
+          const texteRep = await r.text().catch(() => '');
           const apres = await getHtml(url); const s2 = apres.getElementById('txtcampagne_recolte_idEdit'); const o2 = s2 && s2.selectedOptions[0];
           const diff = Object.keys(avant).filter((k) => snap(apres)[k] !== avant[k]);
           if (diff.length) throw new Error('STOP : ' + diff.length + ' autre(s) champ(s) ont changé (' + diff.slice(0, 4).join(', ') + ')');
-          if (!o2 || !o2.value) throw new Error('récolte toujours vide après enregistrement');
+          if (!o2 || !o2.value) throw new Error('STOP : OBC a refusé la modification (récolte toujours vide). Réponse d\'OBC : « ' + texteRep.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200) + ' »');
           corriges++;
         } catch (er) { rates.push(x.num + ' : ' + (er && er.message || er)); if (/^STOP/.test(String(er && er.message))) break; }
       }
