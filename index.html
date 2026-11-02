@@ -4675,7 +4675,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-02-414';
+const APP_VERSION = '2026-11-02-415';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -22738,6 +22738,8 @@ function defoModalFinaleHtml(){
     + '<div style="display:flex;gap:8px;flex-wrap:wrap">'+champ('± largeur de l\'intervalle (kg/ha)','fin_demi',E.demi)+champ('Rayon autour du centre (km)','fin_rayon',E.rayon_km)+'</div>'
     + '<div class="hint" style="margin:6px 0 0">Aperçu : <span id="fin-apercu"></span></div></div>'
     + '<details style="margin:6px 0"><summary class="hint" style="cursor:pointer;margin:0">Ou imposer un intervalle unique à toute la coopérative (facultatif)</summary><div style="display:flex;gap:8px;margin-top:4px">'+champ('Min (kg/ha)','fin_imin','')+champ('Max (kg/ha)','fin_imax','')+'</div></details>'
+    + '<div style="margin:10px 0 4px;padding:8px 10px;border:1px solid var(--border);border-radius:8px"><b>Ajouter cette base à la base consolidée ECORIGINE ?</b> <span class="hint" style="margin:0">(en général oui pour une coopérative qui livre ; ta réponse est obligatoire)</span>'
+    + '<div style="display:flex;gap:16px;margin-top:4px"><label><input type="radio" name="fin-ajout" value="oui"> Oui, l\'ajouter</label><label><input type="radio" name="fin-ajout" value="non"> Non, base isolée seulement</label></div></div>'
     + '<label style="display:flex;gap:8px;align-items:flex-start;margin:10px 0 4px"><input type="checkbox" id="fin-valide" style="margin-top:3px"> <span><b>Je valide cette échelle</b> <span class="hint" style="margin:0">(obligatoire : sans ta validation, rien n\'est produit)</span></span></label>'
     + '<div id="defo-erreur" style="display:none;color:#c0392b;font-size:13px;margin:4px 0 8px"></div>'
     + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" id="fin-envoyer" onclick="defoFinaleEnvoyer()">Produire</button></div></div></div>';
@@ -22752,10 +22754,11 @@ async function defoFinaleEnvoyer(){
     if ([E.d_bas,E.d_haut,E.c_bas,E.c_haut,E.demi,E.rayon_km].some(x=>!isFinite(x)||x<=0)){ defoErreurForm('Remplis toutes les valeurs de l\'échelle (nombres positifs).'); return; }
     if (E.d_haut<=E.d_bas){ defoErreurForm('Le repère haut (% de cacao) doit être plus grand que le repère bas.'); return; }
   }
+  const rep = document.querySelector('input[name="fin-ajout"]:checked'); if (!rep){ defoErreurForm('Réponds à la question : ajouter la base à la base consolidée, oui ou non ?'); return; }
   if (!(document.getElementById('fin-valide')||{}).checked){ defoErreurForm('Coche « Je valide cette échelle » pour continuer.'); return; }
   const et = defoEtat(a); if (et.enCours){ defoErreurForm('Un nettoyage est en cours : attends sa fin.'); return; }
   const btn = document.getElementById('fin-envoyer'); if (btn){ btn.disabled = true; btn.textContent = 'Envoi…'; }
-  const entrees = { analyse_id:aid, source_id:et.dernier?et.dernier.id:null, abrev:ab, echelle_validee:true };
+  const entrees = { analyse_id:aid, source_id:et.dernier?et.dernier.id:null, abrev:ab, echelle_validee:true, ajouter_base:(rep.value==='oui') };
   if (impose) entrees.intervalle_impose = [imin, imax];
   else entrees.echelle = { rayon_m:E.rayon_km*1000, d_bas:E.d_bas/100, d_haut:E.d_haut/100, c_bas:E.c_bas, c_haut:E.c_haut, demi_largeur:E.demi };
   const ins = await supabaseClient.from('analyses_defo').insert({ id:genId('ad'), cooperative_id:a.cooperative_id||null, cooperative_nom:a.cooperative_nom, etape:'base_finale', statut:'demandee',
