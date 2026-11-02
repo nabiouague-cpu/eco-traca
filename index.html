@@ -693,6 +693,11 @@
   .defo-prog .pt.erreur b{background:#c0392b;border-color:#c0392b;color:#fff;}
   .defo-prog .pl{flex:1 1 auto;min-width:18px;height:3px;background:var(--border);border-radius:2px;margin:16px -6px 0;}
   .defo-prog .pl.fait{background:var(--ok);}
+  .defo-chaine{flex-basis:100%;margin:8px 0 2px;padding:10px 14px;border:1px solid var(--border);border-radius:10px;background:var(--card,#fff)}
+  .defo-chaine .barre{height:8px;border-radius:9px;background:#e4ebe8;overflow:hidden;margin:8px 0 6px}
+  .defo-chaine .barre i{display:block;height:100%;background:#2f9e6b;transition:width .5s}
+  .defo-chaine .roue{display:inline-block;width:14px;height:14px;border:3px solid #d5dedb;border-top-color:#F2B705;border-radius:50%;animation:defoRoue .8s linear infinite;vertical-align:-2px;margin-right:6px}
+  @keyframes defoRoue{to{transform:rotate(360deg);}}
   .defo-tabs{display:flex;gap:2px;border-bottom:2px solid var(--border);margin-top:12px;overflow-x:auto;}
   .defo-tab{border:none;background:none;padding:10px 16px;font:inherit;font-weight:600;font-size:13.5px;color:var(--ink-soft);cursor:pointer;border-bottom:3px solid transparent;margin-bottom:-2px;white-space:nowrap;display:inline-flex;gap:8px;align-items:center;border-radius:8px 8px 0 0;}
   .defo-tab:hover{background:var(--surface-2);}
@@ -4652,7 +4657,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-02-394';
+const APP_VERSION = '2026-11-02-395';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -21865,6 +21870,7 @@ async function chargerDefo(){
     if (error) throw error;
     const avant = {}; (state.defo||[]).forEach(x=>{ avant[x.id] = x.statut; });
     state.defo = data || []; state.defoIndispo = false;
+    try { defoChaineAuto(); } catch(e){}
     state.defo.forEach(x=>{ const a = avant[x.id]; if (!a || a===x.statut) return;
       const lib = x.etape==='analyse' ? ['✅ Analyse terminée : ','L\'analyse de '] : x.etape==='nettoyage' ? ['✅ Nettoyage terminé : ','Le nettoyage de '] : x.etape==='base_finale' ? ['✅ Base finale prête : ','La base finale de '] : ['✅ GeoJSON prêt : ','La préparation de '];
       if (x.statut==='terminee') showToast(lib[0]+(x.cooperative_nom||''), 'success');
@@ -21922,7 +21928,7 @@ function renderDefoVue(){
       + '<span><button class="btn-ghost btn-compact" onclick="defoDossierBascule(\''+escJs(x.id)+'\')">'+(ouv?'▾ Fermer':'▸ Ouvrir')+'</button> '+(x.statut==='erreur'&&x.erreur?'<span class="hint" style="color:#c0392b;margin:0">'+esc(x.erreur)+'</span>':'')
       + (x.statut==='demandee' ? ' <button class="btn-ghost btn-compact" onclick="defoAnnuler(\''+escJs(x.id)+'\')">Annuler</button>' : '')
       + (['annulee','terminee','erreur'].includes(x.statut) ? ' <button class="btn-ghost btn-compact" style="color:#c0392b" onclick="defoSupprimer(\''+escJs(x.id)+'\')">🗑 Supprimer</button>' : '')+'</span>'
-      + (ouv ? defoFilHtml(x) : '') + '</div>';
+      + defoChaineBandeau(x) + (ouv ? defoFilHtml(x) : '') + '</div>';
   }).join('') + '</div>';
   h += '</div>';
   h += defoComparePanelHtml();
@@ -22012,18 +22018,28 @@ function defoModalsHtml(){
   if (m && m.type==='defoCompare') return defoModalCompareHtml();
   if (!m || m.type!=='defoPrep') return '';
   const opts = [...state.cooperatives].sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr')).map(c=>'<option value="'+esc(c.nom)+'"></option>').join('');
-  return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:520px"><h3>Préparer les polygones</h3><div id="modal-fields">'
+  return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:520px"><h3>Nouveau dossier d\'analyse</h3><div id="modal-fields">'
     + '<label class="field">Nom de la coopérative <span class="hint" style="margin:0">(tape le nom, ou choisis-en une déjà dans ORIGEN)</span><input type="text" name="defo_coop" list="defo-coops" placeholder="Ex. SOCAET" autocomplete="off"><datalist id="defo-coops">'+opts+'</datalist></label>'
     + '<label class="field">Fichiers de la coopérative <span class="hint" style="margin:0">(KML, KMZ, GPX, GeoJSON, ou shapefile en .zip — plusieurs possibles)</span><input type="file" id="defo-fichiers" multiple accept=".kml,.kmz,.gpx,.geojson,.json,.zip"></label>'
+    + '<label class="field">Registre de la coopérative <span class="hint" style="margin:0">(GMR .xlsx — avec lui, tout s\'enchaîne tout seul jusqu\'au résultat de l\'analyse)</span><input type="file" id="defo-gmr" accept=".xlsx,.xlsm"></label>'
+    + '<details style="margin:2px 0 8px"><summary style="cursor:pointer;font-weight:600">Options de l\'analyse <span class="hint" style="margin:0 0 0 6px;font-weight:400">(facultatif)</span></summary>'
+    + '<label class="field" style="margin-top:8px">Ancien registre <span class="hint" style="margin:0">(.xlsx — pour retrouver les anciens codes par le nom)</span><input type="file" id="defo-gmr-old" accept=".xlsx,.xlsm"></label>'
+    + '<label style="display:flex;gap:8px;align-items:center;margin:6px 0"><input type="checkbox" id="defo-hc"> Coopérative hors chaîne d\'approvisionnement <span class="hint" style="margin:0">(chevauchements avec la base ECORIGINE ignorés)</span></label>'
+    + '<label style="display:flex;gap:8px;align-items:flex-start;margin:6px 0"><input type="checkbox" id="defo-nm" style="margin-top:3px"><span>Noms des polygones saisis à la main (KML) : <b>rattachement strict</b> au registre</span></label>'
+    + '<label class="field">Si la base ECORIGINE contient déjà un lot de cette coopérative <select id="defo-lot"><option value="ignorer">L\'ignorer : les nouveaux fichiers le remplacent (recommandé)</option><option value="garder">Le garder pour comparer</option></select></label></details>'
     + '<div id="defo-erreur" style="display:none;color:#c0392b;font-size:13px;margin:4px 0 8px"></div>'
-    + '<p class="hint">Les points sont supprimés, les lignes deviennent des polygones, les doublons exacts sont retirés. Tes fichiers originaux ne sont pas modifiés.</p>'
-    + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" id="defo-envoyer" onclick="defoEnvoyer()">Lancer la préparation</button></div></div></div>';
+    + '<p class="hint">Parcours automatique : préparation, Whisp, puis analyse, sans rien faire de ton côté. Tu reprends la main au résultat, pour choisir les corrections et produire la base finale. Tes fichiers originaux ne sont pas modifiés.</p>'
+    + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" id="defo-envoyer" onclick="defoEnvoyer()">Lancer le parcours</button></div></div></div>';
 }
 async function defoEnvoyer(){
   let nomCoop = (fv('defo_coop')||'').trim(); if (!nomCoop){ defoErreurForm('Indique le nom de la coopérative.'); return; }
   const rn = defoNomResoudre(nomCoop, defoEnvoyer); if (!rn) return; nomCoop = rn.nom;
   const fl = Array.from((document.getElementById('defo-fichiers')||{}).files||[]); if (!fl.length){ defoErreurForm('Ajoute au moins un fichier.'); return; }
   const mauv = fl.filter(f=>!/\.(kml|kmz|gpx|geojson|json|zip)$/i.test(f.name)); if (mauv.length){ defoErreurForm('Format non pris en charge : '+mauv.map(f=>f.name).join(', ')); return; }
+  const fgmr = (document.getElementById('defo-gmr')||{}).files && document.getElementById('defo-gmr').files[0];
+  if (fgmr && !/\.(xlsx|xlsm)$/i.test(fgmr.name)){ defoErreurForm('Registre : fichier .xlsx attendu.'); return; }
+  const fold = (document.getElementById('defo-gmr-old')||{}).files && document.getElementById('defo-gmr-old').files[0];
+  if (fold && !/\.(xlsx|xlsm)$/i.test(fold.name)){ defoErreurForm('Ancien registre : fichier .xlsx attendu.'); return; }
   const btn = document.getElementById('defo-envoyer'); if (btn){ btn.disabled = true; btn.textContent = 'Envoi…'; }
   const id = genId('ad'), nets = s=>String(s).normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^A-Za-z0-9._-]+/g,'_');
   const coop = carteCoopParNom(nomCoop);
@@ -22038,9 +22054,22 @@ async function defoEnvoyer(){
       demande_par:(state.session&&state.session.user&&state.session.user.email)||null }).select().single();
     if (ins.error) throw ins.error;
     state.defo = [ins.data].concat(state.defo||[]); state.defoIndispo = false;
-    closeModal(); carteLancerRobot(); showToast('Préparation lancée.', 'success');
+    // Parcours automatique : le registre et les options sont gardés dans une ligne « plan » liée au dossier ; la suite (Whisp, analyse) s'enchaîne ensuite toute seule.
+    if (fgmr){
+      const pg = 'defo/'+id+'/plan/registre_'+nets(fgmr.name); const rg = await supabaseClient.storage.from('documents-coop').upload(pg, fgmr, { upsert:true }); if (rg.error) throw rg.error;
+      const pl = { prep_id:id, gmr:{ nom:fgmr.name, path:pg }, noms_manuels:!!(document.getElementById('defo-nm')||{}).checked, hors_chaine:!!(document.getElementById('defo-hc')||{}).checked,
+        ancien_lot_mode:((document.getElementById('defo-lot')||{}).value==='garder'?'garder':'ignorer') };
+      if (fold){ const po = 'defo/'+id+'/plan/ancien_registre_'+nets(fold.name); const ro = await supabaseClient.storage.from('documents-coop').upload(po, fold, { upsert:true }); if (ro.error) throw ro.error; pl.gmr_ancien = { nom:fold.name, path:po }; }
+      if (rn.exclus && rn.exclus.length) pl.lots_exclus = rn.exclus;
+      const pi = await supabaseClient.from('analyses_defo').insert({ id:genId('ad'), cooperative_id:coop?coop.id:null, cooperative_nom:(coop?coop.nom:nomCoop), etape:'plan', statut:'terminee', entrees:pl,
+        demande_par:(state.session&&state.session.user&&state.session.user.email)||null }).select().single();
+      if (pi.error) throw pi.error;
+      state.defo = [pi.data].concat(state.defo||[]);
+    }
+    state.defoOuverts = state.defoOuverts || {}; state.defoOuverts[id] = true;
+    closeModal(); carteLancerRobot(); showToast(fgmr ? 'Parcours lancé : tout s\'enchaîne jusqu\'au résultat.' : 'Préparation lancée.', 'success');
   } catch(e){
-    if (btn){ btn.disabled = false; btn.textContent = 'Lancer la préparation'; }
+    if (btn){ btn.disabled = false; btn.textContent = 'Lancer le parcours'; }
     defoErreurForm('Envoi impossible : '+((e&&e.message)||e));
   }
 }
@@ -22071,10 +22100,11 @@ async function defoSupprimerOk(id){
   if (enfants.some(z=>z.statut==='demandee'||z.statut==='en_cours')){ showToast('Un nettoyage est en cours sur cette analyse : attends qu\'il se termine.'); return; }
   const whispLies = (x.etape||'preparation')==='preparation' ? (state.defo||[]).filter(z=>z.etape==='whisp' && z.entrees && z.entrees.prep_id===id) : [];
   if (whispLies.some(z=>z.statut==='demandee'||z.statut==='en_cours')){ showToast('Whisp est en cours sur ce dossier : attends qu\'il se termine.'); return; }
-  const ids = [id].concat(enfants.map(z=>z.id)).concat(whispLies.map(z=>z.id));
+  const planLies = (x.etape||'preparation')==='preparation' ? (state.defo||[]).filter(z=>z.etape==='plan' && z.entrees && z.entrees.prep_id===id) : [];
+  const ids = [id].concat(enfants.map(z=>z.id)).concat(whispLies.map(z=>z.id)).concat(planLies.map(z=>z.id));
   const { error } = await supabaseClient.from('analyses_defo').delete().in('id', ids);
   if (error){ showToast('Suppression impossible : '+error.message); return; }
-  const chemins = [x].concat(enfants).reduce((acc,z)=>acc.concat(defoChemins(z)), []);
+  const chemins = [x].concat(enfants).concat(planLies).reduce((acc,z)=>acc.concat(defoChemins(z)), []);
   if (chemins.length){ try { await supabaseClient.storage.from('documents-coop').remove(chemins); } catch(e){} }
   state.defo = state.defo.filter(z=>!ids.includes(z.id)); showToast('Supprimé.', 'success'); render();
 }
@@ -23404,6 +23434,49 @@ function ouvrirDefoAnalyse(prepId){ openModal('defoAnalyse', { nom:'', prepId: p
 function defoUtiles(fl){ return (fl||[]).filter(f=>f.path && f.type!=='whisp_csv' && f.type!=='apercu' && !/\.(csv|json)$/i.test(f.nom||'')); }
 function defoChip(f){ return '<a class="defo-chip" title="Télécharger '+esc(f.nom)+'" onclick="carteTelecharger(\''+escJs(f.path)+'\')">📄 '+esc(f.nom)+' <span class="defo-dl">⬇</span></a>'; }
 function defoSec(lab, contenu){ return '<div class="defo-sec"><span class="defo-lab">'+lab+'</span><div class="defo-cont">'+contenu+'</div></div>'; }
+// ===== Parcours automatique : préparation → Whisp → analyse, sans intervention. On reprend la main au résultat de l'analyse. =====
+function defoChaineAuto(){
+  const tout = state.defo||[]; state.defoAuto = state.defoAuto || {};
+  tout.filter(p=>(p.etape||'preparation')==='preparation' && p.statut==='terminee').forEach(p=>{
+    const g = (p.fichiers||[]).find(f=>f.type==='geojson'); if (!g) return;
+    const plan = tout.find(z=>z.etape==='plan' && z.entrees && z.entrees.prep_id===p.id); if (!plan) return;
+    const w = (p.fichiers||[]).find(f=>f.type==='whisp_csv');
+    const wj = tout.filter(z=>z.etape==='whisp' && z.entrees && z.entrees.prep_id===p.id);
+    const aj = tout.filter(z=>z.etape==='analyse' && z.entrees && z.entrees.prep_id===p.id);
+    if (!w){ if (!wj.length && !state.defoAuto[p.id+':w']){ state.defoAuto[p.id+':w'] = 1; defoLancerWhisp(p.id, true); } return; }
+    if (!aj.length && !state.defoAuto[p.id+':a']){ state.defoAuto[p.id+':a'] = 1; defoLancerAnalyseAuto(p, g, w, plan); }
+  });
+}
+async function defoLancerAnalyseAuto(p, g, w, plan){
+  const e = plan.entrees;
+  const entrees = { prep_id:p.id, noms_manuels:!!e.noms_manuels, hors_chaine:!!e.hors_chaine, ancien_lot_mode:(e.ancien_lot_mode==='garder'?'garder':'ignorer'),
+    polygones:{ nom:g.nom, path:g.path, propre:false }, whisp:{ nom:w.nom, path:w.path, propre:false }, gmr:{ nom:e.gmr.nom, path:e.gmr.path, propre:false } };
+  if (e.gmr_ancien) entrees.gmr_ancien = { nom:e.gmr_ancien.nom, path:e.gmr_ancien.path, propre:false };
+  if (e.lots_exclus && e.lots_exclus.length) entrees.lots_exclus = e.lots_exclus;
+  const ins = await supabaseClient.from('analyses_defo').insert({ id:genId('ad'), cooperative_id:p.cooperative_id||null, cooperative_nom:p.cooperative_nom, etape:'analyse', statut:'demandee', entrees,
+    demande_par:(state.session&&state.session.user&&state.session.user.email)||null }).select().single();
+  if (ins.error){ state.defoAuto[p.id+':a'] = 0; showToast('Lancement automatique de l\'analyse impossible : '+ins.error.message); return; }
+  state.defo = [ins.data].concat(state.defo||[]); carteLancerRobot(); render();
+}
+function defoChaineBandeau(p){
+  const tout = state.defo||[], plan = tout.find(z=>z.etape==='plan' && z.entrees && z.entrees.prep_id===p.id); if (!plan) return '';
+  const desc = (a,b)=>String(b.created_at).localeCompare(String(a.created_at));
+  const w = (p.fichiers||[]).find(f=>f.type==='whisp_csv');
+  const wj = tout.filter(z=>z.etape==='whisp' && z.entrees && z.entrees.prep_id===p.id).sort(desc)[0] || null;
+  const aj = tout.filter(z=>z.etape==='analyse' && z.entrees && z.entrees.prep_id===p.id && z.statut!=='annulee').sort(desc)[0] || null;
+  const vivant = z=>z && (z.statut==='demandee'||z.statut==='en_cours');
+  let pct, txt, err = '', fini = false;
+  if (p.statut==='erreur'){ pct = 5; err = 'La préparation a échoué : '+(p.erreur||'erreur inconnue'); }
+  else if (p.statut!=='terminee'){ pct = 12; txt = 'Étape 1 sur 3 : préparation des polygones'; }
+  else if (aj && aj.statut==='terminee'){ pct = 100; fini = true; txt = 'Analyse terminée. Regarde le résultat ci-dessous, choisis les corrections, puis produis la base finale.'; }
+  else if (aj && aj.statut==='erreur'){ pct = 80; err = 'L\'analyse a échoué : '+(aj.erreur||'erreur inconnue'); }
+  else if (aj){ pct = 80; txt = 'Étape 3 sur 3 : croisement des polygones, de Whisp et du registre'; }
+  else if (w){ pct = 66; txt = 'Étape 3 sur 3 : lancement de l\'analyse'; }
+  else if (wj && wj.statut==='erreur'){ pct = 40; err = 'Whisp a échoué : '+(wj.erreur||'erreur inconnue')+' (ferme l\'erreur dans l\'onglet Whisp pour relancer)'; }
+  else { pct = 45; txt = 'Étape 2 sur 3 : Whisp analyse les polygones (quelques minutes)'; }
+  if (err) return '<div class="defo-chaine"><div style="color:#c0392b;font-weight:600">'+esc(err)+'</div><div class="barre"><i style="width:'+pct+'%;background:#c0392b"></i></div></div>';
+  return '<div class="defo-chaine"><div style="font-weight:600">'+(fini ? '✓ ' : '<span class="roue"></span>')+esc(txt)+'</div><div class="barre"><i style="width:'+pct+'%"></i></div><div class="hint" style="margin:0">'+pct+' %'+(fini ? '' : ' · tu n\'as rien à faire, la page se met à jour toute seule')+'</div></div>';
+}
 function defoFilHtml(x){
   const fl = x.fichiers||[], g = fl.find(f=>f.type==='geojson');
   if (x.statut!=='terminee' || !g) return '';
@@ -23554,7 +23627,7 @@ function defoReplier(id, n, btn){
   if (!ferme && typeof AP!=='undefined' && AP && AP.map) setTimeout(()=>{ try{ AP.map.invalidateSize(); }catch(e){} }, 60);
 }
 function defoOnglet(id, n, sig){ (state.defoOnglet = state.defoOnglet || {})[id] = { n:n, sig:sig }; render(); }
-async function defoLancerWhisp(pid){
+async function defoLancerWhisp(pid, auto){
   const p = (state.defo||[]).find(z=>z.id===pid); if (!p) return;
   if ((state.defo||[]).some(z=>z.etape==='whisp' && z.entrees && z.entrees.prep_id===pid && (z.statut==='demandee'||z.statut==='en_cours'))){ showToast('Whisp est déjà en cours pour ce dossier.'); return; }
   const w = (p.fichiers||[]).find(f=>f.type==='whisp_csv');
@@ -23562,9 +23635,9 @@ async function defoLancerWhisp(pid){
     const ins = await supabaseClient.from('analyses_defo').insert({ id:genId('ad'), cooperative_id:p.cooperative_id||null, cooperative_nom:p.cooperative_nom, etape:'whisp', statut:'demandee',
       entrees:{ prep_id:pid }, demande_par:(state.session&&state.session.user&&state.session.user.email)||null }).select().single();
     if (ins.error){ showToast('Lancement impossible : '+ins.error.message); return; }
-    state.defo = [ins.data].concat(state.defo||[]); carteLancerRobot(); showToast('Whisp lancé : quelques minutes.', 'success'); render();
+    state.defo = [ins.data].concat(state.defo||[]); carteLancerRobot(); if (!auto) showToast('Whisp lancé : quelques minutes.', 'success'); render();
   };
-  if (w) askConfirm('Relancer Whisp ? Le CSV actuel de ce dossier sera remplacé par le nouveau résultat.', lancer); else lancer();
+  if (w && !auto) askConfirm('Relancer Whisp ? Le CSV actuel de ce dossier sera remplacé par le nouveau résultat.', lancer); else lancer();
 }
 async function defoFermerWhisp(id){
   const { error } = await supabaseClient.from('analyses_defo').delete().eq('id', id).eq('etape','whisp').eq('statut','erreur');
