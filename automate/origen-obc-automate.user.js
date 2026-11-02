@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.6
+// @version      0.4.7
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.6';
+  const VERSION = '0.4.7';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -919,11 +919,13 @@
       const pes = await existePesee(e), bor = await existeBordereau(e);
       if (!pes) { alert('Pesée ' + e.lot.pesee.code + ' introuvable dans OBC : rien à supprimer. Clique « Continuer ».'); return; }
       const nv = (i) => Number(String(pes.c[i] || '').replace(/[\s  ]/g, '').replace(',', '.'));
-      if (nv(5) > 0 && nv(8) > 0 && nv(10) > 0) { alert('La pesée ' + e.lot.pesee.code + ' a des poids corrects dans OBC (brut ' + pes.c[5] + ', net payé ' + pes.c[10] + ') : Noah 1 ne la supprime pas.'); return; }
+      const attP = Number(e.lot.pesee.poids_net_paye_attendu) || NaN;
+      // La pesée n'est protégée que si son net payé est identique à ORIGEN. Un écart (poids à zéro, ou kilo corrigé après une contestation) autorise la reprise.
+      if (nv(5) > 0 && nv(8) > 0 && nv(10) > 0 && isFinite(attP) && Math.abs(nv(10) - attP) < 0.5) { alert('La pesée ' + e.lot.pesee.code + ' est conforme à ORIGEN dans OBC (net payé ' + pes.c[10] + ') : Noah 1 ne la supprime pas.'); return; }
       const liste = (bor ? '1) le bordereau ' + (e.lot.bordereau && e.lot.bordereau.numero || '') + ' (connaissement ' + e.lot.connaissement.numero + ')\n2) ' : '1) ') + 'la pesée ' + e.lot.pesee.code + ' (brut ' + pes.c[5] + ', net livré ' + pes.c[8] + ', net payé ' + pes.c[10] + ')';
       if (!confirm('SUPPRIMER dans OBC, dans cet ordre :\n' + liste + '\n\nRien d\'autre ne sera touché. Noah 1 refera ensuite la pesée et le bordereau avec les poids d\'ORIGEN. Continuer ?')) return;
       if (bor) { await supprimerLigne('AgroAchatBordereauReception', bor); journal(e, 'Bordereau supprimé dans OBC (reprise à la pesée)'); if (await existeBordereau(e)) throw new Error('Le bordereau est toujours dans OBC après suppression : arrêt, la pesée n\'est pas touchée'); }
-      await supprimerLigne('AgroAchatPeseeBrousse', pes); journal(e, 'Pesée supprimée dans OBC (poids à zéro)'); if (await existePesee(e)) throw new Error('La pesée est toujours dans OBC après suppression');
+      await supprimerLigne('AgroAchatPeseeBrousse', pes); journal(e, 'Pesée supprimée dans OBC (écart avec ORIGEN : net payé ' + pes.c[10] + ' au lieu de ' + e.lot.pesee.poids_net_paye_attendu + ')'); if (await existePesee(e)) throw new Error('La pesée est toujours dans OBC après suppression');
       if (reprisDepuisFile) { try { await api('reprendre', { achat_id: e.lot.achat_id }); } catch (er) { /* la file sera resynchronisée à la fin du lot */ } ecrireEtat(e); }
       const e2 = lireEtat(); e2.etape = 9; e2.statut = 'a_faire'; e2.erreur = null; e2.pause = false; e2.note = 'Reprise à la pesée après suppression du bordereau et de la pesée à poids zéro.'; if (e2.fait) { delete e2.fait[9]; delete e2.fait[10]; } delete e2.t_save; delete e2.cliques; delete e2.verifErr; ecrireEtat(e2); afficherEtat(); boucle();
     } catch (err) { const e3 = lireEtat() || e; e3.erreur = 'Reprise : ' + (err && err.message || err); ecrireEtat(e3); afficherEtat(); }
