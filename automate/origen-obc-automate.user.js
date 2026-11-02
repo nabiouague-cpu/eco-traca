@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.5
+// @version      0.4.6
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.5';
+  const VERSION = '0.4.6';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -128,7 +128,7 @@
   async function finLotFile(e) {
     const f = lireFile(); const num = (e.lot.bordereau && e.lot.bordereau.numero) || '';
     let an = []; try { an = await controleLot(e.lot); } catch (er) { an = [{ maillon: 'Lecture OBC', etape: 1, champ: 'erreur', attendu: '', trouve: String(er && er.message || er).slice(0, 120) }]; }
-    try { await api('controle', { achat_id: e.lot.achat_id, anomalies: an }); } catch (er) { /* le contrôle sera refait */ }
+    try { await api('controle', { achat_id: e.lot.achat_id, anomalies: an, mineurs: an.mineurs || [] }); } catch (er) { /* le contrôle sera refait */ }
     if (an.length) { const t = 'Contrôle OBC : ' + an.slice(0, 4).map((a) => a.maillon + ' › ' + a.champ + ' (attendu ' + a.attendu + ', trouvé ' + a.trouve + ')').join(' ; '); await rapporter(e.lot.achat_id, 'echec', t, ''); f.echecs = (f.echecs || 0) + 1; ecrireFile(f); noterResultat(false, e.lot.connaissement.numero + ' : ' + t); effacerEtat(); afficherEtat(); afficherFile(); dormir(600).then(boucle); return; }
     await rapporter(e.lot.achat_id, 'saisi', '', num);
     f.saisis = (f.saisis || 0) + 1; f.consecutifs = 0; ecrireFile(f); noterResultat(true, e.lot.connaissement.numero + ' : saisi et contrôlé dans OBC (bordereau ' + num + '). Tous les champs concordent avec ORIGEN.');
@@ -998,6 +998,13 @@
     const b = lot.bordereau || {}; const bo = await existeBordereau(e);
     if (!bo || bo.illisible) ajout('Bordereau', 10, 'enregistrement', 'présent', 'absent');
     else { const net = nb(bo.c[bo.c.length - 1]); if (b.net_attendu != null && !(Math.abs(net - Number(b.net_attendu)) < 0.5)) ajout('Bordereau', 10, 'net à payer', b.net_attendu, bo.c[bo.c.length - 1]); }
+    // Écart d'arrondi toléré (≤ 1 kg ou 1 sac) sur le net livré / les sacs acceptés / la tare, UNIQUEMENT si le net payé et le bordereau sont exacts :
+    // OBC recalcule la tare par sac et peut décaler de 1 ; ce qui est payé (net payé, bordereau) reste identique à ORIGEN.
+    const MIN = ['poids net livré', 'sacs acceptés'];
+    const dur = an.filter((a) => !(MIN.includes(a.champ) && Math.abs(nb(a.attendu) - nb(a.trouve)) <= 1));
+    const mineurs = an.filter((a) => !dur.includes(a));
+    if (!dur.length && mineurs.length) { const res = []; res.mineurs = mineurs; return res; }
+    an.mineurs = [];
     return an;
   }
   async function controlerLesSaisis(btn) {
@@ -1008,7 +1015,7 @@
         for (const x of lots) {
           btn.textContent = '🔎 Contrôle ' + x.connaissement + ' (' + (n + 1) + ')…';
           let an; try { an = await controleLot(x.lot); } catch (er) { an = [{ maillon: 'Lecture OBC', etape: 1, champ: 'erreur', attendu: '', trouve: String(er && er.message || er).slice(0, 120) }]; }
-          await api('controle', { achat_id: x.achat_id, anomalies: an }); n++; if (an.length) bad++;
+          await api('controle', { achat_id: x.achat_id, anomalies: an, mineurs: an.mineurs || [] }); n++; if (an.length) bad++;
         }
       }
       alert('Contrôle terminé : ' + n + ' connaissement(s) relu(s) dans OBC, ' + bad + ' avec anomalie(s). Résultat dans ORIGEN › Saisie OBC.');
