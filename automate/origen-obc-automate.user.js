@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.3.0
+// @version      0.3.1
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.3.0';
+  const VERSION = '0.3.1';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -780,7 +780,12 @@
   }
   async function etapePesee(e) {
     const lot = e.lot;
-    if (await existePesee(e)) { e.fait[9] = 'déjà dans OBC'; journal(e, 'Pesée déjà saisie'); return 'suivant'; }
+    { const ex = await existePesee(e);
+      if (ex) {
+        const nv = (i) => Number(String(ex.c[i] || '').replace(/[\s\u00a0\u202f]/g, '').replace(',', '.'));
+        if (!(nv(5) > 0) || !(nv(8) > 0) || !(nv(10) > 0)) throw new Error('Pesée ' + e.lot.pesee.code + ' DÉJÀ ENREGISTRÉE avec des poids à zéro dans OBC (brut ' + ex.c[5] + ', net livré ' + ex.c[8] + ', net payé ' + ex.c[10] + '). À refaire : supprimer dans OBC, dans cet ordre, 1) le bordereau ' + ((e.lot.bordereau && e.lot.bordereau.numero) || '') + ', 2) la pesée ' + e.lot.pesee.code + ' ; Noah 1 reprend ensuite à la pesée.');
+        e.fait[9] = 'déjà dans OBC'; journal(e, 'Pesée déjà saisie'); return 'suivant';
+      } } 
     if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
     const f = await ouvrirFormulaire(9); if (!f) return 'navigation';
     const p = lot.pesee, c = lot.connaissement;
@@ -807,6 +812,18 @@
     if (p.classement) await setSelectTexte(q('#txtqualite_idAdd'), exact(p.classement), 'Classement', p.classement);
     ['poids_entree', 'poids_sortie', 'sacs_decharges', 'sacs_acceptes', 'tare_sacs_acceptes', 'tare_palettes', 'poids_refaction'].forEach((k) => { const el = q('#txtpesee_brousse_' + k + 'Add'); if (el) el.dispatchEvent(new Event('focusout', { bubbles: true })); });
     { const m = await reappliquer(f); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
+    // Cases CALCULÉES par OBC (poids brut, net livré, net payé) : OBC les laisse parfois à 0. On les contrôle et, au besoin, on y écrit la valeur d'ORIGEN.
+    {
+      const brutA = Math.round((Number(num(p.poids_entree)) - Number(num(p.poids_sortie))) * 100) / 100, livreA = Math.round((brutA - Number(num(p.tare_sacs))) * 100) / 100, payeA = Math.round((livreA - refac) * 100) / 100 ;
+      const att = [['poids_brut', brutA, 'Poids brut'], ['poids_net_livre', livreA, 'Poids net livré'], ['poids_net_paye', Number(p.poids_net_paye_attendu) || payeA, 'Poids net payé']];
+      const lireP = (k) => { const el = q('#txtpesee_brousse_' + k + 'Add'); const v = Number(String(el ? el.value : '').replace(/[\s\u00a0\u202f]/g, '').replace(',', '.')); return isFinite(v) ? v : NaN; };
+      const bonP = () => att.every(([k, w]) => Math.abs(lireP(k) - w) < 0.5);
+      for (let t = 0; t < 4 && !bonP(); t++) { ['poids_entree', 'poids_sortie', 'sacs_acceptes', 'tare_sacs_acceptes', 'poids_refaction'].forEach((k) => { const el = q('#txtpesee_brousse_' + k + 'Add'); if (el) { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); el.dispatchEvent(new Event('focusout', { bubbles: true })); } }); await dormir(700); }
+      const forces = [];
+      att.forEach(([k, w, nom]) => { if (Math.abs(lireP(k) - w) < 0.5) return; const el = q('#txtpesee_brousse_' + k + 'Add'); if (el) { const virg = !/\./.test(el.value || ''); el.value = virg ? String(w).replace('.', ',') : String(w); ['input', 'change'].forEach((ev) => el.dispatchEvent(new Event(ev, { bubbles: true }))); forces.push(nom); } });
+      if (forces.length) { journal(e, 'Pesée : cases forcées avec la valeur ORIGEN : ' + forces.join(', ')); await dormir(300); }
+      if (!bonP()) throw new Error('Pesée : OBC n\'a pas calculé poids brut / net livré / net payé (brut ' + lireP('poids_brut') + ', net livré ' + lireP('poids_net_livre') + ', net payé ' + lireP('poids_net_paye') + ') : rien n\'est enregistré');
+    }
     e.note = 'Pesée ' + p.code + ' : entrée ' + p.poids_entree + ' / sortie ' + p.poids_sortie + ', ' + paires.length + ' rubriques qualité, ' + p.classement + '. Poids net payé attendu : ' + p.poids_net_paye_attendu + '.'; return 'rempli';
   }
   async function etapeBordereau(e) {
