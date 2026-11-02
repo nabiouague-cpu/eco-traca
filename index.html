@@ -4678,7 +4678,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-02-416';
+const APP_VERSION = '2026-11-02-417';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -22742,7 +22742,7 @@ function defoModalFinaleHtml(){
     + '<div class="hint" style="margin:6px 0 0">Aperçu : <span id="fin-apercu"></span></div></div>'
     + '<details style="margin:6px 0"><summary class="hint" style="cursor:pointer;margin:0">Ou imposer un intervalle unique à toute la coopérative (facultatif)</summary><div style="display:flex;gap:8px;margin-top:4px">'+champ('Min (kg/ha)','fin_imin','')+champ('Max (kg/ha)','fin_imax','')+'</div></details>'
     + '<div style="margin:10px 0 4px;padding:8px 10px;border:1px solid var(--border);border-radius:8px"><b>Ajouter cette base à la base consolidée ECORIGINE ?</b> <span class="hint" style="margin:0">(en général oui pour une coopérative qui livre ; ta réponse est obligatoire)</span>'
-    + '<div style="display:flex;gap:16px;margin-top:4px"><label><input type="radio" name="fin-ajout" value="oui"> Oui, l\'ajouter</label><label><input type="radio" name="fin-ajout" value="non"> Non, base isolée seulement</label></div></div>'
+    + '<div style="display:flex;gap:16px;margin-top:4px"><label><input type="radio" name="fin-ajout" value="oui"'+(((state.defoFinalePre||{}).aid===a.id && (state.defoFinalePre||{}).ajout===true)?' checked':'')+'> Oui, l\'ajouter</label><label><input type="radio" name="fin-ajout" value="non"'+(((state.defoFinalePre||{}).aid===a.id && (state.defoFinalePre||{}).ajout===false)?' checked':'')+'> Non, base isolée seulement</label></div></div>'
     + '<label style="display:flex;gap:8px;align-items:flex-start;margin:10px 0 4px"><input type="checkbox" id="fin-valide" style="margin-top:3px"> <span><b>Je valide cette échelle</b> <span class="hint" style="margin:0">(obligatoire : sans ta validation, rien n\'est produit)</span></span></label>'
     + '<div id="defo-erreur" style="display:none;color:#c0392b;font-size:13px;margin:4px 0 8px"></div>'
     + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" id="fin-envoyer" onclick="defoFinaleEnvoyer()">Produire</button></div></div></div>';
@@ -22795,6 +22795,12 @@ async function defoDiscEnvoyer(id, texte){
       body: JSON.stringify({ analyse_id:id, question:q, historique:hist }) });
     const data = await resp.json(); if (!resp.ok || data.error) throw new Error(data.error || resp.status);
     d.msgs.push({ role:'assistant', contenu:data.reponse });
+    // Base finale demandée dans la conversation : le formulaire s'ouvre avec ta réponse « base consolidée » déjà cochée ; tu valides l'échelle de rendement.
+    if (data.base_finale){
+      state.defoFinalePre = { aid:id, ajout:!!data.base_finale.ajouter_base };
+      d.msgs.push({ role:'systeme', contenu:'📦 Base finale : j\'ai ouvert le formulaire avec ta réponse (ajout à la base consolidée : '+(data.base_finale.ajouter_base?'oui':'non')+'). Valide l\'échelle de rendement pour lancer la production.' });
+      setTimeout(()=>ouvrirDefoFinale(id), 300);
+    }
     // Décision donnée dans la conversation = validation : le nettoyage se lance automatiquement.
     if (Array.isArray(data.actions) && data.actions.length){
       const ok = await defoLancerNettoyage(id, data.actions);
