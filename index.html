@@ -4670,7 +4670,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-02-404';
+const APP_VERSION = '2026-11-02-405';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -25979,7 +25979,7 @@ function obcManques(l){
 // ORIGEN dépose les lots dans la table obc_file ; l'automate (Tampermonkey) les lit, les saisit seul dans OBC et renvoie le résultat (saisi + n° de bordereau, ou échec + raison).
 async function obcFileCharger(){
   try{
-    const r = await supabaseClient.from('obc_file').select('achat_id,connaissement,statut,message,bordereau_numero,maj_le,controle,controle_le,refaire_depuis');
+    const r = await supabaseClient.from('obc_file').select('achat_id,connaissement,statut,message,bordereau_numero,maj_le,controle,controle_le,refaire_depuis,lot');
     if (r.error) throw r.error;
     state.obcFile = {}; (r.data||[]).forEach(x=>{ state.obcFile[x.achat_id] = x; });
     const saisis = (r.data||[]).filter(x=>x.statut==='saisi' && !(state.achats||[]).some(a=>a.id===x.achat_id && a.obc_saisi_le)).map(x=>x.achat_id);
@@ -25987,7 +25987,30 @@ async function obcFileCharger(){
   }catch(e){ console.warn('obc_file', e); state.obcFile = state.obcFile || {}; }
 }
 function obcFileCompte(){ const n = { attente:0, en_cours:0, saisi:0, echec:0 }; Object.values(state.obcFile||{}).forEach(x=>{ n[x.statut] = (n[x.statut]||0)+1; }); return n; }
-function obcFileMention(a){
+// Changements survenus dans le SAIGIC (réclamations corrigées, poids mis à jour) APRÈS la saisie dans OBC : on compare le lot envoyé à Noah 1 (obc_file.lot) au connaissement tel qu'il est aujourd'hui dans ORIGEN.
+const OBC_SUIVI = [['pesee','poids_entree','poids entrée'],['pesee','poids_sortie','poids sortie'],['pesee','sacs_decharges','sacs déchargés'],['pesee','sacs_acceptes','sacs acceptés'],['pesee','tare_sacs','tare'],['pesee','refaction','réfaction'],['pesee','poids_net_paye_attendu','net payé'],['pesee','classement','classement'],['connaissement','sacs_declares','sacs déclarés'],['connaissement','poids_net_declare','net déclaré']];
+function obcMaj(a){
+  const f = state.obcFile && state.obcFile[a.id]; if (!f || f.statut!=='saisi' || !f.lot || !a.obc_saisi_le) return [];
+  let cur; try{ cur = obcLot(a); }catch(e){ return []; }
+  const out = [];
+  OBC_SUIVI.forEach(([g,k,nom])=>{ const av = f.lot[g] && f.lot[g][k], ap = cur[g] && cur[g][k]; if (av==null || ap==null) return; if (String(av).trim()!==String(ap).trim() && !(isFinite(Number(av)) && isFinite(Number(ap)) && Number(av)===Number(ap))) out.push({ champ:nom, avant:av, apres:ap }); });
+  return out;
+}
+function obcMajListe(){ return (state.achats||[]).filter(a=>obcMaj(a).length); }
+async function obcMajAcquitter(id){
+  const a = (state.achats||[]).find(x=>x.id===id); if (!a) return;
+  askConfirm('Confirmer que ce connaissement a été corrigé dans OBC avec les nouvelles valeurs d\'ORIGEN ? (Il ne sera plus signalé.)', async ()=>{
+    const { error } = await supabaseClient.from('obc_file').update({ lot: obcLot(a), maj_le: new Date().toISOString() }).eq('achat_id', id);
+    if (error){ showToast('Échec : '+error.message); return; }
+    await obcFileCharger(); showToast('Noté : corrigé dans OBC.', 'success'); render();
+  });
+}
+function obcMajHtml(a){
+  const m = obcMaj(a); if (!m.length) return '';
+  return '<div style="font-size:10px;color:#B3261E;font-weight:700;border:1px solid #B3261E;border-radius:6px;padding:3px 6px;margin-bottom:3px;background:#fdecea">🔔 Mis à jour depuis la saisie OBC : '+m.map(x=>esc(x.champ)+' '+esc(x.avant)+' → '+esc(x.apres)).join(' ; ')+'<br><span style="font-weight:400">À corriger dans OBC (supprimer bordereau puis pesée, et refaire), puis </span><a href="#" onclick="obcMajAcquitter(\''+esc(a.id)+'\');return false" style="color:#0E3B36">marquer « corrigé dans OBC »</a></div>';
+}
+function obcFileMention(a){ return obcMajHtml(a)+obcFileMentionBase(a); }
+function obcFileMentionBase(a){
   const f = state.obcFile && state.obcFile[a.id]; if (f && a.obc_saisi_le && f.controle && f.controle.ok) return '<div style="font-size:10px;color:#2e7d32" title="Relu dans OBC : poids, récolte et montants conformes à ORIGEN">✓ Contrôlé dans OBC'+(f.controle.mineurs&&f.controle.mineurs.length?' <span style="color:#8a6d00" title="'+esc(f.controle.mineurs.map(x=>x.champ+' : ORIGEN '+x.attendu+', OBC '+x.trouve).join(' ; '))+'. Net payé et bordereau identiques à ORIGEN.">(arrondi OBC ≤ 1 : net payé et bordereau exacts)</span>':'')+'</div>'; if (!f || a.obc_saisi_le) return '';
   if (f.statut==='attente') return '<div class="vide" style="font-size:10px">⏳ En file d\'attente</div>';
   if (f.statut==='en_cours') return '<div style="font-size:10px;color:#0E3B36;font-weight:700">🤖 Saisie en cours…</div>';
@@ -26698,6 +26721,7 @@ function renderSaisieObcTab(){
           + '<button type="button" class="btn-ghost btn-compact" onclick="obcFileCharger().then(render)">↻ Actualiser</button>'
           + '<button type="button" class="btn-ghost btn-compact" onclick="obcFileVider()">Vider la file</button>'
           + '<button type="button" class="btn-ghost btn-compact" onclick="obcCodeLiaison()" title="À coller une seule fois dans l\'automate OBC">🔑 Code de liaison</button>'
+          + (function(){ const M = obcMajListe(); if (!M.length) return ''; return '<div style="flex:1 1 100%;background:#fdecea;color:#B3261E;border:1px solid #B3261E;border-radius:8px;padding:6px 10px;font-weight:700">🔔 '+M.length+' connaissement'+(M.length>1?'s':'')+' mis à jour dans le SAIGIC depuis la saisie OBC : '+M.slice(0,6).map(x=>esc(x.connaissement)).join(', ')+(M.length>6?'…':'')+'. À corriger dans OBC (détail sur chaque ligne).</div>'; })()
           + (function(){
               const L = Object.values(state.obcFile||{}), ok = L.filter(x=>x.statut==='saisi' && x.controle && x.controle.ok).length,
                     inc = L.filter(x=>x.controle && x.controle.anomalies && x.controle.anomalies.length && x.statut!=='saisi'), non = L.filter(x=>x.statut==='saisi' && !x.controle_le).length,
