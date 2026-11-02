@@ -4675,7 +4675,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-02-409';
+const APP_VERSION = '2026-11-02-410';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -22341,7 +22341,10 @@ function defoAnalyseCarte(a){
   if (P.termine){
     const clos = (state.defo||[]).some(z=>z.etape==='base_finale' && z.statut==='terminee' && z.entrees && z.entrees.analyse_id===a.id);
     const pr = clos ? '<details style="margin-top:10px"><summary style="cursor:pointer;color:#2c5fae;font-weight:600">🗄 Base d\'origine de la coopérative : classée (base finale produite) — voir l\'historique des problèmes</summary>'+P.problemes+'</details>' : P.problemes;
-    h += P.resume + defoLienHtml(a) + defoKmlHtml(a) + P.netInfo + pr + P.apres + defoFinaleHtml(a) + defoProposerHtml(a) + defoDiscussionHtml(a);
+    // Le rapport s'écrit dans la conversation (constats, ce qu'il faut faire) : Nabi décide en une phrase et c'est appliqué automatiquement. L'ancien affichage reste disponible, replié.
+    h += defoDiscussionHtml(a) + defoFinaleHtml(a)
+      + '<details style="margin-top:12px"><summary style="cursor:pointer;color:#5f6b68;font-size:12.5px">Détails techniques (ancien affichage : tableaux, boutons action par action)</summary>'
+      + P.resume + defoLienHtml(a) + defoKmlHtml(a) + P.netInfo + pr + P.apres + defoProposerHtml(a) + '</details>';
   }
   return h + '</div>';
 }
@@ -22763,16 +22766,21 @@ async function defoFinaleEnvoyer(){
 }
 
 // ----- Discussion avec Claude, dans ORIGEN, au sujet d'une analyse : Claude voit tous les éléments de l'analyse (étapes, lien registre, cohérence, dates, erreurs). Les propositions de règles sont « retenues » ici puis mises en œuvre par le développement. -----
-function defoDiscEtat(id){ state.defoDisc = state.defoDisc || {}; return state.defoDisc[id] = state.defoDisc[id] || { msgs:[], ouvert:false, charge:false, chargement:false }; }
+function defoDiscEtat(id){ state.defoDisc = state.defoDisc || {}; return state.defoDisc[id] = state.defoDisc[id] || { msgs:[], ouvert:true, charge:false, chargement:false, init:false }; }
+async function defoDiscCharger(id){
+  const d = defoDiscEtat(id);
+  try{ const r = await supabaseClient.from('defo_discussion').select('id,role,contenu,created_at').eq('analyse_id', id).order('created_at', { ascending:true }); if (!r.error){ d.msgs = r.data||[]; d.charge = true; } }catch(e){ /* conversation vide */ }
+  render();
+  // Première ouverture : le rapport s'écrit tout seul dans la conversation (l'équivalent du mot « Analyse »).
+  if (d.charge && !d.msgs.some(m=>m.role==='user' || m.role==='assistant')) defoDiscEnvoyer(id, 'Analyse');
+}
 async function defoDiscToggle(id){
   const d = defoDiscEtat(id); d.ouvert = !d.ouvert;
-  if (d.ouvert && !d.charge){
-    try{ const r = await supabaseClient.from('defo_discussion').select('id,role,contenu,created_at').eq('analyse_id', id).order('created_at', { ascending:true }); if (!r.error){ d.msgs = r.data||[]; d.charge = true; } }catch(e){ /* conversation vide */ }
-  }
+  if (d.ouvert && !d.charge) return defoDiscCharger(id);
   render();
 }
-async function defoDiscEnvoyer(id){
-  const d = defoDiscEtat(id), inp = document.getElementById('defo-disc-q'), q = inp ? inp.value.trim() : ''; if (!q || d.chargement) return;
+async function defoDiscEnvoyer(id, texte){
+  const d = defoDiscEtat(id), inp = document.getElementById('defo-disc-q'), q = (texte || (inp ? inp.value : '') || '').trim(); if (!q || d.chargement) return;
   const hist = d.msgs.filter(m=>m.role!=='proposition').map(m=>({ role:m.role, contenu:m.contenu }));
   d.msgs.push({ role:'user', contenu:q }); d.chargement = true; render();
   try{
@@ -22782,6 +22790,11 @@ async function defoDiscEnvoyer(id){
       body: JSON.stringify({ analyse_id:id, question:q, historique:hist }) });
     const data = await resp.json(); if (!resp.ok || data.error) throw new Error(data.error || resp.status);
     d.msgs.push({ role:'assistant', contenu:data.reponse });
+    // Décision donnée dans la conversation = validation : le nettoyage se lance automatiquement.
+    if (Array.isArray(data.actions) && data.actions.length){
+      const ok = await defoLancerNettoyage(id, data.actions);
+      d.msgs.push({ role:'systeme', contenu: ok ? '⚙️ Nettoyage lancé automatiquement : '+data.actions.join(', ')+'. Le résultat s\'affichera ici et je te le résumerai.' : "⚠ Le nettoyage n'a pas pu être lancé (un nettoyage est peut-être déjà en cours)." });
+    }
   }catch(e){ d.msgs.push({ role:'assistant', contenu:"Je n'ai pas pu répondre : "+(e && e.message ? e.message : e)+". Réessaie dans un instant.", erreur:true }); }
   d.chargement = false; render();
   setTimeout(()=>{ const z = document.getElementById('defo-disc-fil'); if (z) z.scrollTop = z.scrollHeight; }, 50);
@@ -22795,8 +22808,10 @@ async function defoDiscRetenir(id, i){
 }
 function defoDiscussionHtml(a){
   const d = defoDiscEtat(a.id);
-  if (!d.ouvert) return '<div style="margin-top:12px"><button type="button" class="btn-ghost" onclick="defoDiscToggle(\''+escJs(a.id)+'\')">💬 Discuter de cette analyse avec Claude</button></div>';
+  if (!d.init){ d.init = true; setTimeout(()=>defoDiscCharger(a.id), 0); }
+  if (!d.ouvert) return '<div style="margin-top:12px"><button type="button" class="btn-ghost" onclick="defoDiscToggle(\''+escJs(a.id)+'\')">💬 Reprendre la conversation avec Claude</button></div>';
   const bulles = d.msgs.map((m,i)=>{
+    if (m.role==='systeme') return '<div style="align-self:center;font-size:12px;color:#14633a;background:#e8f5e9;border-radius:8px;padding:4px 10px">'+esc(m.contenu)+'</div>';
     if (m.role==='proposition') return '<div style="align-self:flex-start;max-width:92%;border:1px dashed #9a6700;background:#fff6d6;color:#6b4600;border-radius:10px;padding:6px 10px;font-size:12px"><b>📌 Retenu pour le paramétrage</b><div style="white-space:pre-wrap">'+esc(m.contenu)+'</div></div>';
     const moi = m.role==='user';
     return '<div style="align-self:'+(moi?'flex-end':'flex-start')+';max-width:92%;border-radius:10px;padding:7px 11px;font-size:13px;white-space:pre-wrap;background:'+(moi?'#0E3B36':'#F2F5F4')+';color:'+(moi?'#fff':'#14231F')+'">'+esc(m.contenu)
@@ -22804,8 +22819,8 @@ function defoDiscussionHtml(a){
   }).join('');
   return '<div style="margin-top:12px;border:1px solid var(--border);border-radius:12px;padding:10px 12px;background:#fff">'
     + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b>💬 Discussion avec Claude · '+esc(a.cooperative_nom||'')+'</b><a href="#" onclick="defoDiscToggle(\''+escJs(a.id)+'\');return false" style="font-size:12px">Réduire</a></div>'
-    + '<div class="hint" style="margin:0 0 6px">Claude voit tous les éléments de cette analyse (étapes, verdict, lien registre, cohérence, dates, erreurs). Pose tes questions, demande comment une conclusion a été obtenue, ou propose une règle : « 📌 Retenir » la garde ici pour le paramétrage.</div>'
-    + '<div id="defo-disc-fil" style="display:flex;flex-direction:column;gap:6px;max-height:340px;overflow:auto;padding:4px 0">'+(bulles || '<span class="vide">Aucun message pour l\'instant.</span>')+(d.chargement ? '<div class="vide">Claude réfléchit…</div>' : '')+'</div>'
+    + '<div class="hint" style="margin:0 0 6px">Le rapport s\'écrit ici. Tu donnes ta décision en une phrase (« supprime les doublons et retire les polygones en forêt classée ») : elle est appliquée automatiquement, sur une copie. Tu peux aussi demander comment une conclusion a été obtenue ou proposer une règle (« 📌 Retenir »).</div>'
+    + '<div id="defo-disc-fil" style="display:flex;flex-direction:column;gap:6px;max-height:340px;overflow:auto;padding:4px 0">'+(bulles || '<span class="vide">Aucun message pour l\'instant.</span>')+(d.chargement ? '<div class="vide">Claude rédige… (environ une minute)</div>' : '')+'</div>'
     + '<div style="display:flex;gap:6px;margin-top:6px"><textarea id="defo-disc-q" rows="2" style="flex:1;min-width:0" placeholder="Ta question ou ta proposition…" onkeydown="if(event.key===\'Enter\'&&!event.shiftKey){event.preventDefault();defoDiscEnvoyer(\''+escJs(a.id)+'\')}"></textarea><button type="button" class="btn btn-primary" '+(d.chargement?'disabled':'')+' onclick="defoDiscEnvoyer(\''+escJs(a.id)+'\')">Envoyer</button></div></div>';
 }
 function defoProposerHtml(a){
