@@ -4657,7 +4657,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-02-396';
+const APP_VERSION = '2026-11-02-397';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -21943,13 +21943,16 @@ function renderDefoVue(){
 function ouvrirDefoPrep(){ openModal('defoPrep', { nom:'' }); }
 // ---- le nom saisi ressemble à une coopérative déjà connue : on demande « est-ce la même ? » (Oui / Non) avant de poursuivre ----
 function defoNomCle(t){ return String(t||'').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^A-Z0-9]+/g,' ').trim(); }
+// Mots du statut juridique, communs à presque toutes les coopératives : ils ne servent pas à reconnaître une coopérative (COOP-CA ECAKO et COOP-CA KLAN n'ont rien en commun).
+const DEFO_NOM_GENERIQUES = new Set(['COOP','CA','COOPCA','SCOOP','SCOOPS','SCOOPCA','SOC','SOCIETE','COOPERATIVE','COOPERATIVES','UNION','GROUPEMENT','GIE','SA','SARL','DE','DU','DES','LA','LE','LES','ET','D']);
+function defoNomDistinct(t){ const k = defoNomCle(t), m = k.split(' ').filter(w=>w && !DEFO_NOM_GENERIQUES.has(w)); return m.length ? m.join(' ') : k; }
 function defoNomProche(saisi){
-  const k = defoNomCle(saisi), kc0 = k.replace(/ /g,''); if (kc0.length<2) return null;
+  const k = defoNomDistinct(saisi), kc0 = k.replace(/ /g,''); if (kc0.length<2) return null;
   const mots0 = new Set(k.split(' ')), bi = t=>{ const m = new Map(); for (let i=0;i<t.length-1;i++){ const g=t.slice(i,i+2); m.set(g,(m.get(g)||0)+1); } return m; };
   const b0 = bi(kc0); let best = null;
   for (const c of (state.cooperatives||[])){
     for (const nom of [c.nom, c.nom_complet]){
-      const kn = defoNomCle(nom); if (!kn) continue;
+      const kn = defoNomDistinct(nom); if (!kn) continue;
       const kc = kn.replace(/ /g,'');
       if (kc===kc0) return { identique:true, nom:c.nom, coop:c, score:1 };
       let sc = 0;
@@ -21959,7 +21962,7 @@ function defoNomProche(saisi){
       if (jac>=0.5) sc = Math.max(sc, jac);
       const b1 = bi(kc); let com = 0; b0.forEach((n,g)=>{ com += Math.min(n, b1.get(g)||0); });
       const dice = (kc0.length>1 && kc.length>1) ? 2*com/((kc0.length-1)+(kc.length-1)) : 0;
-      if (dice>=0.75) sc = Math.max(sc, dice);
+      if (dice>=0.85) sc = Math.max(sc, dice);
       if (sc>0 && (!best || sc>best.score)) best = { identique:false, nom:c.nom, coop:c, score:sc };
     }
   }
