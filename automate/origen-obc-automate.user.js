@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.3.1
+// @version      0.3.2
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.3.1';
+  const VERSION = '0.3.2';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -180,6 +180,7 @@
       + '<button id="oo-continuer" style="background:#fff;border:1px solid #cfd8d4;border-radius:8px;padding:8px 12px;cursor:pointer;">Continuer</button>'
       + '<button id="oo-pause" style="background:#fff;border:1px solid #cfd8d4;border-radius:8px;padding:8px 12px;cursor:pointer;">Pause</button>'
       + '<button id="oo-journal" style="background:#fff;border:1px solid #cfd8d4;border-radius:8px;padding:8px 12px;cursor:pointer;">Copier le journal</button>'
+      + '<button id="oo-refaire" title="Supprime dans OBC le bordereau puis la pesée si la pesée est enregistrée avec des poids à zéro, puis refait ces deux étapes" style="background:#fff;border:1px solid #B3261E;border-radius:8px;padding:8px 12px;cursor:pointer;color:#B3261E;">↩ Refaire depuis la pesée</button>'
       + '<button id="oo-stop" style="background:#fff;border:1px solid #cfd8d4;border-radius:8px;padding:8px 12px;cursor:pointer;color:#B3261E;">Effacer le lot</button>'
       + '</div></div>';
     document.body.appendChild(panneau);
@@ -207,6 +208,7 @@
     panneau.querySelector('#oo-continuer').onclick = () => { const e = lireEtat(); if (!e) return; e.pause = false; e.erreur = null; if (e.statut === 'attente_enregistrement') e.statut = 'verifier'; ecrireEtat(e); boucle(); };
     panneau.querySelector('#oo-pause').onclick = () => { const e = lireEtat(); if (!e) return; e.pause = !e.pause; ecrireEtat(e); afficherEtat(); if (!e.pause) boucle(); };
     panneau.querySelector('#oo-journal').onclick = () => { const e = lireEtat(); navigator.clipboard.writeText(JSON.stringify({ origen_obc_journal: true, etape: e && e.etape, statut: e && e.statut, ids: e && e.ids, journal: e && e.journal }, null, 1)); };
+    panneau.querySelector('#oo-refaire').onclick = refaireDepuisPesee;
     panneau.querySelector('#oo-stop').onclick = () => { if (confirm('Effacer le lot en cours ? (Ce qui est déjà enregistré dans OBC reste enregistré.)')) { effacerEtat(); afficherEtat(); } };
     // déplaçable
     let dx = 0, dy = 0, drag = false; const tete = panneau.querySelector('#oo-tete');
@@ -879,6 +881,31 @@
     e.note = 'Bordereau ' + b.numero + ' : PU ' + b.pu_commodite + ', BIC ' + b.pu_bic + ', transport ' + b.pu_transport + (b.montant_revolving ? ', revolving ' + b.montant_revolving : '') + '.' + verif; return 'rempli';
   }
   const EXEC = [etapeGrosTraitantTiers, etapeGrosTraitant, etapeCompteTiers, etapeCooperative, etapeTransporteur, etapeProducteur, etapeBrousse, etapeLivraison, etapePesee, etapeBordereau];
+
+  // ---------- reprise à partir de la pesée (suppression ciblée, en aval de l'erreur uniquement) ----------
+  // Ordre imposé par la chaîne OBC : bordereau, puis pesée. Rien d'autre n'est touché. Uniquement si la pesée est enregistrée avec des poids à zéro, et après confirmation.
+  async function supprimerLigne(page, ligne) {
+    const lien = ligne.tr.querySelector('a[href*="' + page + '/Delete/"]'); if (!lien) throw new Error('Pas de lien « Supprimer » sur cette ligne (droit de suppression absent dans OBC ?)');
+    const doc = await getHtml(lien.getAttribute('href').split('?')[0]);
+    const form = doc.querySelector('form[action*="/Delete/"]'); if (!form) throw new Error('Formulaire de suppression introuvable');
+    const fd = new FormData(form); const corps = new URLSearchParams(); fd.forEach((v, k) => { if (typeof v === 'string') corps.append(k, v); });
+    const r = await fetch(form.getAttribute('action'), { method: 'POST', credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest', 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' }, body: corps.toString() });
+    if (!r.ok) throw new Error('OBC a refusé la suppression (HTTP ' + r.status + ')');
+  }
+  async function refaireDepuisPesee() {
+    const e = lireEtat(); if (!e || !e.lot) { alert('Aucun lot en cours dans Noah 1.'); return; }
+    try {
+      const pes = await existePesee(e), bor = await existeBordereau(e);
+      if (!pes) { alert('Pesée ' + e.lot.pesee.code + ' introuvable dans OBC : rien à supprimer. Clique « Continuer ».'); return; }
+      const nv = (i) => Number(String(pes.c[i] || '').replace(/[\s  ]/g, '').replace(',', '.'));
+      if (nv(5) > 0 && nv(8) > 0 && nv(10) > 0) { alert('La pesée ' + e.lot.pesee.code + ' a des poids corrects dans OBC (brut ' + pes.c[5] + ', net payé ' + pes.c[10] + ') : Noah 1 ne la supprime pas.'); return; }
+      const liste = (bor ? '1) le bordereau ' + (e.lot.bordereau && e.lot.bordereau.numero || '') + ' (connaissement ' + e.lot.connaissement.numero + ')\n2) ' : '1) ') + 'la pesée ' + e.lot.pesee.code + ' (brut ' + pes.c[5] + ', net livré ' + pes.c[8] + ', net payé ' + pes.c[10] + ')';
+      if (!confirm('SUPPRIMER dans OBC, dans cet ordre :\n' + liste + '\n\nRien d\'autre ne sera touché. Noah 1 refera ensuite la pesée et le bordereau avec les poids d\'ORIGEN. Continuer ?')) return;
+      if (bor) { await supprimerLigne('AgroAchatBordereauReception', bor); journal(e, 'Bordereau supprimé dans OBC (reprise à la pesée)'); if (await existeBordereau(e)) throw new Error('Le bordereau est toujours dans OBC après suppression : arrêt, la pesée n\'est pas touchée'); }
+      await supprimerLigne('AgroAchatPeseeBrousse', pes); journal(e, 'Pesée supprimée dans OBC (poids à zéro)'); if (await existePesee(e)) throw new Error('La pesée est toujours dans OBC après suppression');
+      const e2 = lireEtat(); e2.etape = 9; e2.statut = 'a_faire'; e2.erreur = null; e2.pause = false; e2.note = 'Reprise à la pesée après suppression du bordereau et de la pesée à poids zéro.'; if (e2.fait) { delete e2.fait[9]; delete e2.fait[10]; } delete e2.t_save; delete e2.cliques; delete e2.verifErr; ecrireEtat(e2); afficherEtat(); boucle();
+    } catch (err) { const e3 = lireEtat() || e; e3.erreur = 'Reprise : ' + (err && err.message || err); ecrireEtat(e3); afficherEtat(); }
+  }
 
   // ---------- boucle ----------
   let enCours = false;
