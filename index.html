@@ -4677,7 +4677,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-02-428';
+const APP_VERSION = '2026-11-02-429';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -22770,18 +22770,71 @@ async function defoFinaleEnvoyer(){
 }
 
 // ----- Discussion avec Claude, dans ORIGEN, au sujet d'une analyse : Claude voit tous les éléments de l'analyse (étapes, lien registre, cohérence, dates, erreurs). Les propositions de règles sont « retenues » ici puis mises en œuvre par le développement. -----
-function defoDiscEtat(id){ state.defoDisc = state.defoDisc || {}; return state.defoDisc[id] = state.defoDisc[id] || { msgs:[], ouvert:true, charge:false, chargement:false, init:false }; }
-async function defoDiscCharger(id){
-  const d = defoDiscEtat(id);
-  try{ const r = await supabaseClient.from('defo_discussion').select('id,role,contenu,created_at').eq('analyse_id', id).order('created_at', { ascending:true }); if (!r.error){ d.msgs = r.data||[]; d.charge = true; } else { d.msgs = [{ role:'assistant', erreur:true, contenu:'Je ne peux pas ouvrir la conversation : '+r.error.message }]; } }catch(e){ d.msgs = [{ role:'assistant', erreur:true, contenu:'Je ne peux pas ouvrir la conversation : '+(e&&e.message?e.message:e) }]; }
-  render();
-  // Première ouverture : le rapport s'écrit tout seul dans la conversation (l'équivalent du mot « Analyse »).
-  if (d.charge && !d.msgs.some(m=>m.role==='user' || m.role==='assistant')) defoDiscEnvoyer(id, 'Analyse');
+function defoDiscEtat(id){ state.defoDisc = state.defoDisc || {}; return state.defoDisc[id] = state.defoDisc[id] || { msgs:[], charge:false, chargement:false }; }
+// ----- Discussion avec Noah : une PAGE À PART (hors du rendu général d'ORIGEN) ; elle ne redessine jamais l'écran, elle ajoute seulement les messages. -----
+function ddBulleHtml(id, m, i){
+  if (m.role==='systeme') return '<div style="align-self:center;font-size:12px;color:#14633a;background:#e8f5e9;border-radius:8px;padding:5px 12px;max-width:92%">'+esc(m.contenu)+'</div>';
+  if (m.role==='proposition') return '<div style="align-self:flex-start;max-width:92%;border:1px dashed #9a6700;background:#fff6d6;color:#6b4600;border-radius:10px;padding:6px 10px;font-size:12px"><b>📌 Retenu pour le paramétrage</b><div style="white-space:pre-wrap">'+esc(m.contenu)+'</div></div>';
+  const moi = m.role==='user';
+  return '<div style="align-self:'+(moi?'flex-end':'flex-start')+';max-width:'+(moi?'80%':'96%')+';min-width:0;border-radius:12px;padding:9px 13px;font-size:14px;line-height:1.55;'+(moi?'white-space:pre-wrap;':'')+'background:'+(moi?'#0E3B36':'#F2F5F4')+';color:'+(moi?'#fff':'#14231F')+'">'
+    + (moi ? esc(m.contenu)+'<div style="text-align:right;font-size:10.5px;opacity:.7;margin-top:2px">✓ Envoyé</div>'
+           : '<div style="font-size:11px;font-weight:700;color:#0E3B36;margin-bottom:2px">Noah</div>'+mdHtml(m.contenu)
+             + (!m.erreur ? '<div style="margin-top:4px"><a href="#" id="dd-ret-'+i+'" style="font-size:11px;color:'+(m.retenu?'#2e7d32':'#0E3B36')+'" onclick="defoDiscRetenir(\''+escJs(id)+'\','+i+');return false">'+(m.retenu?'✓ retenu':'📌 Retenir pour le paramétrage')+'</a></div>' : ''))
+    + '</div>';
 }
-async function defoDiscToggle(id){
-  const d = defoDiscEtat(id); d.ouvert = !d.ouvert;
-  if (d.ouvert && !d.charge) return defoDiscCharger(id);
-  render();
+function ddAjouter(id, m){
+  const fil = document.getElementById('defo-disc-fil'); if (!fil) return;
+  const d = defoDiscEtat(id), i = d.msgs.indexOf(m);
+  const pense = document.getElementById('dd-pense'); const h = ddBulleHtml(id, m, i);
+  if (pense) pense.insertAdjacentHTML('beforebegin', h); else fil.insertAdjacentHTML('beforeend', h);
+  fil.scrollTop = fil.scrollHeight;
+}
+function ddPense(on){
+  const fil = document.getElementById('defo-disc-fil'); if (!fil) return;
+  const ex = document.getElementById('dd-pense'); if (ex) ex.remove();
+  const btn = document.getElementById('defo-disc-env'); if (btn) btn.disabled = !!on;
+  if (!on) return;
+  fil.insertAdjacentHTML('beforeend', '<div id="dd-pense" style="align-self:flex-start;border-radius:12px;padding:9px 13px;background:#F2F5F4;color:#14231F;font-size:14px"><div style="font-size:11px;font-weight:700;color:#0E3B36;margin-bottom:2px">Noah</div>Noah réfléchit<span class="pts-pense"><i>.</i><i>.</i><i>.</i></span> <span class="hint" style="margin:0">(jusqu\'à une minute)</span></div>');
+  fil.scrollTop = fil.scrollHeight;
+}
+function defoDiscFermer(){
+  defoDiscMicroArreter();
+  const pg = document.getElementById('defo-disc-page'); if (pg) pg.remove();
+  document.body.style.overflow = '';
+  document.removeEventListener('keydown', defoDiscTouche);
+}
+function defoDiscTouche(ev){ if (ev.key==='Escape') defoDiscFermer(); }
+async function defoDiscOuvrir(id){
+  const a = (state.defo||[]).find(z=>z.id===id); if (!a) return;
+  defoDiscFermer();
+  const d = defoDiscEtat(id);
+  const pg = document.createElement('div'); pg.id = 'defo-disc-page';
+  pg.style.cssText = 'position:fixed;inset:0;z-index:60;background:#F6F8F7;display:flex;flex-direction:column;';
+  pg.innerHTML = '<div style="display:flex;align-items:center;gap:12px;padding:10px 16px;background:#fff;border-bottom:1px solid var(--border)">'
+    + '<button type="button" class="btn-ghost" onclick="defoDiscFermer()">← Retour au dossier</button>'
+    + '<div style="flex:1;min-width:0"><b>💬 Noah · '+esc(a.cooperative_nom||'')+'</b><div class="hint" style="margin:0">On discute, on compare les options, puis tu demandes d\'appliquer la stratégie. Rien n\'est appliqué sans ton ordre ; le nettoyage se fait sur une copie.</div></div></div>'
+    + '<div id="defo-disc-fil" style="flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:10px;width:100%;max-width:900px;margin:0 auto;box-sizing:border-box"></div>'
+    + '<div style="background:#fff;border-top:1px solid var(--border);padding:10px 16px"><div style="display:flex;gap:8px;max-width:900px;margin:0 auto">'
+    + '<textarea id="defo-disc-q" rows="2" style="flex:1;min-width:0;font-size:14px" placeholder="Écris ici : une question, une objection, une stratégie… (Entrée pour envoyer, Maj+Entrée pour une nouvelle ligne)" onkeydown="if(event.key===\'Enter\'&&!event.shiftKey){event.preventDefault();defoDiscEnvoyer(\''+escJs(id)+'\')}"></textarea>'
+    + '<button type="button" id="defo-disc-mic" class="btn-ghost" title="Dicter à voix haute (clique pour démarrer, reclique pour arrêter)" style="font-size:20px;padding:0 14px" onclick="defoDiscMicro()">🎤</button>'
+    + '<button type="button" id="defo-disc-env" class="btn btn-primary" onclick="defoDiscEnvoyer(\''+escJs(id)+'\')">Envoyer</button></div></div>';
+  document.body.appendChild(pg); document.body.style.overflow = 'hidden';
+  document.addEventListener('keydown', defoDiscTouche);
+  const fil = document.getElementById('defo-disc-fil');
+  if (!d.charge){
+    fil.innerHTML = '<div class="vide">Chargement de la conversation…</div>';
+    try{
+      const r = await supabaseClient.from('defo_discussion').select('id,role,contenu,created_at').eq('analyse_id', id).order('created_at', { ascending:true });
+      if (r.error) throw r.error;
+      d.msgs = r.data||[]; d.charge = true;
+    }catch(e){ fil.innerHTML = ''; d.msgs = []; fil.insertAdjacentHTML('beforeend', ddBulleHtml(id, { role:'assistant', erreur:true, contenu:'Je ne peux pas ouvrir la conversation : '+(e&&e.message?e.message:e) }, -1)); return; }
+  }
+  fil.innerHTML = d.msgs.map((m,i)=>ddBulleHtml(id, m, i)).join('');
+  fil.scrollTop = fil.scrollHeight;
+  const t = document.getElementById('defo-disc-q'); if (t) t.focus();
+  // Première ouverture : le rapport s'écrit tout seul (l'équivalent du mot « Analyse »).
+  if (!d.msgs.some(m=>m.role==='user' || m.role==='assistant')) defoDiscEnvoyer(id, 'Analyse');
+  if (d.chargement) ddPense(true);
 }
 // ----- Dictée vocale (navigateur) : la voix devient du texte dans le champ de saisie ; tu relis puis tu envoies. -----
 let _voix = null;
@@ -22817,37 +22870,47 @@ function defoDiscMicro(){
 async function defoDiscEnvoyer(id, texte){
   const d = defoDiscEtat(id), inp = document.getElementById('defo-disc-q'), q = (texte || (inp ? inp.value : '') || '').trim(); if (!q || d.chargement) return;
   defoDiscMicroArreter();
-  const hist = d.msgs.filter(m=>m.role!=='proposition').map(m=>({ role:m.role, contenu:m.contenu }));
-  d.msgs.push({ role:'user', contenu:q, envoye:true }); d.chargement = true; render();
-  setTimeout(()=>{ const z = document.getElementById('defo-disc-fil'); if (z) z.scrollTop = z.scrollHeight; const t = document.getElementById('defo-disc-q'); if (t) t.focus(); }, 30);
+  if (inp && !texte) inp.value = '';   // le message part : la barre de saisie se vide tout de suite
+  const hist = d.msgs.filter(m=>m.role!=='proposition' && m.role!=='systeme').map(m=>({ role:m.role, contenu:m.contenu }));
+  const mu = { role:'user', contenu:q, envoye:true }; d.msgs.push(mu); d.chargement = true;
+  ddAjouter(id, mu); ddPense(true);
+  let fermerPourFormulaire = false;
   try{
     const { data: sd } = await supabaseClient.auth.getSession();
     const resp = await fetch(SUPABASE_URL+'/functions/v1/defo-discussion', { method:'POST',
       headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+(sd && sd.session ? sd.session.access_token : SUPABASE_ANON_KEY) },
       body: JSON.stringify({ analyse_id:id, question:q, historique:hist }) });
     const data = await resp.json(); if (!resp.ok || data.error) throw new Error(data.error || resp.status);
-    d.msgs.push({ role:'assistant', contenu:data.reponse });
+    ddPense(false);
+    const ma = { role:'assistant', contenu:data.reponse }; d.msgs.push(ma); ddAjouter(id, ma);
+    // Décision donnée dans la conversation = ordre d'appliquer : le nettoyage se lance (sur une copie).
+    if (Array.isArray(data.actions) && data.actions.length){
+      const ok = await defoLancerNettoyage(id, data.actions);
+      const ms = { role:'systeme', contenu: ok ? '⚙️ Stratégie appliquée, nettoyage lancé : '+data.actions.join(', ')+'. Le résultat s\'affichera dans l\'onglet Nettoyage du dossier.' : "⚠ Le nettoyage n'a pas pu être lancé (un nettoyage est peut-être déjà en cours)." };
+      d.msgs.push(ms); ddAjouter(id, ms);
+    }
     // Base finale demandée dans la conversation : le formulaire s'ouvre avec ta réponse « base consolidée » déjà cochée ; tu valides l'échelle de rendement.
     if (data.base_finale){
       state.defoFinalePre = { aid:id, ajout:!!data.base_finale.ajouter_base };
-      d.msgs.push({ role:'systeme', contenu:'📦 Base finale : j\'ai ouvert le formulaire avec ta réponse (ajout à la base consolidée : '+(data.base_finale.ajouter_base?'oui':'non')+'). Valide l\'échelle de rendement pour lancer la production.' });
-      setTimeout(()=>ouvrirDefoFinale(id), 300);
+      const ms = { role:'systeme', contenu:'📦 Base finale : j\'ouvre le formulaire avec ta réponse (ajout à la base consolidée : '+(data.base_finale.ajouter_base?'oui':'non')+'). Valide l\'échelle de rendement pour lancer la production ; la conversation reste enregistrée.' };
+      d.msgs.push(ms); ddAjouter(id, ms); fermerPourFormulaire = true;
     }
-    // Décision donnée dans la conversation = validation : le nettoyage se lance automatiquement.
-    if (Array.isArray(data.actions) && data.actions.length){
-      const ok = await defoLancerNettoyage(id, data.actions);
-      d.msgs.push({ role:'systeme', contenu: ok ? '⚙️ Stratégie appliquée, nettoyage lancé : '+data.actions.join(', ')+'. Le résultat s\'affichera ici et je te le résumerai.' : "⚠ Le nettoyage n'a pas pu être lancé (un nettoyage est peut-être déjà en cours)." });
-    }
-  }catch(e){ d.msgs.push({ role:'assistant', contenu:"Je n'ai pas pu répondre : "+(e && e.message ? e.message : e)+". Réessaie dans un instant.", erreur:true }); }
-  d.chargement = false; render();
-  setTimeout(()=>{ const z = document.getElementById('defo-disc-fil'); if (z) z.scrollTop = z.scrollHeight; }, 50);
+  }catch(e){
+    ddPense(false);
+    const me = { role:'assistant', contenu:"Je n'ai pas pu répondre : "+(e && e.message ? e.message : e)+". Réessaie dans un instant.", erreur:true }; d.msgs.push(me); ddAjouter(id, me);
+    const t = document.getElementById('defo-disc-q'); if (t && !t.value && !texte) t.value = q;   // ton message n'est pas perdu
+  }
+  d.chargement = false; ddPense(false);
+  if (fermerPourFormulaire) setTimeout(()=>{ defoDiscFermer(); ouvrirDefoFinale(id); }, 1400);
+  else { const t = document.getElementById('defo-disc-q'); if (t) t.focus(); }
 }
 async function defoDiscRetenir(id, i){
   const d = defoDiscEtat(id), m = d.msgs[i]; if (!m || m.retenu) return;
   const a = (state.defo||[]).find(x=>x.id===id);
   const { error } = await supabaseClient.from('defo_discussion').insert({ analyse_id:id, cooperative_id:a ? a.cooperative_id : null, role:'proposition', contenu:m.contenu });
   if (error){ showToast('Échec : '+error.message); return; }
-  m.retenu = true; showToast('Proposition retenue pour le paramétrage.', 'success'); render();
+  m.retenu = true; showToast('Proposition retenue pour le paramétrage.', 'success');
+  const l = document.getElementById('dd-ret-'+i); if (l){ l.textContent = '✓ retenu'; l.style.color = '#2e7d32'; }
 }
 function mdHtml(t){
   const inl = x => esc(x).replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>').replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/g,'$1<i>$2</i>').replace(/`([^`]+)`/g,'<code style="background:#e6ecea;padding:0 4px;border-radius:4px">$1</code>');
@@ -22873,21 +22936,11 @@ function mdHtml(t){
   fin(); return o;
 }
 function defoDiscussionHtml(a){
-  const d = defoDiscEtat(a.id);
-  if (!d.init){ d.init = true; setTimeout(()=>defoDiscCharger(a.id), 0); }
-  if (!d.ouvert) return '<div style="margin-top:12px"><button type="button" class="btn-ghost" onclick="defoDiscToggle(\''+escJs(a.id)+'\')">💬 Reprendre la conversation avec Noah</button></div>';
-  const bulles = d.msgs.map((m,i)=>{
-    if (m.role==='systeme') return '<div style="align-self:center;font-size:12px;color:#14633a;background:#e8f5e9;border-radius:8px;padding:4px 10px">'+esc(m.contenu)+'</div>';
-    if (m.role==='proposition') return '<div style="align-self:flex-start;max-width:92%;border:1px dashed #9a6700;background:#fff6d6;color:#6b4600;border-radius:10px;padding:6px 10px;font-size:12px"><b>📌 Retenu pour le paramétrage</b><div style="white-space:pre-wrap">'+esc(m.contenu)+'</div></div>';
-    const moi = m.role==='user';
-    return '<div style="align-self:'+(moi?'flex-end':'flex-start')+';max-width:92%;border-radius:10px;padding:8px 12px;font-size:13.5px;line-height:1.5;'+(moi?'white-space:pre-wrap;':'')+'background:'+(moi?'#0E3B36':'#F2F5F4')+';color:'+(moi?'#fff':'#14231F')+'">'+(moi?'':'<div style="font-size:11px;font-weight:700;color:#0E3B36;margin-bottom:2px">Noah</div>')+(moi?esc(m.contenu)+'<div style="text-align:right;font-size:10.5px;opacity:.7;margin-top:2px">✓ Envoyé</div>':mdHtml(m.contenu))
-      + (!moi && !m.erreur ? '<div style="margin-top:4px"><a href="#" style="font-size:11px;color:'+(m.retenu?'#2e7d32':'#0E3B36')+'" onclick="defoDiscRetenir(\''+escJs(a.id)+'\','+i+');return false">'+(m.retenu?'✓ retenu':'📌 Retenir pour le paramétrage')+'</a></div>' : '')+'</div>';
-  }).join('');
-  return '<div style="margin-top:12px;border:1px solid var(--border);border-radius:12px;padding:10px 12px;background:#fff">'
-    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b>💬 Discussion avec Noah · '+esc(a.cooperative_nom||'')+'</b><a href="#" onclick="defoDiscToggle(\''+escJs(a.id)+'\');return false" style="font-size:12px">Réduire</a></div>'
-    + '<div class="hint" style="margin:0 0 6px">Le rapport s\'écrit ici, puis on discute de la stratégie à appliquer : pose tes questions, conteste, compare des options. Rien n\'est appliqué tant que tu ne demandes pas d\'appliquer la stratégie récapitulée ; le nettoyage se lance alors automatiquement, sur une copie. Tu peux aussi proposer une règle (« 📌 Retenir »).</div>'
-    + '<div id="defo-disc-fil" style="display:flex;flex-direction:column;gap:8px;max-height:72vh;overflow:auto;padding:4px 0">'+(bulles || '<span class="vide">Aucun message pour l\'instant.</span>')+(d.chargement ? '<div style="align-self:flex-start;border-radius:10px;padding:8px 12px;background:#F2F5F4;color:#14231F;font-size:13px"><div style="font-size:11px;font-weight:700;color:#0E3B36;margin-bottom:2px">Noah</div>Noah réfléchit<span class="pts-pense"><i>.</i><i>.</i><i>.</i></span> <span class="hint" style="margin:0">(jusqu\'à une minute)</span></div>' : '')+'</div>'
-    + '<div style="display:flex;gap:6px;margin-top:6px"><textarea id="defo-disc-q" rows="2" style="flex:1;min-width:0" placeholder="Écris ici : une question, une objection, une stratégie…" onkeydown="if(event.key===\'Enter\'&&!event.shiftKey){event.preventDefault();defoDiscEnvoyer(\''+escJs(a.id)+'\')}"></textarea><button type="button" id="defo-disc-mic" class="btn-ghost" title="Dicter à voix haute (clique pour démarrer, reclique pour arrêter)" style="font-size:18px;padding:0 12px" onclick="defoDiscMicro()">🎤</button><button type="button" class="btn btn-primary" '+(d.chargement?'disabled':'')+' onclick="defoDiscEnvoyer(\''+escJs(a.id)+'\')">Envoyer</button></div></div>';
+  const d = defoDiscEtat(a.id), aid = escJs(a.id);
+  const sous = d.charge && d.msgs.length ? (d.msgs.filter(m=>m.role==='user'||m.role==='assistant').length+' messages : reprends où vous en étiez.') : 'Noah écrit le rapport, puis vous décidez ensemble de la stratégie à appliquer.';
+  return '<div style="margin-top:12px;border:1px solid var(--border);border-radius:12px;padding:12px 14px;background:#fff;display:flex;gap:12px;align-items:center;flex-wrap:wrap">'
+    + '<div style="flex:1;min-width:220px"><b>💬 Discussion avec Noah</b><div class="hint" style="margin:2px 0 0">'+sous+'</div></div>'
+    + '<button type="button" class="btn btn-primary" onclick="defoDiscOuvrir(\''+aid+'\')">Ouvrir la discussion</button></div>';
 }
 function defoProposerHtml(a){
   const aid = escJs(a.id);
