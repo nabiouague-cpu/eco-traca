@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.3.2
+// @version      0.3.3
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.3.2';
+  const VERSION = '0.3.3';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -793,6 +793,7 @@
     const p = lot.pesee, c = lot.connaissement;
     fixerCampagne(e);
     await listeStable(q('#txtconnaissement_usine_idAdd')); await listeStable(q('#txtqualite_idAdd'));
+    await setSelectTexte(q('#txtcampagne_recolte_idAdd'), new RegExp('^' + lot.campagne.recolte, 'i'), 'Récolte');
     await setSelectTexte(q('#txtconnaissement_usine_idAdd'), c.numero, 'Connaissement usine');
     await dormir(1500);
     setInput(q('#txtpesee_brousse_dateAdd'), isoDate(p.date || c.date)); setInput(q('#txtpesee_brousse_numeroAdd'), p.code);
@@ -814,6 +815,7 @@
     if (p.classement) await setSelectTexte(q('#txtqualite_idAdd'), exact(p.classement), 'Classement', p.classement);
     ['poids_entree', 'poids_sortie', 'sacs_decharges', 'sacs_acceptes', 'tare_sacs_acceptes', 'tare_palettes', 'poids_refaction'].forEach((k) => { const el = q('#txtpesee_brousse_' + k + 'Add'); if (el) el.dispatchEvent(new Event('focusout', { bubbles: true })); });
     { const m = await reappliquer(f); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
+    { const rs = q('#txtcampagne_recolte_idAdd'); if (rs && !rs.value) throw new Error('Pesée : la récolte (' + lot.campagne.recolte + ') n\'est pas renseignée : rien n\'est enregistré'); }
     // Cases CALCULÉES par OBC (poids brut, net livré, net payé) : OBC les laisse parfois à 0. On les contrôle et, au besoin, on y écrit la valeur d'ORIGEN.
     {
       const brutA = Math.round((Number(num(p.poids_entree)) - Number(num(p.poids_sortie))) * 100) / 100, livreA = Math.round((brutA - Number(num(p.tare_sacs))) * 100) / 100, payeA = Math.round((livreA - refac) * 100) / 100 ;
