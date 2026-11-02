@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.2
+// @version      0.4.3
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.2';
+  const VERSION = '0.4.3';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -800,9 +800,10 @@
     const p = lot.pesee, c = lot.connaissement;
     fixerCampagne(e);
     await listeStable(q('#txtconnaissement_usine_idAdd')); await listeStable(q('#txtqualite_idAdd'));
-    await setSelectTexte(q('#txtcampagne_recolte_idAdd'), new RegExp('^' + lot.campagne.recolte, 'i'), 'Récolte');
     await setSelectTexte(q('#txtconnaissement_usine_idAdd'), c.numero, 'Connaissement usine');
     await dormir(1500);
+    // OBC remplit la récolte tout seul depuis le connaissement usine choisi ; on vérifie, et on la renseigne nous-mêmes si elle est restée vide.
+    { const rs = q('#txtcampagne_recolte_idAdd'); if (rs && !rs.value) { await attendre(() => rs.options.length > 1, 4000, 300); if (!rs.value) await setSelectTexte(rs, new RegExp('^' + lot.campagne.recolte, 'i'), 'Récolte'); } }
     setInput(q('#txtpesee_brousse_dateAdd'), isoDate(p.date || c.date)); setInput(q('#txtpesee_brousse_numeroAdd'), p.code);
     setInput(q('#txtpesee_brousse_poids_entreeAdd'), num(p.poids_entree)); setInput(q('#txtpesee_brousse_poids_sortieAdd'), num(p.poids_sortie));
     if (p.date_entree) setInput(q('#txtpesee_brousse_date_entreeAdd'), p.date_entree); if (p.date_sortie) setInput(q('#txtpesee_brousse_date_sortieAdd'), p.date_sortie);
