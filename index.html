@@ -4675,7 +4675,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-02-411';
+const APP_VERSION = '2026-11-02-412';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -22341,10 +22341,9 @@ function defoAnalyseCarte(a){
   if (P.termine){
     const clos = (state.defo||[]).some(z=>z.etape==='base_finale' && z.statut==='terminee' && z.entrees && z.entrees.analyse_id===a.id);
     const pr = clos ? '<details style="margin-top:10px"><summary style="cursor:pointer;color:#2c5fae;font-weight:600">🗄 Base d\'origine de la coopérative : classée (base finale produite) — voir l\'historique des problèmes</summary>'+P.problemes+'</details>' : P.problemes;
-    // Le rapport s'écrit dans la conversation (constats, ce qu'il faut faire) : Nabi décide en une phrase et c'est appliqué automatiquement. L'ancien affichage reste disponible, replié.
-    h += defoDiscussionHtml(a) + defoFinaleHtml(a)
-      + '<details style="margin-top:12px"><summary style="cursor:pointer;color:#5f6b68;font-size:12.5px">Détails techniques (ancien affichage : tableaux, boutons action par action)</summary>'
-      + P.resume + defoLienHtml(a) + defoKmlHtml(a) + P.netInfo + pr + P.apres + defoProposerHtml(a) + '</details>';
+    // Nouvelle base : tout passe par la conversation (rapport, stratégie, décision). Plus d'ancien affichage.
+    h += defoDiscussionHtml(a) + P.apres + defoFinaleHtml(a)
+      + '<div style="margin-top:8px;display:flex;gap:10px;flex-wrap:wrap">' + defoLienHtml(a) + defoKmlHtml(a) + '</div>';
   }
   return h + '</div>';
 }
@@ -22806,6 +22805,29 @@ async function defoDiscRetenir(id, i){
   if (error){ showToast('Échec : '+error.message); return; }
   m.retenu = true; showToast('Proposition retenue pour le paramétrage.', 'success'); render();
 }
+function mdHtml(t){
+  const inl = x => esc(x).replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>').replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/g,'$1<i>$2</i>').replace(/`([^`]+)`/g,'<code style="background:#e6ecea;padding:0 4px;border-radius:4px">$1</code>');
+  const L = String(t||'').replace(/\r/g,'').split('\n'); let o = '', i = 0, list = null;
+  const fin = ()=>{ if (list){ o += '</'+list+'>'; list = null; } };
+  while (i < L.length){
+    const m = L[i].trim();
+    if (!m){ fin(); i++; continue; }
+    if (/^\|.*\|$/.test(m) && i+1 < L.length && /^\|?\s*:?-{2,}/.test(L[i+1].trim())){
+      fin(); const cells = r => r.trim().replace(/^\||\|$/g,'').split('|').map(c=>c.trim());
+      const hd = cells(m); i += 2; let rows = '';
+      while (i < L.length && /^\|.*\|$/.test(L[i].trim())){ rows += '<tr>'+cells(L[i]).map(c=>'<td style="border:1px solid #cfd8d5;padding:4px 8px;vertical-align:top">'+inl(c)+'</td>').join('')+'</tr>'; i++; }
+      o += '<div style="overflow-x:auto;margin:6px 0"><table style="border-collapse:collapse;font-size:12.5px"><thead><tr>'+hd.map(c=>'<th style="border:1px solid #cfd8d5;padding:4px 8px;background:#e6ecea;text-align:left">'+inl(c)+'</th>').join('')+'</tr></thead><tbody>'+rows+'</tbody></table></div>';
+      continue;
+    }
+    let g;
+    if ((g = m.match(/^(#{1,4})\s+(.*)$/))){ fin(); o += '<div style="font-weight:700;font-size:'+(g[1].length<=2?'15px':'13.5px')+';margin:10px 0 4px">'+inl(g[2])+'</div>'; i++; continue; }
+    if (/^(-{3,}|_{3,}|\*{3,})$/.test(m)){ fin(); o += '<hr style="border:0;border-top:1px solid #cfd8d5;margin:8px 0">'; i++; continue; }
+    if ((g = m.match(/^[-*•]\s+(.*)$/))){ if (list!=='ul'){ fin(); o += '<ul style="margin:4px 0;padding-left:20px">'; list = 'ul'; } o += '<li style="margin:2px 0">'+inl(g[1])+'</li>'; i++; continue; }
+    if ((g = m.match(/^\d+[.)]\s+(.*)$/))){ if (list!=='ol'){ fin(); o += '<ol style="margin:4px 0;padding-left:22px">'; list = 'ol'; } o += '<li style="margin:2px 0">'+inl(g[1])+'</li>'; i++; continue; }
+    fin(); o += '<p style="margin:5px 0">'+inl(m)+'</p>'; i++;
+  }
+  fin(); return o;
+}
 function defoDiscussionHtml(a){
   const d = defoDiscEtat(a.id);
   if (!d.init){ d.init = true; setTimeout(()=>defoDiscCharger(a.id), 0); }
@@ -22814,13 +22836,13 @@ function defoDiscussionHtml(a){
     if (m.role==='systeme') return '<div style="align-self:center;font-size:12px;color:#14633a;background:#e8f5e9;border-radius:8px;padding:4px 10px">'+esc(m.contenu)+'</div>';
     if (m.role==='proposition') return '<div style="align-self:flex-start;max-width:92%;border:1px dashed #9a6700;background:#fff6d6;color:#6b4600;border-radius:10px;padding:6px 10px;font-size:12px"><b>📌 Retenu pour le paramétrage</b><div style="white-space:pre-wrap">'+esc(m.contenu)+'</div></div>';
     const moi = m.role==='user';
-    return '<div style="align-self:'+(moi?'flex-end':'flex-start')+';max-width:92%;border-radius:10px;padding:7px 11px;font-size:13px;white-space:pre-wrap;background:'+(moi?'#0E3B36':'#F2F5F4')+';color:'+(moi?'#fff':'#14231F')+'">'+esc(m.contenu)
+    return '<div style="align-self:'+(moi?'flex-end':'flex-start')+';max-width:92%;border-radius:10px;padding:8px 12px;font-size:13.5px;line-height:1.5;'+(moi?'white-space:pre-wrap;':'')+'background:'+(moi?'#0E3B36':'#F2F5F4')+';color:'+(moi?'#fff':'#14231F')+'">'+(moi?esc(m.contenu):mdHtml(m.contenu))
       + (!moi && !m.erreur ? '<div style="margin-top:4px"><a href="#" style="font-size:11px;color:'+(m.retenu?'#2e7d32':'#0E3B36')+'" onclick="defoDiscRetenir(\''+escJs(a.id)+'\','+i+');return false">'+(m.retenu?'✓ retenu':'📌 Retenir pour le paramétrage')+'</a></div>' : '')+'</div>';
   }).join('');
   return '<div style="margin-top:12px;border:1px solid var(--border);border-radius:12px;padding:10px 12px;background:#fff">'
     + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b>💬 Discussion avec Claude · '+esc(a.cooperative_nom||'')+'</b><a href="#" onclick="defoDiscToggle(\''+escJs(a.id)+'\');return false" style="font-size:12px">Réduire</a></div>'
     + '<div class="hint" style="margin:0 0 6px">Le rapport s\'écrit ici, puis on discute de la stratégie à appliquer : pose tes questions, conteste, compare des options. Rien n\'est appliqué tant que tu ne demandes pas d\'appliquer la stratégie récapitulée ; le nettoyage se lance alors automatiquement, sur une copie. Tu peux aussi proposer une règle (« 📌 Retenir »).</div>'
-    + '<div id="defo-disc-fil" style="display:flex;flex-direction:column;gap:6px;max-height:340px;overflow:auto;padding:4px 0">'+(bulles || '<span class="vide">Aucun message pour l\'instant.</span>')+(d.chargement ? '<div class="vide">Claude rédige… (environ une minute)</div>' : '')+'</div>'
+    + '<div id="defo-disc-fil" style="display:flex;flex-direction:column;gap:8px;max-height:72vh;overflow:auto;padding:4px 0">'+(bulles || '<span class="vide">Aucun message pour l\'instant.</span>')+(d.chargement ? '<div class="vide">Claude rédige… (environ une minute)</div>' : '')+'</div>'
     + '<div style="display:flex;gap:6px;margin-top:6px"><textarea id="defo-disc-q" rows="2" style="flex:1;min-width:0" placeholder="Écris ici : une question, une objection, une stratégie…" onkeydown="if(event.key===\'Enter\'&&!event.shiftKey){event.preventDefault();defoDiscEnvoyer(\''+escJs(a.id)+'\')}"></textarea><button type="button" class="btn btn-primary" '+(d.chargement?'disabled':'')+' onclick="defoDiscEnvoyer(\''+escJs(a.id)+'\')">Envoyer</button></div></div>';
 }
 function defoProposerHtml(a){
