@@ -4149,10 +4149,23 @@ function presSaisieObc(a){
   return { ok:false, code:'ND', motif:'Pesé, pas encore saisi' };
 }
 // PDF du tracking brousse (paysage A4) : uniquement les camions saisis dans OBC.
-async function presAchatsPdfSaisis(btn){
+// Lots de saisie OBC : les camions saisis à la suite les uns des autres forment un lot (nouveau lot après 2 h sans saisie). Lot 1 = la plus ancienne saisie.
+function obcLotsSaisie(){
   const D = presAchatsDonnees();
-  const L = D.camions.filter(a=>!a.refoulee && a.obc_saisi_le);
-  if (!L.length){ showToast("Aucun camion n'est encore saisi dans OBC."); return; }
+  const saisis = D.camions.filter(a=>!a.refoulee && a.obc_saisi_le).slice().sort((x,y)=>String(x.obc_saisi_le).localeCompare(String(y.obc_saisi_le)));
+  const lots = []; let dernier = 0;
+  saisis.forEach(a=>{ const t = new Date(a.obc_saisi_le).getTime();
+    if (!lots.length || t-dernier > 2*3600*1000) lots.push({ n:lots.length+1, debut:a.obc_saisi_le, fin:a.obc_saisi_le, achats:[] });
+    const l = lots[lots.length-1]; l.achats.push(a); l.fin = a.obc_saisi_le; dernier = t; });
+  lots.forEach(l=>{ const d1 = String(l.debut).slice(0,10), d2 = String(l.fin).slice(0,10); l.date = d1===d2 ? dateFr(d1) : dateFr(d1)+' au '+dateFr(d2); });
+  return lots;
+}
+async function presAchatsPdfSaisis(btn, lotN){
+  const D = presAchatsDonnees();
+  const lot = lotN ? obcLotsSaisie().find(l=>String(l.n)===String(lotN)) : null;
+  const L = lot ? lot.achats : D.camions.filter(a=>!a.refoulee && a.obc_saisi_le);
+  const titreRapport = lot ? 'Rapport de saisie OBC — Lot '+lot.n+' · saisi le '+lot.date : 'Rapport de saisie OBC — tous les camions saisis';
+  if (!L.length){ showToast(lot ? "Ce lot est vide." : "Aucun camion n'est encore saisi dans OBC."); return; }
   const txt = btn ? btn.textContent : ''; if (btn){ btn.disabled = true; btn.textContent = 'Génération du PDF…'; }
   try{
     await chargerBibliothequesPdf();
@@ -4174,8 +4187,8 @@ async function presAchatsPdfSaisis(btn){
     if (dernierePleine) pages.push([]);
     const dateEd = new Date().toLocaleDateString('fr-FR');
     const htmlPage = (rows, k)=>'<div style="width:1122px;height:794px;box-sizing:border-box;padding:34px 40px;background:#fff;font-family:Arial,Helvetica,sans-serif;color:#14231F;position:relative">'
-      + (k===0 ? '<div style="display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #C8962E;padding-bottom:10px;margin-bottom:12px"><div><div style="font-size:11px;font-weight:700;letter-spacing:.12em;color:#8A6A1F">ECORIGINE · ORIGEN</div><div style="font-size:24px;font-weight:800;color:#0E3B36;margin-top:2px">Tracking brousse — camions saisis dans OBC</div><div style="font-size:12px;color:#5A6865;margin-top:3px">Campagne '+esc(campNom)+' · un camion par ligne, saisie OBC = OK</div></div><div style="text-align:right;font-size:12px;color:#5A6865">Édité le '+dateEd+'<br><b style="color:#0E3B36;font-size:18px">'+L.length+' camion'+(L.length>1?'s':'')+' OK</b></div></div>'
-        : '<div style="font-size:12px;color:#5A6865;margin-bottom:8px;border-bottom:1px solid #D5DDD9;padding-bottom:6px">Tracking brousse — camions saisis dans OBC · Campagne '+esc(campNom)+' (suite)</div>')
+      + (k===0 ? '<div style="display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #C8962E;padding-bottom:10px;margin-bottom:12px"><div><div style="font-size:11px;font-weight:700;letter-spacing:.12em;color:#8A6A1F">ECORIGINE · ORIGEN</div><div style="font-size:24px;font-weight:800;color:#0E3B36;margin-top:2px">'+esc(titreRapport)+'</div><div style="font-size:12px;color:#5A6865;margin-top:3px">Campagne '+esc(campNom)+' · un camion par ligne, saisie OBC = OK</div></div><div style="text-align:right;font-size:12px;color:#5A6865">Édité le '+dateEd+'<br><b style="color:#0E3B36;font-size:18px">'+L.length+' camion'+(L.length>1?'s':'')+' OK</b></div></div>'
+        : '<div style="font-size:12px;color:#5A6865;margin-bottom:8px;border-bottom:1px solid #D5DDD9;padding-bottom:6px">'+esc(lot ? 'Rapport de saisie OBC — Lot '+lot.n : 'Rapport de saisie OBC')+' · Campagne '+esc(campNom)+' (suite)</div>')
       + (rows.length ? '<table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:11px">'+tete+'<tbody>'+rows.map((a,i)=>ligne(a,i)).join('')+(k===pages.length-1 ? totLigne : '')+'</tbody></table>' : '<table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:11px"><tbody>'+totLigne+'</tbody></table>')
       + '<div style="position:absolute;left:40px;right:40px;bottom:18px;display:flex;justify-content:space-between;font-size:10px;color:#8A9591"><span>ECORIGINE SA · Abidjan — document généré par ORIGEN</span><span>Page '+(k+1)+' / '+pages.length+'</span></div></div>';
     const cadre = document.createElement('iframe');
@@ -4191,7 +4204,7 @@ async function presAchatsPdfSaisis(btn){
         if (k>0) pdf.addPage('a4','landscape');
         pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, 297, 210, undefined, 'FAST');
       }
-      telechargerBlob(pdf.output('blob'), 'Tracking_brousse_saisis_OBC_'+new Date().toISOString().slice(0,10)+'.pdf');
+      telechargerBlob(pdf.output('blob'), (lot ? 'Rapport_saisie_OBC_Lot'+lot.n+'_' : 'Rapport_saisie_OBC_tous_')+new Date().toISOString().slice(0,10)+'.pdf');
       showToast('PDF téléchargé : '+L.length+' camion'+(L.length>1?'s':'')+' saisi'+(L.length>1?'s':'')+' dans OBC.', 'success');
     } finally { cadre.remove(); }
   }catch(e){ showToast('Échec du PDF : '+(e&&e.message?e.message:e)); }
@@ -4657,7 +4670,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-02-397';
+const APP_VERSION = '2026-11-02-398';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -26643,6 +26656,13 @@ function renderSaisieObcTab(){
     + '<b>🧾 Bordereaux groupés</b> du <input type="date" value="'+esc(state.sobcDu||'')+'" onchange="setSobcPeriode(\'sobcDu\', this.value)"> au <input type="date" value="'+esc(state.sobcAu||'')+'" onchange="setSobcPeriode(\'sobcAu\', this.value)">'
     + '<label style="display:flex;gap:4px;align-items:center"><input type="checkbox"'+(state.sobcInclureNonSaisis?' checked':'')+' onchange="state.sobcInclureNonSaisis=this.checked;render()"> inclure ceux pas encore saisis</label>'
     + '<button type="button" class="btn btn-primary btn-compact" onclick="ouvrirBordereauxGroupes()" title="Réunit tous les bordereaux de la période dans un seul document : Imprimer › Enregistrer au format PDF = un seul fichier">⬇ Télécharger les '+fmtNum(bordereauxGroupesListe().length)+' bordereaux (un seul PDF)</button></div>'
+    + (function(){ const lots = obcLotsSaisie(), sel = state.obcRapportLot||'';
+        return '<div class="sobc-groupe" style="display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;padding:0 18px 10px;font-size:13px">'
+          + '<b>📄 Rapport de saisie OBC</b> <select id="obc-rapport-lot" onchange="state.obcRapportLot=this.value">'
+          + '<option value="">Tous les camions saisis ('+fmtNum(lots.reduce((t,l)=>t+l.achats.length,0))+')</option>'
+          + lots.slice().reverse().map(l=>'<option value="'+l.n+'"'+(String(l.n)===String(sel)?' selected':'')+'>Lot '+l.n+' · saisi le '+esc(l.date)+' · '+l.achats.length+' camion'+(l.achats.length>1?'s':'')+'</option>').join('')+'</select>'
+          + '<button type="button" class="btn btn-primary btn-compact" onclick="presAchatsPdfSaisis(this, document.getElementById(\'obc-rapport-lot\').value)" title="Télécharge le rapport (PDF) du lot choisi, ou de tous les camions saisis">⬇ Télécharger le rapport (PDF)</button>'
+          + '<span class="hint" style="margin:0">Un lot = les camions saisis à la suite ; un nouveau lot commence après 2 h sans saisie.</span></div>'; })()
     + (function(){ const n = obcFileCompte(), cand = obcFileCandidats().length;
         return '<div class="sobc-groupe" style="display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;padding:0 18px 10px;font-size:13px">'
           + '<b>🤖 Noah 1 · Saisie OBC</b> <span>'+fmtNum(n.attente)+' en file · '+fmtNum(n.en_cours)+' en cours · '+fmtNum(n.saisi)+' saisis · <span style="color:'+(n.echec ? '#B3261E' : 'inherit')+'">'+fmtNum(n.echec)+' en échec</span></span>'
