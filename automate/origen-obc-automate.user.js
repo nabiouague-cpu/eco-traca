@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.3.4
+// @version      0.4.0
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.3.4';
+  const VERSION = '0.4.0';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -121,11 +121,14 @@
     const g = lireFile();
     if (!r.lot) { g.actif = false; g.erreurApi = null; g.dernier = 'File terminée : ' + (g.saisis || 0) + ' saisi(s), ' + (g.echecs || 0) + ' échec(s). Les résultats sont dans ORIGEN › Saisie OBC.'; ecrireFile(g); afficherFile(); return false; }
     g.erreurApi = null; ecrireFile(g);
-    ecrireEtat({ v10: true, lot: r.lot, etape: 1, statut: 'a_faire', ids: {}, fait: {}, journal: [], pause: false, erreur: null, note: '', enFile: true });
+    ecrireEtat({ v10: true, lot: r.lot, etape: Math.max(1, Math.min(NB_ETAPES, Number(r.refaire_depuis) || 1)), statut: 'a_faire', ids: {}, fait: {}, journal: [], pause: false, erreur: null, note: '', enFile: true });
     afficherEtat(); afficherFile(); return true;
   }
   async function finLotFile(e) {
     const f = lireFile(); const num = (e.lot.bordereau && e.lot.bordereau.numero) || '';
+    let an = []; try { an = await controleLot(e.lot); } catch (er) { an = [{ maillon: 'Lecture OBC', etape: 1, champ: 'erreur', attendu: '', trouve: String(er && er.message || er).slice(0, 120) }]; }
+    try { await api('controle', { achat_id: e.lot.achat_id, anomalies: an }); } catch (er) { /* le contrôle sera refait */ }
+    if (an.length) { const t = 'Contrôle OBC : ' + an.slice(0, 4).map((a) => a.maillon + ' › ' + a.champ + ' (attendu ' + a.attendu + ', trouvé ' + a.trouve + ')').join(' ; '); await rapporter(e.lot.achat_id, 'echec', t, ''); f.echecs = (f.echecs || 0) + 1; ecrireFile(f); effacerEtat(); afficherEtat(); afficherFile(); dormir(600).then(boucle); return; }
     await rapporter(e.lot.achat_id, 'saisi', '', num);
     f.saisis = (f.saisis || 0) + 1; f.consecutifs = 0; ecrireFile(f);
     effacerEtat(); afficherEtat(); afficherFile(); dormir(600).then(boucle);
@@ -182,6 +185,7 @@
       + '<button id="oo-journal" style="background:#fff;border:1px solid #cfd8d4;border-radius:8px;padding:8px 12px;cursor:pointer;">Copier le journal</button>'
       + '<button id="oo-refaire" title="Supprime dans OBC le bordereau puis la pesée si la pesée est enregistrée avec des poids à zéro, puis refait ces deux étapes" style="background:#fff;border:1px solid #B3261E;border-radius:8px;padding:8px 12px;cursor:pointer;color:#B3261E;">↩ Refaire depuis la pesée</button>'
       + '<button id="oo-recolte" title="Repère les pesées enregistrées sans récolte et la renseigne (modification, pas de suppression)" style="background:#fff;border:1px solid #cfd8d4;border-radius:8px;padding:8px 12px;cursor:pointer;">🌾 Contrôler la récolte</button>'
+      + '<button id="oo-controle" title="Relit dans OBC les connaissements déjà saisis et compare à ORIGEN (poids, récolte, montants)" style="background:#fff;border:1px solid #cfd8d4;border-radius:8px;padding:8px 12px;cursor:pointer;">🔎 Contrôler les saisis</button>'
       + '<button id="oo-stop" style="background:#fff;border:1px solid #cfd8d4;border-radius:8px;padding:8px 12px;cursor:pointer;color:#B3261E;">Effacer le lot</button>'
       + '</div></div>';
     document.body.appendChild(panneau);
@@ -211,6 +215,7 @@
     panneau.querySelector('#oo-journal').onclick = () => { const e = lireEtat(); navigator.clipboard.writeText(JSON.stringify({ origen_obc_journal: true, etape: e && e.etape, statut: e && e.statut, ids: e && e.ids, journal: e && e.journal }, null, 1)); };
     panneau.querySelector('#oo-refaire').onclick = refaireDepuisPesee;
     panneau.querySelector('#oo-recolte').onclick = (ev) => controleRecoltePesees(ev.currentTarget);
+    panneau.querySelector('#oo-controle').onclick = (ev) => controlerLesSaisis(ev.currentTarget);
     panneau.querySelector('#oo-stop').onclick = () => { if (confirm('Effacer le lot en cours ? (Ce qui est déjà enregistré dans OBC reste enregistré.)')) { effacerEtat(); afficherEtat(); } };
     // déplaçable
     let dx = 0, dy = 0, drag = false; const tete = panneau.querySelector('#oo-tete');
@@ -950,6 +955,49 @@
       alert('Récolte renseignée sur ' + corriges + ' pesée(s).' + (rates.length ? '\nÀ vérifier :\n' + rates.join('\n') : '') + (zero.length ? '\nÀ refaire (poids zéro) : ' + zero.map((x) => x.num).join(', ') : ''));
     } catch (err) { alert('Contrôle récolte : ' + (err && err.message || err)); }
     finally { btn.textContent = lib; }
+  }
+
+  // ---------- contrôle d'un connaissement déjà saisi : OBC relu et comparé à ORIGEN ----------
+  // Renvoie la liste des anomalies [{maillon, etape, champ, attendu, trouve}] ; vide = tout est conforme.
+  async function controleLot(lot) {
+    const an = []; const e = { lot };
+    const nb = (x) => { const v = Number(String(x == null ? '' : x).replace(/[\s  ]/g, '').replace(',', '.')); return isFinite(v) ? v : NaN; };
+    const ajout = (maillon, etape, champ, attendu, trouve) => an.push({ maillon, etape, champ, attendu, trouve });
+    const recolteDe = async (ligne) => { const a = ligne.tr.querySelector('a[href*="/Edit/"]'); if (!a) return null; const ed = await getHtml(a.getAttribute('href').split('?')[0]); const so = ed.getElementById('txtcampagne_recolte_idEdit'); const o = so && so.selectedOptions[0]; return { texte: o && o.value ? o.text.trim() : '', ed }; };
+    const rec = String(lot.campagne && lot.campagne.recolte || 'PRINCIPALE').toUpperCase();
+    // Données livraison (connaissement usine)
+    const us = await existeUsine(e);
+    if (!us || us.illisible) ajout('Données livraison', 8, 'enregistrement', 'présent', 'absent');
+    else { const r = await recolteDe(us); if (!r || !new RegExp('^' + rec, 'i').test(r.texte)) ajout('Données livraison', 8, 'récolte', rec, r && r.texte || 'vide'); }
+    // Pesée
+    const p = lot.pesee || {}; const pe = await existePesee(e);
+    if (!pe || pe.illisible) ajout('Pesée', 9, 'enregistrement', 'présent', 'absent');
+    else {
+      const brutA = Math.round((nb(p.poids_entree) - nb(p.poids_sortie)) * 100) / 100, livreA = Math.round((brutA - nb(p.tare_sacs)) * 100) / 100, payeA = Number(p.poids_net_paye_attendu) || NaN;
+      [['poids brut', 5, brutA], ['poids net livré', 8, livreA], ['poids net payé', 10, payeA]].forEach(([nom, i, att]) => { const v = nb(pe.c[i]); if (!(v > 0) || (isFinite(att) && Math.abs(v - att) > 0.5)) ajout('Pesée', 9, nom, att, pe.c[i]); });
+      if (nb(pe.c[6]) !== nb(p.sacs_acceptes)) ajout('Pesée', 9, 'sacs acceptés', p.sacs_acceptes, pe.c[6]);
+      const r = await recolteDe(pe); if (!r || !new RegExp('^' + rec, 'i').test(r.texte)) ajout('Pesée', 9, 'récolte', rec, r && r.texte || 'vide');
+      if (r && r.ed) { const g = (id) => { const el = r.ed.getElementById(id); return el ? nb(el.value) : NaN; }; if (g('txtpesee_brousse_poids_entreeEdit') !== nb(p.poids_entree)) ajout('Pesée', 9, 'poids entrée', p.poids_entree, g('txtpesee_brousse_poids_entreeEdit')); if (g('txtpesee_brousse_poids_sortieEdit') !== nb(p.poids_sortie)) ajout('Pesée', 9, 'poids sortie', p.poids_sortie, g('txtpesee_brousse_poids_sortieEdit')); }
+    }
+    // Bordereau de réception
+    const b = lot.bordereau || {}; const bo = await existeBordereau(e);
+    if (!bo || bo.illisible) ajout('Bordereau', 10, 'enregistrement', 'présent', 'absent');
+    else { const net = nb(bo.c[bo.c.length - 1]); if (b.net_attendu != null && !(Math.abs(net - Number(b.net_attendu)) < 0.5)) ajout('Bordereau', 10, 'net à payer', b.net_attendu, bo.c[bo.c.length - 1]); }
+    return an;
+  }
+  async function controlerLesSaisis(btn) {
+    const lib = btn.textContent; let n = 0, bad = 0;
+    try {
+      for (let tour = 0; tour < 25; tour++) {
+        const r = await api('a_controler', { max: 10 }); const lots = r.lots || []; if (!lots.length) break;
+        for (const x of lots) {
+          btn.textContent = '🔎 Contrôle ' + x.connaissement + ' (' + (n + 1) + ')…';
+          let an; try { an = await controleLot(x.lot); } catch (er) { an = [{ maillon: 'Lecture OBC', etape: 1, champ: 'erreur', attendu: '', trouve: String(er && er.message || er).slice(0, 120) }]; }
+          await api('controle', { achat_id: x.achat_id, anomalies: an }); n++; if (an.length) bad++;
+        }
+      }
+      alert('Contrôle terminé : ' + n + ' connaissement(s) relu(s) dans OBC, ' + bad + ' avec anomalie(s). Résultat dans ORIGEN › Saisie OBC.');
+    } catch (err) { alert('Contrôle : ' + (err && err.message || err)); } finally { btn.textContent = lib; }
   }
 
   // ---------- boucle ----------
