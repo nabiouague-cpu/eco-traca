@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.3.3
+// @version      0.3.4
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.3.3';
+  const VERSION = '0.3.4';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -181,6 +181,7 @@
       + '<button id="oo-pause" style="background:#fff;border:1px solid #cfd8d4;border-radius:8px;padding:8px 12px;cursor:pointer;">Pause</button>'
       + '<button id="oo-journal" style="background:#fff;border:1px solid #cfd8d4;border-radius:8px;padding:8px 12px;cursor:pointer;">Copier le journal</button>'
       + '<button id="oo-refaire" title="Supprime dans OBC le bordereau puis la pesée si la pesée est enregistrée avec des poids à zéro, puis refait ces deux étapes" style="background:#fff;border:1px solid #B3261E;border-radius:8px;padding:8px 12px;cursor:pointer;color:#B3261E;">↩ Refaire depuis la pesée</button>'
+      + '<button id="oo-recolte" title="Repère les pesées enregistrées sans récolte et la renseigne (modification, pas de suppression)" style="background:#fff;border:1px solid #cfd8d4;border-radius:8px;padding:8px 12px;cursor:pointer;">🌾 Contrôler la récolte</button>'
       + '<button id="oo-stop" style="background:#fff;border:1px solid #cfd8d4;border-radius:8px;padding:8px 12px;cursor:pointer;color:#B3261E;">Effacer le lot</button>'
       + '</div></div>';
     document.body.appendChild(panneau);
@@ -209,6 +210,7 @@
     panneau.querySelector('#oo-pause').onclick = () => { const e = lireEtat(); if (!e) return; e.pause = !e.pause; ecrireEtat(e); afficherEtat(); if (!e.pause) boucle(); };
     panneau.querySelector('#oo-journal').onclick = () => { const e = lireEtat(); navigator.clipboard.writeText(JSON.stringify({ origen_obc_journal: true, etape: e && e.etape, statut: e && e.statut, ids: e && e.ids, journal: e && e.journal }, null, 1)); };
     panneau.querySelector('#oo-refaire').onclick = refaireDepuisPesee;
+    panneau.querySelector('#oo-recolte').onclick = (ev) => controleRecoltePesees(ev.currentTarget);
     panneau.querySelector('#oo-stop').onclick = () => { if (confirm('Effacer le lot en cours ? (Ce qui est déjà enregistré dans OBC reste enregistré.)')) { effacerEtat(); afficherEtat(); } };
     // déplaçable
     let dx = 0, dy = 0, drag = false; const tete = panneau.querySelector('#oo-tete');
@@ -907,6 +909,47 @@
       await supprimerLigne('AgroAchatPeseeBrousse', pes); journal(e, 'Pesée supprimée dans OBC (poids à zéro)'); if (await existePesee(e)) throw new Error('La pesée est toujours dans OBC après suppression');
       const e2 = lireEtat(); e2.etape = 9; e2.statut = 'a_faire'; e2.erreur = null; e2.pause = false; e2.note = 'Reprise à la pesée après suppression du bordereau et de la pesée à poids zéro.'; if (e2.fait) { delete e2.fait[9]; delete e2.fait[10]; } delete e2.t_save; delete e2.cliques; delete e2.verifErr; ecrireEtat(e2); afficherEtat(); boucle();
     } catch (err) { const e3 = lireEtat() || e; e3.erreur = 'Reprise : ' + (err && err.message || err); ecrireEtat(e3); afficherEtat(); }
+  }
+
+  // ---------- contrôle / correction de la récolte des pesées déjà enregistrées ----------
+  // La récolte (PRINCIPALE / INTERMEDIAIRE) est une case de la pesée. Les pesées saisies avant la version 0.3.3 l'ont vide : on les repère puis, après confirmation, on la renseigne (modification, jamais suppression).
+  async function controleRecoltePesees(btn) {
+    const lib = btn.textContent; const maj = (t) => { btn.textContent = t; };
+    try {
+      maj('🌾 Lecture de la liste…');
+      const liste = lignesTable(await getHtml('/AgroAchatPeseeBrousse/Index?pageSize=500')).filter((l) => /26\s*-\s*27/.test(l.c[2] || '') && l.tr.querySelector('a[href*="/Edit/"]'));
+      const sans = []; let fait = 0; let i = 0;
+      const lire = async () => { while (i < liste.length) { const l = liste[i++]; try { const ed = await getHtml(l.tr.querySelector('a[href*="/Edit/"]').getAttribute('href').split('?')[0]); const so = ed.getElementById('txtcampagne_recolte_idEdit'); const o = so && so.selectedOptions[0]; if (!o || !o.value) sans.push({ l, num: l.c[4], date: l.c[3] }); } catch (er) { sans.push({ l, num: l.c[4], date: l.c[3], err: true }); } fait++; maj('🌾 Contrôle ' + fait + '/' + liste.length); } };
+      await Promise.all([lire(), lire(), lire(), lire()]);
+      const mois = (d) => { const m = String(d || '').match(/\d{4}\s*-\s*\d+\s+([a-zéû.]+)/i); const t = m ? m[1].toLowerCase() : ''; return ['janv', 'févr', 'fevr', 'mars', 'avr', 'mai', 'juin', 'juil', 'août', 'aout', 'sept', 'oct', 'nov', 'déc', 'dec'].findIndex((x) => t.startsWith(x)); };
+      const ok = sans.filter((x) => !x.err && x.l.c[5] !== '0'), zero = sans.filter((x) => x.l.c[5] === '0'), inconnus = sans.filter((x) => x.err);
+      if (!sans.length) { alert('Récolte renseignée sur les ' + liste.length + ' pesées de la campagne 26-27. Rien à corriger.'); return; }
+      if (!confirm(liste.length + ' pesées contrôlées (campagne 26-27) : ' + sans.length + ' SANS récolte.\n' + (zero.length ? '- ' + zero.length + ' à poids zéro (à refaire, non touchées) : ' + zero.map((x) => x.num).join(', ') + '\n' : '') + (inconnus.length ? '- ' + inconnus.length + ' illisibles (non touchées)\n' : '') + '\nRenseigner la récolte PRINCIPALE sur ' + ok.length + ' pesées (modification, pas de suppression) ?\nLa 1re pesée sert de test : si autre chose qu\'elle change, tout s\'arrête.')) return;
+      const snap = (doc) => { const o = {}; doc.querySelectorAll('#AgroAchatPeseeBrousse input, input, select, textarea').forEach((el) => { if (el.name && !/token|recolte/i.test(el.name)) o[el.name] = el.tagName === 'SELECT' ? ((el.selectedOptions[0] || {}).text || '') : el.value; }); return o; };
+      let corriges = 0; const rates = [];
+      for (const x of ok) {
+        maj('🌾 Correction ' + (corriges + 1) + '/' + ok.length);
+        try {
+          const url = x.l.tr.querySelector('a[href*="/Edit/"]').getAttribute('href').split('?')[0];
+          const doc = await getHtml(url); const sel = doc.getElementById('txtcampagne_recolte_idEdit'); const camp = doc.getElementById('txtcampagne_idEdit'); const form = sel && sel.closest('form');
+          if (!form) throw new Error('formulaire introuvable');
+          const rs = await getJson('/AppMethods1/LoadAgroRecoltesByCampagneId?CampagneId=' + encodeURIComponent(camp.value || (camp.selectedOptions[0] || {}).value));
+          const pr = rs.find((r) => /^PRINCIPALE/i.test(jsonTxt(r))); if (!pr) throw new Error('récolte PRINCIPALE absente');
+          const avant = snap(doc);
+          sel.innerHTML = '<option value="' + jsonVal(pr) + '" selected>' + jsonTxt(pr) + '</option>'; sel.value = jsonVal(pr);
+          const corps = new URLSearchParams(); new FormData(form).forEach((v, k) => { if (typeof v === 'string') corps.append(k, v); });
+          const r = await fetch(form.getAttribute('action'), { method: 'POST', credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest', 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' }, body: corps.toString() });
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          const apres = await getHtml(url); const s2 = apres.getElementById('txtcampagne_recolte_idEdit'); const o2 = s2 && s2.selectedOptions[0];
+          const diff = Object.keys(avant).filter((k) => snap(apres)[k] !== avant[k]);
+          if (diff.length) throw new Error('STOP : ' + diff.length + ' autre(s) champ(s) ont changé (' + diff.slice(0, 4).join(', ') + ')');
+          if (!o2 || !o2.value) throw new Error('récolte toujours vide après enregistrement');
+          corriges++;
+        } catch (er) { rates.push(x.num + ' : ' + (er && er.message || er)); if (/^STOP/.test(String(er && er.message))) break; }
+      }
+      alert('Récolte renseignée sur ' + corriges + ' pesée(s).' + (rates.length ? '\nÀ vérifier :\n' + rates.join('\n') : '') + (zero.length ? '\nÀ refaire (poids zéro) : ' + zero.map((x) => x.num).join(', ') : ''));
+    } catch (err) { alert('Contrôle récolte : ' + (err && err.message || err)); }
+    finally { btn.textContent = lib; }
   }
 
   // ---------- boucle ----------
