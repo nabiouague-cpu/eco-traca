@@ -4670,7 +4670,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-02-399';
+const APP_VERSION = '2026-11-02-400';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7117,15 +7117,14 @@ function sachDechargeHtml(P, spl, tpl, spp){
   return h;
 }
 // ================== Onglet Shipping : suivi des lots export, de la production à l'embarquement ==================
-// Parcours d'un lot : produit → déclaré au SAIGIC → en entrepôt export → présenté au client → agréé → OT / instructions d'embarquement → embarqué.
+// Parcours d'un lot : produit → pesée → déclaré au SAIGIC → agréage (présentation + agréage) → instructions / OT → embarqué. Les instructions ne comptent qu'une fois le lot agréé.
 // Les formules du SAIGIC (BV, Fo1, D6) et la création de l'OT ne se font qu'après l'agréage du client et la réception des instructions d'embarquement.
 const SHIP_ETAPES = [
   ['produit','Produit','Lot fabriqué à l\'usine'],
-  ['declare','Déclaré SAIGIC','Lot créé dans le SAIGIC'],
-  ['entrepot','En entrepôt','Pesé à l\'entrée de l\'entrepôt export'],
-  ['presente','Présenté','Présenté au client pour agréage'],
-  ['agree','Agréé','Agréé par le client : les formules SAIGIC et l\'OT se débloquent'],
-  ['ot','OT','Rattaché à un OT (instructions d\'embarquement reçues)'],
+  ['entrepot','Pesée','Pesé à l\'entrée de l\'entrepôt export'],
+  ['declare','Déclaré SAIGIC','Déclaré sur le site du SAIGIC, après la pesée'],
+  ['agree','Agréage','Présenté au client puis agréé : les instructions, les formules SAIGIC et l\'OT ne se débloquent qu\'après l\'agréage'],
+  ['ot','Instructions','Instructions d\'embarquement reçues : lot rattaché à un OT (seulement une fois le lot agréé)'],
   ['embarque','Embarqué','BL émis / OT embarqué'],
 ];
 const SHIP_AGREAGE = { agree:['ok','Agréé'], refuse:['danger','Refusé'], declasse:['warn','Déclassé'] };
@@ -7139,17 +7138,18 @@ function shipOtDuLot(lotId){
   const lien = (state.lotsExportUsinage||[]).find(x=>x.lot_usinage_id===lotId);
   return lien ? ((state.lotsExport||[]).find(o=>o.id===lien.lot_export_id) || null) : null;
 }
+function shipAgree(l){ const s = shipSuiviDe(l.id); return !!((s && s.agreage_resultat==='agree') || (l.agree_le && !(s && s.agreage_resultat))); }
 function shipEtape(l){
-  const s = shipSuiviDe(l.id), ot = shipOtDuLot(l.id);
+  const ot = shipOtDuLot(l.id);
   if (ot && (ot.statut==='embarque' || ot.bl_numero)) return 'embarque';
-  if (ot) return 'ot';
-  if ((s && s.agreage_resultat==='agree') || (l.agree_le && !(s && s.agreage_resultat))) return 'agree';
-  if (s && s.date_presentation) return 'presente';
-  if (lotsUsinagePese(l)>0 || l.date_pesee_entrepot) return 'entrepot';
-  if (l.saigic_date_fab) return 'declare';
+  // Les instructions (OT) ne comptent qu'une fois le lot agréé : un OT déjà rattaché ne fait rien avancer tant que l'agréage n'est pas validé.
+  if (shipAgree(l)) return ot ? 'ot' : 'agree';
+  const pese = lotsUsinagePese(l)>0 || !!l.date_pesee_entrepot;
+  if (pese && l.saigic_date_fab) return 'declare';
+  if (pese) return 'entrepot';
   return 'produit';
 }
-function shipProchaine(et){ return ({ produit:'à déclarer au SAIGIC', declare:'à peser en entrepôt', entrepot:'à présenter au client', presente:'agréage en attente', agree:'instructions à recevoir', ot:'embarquement à venir' })[et] || ''; }
+function shipProchaine(et){ return ({ produit:'à peser en entrepôt', entrepot:'à déclarer sur le SAIGIC', declare:'agréage en attente', agree:'instructions à recevoir', ot:'embarquement à venir' })[et] || ''; }
 // ==================== Circuit du cacao (bandeau Shipping) : stations cliquables, un trajet par OT ====================
 const SHIP_STATIONS = [
   { k:'usine',   ic:'produit',  x:150,  lib:'Site d\'usinage' },
@@ -7159,11 +7159,10 @@ const SHIP_STATIONS = [
 ];
 // Étapes documentaires : toutes se font au magasin export, elles s'allument autour de son icône
 const SHIP_SAT = [
-  { k:'instr',    lib:'Instructions',   ic:'<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1"/><path d="M8.5 10h7M8.5 14h7M8.5 18h4"/>' },
-  { k:'declare',  lib:'Déclaré SAIGIC', ic:'<path d="M6 3h9l4 4v14H6z"/><path d="M15 3v4h4"/><path d="M9 13l2 2 4-4"/>' },
   { k:'pesee',    lib:'Pesée',          ic:'<path d="M12 4v15M8 19h8M5 7h14"/><path d="M5 7l-3 6h6zM19 7l-3 6h6z"/>' },
-  { k:'presente', lib:'Présentation',   ic:'<circle cx="11" cy="11" r="6"/><path d="M21 21l-5-5"/><path d="M8.5 11l2 2 3-3.5"/>' },
+  { k:'declare',  lib:'Déclaré SAIGIC', ic:'<path d="M6 3h9l4 4v14H6z"/><path d="M15 3v4h4"/><path d="M9 13l2 2 4-4"/>' },
   { k:'agree',    lib:'Agréage',        ic:'<circle cx="12" cy="10" r="6"/><path d="M9.5 10l2 2 3-3.5"/><path d="M8.5 15l-1.5 6 5-3 5 3-1.5-6"/>' },
+  { k:'instr',    lib:'Instructions',   ic:'<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1"/><path d="M8.5 10h7M8.5 14h7M8.5 18h4"/>' },
   { k:'ordre',    lib:'Ordre de transit', ic:'<path d="M3 7h11v9H3zM14 10h4l3 3v3h-7z"/><circle cx="7" cy="17.5" r="1.8"/><circle cx="17" cy="17.5" r="1.8"/>' },
   { k:'formules', lib:'BV · Fo1 · D6',  ic:'<path d="M5 21h14"/><path d="M8 21v-3h8v3"/><path d="M12 18v-4"/><circle cx="12" cy="9" r="4.5"/>' },
   { k:'fumig',    lib:'Fumigation',     ic:'<path d="M7 16a4 4 0 0 1 0-8 5 5 0 0 1 9.5-1A4 4 0 0 1 17 16z"/><path d="M9 19v2M12 19v2M15 19v2"/>' },
@@ -7180,7 +7179,7 @@ function shipSatFait(k, l){
   if (k==='ordre') return !!sv.date_ordre_transit;
   if (k==='presente') return !!sv.date_presentation;
   if (k==='agree') return sv.agreage_resultat==='agree' || !!(l.agree_le && !sv.agreage_resultat);
-  if (k==='instr') return !!ot; // l'OT est créé à partir des instructions du client : OT = instructions reçues
+  if (k==='instr') return !!ot && shipAgree(l); // OT = instructions reçues ; elles ne s'allument qu'une fois le lot agréé
   if (k==='formules') return !!(String(l.saigic_numero_bv||'').trim() && String(l.saigic_fo1||l.saigic_fo1_provisoire||'').trim() && String(l.saigic_d6||'').trim());
   return false;
 }
@@ -7194,7 +7193,7 @@ const SHIP_ICONES = {
 };
 function shipStationDuLot(l){
   const et = shipEtape(l), ot = shipOtDuLot(l.id);
-  if (et==='produit' || et==='declare') return 'usine';
+  if (et==='produit') return 'usine';
   if (et==='embarque') return 'mer';
   return (et==='ot' && ot && (ot.si_date || ot.si_reference) && shipSatFait('formules', l)) ? 'port' : 'entrepot';
 }
