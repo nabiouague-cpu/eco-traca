@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.1
+// @version      0.4.2
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.1';
+  const VERSION = '0.4.2';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -919,6 +919,7 @@
   // ---------- contrôle / correction de la récolte des pesées déjà enregistrées ----------
   // La récolte (PRINCIPALE / INTERMEDIAIRE) est une case de la pesée. Les pesées saisies avant la version 0.3.3 l'ont vide : on les repère puis, après confirmation, on la renseigne (modification, jamais suppression).
   async function controleRecoltePesees(btn) {
+    alert('Désactivé pour l\'instant : la récolte d\'une pesée est affichée par JavaScript dans OBC, Noah 1 ne peut pas la lire de façon fiable. Contrôle en cours avec Nabi.'); return;
     const lib = btn.textContent; const maj = (t) => { btn.textContent = t; };
     try {
       maj('🌾 Lecture de la liste…');
@@ -977,7 +978,7 @@
       const brutA = Math.round((nb(p.poids_entree) - nb(p.poids_sortie)) * 100) / 100, livreA = Math.round((brutA - nb(p.tare_sacs)) * 100) / 100, payeA = Number(p.poids_net_paye_attendu) || NaN;
       [['poids brut', 5, brutA], ['poids net livré', 8, livreA], ['poids net payé', 10, payeA]].forEach(([nom, i, att]) => { const v = nb(pe.c[i]); if (!(v > 0) || (isFinite(att) && Math.abs(v - att) > 0.5)) ajout('Pesée', 9, nom, att, pe.c[i]); });
       if (nb(pe.c[6]) !== nb(p.sacs_acceptes)) ajout('Pesée', 9, 'sacs acceptés', p.sacs_acceptes, pe.c[6]);
-      const r = await recolteDe(pe); if (!r || !new RegExp('^' + rec, 'i').test(r.texte)) ajout('Pesée', 9, 'récolte', rec, r && r.texte || 'vide');
+      const r = await recolteDe(pe); /* récolte de la pesée : OBC l'affiche par JavaScript, illisible par lecture simple — non contrôlée */
       if (r && r.ed) { const g = (id) => { const el = r.ed.getElementById(id); return el ? nb(el.value) : NaN; }; if (g('txtpesee_brousse_poids_entreeEdit') !== nb(p.poids_entree)) ajout('Pesée', 9, 'poids entrée', p.poids_entree, g('txtpesee_brousse_poids_entreeEdit')); if (g('txtpesee_brousse_poids_sortieEdit') !== nb(p.poids_sortie)) ajout('Pesée', 9, 'poids sortie', p.poids_sortie, g('txtpesee_brousse_poids_sortieEdit')); }
     }
     // Bordereau de réception
