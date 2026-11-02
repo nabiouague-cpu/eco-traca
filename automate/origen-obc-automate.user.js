@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.4
+// @version      0.4.5
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.4';
+  const VERSION = '0.4.5';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -124,13 +124,14 @@
     ecrireEtat({ v10: true, lot: r.lot, etape: Math.max(1, Math.min(NB_ETAPES, Number(r.refaire_depuis) || 1)), statut: 'a_faire', ids: {}, fait: {}, journal: [], pause: false, erreur: null, note: '', enFile: true });
     afficherEtat(); afficherFile(); return true;
   }
+  function noterResultat(ok, texte) { const f = lireFile(); f.resultat = { ok, texte, quand: new Date().toLocaleTimeString('fr-FR') }; ecrireFile(f); }
   async function finLotFile(e) {
     const f = lireFile(); const num = (e.lot.bordereau && e.lot.bordereau.numero) || '';
     let an = []; try { an = await controleLot(e.lot); } catch (er) { an = [{ maillon: 'Lecture OBC', etape: 1, champ: 'erreur', attendu: '', trouve: String(er && er.message || er).slice(0, 120) }]; }
     try { await api('controle', { achat_id: e.lot.achat_id, anomalies: an }); } catch (er) { /* le contrôle sera refait */ }
-    if (an.length) { const t = 'Contrôle OBC : ' + an.slice(0, 4).map((a) => a.maillon + ' › ' + a.champ + ' (attendu ' + a.attendu + ', trouvé ' + a.trouve + ')').join(' ; '); await rapporter(e.lot.achat_id, 'echec', t, ''); f.echecs = (f.echecs || 0) + 1; ecrireFile(f); effacerEtat(); afficherEtat(); afficherFile(); dormir(600).then(boucle); return; }
+    if (an.length) { const t = 'Contrôle OBC : ' + an.slice(0, 4).map((a) => a.maillon + ' › ' + a.champ + ' (attendu ' + a.attendu + ', trouvé ' + a.trouve + ')').join(' ; '); await rapporter(e.lot.achat_id, 'echec', t, ''); f.echecs = (f.echecs || 0) + 1; ecrireFile(f); noterResultat(false, e.lot.connaissement.numero + ' : ' + t); effacerEtat(); afficherEtat(); afficherFile(); dormir(600).then(boucle); return; }
     await rapporter(e.lot.achat_id, 'saisi', '', num);
-    f.saisis = (f.saisis || 0) + 1; f.consecutifs = 0; ecrireFile(f);
+    f.saisis = (f.saisis || 0) + 1; f.consecutifs = 0; ecrireFile(f); noterResultat(true, e.lot.connaissement.numero + ' : saisi et contrôlé dans OBC (bordereau ' + num + '). Tous les champs concordent avec ORIGEN.');
     effacerEtat(); afficherEtat(); afficherFile(); dormir(600).then(boucle);
   }
   async function echecLot(e, msg) {
@@ -138,7 +139,7 @@
     await rapporter(e.lot.achat_id, 'echec', texte, '');
     f.echecs = (f.echecs || 0) + 1; f.consecutifs = (f.consecutifs || 0) + 1;
     if (f.consecutifs >= 3) { f.actif = false; f.dernier = 'File arrêtée : 3 échecs de suite. Dernier : ' + texte; }
-    ecrireFile(f); effacerEtat(); afficherEtat(); afficherFile(); dormir(600).then(boucle);
+    ecrireFile(f); noterResultat(false, e.lot.connaissement.numero + ' : ÉCHEC — ' + texte); effacerEtat(); afficherEtat(); afficherFile(); dormir(600).then(boucle);
   }
   // Bouton « Enregistrer » du formulaire de l'étape k (dans la fenêtre modale qui le contient).
   function boutonEnregistrer(k) {
@@ -242,7 +243,7 @@
   function afficherEtat() {
     if (!zoneEtat) return;
     const e = lireEtat();
-    if (!e) { zoneEtat.innerHTML = '<span style="color:#5b6b68">Aucun lot. Colle un lot ORIGEN puis « Démarrer ».</span>'; return; }
+    if (!e) { const rs = lireFile().resultat; zoneEtat.innerHTML = rs ? '<div style="padding:8px 10px;border-radius:8px;font-weight:700;background:' + (rs.ok ? '#e3f4ea;color:#1f7a4d' : '#fdecea;color:#B3261E') + '">' + (rs.ok ? '✓ TERMINÉ — ' : '✗ ') + rs.texte + '<div style="font-weight:400;font-size:11px">à ' + rs.quand + ' · Noah 1 ne fait plus rien</div></div>' : '<span style="color:#5b6b68">Aucun lot. Colle un lot ORIGEN puis « Démarrer ».</span>'; return; }
     const lignes = ETAPES.map((n, i) => {
       const k = i + 1; let s = '○';
       if (k < e.etape) s = '✓'; else if (k === e.etape) s = e.statut === 'attente_enregistrement' ? '✎' : '▶';
