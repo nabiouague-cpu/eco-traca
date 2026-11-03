@@ -4677,7 +4677,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-03-436';
+const APP_VERSION = '2026-11-03-437';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -22299,9 +22299,41 @@ function defoAnalyseParties(a){
     }
     if (et.enCours) P.netInfo += '<div style="margin-top:6px;color:#1f5fa8;font-weight:600">⏳ Nettoyage en cours… <span class="hint" style="margin:0">'+carteDepuis(et.enCours)+'</span></div>';
     if (et.erreur) P.netInfo += '<div style="margin-top:6px;color:#c0392b;font-size:12.5px">Le dernier nettoyage a échoué : '+esc(et.erreur.erreur||'erreur inconnue')+' <button class="btn-ghost btn-compact" onclick="defoFermerErreur(\''+escJs(et.erreur.id)+'\')">Fermer</button></div>';
-    P.problemes = '<div style="margin-top:10px">'+defoProblemesHtml(a, et)+'</div>';
+    P.problemes = defoRapprochementHtml(a) + '<div style="margin-top:10px">'+defoProblemesHtml(a, et)+'</div>';
   }
   return P;
+}
+// ----- Rapprochement polygones ↔ registre : à valider AVANT le nettoyage (spec maître §4.9) -----
+function defoRapprochementOk(a){
+  const r = a.resume||{}; if (!r.rapprochement) return true;                 // pas de registre : rien à rapprocher
+  if (a.entrees && a.entrees.rapprochement_valide) return true;
+  const et = defoEtat(a); return !!(et.dernier || et.enCours);                 // un nettoyage a déjà été fait sur ce rapprochement
+}
+function defoRapprochementHtml(a){
+  const r = a.resume||{}, rp = r.rapprochement; if (!rp) return '';
+  const lien = r.lien_registre||{}, n = r.polygones||0, aid = escJs(a.id);
+  const taux = rp.taux!=null ? rp.taux : (lien.taux!=null ? lien.taux : 0), val = a.entrees && a.entrees.rapprochement_valide, ok = defoRapprochementOk(a);
+  const rapp = rp.polygones_rapproches!=null ? rp.polygones_rapproches : (r.reg_polygones_trouves!=null ? r.reg_polygones_trouves : null);
+  const essais = (rp.essais||[]).slice(0,5).map(e=>'<li>'+esc(Math.round(100*(e[0]||0))+' % · « '+e[1]+' » ↔ « '+e[2]+' » · '+e[3])+'</li>').join('');
+  const nRempl = Array.isArray(rp.noms_remplaces) ? rp.noms_remplaces.length : 0, nAmb = rp.noms_ambigus ? Object.keys(rp.noms_ambigus).length : 0;
+  const bas = taux < 0.5;
+  let h = '<div style="margin-top:10px;padding:10px 12px;border:1px solid '+(bas?'#c0392b':'#b9d9c0')+';background:'+(bas?'#fdecea':'#f4faf5')+';border-radius:8px;font-size:12.5px;line-height:1.5">'
+    + '<b>Rapprochement polygones ↔ registre</b> <span style="font-weight:600;color:'+(ok?'#14633a':'#a8281c')+'">'+(val?'✔ validé par '+esc(val.par||'—'):(ok?'✔ déjà utilisé pour un nettoyage':'à valider avant le nettoyage'))+'</span>'
+    + (lien.verdict ? '<div style="margin-top:3px">'+esc(lien.verdict)+'</div>' : '')
+    + '<div style="margin-top:3px">'+(rp.propriete ? 'Couple retenu : propriété « <b>'+esc(rp.propriete)+'</b> » du fichier ↔ colonne « <b>'+esc(rp.colonne||'')+'</b> » du registre · stratégie : '+esc(rp.strategie||'—')+' · niveau du registre : '+esc(rp.niveau||'—')+(rp.format?' · format '+esc(rp.format):'')+'<br>' : '')
+    + 'Polygones rapprochés : <b>'+(rapp!=null ? fmtNum(rapp)+' sur '+fmtNum(n) : '—')+'</b> ('+Math.round(100*taux)+' %)'
+    + (nRempl ? ' · '+fmtNum(nRempl)+' nom(s) remplacé(s) par le code du registre' : '') + (nAmb ? ' · '+fmtNum(nAmb)+' nom(s) ambigu(s) laissé(s) de côté' : '')+'</div>'
+    + (essais ? '<details style="margin-top:4px"><summary style="cursor:pointer">Les 5 meilleurs essais</summary><ul style="margin:3px 0 0 18px;padding:0">'+essais+'</ul></details>' : '');
+  if (bas && !ok) h += '<div style="margin-top:6px;color:#a8281c"><b>Moins de 50 % des polygones se relient au registre :</b> problème de format probable. Le nettoyage reste bloqué ; demande au fournisseur la table de correspondance polygone ↔ code.</div>';
+  else if (!ok) h += '<div style="margin-top:8px"><button class="btn btn-primary btn-compact" onclick="defoValiderRapprochement(\''+aid+'\')">✔ Je valide ce rapprochement</button> <span class="hint" style="margin:0 0 0 6px">ou dis-le à Ryomen dans la discussion.</span></div>';
+  return h + '</div>';
+}
+async function defoValiderRapprochement(id){
+  const a = (state.defo||[]).find(z=>z.id===id); if (!a) return false;
+  const entrees = Object.assign({}, a.entrees||{}, { rapprochement_valide:{ par:(state.session&&state.session.user&&state.session.user.email)||null, le:new Date().toISOString() } });
+  const r = await supabaseClient.from('analyses_defo').update({ entrees }).eq('id', id).select().single();
+  if (r.error){ showToast('Validation impossible : '+r.error.message); return false; }
+  a.entrees = r.data.entrees; showToast('Rapprochement validé : le nettoyage est débloqué.', 'success'); render(); return true;
 }
 function defoKmlHtml(a){
   const k = a.resume && a.resume.kml_strict; if (!k) return '';
@@ -22930,9 +22962,14 @@ async function defoDiscEnvoyer(id, texte){
     // Décision donnée dans la conversation = ordre d'appliquer : le nettoyage se lance (sur une copie).
     if (Array.isArray(data.actions) && data.actions.length){
       const ok = await defoLancerNettoyage(id, data.actions);
-      const ms = { role:'systeme', contenu: ok ? '⚙️ Stratégie appliquée, nettoyage lancé : '+data.actions.join(', ')+'. Le résultat s\'affiche ici dans environ 3 minutes.' : "⚠ Le nettoyage n'a pas pu être lancé (un nettoyage est peut-être déjà en cours)." };
+      const ms = { role:'systeme', contenu: ok ? '⚙️ Stratégie appliquée, nettoyage lancé : '+data.actions.join(', ')+'. Le résultat s\'affiche ici dans environ 3 minutes.' : "⚠ Le nettoyage n'a pas pu être lancé : le rapprochement polygones ↔ registre n'est pas validé, ou un nettoyage est déjà en cours." };
       d.msgs.push(ms); ddAjouter(id, ms);
       if (ok && state.defo && state.defo[0] && state.defo[0].etape==='nettoyage') ddSuivreNettoyage(id, state.defo[0].id);
+    }
+    if (data.rapprochement_valide){
+      const okv = await defoValiderRapprochement(id);
+      const mv = { role:'systeme', contenu: okv ? '✔ Rapprochement polygones ↔ registre validé : le nettoyage est débloqué.' : '⚠ Le rapprochement n\'a pas pu être validé.' };
+      d.msgs.push(mv); ddAjouter(id, mv);
     }
     // Base finale demandée dans la conversation : l'échelle a été validée et la question « base consolidée » répondue ici même ; la production se lance directement.
     if (data.base_finale){
@@ -23148,6 +23185,7 @@ function defoAppliquerTout(aid){
 async function defoLancerNettoyage(aid, actions, retouches, decisions){
   const a = (state.defo||[]).find(z=>z.id===aid); if (!a) return false;
   const et = defoEtat(a); if (et.enCours){ showToast('Un nettoyage est déjà en cours.'); return false; }
+  if (!defoRapprochementOk(a)){ showToast('Valide d\'abord le rapprochement polygones ↔ registre (onglet Nettoyage du dossier, ou dis-le à Ryomen).'); return false; }
   const entrees = { analyse_id:aid, source_id:et.dernier?et.dernier.id:null, actions };
   if (retouches && ((retouches.supprimes||[]).length || Object.keys(retouches.modifies||{}).length)) entrees.retouches = retouches;
   if (decisions) entrees.decisions = decisions;
