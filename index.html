@@ -4677,7 +4677,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-03-435';
+const APP_VERSION = '2026-11-03-436';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -21934,7 +21934,7 @@ function renderDefoVue(){
   if (nEnCours) h += '<div class="panel" style="border-left:4px solid #1f5fa8"><div style="padding:12px 18px"><b>⏳ '+nEnCours+' tâche'+(nEnCours>1?'s':'')+' en cours</b> <span class="hint" style="margin:0 0 0 6px">Quelques minutes. La liste se met à jour toute seule.</span></div></div>';
   h += '<div class="panel"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 18px 16px">'
     + '<div><b>Dossiers des coopératives</b><div class="hint" style="margin:2px 0 0">Une coopérative = un dossier = un seul parcours : <b>Préparation → Whisp → Analyse → Aperçu → Nettoyage → Base finale</b>. Dépose ses fichiers (KML, KMZ, GPX, GeoJSON, shapefile .zip), puis passe d\'un onglet à l\'autre : l\'onglet à faire s\'ouvre tout seul, les suivants attendent que le précédent soit terminé.</div></div>'
-    + '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="ouvrirDefoCombine()" title="Un seul rapport Excel pour plusieurs coopératives">📊 Rapport combiné</button><button class="btn" onclick="ouvrirDefoCompare()" title="Comparer la version initiale et la version actualisée des données d\'une coopérative">⚖ Comparer deux versions</button><button class="btn" onclick="ouvrirDefoEnvoi()" title="Mails individuels aux coopératives ou mail groupé à un partenaire">✉ Envoyer par e-mail</button><button class="btn btn-primary" onclick="ouvrirDefoPrep()">🌳 Nouvelle préparation</button></div></div>';
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="ouvrirDefoCombine()" title="Un seul rapport Excel pour plusieurs coopératives">📊 Rapport combiné</button><button class="btn" onclick="ouvrirDefoRG()" title="Retraits par motif, décision fournisseur et volumes livrables pour plusieurs coopératives">📑 Rapport général des suppressions</button><button class="btn" onclick="ouvrirDefoCompare()" title="Comparer la version initiale et la version actualisée des données d\'une coopérative">⚖ Comparer deux versions</button><button class="btn" onclick="ouvrirDefoEnvoi()" title="Mails individuels aux coopératives ou mail groupé à un partenaire">✉ Envoyer par e-mail</button><button class="btn btn-primary" onclick="ouvrirDefoPrep()">🌳 Nouvelle préparation</button></div></div>';
   if (state.defoIndispo) h += '<div class="hint" style="padding:0 18px 14px;color:var(--warn)">Le suivi des analyses n\'est pas encore disponible sur cette base.</div>';
   else if (!state.defoCharge) h += '<div class="hint" style="padding:0 18px 14px">Chargement…</div>';
   else if (!liste.length) h += '<div class="hint" style="padding:0 18px 14px">Aucune préparation pour le moment.</div>';
@@ -21951,6 +21951,7 @@ function renderDefoVue(){
   }).join('') + '</div>';
   h += '</div>';
   h += defoComparePanelHtml();
+  h += defoRGPanelHtml();
   // anciennes analyses lancées à la main (sans dossier) : affichées seulement s'il en reste, pour pouvoir les consulter ou les supprimer
   if (state.defoCharge && !state.defoIndispo && analyses.length){
     h += '<div class="panel"><div style="padding:14px 18px 6px"><b>Anciennes analyses (sans dossier)</b><div class="hint" style="margin:2px 0 0">Lancées avant les dossiers. Les nouvelles analyses se font dans l\'onglet « Analyse » du dossier de la coopérative.</div></div>'
@@ -22036,6 +22037,7 @@ function defoModalsHtml(){
   if (m && m.type==='defoFinale') return defoModalFinaleHtml();
   if (m && m.type==='defoGuide') return defoGuideModalHtml();
   if (m && m.type==='defoCombine') return defoModalCombineHtml();
+  if (m && m.type==='defoRG') return defoModalRGHtml();
   if (m && m.type==='defoEnvoi') return defoModalEnvoiHtml();
   if (m && m.type==='defoCompare') return defoModalCompareHtml();
   if (!m || m.type!=='defoPrep') return '';
@@ -22414,6 +22416,36 @@ async function defoToutTelecharger(finId){
     showToast(fl.length+' fichiers dans '+nom, 'success');
   } catch(e){ showToast('Échec du zip : '+(e.message||e)); }
   if (btn){ btn.disabled = false; btn.textContent = '⬇ Tout télécharger en un clic (.zip)'; }
+}
+// ===== Rapport général des suppressions (plusieurs coopératives) : fabriqué par le robot à partir des analyses, nettoyages et bases finales déjà faits =====
+function ouvrirDefoRG(){ openModal('defoRG', { choisis:new Set(defoCombinables().map(x=>x.id)) }); }
+function defoRGBascule(id, on){ const m = state.modal.payload; if (on) m.choisis.add(id); else m.choisis.delete(id); const b = document.getElementById('rg-go'); if (b) b.textContent = 'Lancer le rapport ('+m.choisis.size+')'; }
+function defoModalRGHtml(){
+  const L = defoCombinables(), m = state.modal.payload;
+  const lignes = L.map(x=>'<label style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px solid var(--border)"><input type="checkbox" '+(m.choisis.has(x.id)?'checked ':'')+'onchange="defoRGBascule(\''+escJs(x.id)+'\',this.checked)" style="margin-top:3px"><span><b>'+esc(x.cooperative_nom)+'</b><span class="hint" style="margin:0 0 0 8px">'+esc(dateFr(String(x.created_at).slice(0,10)))+'</span></span></label>').join('');
+  return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:600px;max-height:90vh;overflow:auto"><h3>Rapport général des suppressions</h3>'
+    + '<div class="hint" style="margin:0 0 8px">Un fichier Excel pour plusieurs coopératives : bilan (reçus, retirés par motif, restants), un onglet par motif, décision fournisseur (Option A ou B) et volumes livrables. Il reprend ce qui a déjà été analysé, nettoyé et produit ; rien n\'est recalculé ni modifié. Une coopérative sans nettoyage ou sans base finale est marquée « Non fait ».</div>'
+    + '<div id="modal-fields">'+(L.length ? lignes : '<div class="hint">Aucune analyse terminée pour le moment.</div>')+'</div>'
+    + '<div class="actions"><button class="btn" onclick="closeModal()">Annuler</button>'+(L.length?'<button class="btn btn-primary" id="rg-go" onclick="defoRGLancer()">Lancer le rapport ('+m.choisis.size+')</button>':'')+'</div></div></div>';
+}
+async function defoRGLancer(){
+  const m = state.modal && state.modal.payload; if (!m || !m.choisis || !m.choisis.size){ showToast('Choisis au moins une coopérative.'); return; }
+  const ids = Array.from(m.choisis);
+  const ins = await supabaseClient.from('analyses_defo').insert({ id:genId('ad'), cooperative_id:null, cooperative_nom:'RAPPORT GÉNÉRAL ('+ids.length+' coopérative'+(ids.length>1?'s':'')+')', etape:'rapport_general', statut:'demandee',
+    entrees:{ analyses:ids }, demande_par:(state.session&&state.session.user&&state.session.user.email)||null }).select().single();
+  if (ins.error){ showToast('Lancement impossible : '+ins.error.message); return; }
+  state.defo = [ins.data].concat(state.defo||[]); carteLancerRobot(); closeModal(); showToast('Rapport général lancé : quelques minutes.', 'success'); render();
+}
+function defoRGPanelHtml(){
+  const L = (state.defo||[]).filter(x=>x.etape==='rapport_general').sort((p,q)=>String(q.created_at).localeCompare(String(p.created_at))).slice(0,5);
+  if (!L.length) return '';
+  return '<div class="panel"><div style="padding:14px 18px"><b>📑 Rapports généraux des suppressions</b>'
+    + L.map(x=>{ const st = CARTE_STATUTS[x.statut] || [x.statut,'#7a8683']; const r = x.resume||{};
+      return '<div style="margin-top:8px;display:flex;gap:8px 12px;flex-wrap:wrap;align-items:center"><span>'+esc(x.cooperative_nom||'')+'</span><span class="hint" style="margin:0">'+esc(dateFr(String(x.created_at).slice(0,10)))+' · '+esc(st[0])+'</span>'
+        + (x.statut==='terminee' ? '<span class="hint" style="margin:0">'+fmtNum(r.polygones_recus)+' reçus · '+fmtNum(r.retires)+' retirés · '+fmtNum(r.restants)+' restants · ≈ '+fmtNum(r.volume_t)+' t</span>'+defoUtiles(x.fichiers).map(defoChip).join('') : '')
+        + (x.statut==='erreur' ? '<span class="hint" style="color:#c0392b;margin:0">'+esc(x.erreur||'')+'</span>' : '')
+        + (['annulee','terminee','erreur'].includes(x.statut) ? '<button class="btn-ghost btn-compact" style="color:#c0392b" onclick="defoSupprimer(\''+escJs(x.id)+'\')">🗑</button>' : '')+'</div>'; }).join('')
+    + '</div></div>';
 }
 // ===== Rapport combiné de plusieurs coopératives =====
 function defoCombinables(){
