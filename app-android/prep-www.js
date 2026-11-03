@@ -1,0 +1,22 @@
+// Prépare le dossier www à partir de terrain.html : bibliothèques embarquées (fonctionne sans réseau)
+const fs = require('fs'), path = require('path');
+const R = (...p) => path.join(__dirname, ...p), W = R('www');
+fs.rmSync(W, { recursive: true, force: true }); fs.mkdirSync(R('www', 'lib', 'images'), { recursive: true });
+let h = fs.readFileSync(R('..', 'terrain.html'), 'utf8');
+const sub = (a, b) => { if (!h.includes(a)) throw new Error('introuvable : ' + a); h = h.replace(a, b); };
+sub('https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css', 'lib/leaflet.css');
+sub('https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js', 'lib/leaflet.js');
+sub('https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js', 'lib/turf.min.js');
+sub('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2', 'lib/supabase.js');
+h = h.replace(/<link rel="manifest"[^>]*>\s*/, '');
+h = h.replace(/APP_VERSION = '([^']+)'/, "APP_VERSION = '$1-android'");
+fs.writeFileSync(R('www', 'index.html'), h);
+const cp = (a, b) => fs.copyFileSync(a, R('www', b));
+cp(R('node_modules/leaflet/dist/leaflet.css'), 'lib/leaflet.css');
+cp(R('node_modules/leaflet/dist/leaflet.js'), 'lib/leaflet.js');
+for (const f of fs.readdirSync(R('node_modules/leaflet/dist/images'))) cp(R('node_modules/leaflet/dist/images', f), 'lib/images/' + f);
+cp(R('node_modules/@turf/turf/turf.min.js'), 'lib/turf.min.js');
+cp(R('node_modules/@supabase/supabase-js/dist/umd/supabase.js'), 'lib/supabase.js');
+cp(R('node_modules/@supabase/supabase-js/dist/umd/591.supabase.js'), 'lib/591.supabase.js');
+cp(R('..', 'terrain-192.png'), 'terrain-192.png'); cp(R('..', 'terrain-sw.js'), 'terrain-sw.js');
+console.log('www prêt :', fs.readdirSync(W).join(', '));
