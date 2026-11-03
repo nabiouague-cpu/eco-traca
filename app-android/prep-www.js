@@ -2,13 +2,12 @@
 const fs = require('fs'), path = require('path');
 const R = (...p) => path.join(__dirname, ...p), W = R('www');
 fs.rmSync(W, { recursive: true, force: true }); fs.mkdirSync(R('www', 'lib', 'images'), { recursive: true });
-let h = fs.readFileSync(R('..', 'terrain.html'), 'utf8');
+let h = fs.readFileSync(R('src', 'index.html'), 'utf8');
 const sub = (a, b) => { if (!h.includes(a)) throw new Error('introuvable : ' + a); h = h.replace(a, b); };
 sub('https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css', 'lib/leaflet.css');
 sub('https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js', 'lib/leaflet.js');
 sub('https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js', 'lib/turf.min.js');
 sub('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2', 'lib/supabase.js');
-h = h.replace(/<link rel="manifest"[^>]*>\s*/, '');
 h = h.replace(/APP_VERSION = '([^']+)'/, "APP_VERSION = '$1-android'");
 fs.writeFileSync(R('www', 'index.html'), h);
 const cp = (a, b) => fs.copyFileSync(a, R('www', b));
