@@ -55,6 +55,7 @@
   .alerte.rouge{background:var(--rouge-bg);color:var(--rouge)} .alerte.orange{background:var(--orange-bg);color:var(--orange)} .alerte.ok{background:var(--ok-bg);color:var(--ok)}
   #connexion{position:absolute;inset:0;z-index:1000;background:var(--fond);padding:24px;display:none;overflow:auto}
   #connexion.actif{display:block}
+  .sommet{width:24px;height:24px;border-radius:50%;background:#f5c518;border:2px solid #14532d;color:#14532d;font:700 11px/20px system-ui;text-align:center;box-shadow:0 1px 4px #0006}
   .toast{position:fixed;z-index:2000;left:12px;right:12px;bottom:90px;background:#1c2a20;color:#fff;border-radius:10px;padding:11px 14px;font-size:14px;display:none}
 </style>
 </head>
@@ -92,14 +93,14 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
-const APP_VERSION = '2026-11-03-t1';
+const APP_VERSION = '2026-11-03-t2';
 const SB_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SB_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 const COUCHE_PA = 'couches/espaces_proteges_v1.json';
 const sb = supabase.createClient(SB_URL, SB_KEY);
 const $ = id => document.getElementById(id);
 const esc = s => String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const S = { coop:null, pa:null, paIdx:[], pos:null, pts:[], manuel:false, collecte:null, maxAcc:15, suivre:true, verif:null, traces:[], cartes:null, vue:'carte', tel:null };
+const S = { marche:null, rawTrail:null, meta:null, fermeture:null, coop:null, pa:null, paIdx:[], pos:null, pts:[], manuel:false, collecte:null, maxAcc:15, suivre:true, verif:null, traces:[], cartes:null, vue:'carte', tel:null };
 
 /* ---------- petit stockage local (IndexedDB) ---------- */
 function idb(){ return new Promise((ok,ko)=>{ const r = indexedDB.open('origen-terrain',1); r.onupgradeneeded = ()=>{ r.result.createObjectStore('kv'); r.result.createObjectStore('traces',{keyPath:'id'}); }; r.onsuccess = ()=>ok(r.result); r.onerror = ()=>ko(r.error); }); }
@@ -141,10 +142,10 @@ async function demarrer(){
 /* ---------- carte ---------- */
 function initCarte(){
   S.map = L.map('map',{ zoomControl:false, attributionControl:true }).setView([6.9,-5.5],7);
-  const sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{ maxZoom:19, attribution:'Imagerie © Esri' });
-  const plan = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{ maxZoom:19, attribution:'© OpenStreetMap' });
+  const sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{ maxZoom:19, crossOrigin:true, attribution:'Imagerie © Esri' });
+  const plan = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{ maxZoom:19, crossOrigin:true, attribution:'© OpenStreetMap' });
   sat.addTo(S.map);
-  S.paLayer = L.layerGroup().addTo(S.map); S.traceLayer = L.layerGroup().addTo(S.map); S.posLayer = L.layerGroup().addTo(S.map);
+  S.paLayer = L.layerGroup().addTo(S.map); S.traceLayer = L.layerGroup().addTo(S.map); S.marcheLayer = L.layerGroup().addTo(S.map); S.posLayer = L.layerGroup().addTo(S.map);
   L.control.layers({ 'Satellite':sat, 'Plan':plan },{ 'Aires protégées':S.paLayer },{ position:'topright' }).addTo(S.map);
   S.map.on('click', e=>{ if (S.manuel) ajouterPoint({ lat:e.latlng.lat, lng:e.latlng.lng, acc:0, n:0 }); });
   S.map.on('dragstart', ()=>{ S.suivre = false; });
@@ -202,6 +203,7 @@ function activerGPS(){
     L.circle([S.pos.lat,S.pos.lng],{ radius:S.pos.acc, color:'#2563eb', weight:1, fillOpacity:.1 }).addTo(S.posLayer);
     L.circleMarker([S.pos.lat,S.pos.lng],{ radius:7, color:'#fff', weight:2, fillColor:'#2563eb', fillOpacity:1 }).addTo(S.posLayer);
     if (S.suivre && !S.vuDejaCentre){ S.vuDejaCentre = true; S.map.setView([S.pos.lat,S.pos.lng],17); } else if (S.suivre) S.map.panTo([S.pos.lat,S.pos.lng],{ animate:true });
+    if (S.marche) marcheFix(S.pos);
     if (S.collecte && S.pos.acc <= S.maxAcc) S.collecte.fixes.push({ lat:S.pos.lat, lng:S.pos.lng, acc:S.pos.acc });
     majBandeau();
   }, e=>{
@@ -214,9 +216,15 @@ function activerGPS(){
 function dessiner(){
   S.traceLayer.clearLayers();
   const ll = S.pts.map(p=>[p.lat,p.lng]);
-  if (ll.length>=3) L.polygon(ll,{ color:'#f5c518', weight:3, fillOpacity:.15 }).addTo(S.traceLayer); else if (ll.length===2) L.polyline(ll,{ color:'#f5c518', weight:3 }).addTo(S.traceLayer);
-  ll.forEach((p,i)=>L.circleMarker(p,{ radius:5, color:'#14532d', weight:2, fillColor:'#f5c518', fillOpacity:1 }).bindTooltip(String(i+1),{ permanent:true, direction:'top', offset:[0,-4] }).addTo(S.traceLayer));
+  if (ll.length>=3) L.polygon(ll,{ color:'#f5c518', weight:3, fillOpacity:.15, interactive:false }).addTo(S.traceLayer); else if (ll.length===2) L.polyline(ll,{ color:'#f5c518', weight:3, interactive:false }).addTo(S.traceLayer);
+  S.pts.forEach((p,i)=>{
+    const m = L.marker([p.lat,p.lng],{ draggable:true, icon:L.divIcon({ className:'', html:'<div class="sommet">'+(i+1)+'</div>', iconSize:[24,24], iconAnchor:[12,12] }) });
+    m.bindPopup('<b>Point '+(i+1)+'</b><br><button class="btn petit" onclick="supprimerPoint('+i+')">Supprimer ce point</button>');
+    m.on('dragend', ()=>{ const q = m.getLatLng(); S.pts[i].lat = q.lat; S.pts[i].lng = q.lng; S.pts[i].edite = true; if (S.verif) verifierTrace(); else dessiner(); });
+    m.addTo(S.traceLayer);
+  });
 }
+function supprimerPoint(i){ S.map.closePopup(); S.pts.splice(i,1); if (S.pts.length<3) S.verif = null; dessiner(); if (S.verif) verifierTrace(); else rendreFeuille(); }
 function ajouterPoint(p){ S.pts.push(p); S.verif = null; dessiner(); rendreFeuille(); }
 async function marquerPoint(){
   if (!S.pos){ toast('Active d’abord le GPS et attends le signal.'); activerGPS(); return; }
@@ -228,14 +236,63 @@ async function marquerPoint(){
   const m = k=>f.reduce((a,x)=>a+x[k],0)/f.length;
   ajouterPoint({ lat:m('lat'), lng:m('lng'), acc:m('acc'), n:f.length });
 }
+function dMetres(a,b){ const k = 111320, cl = Math.cos(((a.lat+b.lat)/2)*Math.PI/180); return Math.hypot((a.lng-b.lng)*k*cl,(a.lat-b.lat)*k); }
+function simplifier(pts,tol){
+  if (pts.length<3) return pts.slice();
+  const k = 111320, cl = Math.cos(pts[0].lat*Math.PI/180), P = pts.map(p=>[p.lng*k*cl,p.lat*k]), garde = new Array(P.length).fill(false);
+  garde[0] = garde[P.length-1] = true; const pile = [[0,P.length-1]];
+  while (pile.length){
+    const [i,j] = pile.pop(); let max = 0, idx = -1; const ax=P[i][0], ay=P[i][1], dx=P[j][0]-ax, dy=P[j][1]-ay, l2=dx*dx+dy*dy;
+    for (let n=i+1;n<j;n++){ let t = l2 ? ((P[n][0]-ax)*dx+(P[n][1]-ay)*dy)/l2 : 0; t = Math.max(0,Math.min(1,t)); const d = Math.hypot(P[n][0]-(ax+t*dx), P[n][1]-(ay+t*dy)); if (d>max){ max = d; idx = n; } }
+    if (max>tol && idx>0){ garde[idx] = true; pile.push([i,idx],[idx,j]); }
+  }
+  return pts.filter((_,i)=>garde[i]);
+}
+function marcherDebut(){
+  if (!S.pos){ toast('Active d’abord le GPS et attends le signal.'); activerGPS(); return; }
+  S.pts = []; S.verif = null; S.fermeture = null; S.rawTrail = null; S.meta = null; dessiner();
+  S.marche = { trail:[], dist:0, rejetes:0, debut:Date.now() }; S.marcheLayer.clearLayers(); S.suivre = true;
+  marcheFix(S.pos); rendreFeuille();
+}
+function marcheFix(p){
+  const m = S.marche; if (!m) return;
+  if (p.acc>S.maxAcc){ m.rejetes++; majMarche(); return; }
+  const dernier = m.trail[m.trail.length-1];
+  if (dernier){
+    const d = dMetres(dernier,p), dt = Math.max(0.5,(p.t-dernier.t)/1000);
+    if (d/dt>4){ m.rejetes++; majMarche(); return; }          // saut impossible à pied : mesure écartée
+    if (d<Math.max(3,p.acc/2)) return;                          // pas assez avancé
+    m.dist += d;
+  }
+  m.trail.push({ lat:p.lat, lng:p.lng, acc:p.acc, t:p.t });
+  S.marcheLayer.clearLayers(); L.polyline(m.trail.map(x=>[x.lat,x.lng]),{ color:'#f5c518', weight:4, interactive:false }).addTo(S.marcheLayer);
+  majMarche();
+}
+function majMarche(){ const e = $('st-marche'), m = S.marche; if (e && m) e.textContent = m.trail.length+' points · '+Math.round(m.dist)+' m parcourus'+(m.rejetes?' · '+m.rejetes+' mesure'+(m.rejetes>1?'s':'')+' écartée'+(m.rejetes>1?'s':''):''); }
+function marcherAnnuler(){ S.marche = null; S.marcheLayer.clearLayers(); rendreFeuille(); }
+function marcherFin(){
+  const m = S.marche; S.marche = null; S.marcheLayer.clearLayers();
+  if (!m || m.trail.length<5){ toast('Pas assez de points : marche un peu plus longtemps, ou relève le seuil de précision.'); rendreFeuille(); return; }
+  const accMoy = m.trail.reduce((a,x)=>a+x.acc,0)/m.trail.length, tol = Math.max(2,Math.min(8,accMoy*0.5));
+  let v = simplifier(m.trail,tol); S.fermeture = dMetres(m.trail[0], m.trail[m.trail.length-1]);
+  if (v.length>3 && S.fermeture<Math.max(tol*2,6)) v = v.slice(0,-1);
+  S.rawTrail = m.trail; S.meta = { mode:'marche', dist:m.dist, rejetes:m.rejetes, brut:m.trail.length };
+  S.pts = v.map(x=>({ lat:x.lat, lng:x.lng, acc:x.acc, n:1 })); dessiner(); verifierTrace();
+}
 function annulerDernier(){ S.pts.pop(); S.verif = null; dessiner(); rendreFeuille(); }
-function effacerTrace(){ S.pts = []; S.verif = null; dessiner(); rendreFeuille(); }
+function effacerTrace(){ S.pts = []; S.verif = null; S.fermeture = null; S.rawTrail = null; S.meta = null; dessiner(); rendreFeuille(); }
+function margeSurface(poly,r){ try { const plus = turf.buffer(poly,r,{ units:'meters' }), moins = turf.buffer(poly,-r,{ units:'meters' }); return { max:turf.area(plus)/10000, min:moins ? turf.area(moins)/10000 : 0 }; } catch(e){ return null; } }
 function verifierTrace(){
   if (S.pts.length<3){ toast('Il faut au moins 3 points.'); return; }
+  const nomV = ($('t-nom')||{}).value, codeV = ($('t-code')||{}).value;
   const coords = S.pts.map(p=>[p.lng,p.lat]); const poly = turf.polygon([coords.concat([coords[0]])]);
   const ha = turf.area(poly)/10000, perim = turf.length(turf.polygonToLine(poly),{ units:'meters' });
   const accs = S.pts.filter(p=>p.acc>0).map(p=>p.acc), accMoy = accs.length ? accs.reduce((a,b)=>a+b,0)/accs.length : null;
   const al = [];
+  const marge = accMoy!=null ? margeSurface(poly, accMoy) : null;
+  if (S.fermeture!=null){ if (S.fermeture>40) al.push({ n:'rouge', t:'Le tour n’est pas fermé : '+Math.round(S.fermeture)+' m entre le départ et l’arrivée. La surface est peu fiable.' }); else if (S.fermeture>15) al.push({ n:'orange', t:'Départ et arrivée distants de '+Math.round(S.fermeture)+' m.' }); }
+  if (marge && ha>0 && (marge.max-marge.min)/ha>0.4) al.push({ n:'orange', t:'Marge importante sur la surface (entre '+fmt(marge.min,2)+' et '+fmt(marge.max,2)+' ha) : la précision du GPS est limite pour cette parcelle.' });
+  const dep = S.pts.filter(p=>p.edite).length; if (dep) al.push({ n:'ok', t:dep+' point'+(dep>1?'s':'')+' corrigé'+(dep>1?'s':'')+' à la main.' });
   let croise = 0; try { croise = turf.kinks(poly).features.length; } catch(e){}
   if (croise) al.push({ n:'rouge', t:'Le tracé se croise ('+croise+' croisement'+(croise>1?'s':'')+') : la surface n’est pas fiable.' });
   const bb = turf.bbox(poly);
@@ -248,25 +305,29 @@ function verifierTrace(){
   if (accMoy!=null && accMoy>10) al.push({ n:'orange', t:'Précision moyenne faible (±'+Math.round(accMoy)+' m).' });
   if (!S.paIdx.length) al.push({ n:'orange', t:'Couches non téléchargées : le chevauchement avec les aires protégées n’a pas été contrôlé.' });
   if (!al.length) al.push({ n:'ok', t:'Aucune alerte.' });
-  S.verif = { ha, perim, accMoy, al, geom:poly.geometry };
+  S.verif = { ha, perim, accMoy, al, marge, geom:poly.geometry };
   rendreFeuille();
+  if (nomV && $('t-nom')) $('t-nom').value = nomV; if (codeV && $('t-code')) $('t-code').value = codeV;
 }
 function rendreFeuille(){
   const f = $('feuille'); let h = '';
   const nbtxt = S.pts.length+' point'+(S.pts.length>1?'s':'');
   if (S.verif){
     const v = S.verif;
-    h += '<h3>Résultat du tracé</h3><div class="rangee" style="gap:16px"><div><b style="font-size:20px">'+fmt(v.ha,2)+' ha</b><div class="gris">surface</div></div><div><b>'+Math.round(v.perim)+' m</b><div class="gris">périmètre</div></div><div><b>'+S.pts.length+'</b><div class="gris">points</div></div><div><b>'+(v.accMoy!=null?'±'+Math.round(v.accMoy)+' m':'—')+'</b><div class="gris">précision</div></div></div>'
+    h += '<h3>Résultat du tracé</h3><div class="rangee" style="gap:16px"><div><b style="font-size:20px">'+fmt(v.ha,2)+' ha</b><div class="gris">surface'+(v.marge?' (entre '+fmt(v.marge.min,2)+' et '+fmt(v.marge.max,2)+')':'')+'</div></div><div><b>'+Math.round(v.perim)+' m</b><div class="gris">périmètre</div></div><div><b>'+S.pts.length+'</b><div class="gris">points</div></div><div><b>'+(v.accMoy!=null?'±'+Math.round(v.accMoy)+' m':'—')+'</b><div class="gris">précision</div></div></div>'
       + v.al.map(a=>'<div class="alerte '+a.n+'">'+esc(a.t)+'</div>').join('')
-      + '<div class="gris">Rien ne bloque : tu peux enregistrer quand même.</div>'
+      + '<div class="gris">'+(v.marge?'La marge vient de la précision du GPS. ':'')+'Touche un numéro pour le supprimer ou fais-le glisser pour corriger. Rien ne bloque : tu peux enregistrer quand même.</div>'
       + '<label for="t-nom">Producteur</label><input id="t-nom" placeholder="Nom du producteur" autocomplete="off">'
       + '<label for="t-code">Code de la parcelle (facultatif)</label><input id="t-code" placeholder="Ex. ECA_GB123-P1" autocomplete="off">'
       + '<div class="rangee" style="margin-top:10px"><button class="btn plein" onclick="enregistrerTrace()">Enregistrer le tracé</button><button class="btn" onclick="S.verif=null;rendreFeuille()">Retour</button></div>';
+  } else if (S.marche){
+    h += '<h3>Marche en cours…</h3><p id="st-marche" class="gris" style="margin:4px 0 8px">'+S.marche.trail.length+' points</p><div class="gris" style="margin-bottom:8px">Longe la limite de la parcelle en revenant à ton point de départ. Marche à allure normale.</div>'
+      + '<div class="rangee"><button class="btn plein" onclick="marcherFin()">■ Terminer le tour</button><button class="btn" onclick="marcherAnnuler()">Annuler</button></div>';
   } else {
     h += '<h3>Tracer une parcelle</h3>'
       + '<div class="gris" style="margin-bottom:6px">'+nbtxt+(S.manuel?' · mode test : touche la carte':' · marche le long de la limite, un point à chaque coin')+'</div>'
       + '<div class="rangee">'
-      + (S.manuel ? '' : '<button class="btn plein" id="b-marquer" '+(S.collecte?'disabled':'')+' onclick="marquerPoint()">'+(S.collecte?'Mesure…':'Marquer un point ici')+'</button>')
+      + (S.manuel ? '' : '<button class="btn plein" onclick="marcherDebut()" '+(S.collecte?'disabled':'')+'>▶ Marcher le contour</button><button class="btn" id="b-marquer" '+(S.collecte?'disabled':'')+' onclick="marquerPoint()">'+(S.collecte?'Mesure…':'Marquer un point ici')+'</button>')
       + '<button class="btn" onclick="annulerDernier()" '+(S.pts.length?'':'disabled')+'>Annuler le dernier</button>'
       + '<button class="btn" onclick="verifierTrace()" '+(S.pts.length>=3?'':'disabled')+'>Fermer et vérifier</button>'
       + (S.pts.length?'<button class="btn petit" onclick="effacerTrace()">Effacer</button>':'')+'</div>'
@@ -282,10 +343,12 @@ async function enregistrerTrace(){
   const nom = ($('t-nom').value||'').trim(), code = ($('t-code').value||'').trim();
   const manuel = S.pts.some(p=>p.acc===0);
   const t = { id:'tr_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6), cooperative_id:S.coop.id, producteur_nom:nom||null, code_parcelle:code||null,
-    geojson:{ type:'Feature', properties:{ surface_ha:+v.ha.toFixed(4), precision_moy_m:v.accMoy!=null?+v.accMoy.toFixed(1):null, producteur:nom||null, code:code||null }, geometry:v.geom },
+    geojson:{ type:'Feature', properties:{ surface_ha:+v.ha.toFixed(4), surface_min_ha:v.marge?+v.marge.min.toFixed(4):null, surface_max_ha:v.marge?+v.marge.max.toFixed(4):null, precision_moy_m:v.accMoy!=null?+v.accMoy.toFixed(1):null, producteur:nom||null, code:code||null,
+      releve:S.meta?S.meta.mode:(manuel?'manuel':'points'), fermeture_m:S.fermeture!=null?+S.fermeture.toFixed(1):null, sommets_deplaces:S.pts.filter(p=>p.edite).length, distance_marchee_m:S.meta?Math.round(S.meta.dist):null,
+      piste:S.rawTrail?S.rawTrail.slice(0,1500).map(x=>[+x.lng.toFixed(6),+x.lat.toFixed(6),Math.round(x.acc),Math.round(x.t/1000)]):null }, geometry:v.geom },
     surface_ha:+v.ha.toFixed(4), precision_moy_m:v.accMoy!=null?+v.accMoy.toFixed(1):null, alertes:v.al.filter(a=>a.n!=='ok').map(a=>a.t), mode:manuel?'manuel':'gps',
     appareil:navigator.userAgent.slice(0,140), releve_le:new Date().toISOString(), statut:'en_attente' };
-  await trPut(t); S.traces = await trAll(); S.pts = []; S.verif = null; dessiner(); rendreFeuille(); majAttente(); rendreTraces();
+  await trPut(t); S.traces = await trAll(); S.pts = []; S.verif = null; S.fermeture = null; S.rawTrail = null; S.meta = null; dessiner(); rendreFeuille(); majAttente(); rendreTraces();
   toast('Tracé enregistré sur le téléphone.'); synchroniser();
 }
 
@@ -312,10 +375,13 @@ async function rendreCouches(){
     + '<div class="barre" id="p-couche" style="display:none"><i></i></div><p class="gris" id="t-couche"></p>'
     + '<button class="btn plein" '+(S.tel?'disabled':'')+' onclick="telechargerCouche()">'+(pa?'Mettre à jour':'Télécharger les couches')+'</button></div>';
   h += '<div class="carte"><h2>Mes cartes de localisation</h2><div id="liste-cartes" class="gris">Chargement…</div></div>';
+  h += '<div class="carte"><h2>Images satellite et plan</h2><p class="gris" id="t-tuiles">…</p><p class="gris">Les images que tu as regardées avec du réseau restent disponibles sans réseau. Avant de partir, parcours la zone de travail à l’écran.</p><button class="btn petit" onclick="viderTuiles()">Vider les images gardées</button></div>';
   h += '<div class="carte"><h2>Stockage sur ce téléphone</h2><p class="gris" id="t-stock">…</p><button class="btn petit" onclick="stockageDurable()">Garder les données même si le téléphone manque de place</button></div>';
   h += '<div class="carte"><h2>À savoir sur la précision</h2><p class="gris">Ce test utilise le GPS du navigateur : environ 3 à 10 m en terrain dégagé, moins bien sous couvert. Chaque point est moyenné sur 10 secondes et refusé si la précision dépasse ton seuil. Version '+APP_VERSION+'.</p></div>';
-  c.innerHTML = h; chargerCartes(); majStockage();
+  c.innerHTML = h; chargerCartes(); majStockage(); majTuiles();
 }
+async function majTuiles(){ try { const n = (await (await caches.open('terrain-tuiles-v1')).keys()).length; const e = $('t-tuiles'); if (e) e.textContent = n+' image'+(n>1?'s':'')+' gardée'+(n>1?'s':'')+' sur ce téléphone.'; } catch(e){} }
+async function viderTuiles(){ try { await caches.delete('terrain-tuiles-v1'); toast('Images supprimées.'); } catch(e){} majTuiles(); majStockage(); }
 async function majStockage(){ try { const e = await navigator.storage.estimate(); const p = navigator.storage.persisted ? await navigator.storage.persisted() : false; const el = $('t-stock'); if (el) el.textContent = fmt((e.usage||0)/1e6,1)+' Mo utilisés sur '+fmt((e.quota||0)/1e6,0)+' Mo disponibles'+(p?' · stockage durable activé':''); } catch(e){ const el = $('t-stock'); if (el) el.textContent = 'Information indisponible.'; } }
 async function stockageDurable(){ try { const ok = await navigator.storage.persist(); toast(ok ? 'Stockage durable activé.' : 'Le navigateur n’a pas accepté.'); } catch(e){ toast('Non pris en charge sur ce navigateur.'); } majStockage(); }
 async function telechargerCouche(){
