@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>ORIGEN Terrain</title>
+<meta name="theme-color" content="#14532d">
+<link rel="manifest" href="terrain.webmanifest">
+<link rel="icon" href="terrain-192.png">
+<link rel="apple-touch-icon" href="terrain-192.png">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root{ --vert:#14532d; --vert2:#166534; --or:#f5c518; --fond:#f4f6f3; --carte:#fff; --txt:#1c2a20; --gris:#5f6f64; --bord:#d9e0da; --rouge:#b42318; --rouge-bg:#fdeceb; --orange:#b54708; --orange-bg:#fff4e5; --ok:#1a7f37; --ok-bg:#e8f5ec; }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;margin:0;font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--txt);background:var(--fond)}
+  body{display:flex;flex-direction:column;overflow:hidden}
+  header{background:var(--vert);color:#fff;padding:8px 14px;padding-top:max(8px,env(safe-area-inset-top));display:flex;align-items:center;gap:10px;flex:none}
+  header b{font-size:16px;letter-spacing:.02em}
+  header .coop{font-size:12px;opacity:.85;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pastille{font-size:11px;padding:2px 8px;border-radius:12px;background:#ffffff22;white-space:nowrap}
+  .pastille.hors{background:var(--or);color:#3b2f00;font-weight:600}
+  main{flex:1;position:relative;min-height:0}
+  .vue{position:absolute;inset:0;display:none;overflow:auto;padding:14px;padding-bottom:20px}
+  .vue.actif{display:block}
+  #v-carte{padding:0;overflow:hidden}
+  #map{position:absolute;inset:0}
+  nav{flex:none;display:flex;background:#fff;border-top:1px solid var(--bord);padding-bottom:env(safe-area-inset-bottom)}
+  nav button{flex:1;border:0;background:none;padding:10px 4px 8px;font-size:12px;color:var(--gris);display:flex;flex-direction:column;align-items:center;gap:2px}
+  nav button .ic{font-size:20px;line-height:1}
+  nav button.actif{color:var(--vert);font-weight:700}
+  .carte{background:var(--carte);border:1px solid var(--bord);border-radius:12px;padding:14px;margin:0 0 12px}
+  .carte h2{margin:0 0 6px;font-size:15px}
+  .carte p{margin:4px 0}
+  .gris{color:var(--gris);font-size:13px}
+  button.btn{border:1px solid var(--vert);background:#fff;color:var(--vert);border-radius:10px;padding:10px 14px;font-size:14px;font-weight:600}
+  button.btn.plein{background:var(--vert);color:#fff}
+  button.btn:disabled{opacity:.5}
+  button.btn.petit{padding:6px 10px;font-size:13px}
+  .rangee{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  input,select,textarea{font:inherit;padding:10px;border:1px solid var(--bord);border-radius:10px;width:100%;background:#fff}
+  label{display:block;font-size:13px;color:var(--gris);margin:8px 0 2px}
+  .barre{height:8px;background:#e3e9e4;border-radius:6px;overflow:hidden;margin:8px 0}
+  .barre i{display:block;height:100%;background:var(--vert2);width:0}
+  .badge{display:inline-block;font-size:11.5px;font-weight:700;padding:2px 9px;border-radius:12px;background:#e3e9e4;color:var(--gris)}
+  .badge.ok{background:var(--ok-bg);color:var(--ok)} .badge.warn{background:var(--orange-bg);color:var(--orange)} .badge.danger{background:var(--rouge-bg);color:var(--rouge)}
+  /* carte */
+  #bandeau{position:absolute;z-index:500;left:10px;right:10px;top:10px;padding:10px 12px;border-radius:10px;font-size:14px;font-weight:600;display:none;box-shadow:0 2px 8px #0003}
+  #bandeau.rouge{display:block;background:var(--rouge);color:#fff} #bandeau.orange{display:block;background:var(--or);color:#3b2f00} #bandeau.gris{display:block;background:#ffffffee;color:var(--gris);font-weight:500}
+  #gps{position:absolute;z-index:500;left:10px;top:62px;background:#ffffffee;border-radius:8px;padding:4px 9px;font-size:12px;box-shadow:0 1px 5px #0003}
+  #flottants{position:absolute;z-index:500;right:10px;bottom:calc(var(--feuille,150px) + 12px);display:grid;gap:8px}
+  #flottants button{width:44px;height:44px;border-radius:50%;border:0;background:#fff;box-shadow:0 2px 8px #0004;font-size:20px}
+  #feuille{position:absolute;z-index:600;left:0;right:0;bottom:0;background:#fff;border-radius:16px 16px 0 0;box-shadow:0 -3px 14px #0003;padding:12px 14px 14px;max-height:62%;overflow:auto}
+  #feuille h3{margin:0 0 6px;font-size:15px}
+  .alerte{padding:8px 10px;border-radius:8px;margin:6px 0;font-size:13.5px}
+  .alerte.rouge{background:var(--rouge-bg);color:var(--rouge)} .alerte.orange{background:var(--orange-bg);color:var(--orange)} .alerte.ok{background:var(--ok-bg);color:var(--ok)}
+  #connexion{position:absolute;inset:0;z-index:1000;background:var(--fond);padding:24px;display:none;overflow:auto}
+  #connexion.actif{display:block}
+  .toast{position:fixed;z-index:2000;left:12px;right:12px;bottom:90px;background:#1c2a20;color:#fff;border-radius:10px;padding:11px 14px;font-size:14px;display:none}
+</style>
+</head>
+<body>
+<header><b>ORIGEN Terrain</b><span class="coop" id="h-coop"></span><span class="pastille" id="h-reseau">En ligne</span></header>
+<main>
+  <section class="vue actif" id="v-carte">
+    <div id="map"></div>
+    <div id="bandeau"></div>
+    <div id="gps">GPS : non activé</div>
+    <div id="flottants"><button id="b-centrer" title="Me centrer" aria-label="Me centrer">◎</button></div>
+    <div id="feuille"></div>
+  </section>
+  <section class="vue" id="v-couches"></section>
+  <section class="vue" id="v-traces"></section>
+  <section id="connexion">
+    <h2 style="margin:20px 0 4px">ORIGEN Terrain</h2>
+    <p class="gris">Connecte-toi avec le compte de ta coopérative (le même que sur la plateforme).</p>
+    <form id="f-login" autocomplete="on">
+      <label for="l-email">Email</label><input id="l-email" type="email" autocomplete="username" required>
+      <label for="l-mdp">Mot de passe</label><input id="l-mdp" type="password" autocomplete="current-password" required>
+      <p id="l-err" style="color:var(--rouge);font-size:13.5px;min-height:20px"></p>
+      <button class="btn plein" type="submit" style="width:100%">Se connecter</button>
+    </form>
+  </section>
+</main>
+<nav>
+  <button data-v="carte" class="actif"><span class="ic">🗺</span>Carte</button>
+  <button data-v="couches"><span class="ic">⬇</span>Couches</button>
+  <button data-v="traces"><span class="ic">📍</span>Mes tracés <span id="n-attente"></span></button>
+</nav>
+<div class="toast" id="toast"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+const APP_VERSION = '2026-11-03-t1';
+const SB_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
+const SB_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
+const COUCHE_PA = 'couches/espaces_proteges_v1.json';
+const sb = supabase.createClient(SB_URL, SB_KEY);
+const $ = id => document.getElementById(id);
+const esc = s => String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const S = { coop:null, pa:null, paIdx:[], pos:null, pts:[], manuel:false, collecte:null, maxAcc:15, suivre:true, verif:null, traces:[], cartes:null, vue:'carte', tel:null };
+
+/* ---------- petit stockage local (IndexedDB) ---------- */
+function idb(){ return new Promise((ok,ko)=>{ const r = indexedDB.open('origen-terrain',1); r.onupgradeneeded = ()=>{ r.result.createObjectStore('kv'); r.result.createObjectStore('traces',{keyPath:'id'}); }; r.onsuccess = ()=>ok(r.result); r.onerror = ()=>ko(r.error); }); }
+async function kvGet(k){ try { const db = await idb(); return await new Promise((ok,ko)=>{ const q = db.transaction('kv').objectStore('kv').get(k); q.onsuccess = ()=>ok(q.result); q.onerror = ()=>ko(q.error); }); } catch(e){ return null; } }
+async function kvSet(k,v){ const db = await idb(); return new Promise((ok,ko)=>{ const t = db.transaction('kv','readwrite'); t.objectStore('kv').put(v,k); t.oncomplete = ()=>ok(); t.onerror = ()=>ko(t.error); }); }
+async function trAll(){ try { const db = await idb(); return await new Promise((ok,ko)=>{ const q = db.transaction('traces').objectStore('traces').getAll(); q.onsuccess = ()=>ok(q.result||[]); q.onerror = ()=>ko(q.error); }); } catch(e){ return []; } }
+async function trPut(t){ const db = await idb(); return new Promise((ok,ko)=>{ const x = db.transaction('traces','readwrite'); x.objectStore('traces').put(t); x.oncomplete = ()=>ok(); x.onerror = ()=>ko(x.error); }); }
+async function trDel(id){ const db = await idb(); return new Promise((ok,ko)=>{ const x = db.transaction('traces','readwrite'); x.objectStore('traces').delete(id); x.oncomplete = ()=>ok(); x.onerror = ()=>ko(x.error); }); }
+
+function toast(m){ const t = $('toast'); t.textContent = m; t.style.display = 'block'; clearTimeout(toast.h); toast.h = setTimeout(()=>{ t.style.display = 'none'; }, 3800); }
+function fmt(n,d){ return Number(n).toLocaleString('fr-FR',{minimumFractionDigits:d||0,maximumFractionDigits:d||0}); }
+
+/* ---------- connexion ---------- */
+$('f-login').addEventListener('submit', async ev=>{
+  ev.preventDefault(); $('l-err').textContent = '';
+  const r = await sb.auth.signInWithPassword({ email:$('l-email').value.trim(), password:$('l-mdp').value });
+  if (r.error){ $('l-err').textContent = 'Connexion impossible : '+r.error.message; return; }
+  $('connexion').classList.remove('actif'); await demarrer();
+});
+async function demarrer(){
+  const s = await sb.auth.getSession();
+  let coop = null;
+  if (s.data && s.data.session){
+    S.uid = s.data.session.user.id;
+    if (navigator.onLine){
+      const r = await sb.from('cooperatives').select('id,nom').order('nom').limit(100);
+      if (!r.error && r.data && r.data.length){
+        coop = r.data.length===1 ? r.data[0] : (r.data.find(c=>c.id===localStorage.getItem('terrain_coop')) || r.data[0]);
+        S.coops = r.data; await kvSet('coop', coop);
+      }
+    }
+  }
+  if (!coop) coop = await kvGet('coop');
+  if (!coop){ $('connexion').classList.add('actif'); return; }
+  S.coop = coop; $('h-coop').textContent = coop.nom;
+  await chargerPA(); S.traces = await trAll(); majAttente(); dessiner(); rendreFeuille(); rendreCouches(); rendreTraces(); synchroniser();
+}
+
+/* ---------- carte ---------- */
+function initCarte(){
+  S.map = L.map('map',{ zoomControl:false, attributionControl:true }).setView([6.9,-5.5],7);
+  const sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{ maxZoom:19, attribution:'Imagerie © Esri' });
+  const plan = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{ maxZoom:19, attribution:'© OpenStreetMap' });
+  sat.addTo(S.map);
+  S.paLayer = L.layerGroup().addTo(S.map); S.traceLayer = L.layerGroup().addTo(S.map); S.posLayer = L.layerGroup().addTo(S.map);
+  L.control.layers({ 'Satellite':sat, 'Plan':plan },{ 'Aires protégées':S.paLayer },{ position:'topright' }).addTo(S.map);
+  S.map.on('click', e=>{ if (S.manuel) ajouterPoint({ lat:e.latlng.lat, lng:e.latlng.lng, acc:0, n:0 }); });
+  S.map.on('dragstart', ()=>{ S.suivre = false; });
+  $('b-centrer').onclick = ()=>{ S.suivre = true; if (S.pos) S.map.setView([S.pos.lat,S.pos.lng], Math.max(S.map.getZoom(),17)); else activerGPS(); };
+}
+async function chargerPA(){
+  const c = await kvGet('pa'); S.pa = c || null; S.paIdx = []; if (S.paLayer) S.paLayer.clearLayers();
+  if (!c) return;
+  c.json.features.forEach(f=>{
+    const polys = f.geometry.type==='Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates;
+    let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+    polys.forEach(p=>p[0].forEach(q=>{ if(q[0]<x0)x0=q[0]; if(q[0]>x1)x1=q[0]; if(q[1]<y0)y0=q[1]; if(q[1]>y1)y1=q[1]; }));
+    S.paIdx.push({ nom:f.properties.nom, type:f.properties.type, polys, bbox:[x0,y0,x1,y1], f });
+  });
+  if (S.paLayer) L.geoJSON(c.json,{ style:{ color:'#d92d20', weight:2, dashArray:'6 4', fillColor:'#d92d20', fillOpacity:.14 }, onEachFeature:(f,l)=>l.bindPopup('<b>'+esc(f.properties.nom)+'</b><br>'+esc(f.properties.type)) }).addTo(S.paLayer);
+}
+function pip(lng,lat,rings){ let dedans = false; for (const ring of rings){ for (let i=0,j=ring.length-1;i<ring.length;j=i++){ const xi=ring[i][0],yi=ring[i][1],xj=ring[j][0],yj=ring[j][1]; if (((yi>lat)!==(yj>lat)) && (lng < (xj-xi)*(lat-yi)/(yj-yi)+xi)) dedans = !dedans; } } return dedans; }
+function distAnneaux(lng,lat,rings){
+  const k = 111320, cl = Math.cos(lat*Math.PI/180); let best = Infinity;
+  for (const ring of rings){ for (let i=0;i<ring.length-1;i++){
+    const ax=(ring[i][0]-lng)*k*cl, ay=(ring[i][1]-lat)*k, bx=(ring[i+1][0]-lng)*k*cl, by=(ring[i+1][1]-lat)*k, dx=bx-ax, dy=by-ay, l2=dx*dx+dy*dy;
+    let t = l2 ? -(ax*dx+ay*dy)/l2 : 0; t = Math.max(0,Math.min(1,t)); const d = Math.hypot(ax+t*dx, ay+t*dy); if (d<best) best = d;
+  } } return best;
+}
+function proximite(lng,lat){
+  let meilleur = null;
+  for (const z of S.paIdx){
+    const m = 0.03; if (lng<z.bbox[0]-m || lng>z.bbox[2]+m || lat<z.bbox[1]-m || lat>z.bbox[3]+m) continue;
+    for (const p of z.polys){
+      if (pip(lng,lat,p)) return { dedans:true, nom:z.nom, type:z.type, d:0 };
+      const d = distAnneaux(lng,lat,p); if (!meilleur || d<meilleur.d) meilleur = { dedans:false, nom:z.nom, type:z.type, d };
+    }
+  }
+  return meilleur;
+}
+function majBandeau(){
+  const b = $('bandeau');
+  if (!S.pos){ b.className = ''; return; }
+  if (!S.pa){ b.className = 'gris'; b.textContent = 'Couches non téléchargées : onglet Couches.'; return; }
+  const p = proximite(S.pos.lng, S.pos.lat);
+  if (p && p.dedans){ b.className = 'rouge'; b.textContent = 'Tu es dans une aire protégée : '+p.nom+' ('+p.type+')'; }
+  else if (p && p.d<=300){ b.className = 'orange'; b.textContent = 'Aire protégée à '+Math.round(p.d)+' m : '+p.nom; }
+  else { b.className = 'gris'; b.textContent = p && p.d<5000 ? 'Aire protégée la plus proche : '+(p.d>=1000?fmt(p.d/1000,1)+' km':Math.round(p.d)+' m')+' ('+p.nom+')' : 'Aucune aire protégée à moins de 5 km.'; }
+}
+
+/* ---------- GPS ---------- */
+function activerGPS(){
+  if (!navigator.geolocation){ toast('Ce téléphone ne donne pas la position.'); return; }
+  if (S.watch != null) return;
+  $('gps').textContent = 'GPS : recherche du signal…';
+  S.watch = navigator.geolocation.watchPosition(p=>{
+    S.pos = { lat:p.coords.latitude, lng:p.coords.longitude, acc:p.coords.accuracy, t:p.timestamp };
+    $('gps').textContent = 'GPS : ±'+Math.round(S.pos.acc)+' m';
+    S.posLayer.clearLayers();
+    L.circle([S.pos.lat,S.pos.lng],{ radius:S.pos.acc, color:'#2563eb', weight:1, fillOpacity:.1 }).addTo(S.posLayer);
+    L.circleMarker([S.pos.lat,S.pos.lng],{ radius:7, color:'#fff', weight:2, fillColor:'#2563eb', fillOpacity:1 }).addTo(S.posLayer);
+    if (S.suivre && !S.vuDejaCentre){ S.vuDejaCentre = true; S.map.setView([S.pos.lat,S.pos.lng],17); } else if (S.suivre) S.map.panTo([S.pos.lat,S.pos.lng],{ animate:true });
+    if (S.collecte && S.pos.acc <= S.maxAcc) S.collecte.fixes.push({ lat:S.pos.lat, lng:S.pos.lng, acc:S.pos.acc });
+    majBandeau();
+  }, e=>{
+    S.watch = null;
+    $('gps').textContent = e.code===1 ? 'GPS : refusé (autorise la position dans le navigateur)' : 'GPS : indisponible ('+e.message+')';
+  }, { enableHighAccuracy:true, maximumAge:0, timeout:20000 });
+}
+
+/* ---------- tracé ---------- */
+function dessiner(){
+  S.traceLayer.clearLayers();
+  const ll = S.pts.map(p=>[p.lat,p.lng]);
+  if (ll.length>=3) L.polygon(ll,{ color:'#f5c518', weight:3, fillOpacity:.15 }).addTo(S.traceLayer); else if (ll.length===2) L.polyline(ll,{ color:'#f5c518', weight:3 }).addTo(S.traceLayer);
+  ll.forEach((p,i)=>L.circleMarker(p,{ radius:5, color:'#14532d', weight:2, fillColor:'#f5c518', fillOpacity:1 }).bindTooltip(String(i+1),{ permanent:true, direction:'top', offset:[0,-4] }).addTo(S.traceLayer));
+}
+function ajouterPoint(p){ S.pts.push(p); S.verif = null; dessiner(); rendreFeuille(); }
+async function marquerPoint(){
+  if (!S.pos){ toast('Active d’abord le GPS et attends le signal.'); activerGPS(); return; }
+  if (S.collecte) return;
+  const duree = 10000; S.collecte = { fixes:[], debut:Date.now() }; rendreFeuille();
+  await new Promise(r=>{ const iv = setInterval(()=>{ const reste = Math.max(0, Math.ceil((duree-(Date.now()-S.collecte.debut))/1000)); const b = $('b-marquer'); if (b) b.textContent = 'Mesure… '+reste+' s ('+S.collecte.fixes.length+' relevés)'; if (Date.now()-S.collecte.debut>=duree){ clearInterval(iv); r(); } },250); });
+  const f = S.collecte.fixes; S.collecte = null;
+  if (f.length<3){ toast('Précision insuffisante (±'+Math.round(S.pos.acc)+' m, seuil '+S.maxAcc+' m). Attends un meilleur signal ou relève le seuil.'); rendreFeuille(); return; }
+  const m = k=>f.reduce((a,x)=>a+x[k],0)/f.length;
+  ajouterPoint({ lat:m('lat'), lng:m('lng'), acc:m('acc'), n:f.length });
+}
+function annulerDernier(){ S.pts.pop(); S.verif = null; dessiner(); rendreFeuille(); }
+function effacerTrace(){ S.pts = []; S.verif = null; dessiner(); rendreFeuille(); }
+function verifierTrace(){
+  if (S.pts.length<3){ toast('Il faut au moins 3 points.'); return; }
+  const coords = S.pts.map(p=>[p.lng,p.lat]); const poly = turf.polygon([coords.concat([coords[0]])]);
+  const ha = turf.area(poly)/10000, perim = turf.length(turf.polygonToLine(poly),{ units:'meters' });
+  const accs = S.pts.filter(p=>p.acc>0).map(p=>p.acc), accMoy = accs.length ? accs.reduce((a,b)=>a+b,0)/accs.length : null;
+  const al = [];
+  let croise = 0; try { croise = turf.kinks(poly).features.length; } catch(e){}
+  if (croise) al.push({ n:'rouge', t:'Le tracé se croise ('+croise+' croisement'+(croise>1?'s':'')+') : la surface n’est pas fiable.' });
+  const bb = turf.bbox(poly);
+  S.paIdx.forEach(z=>{
+    if (bb[2]<z.bbox[0] || bb[0]>z.bbox[2] || bb[3]<z.bbox[1] || bb[1]>z.bbox[3]) return;
+    try { const inter = turf.intersect(poly, z.f); if (inter){ const h = turf.area(inter)/10000; if (h>0.0005) al.push({ n:'rouge', t:'Chevauche '+z.nom+' ('+z.type+') sur '+fmt(h,2)+' ha.' }); } } catch(e){}
+  });
+  if (ha<0.1) al.push({ n:'orange', t:'Très petite parcelle ('+fmt(ha,3)+' ha) : vérifie le tracé.' });
+  if (ha>4) al.push({ n:'orange', t:'Parcelle de plus de 4 ha : vérifie qu’elle n’en regroupe pas plusieurs.' });
+  if (accMoy!=null && accMoy>10) al.push({ n:'orange', t:'Précision moyenne faible (±'+Math.round(accMoy)+' m).' });
+  if (!S.paIdx.length) al.push({ n:'orange', t:'Couches non téléchargées : le chevauchement avec les aires protégées n’a pas été contrôlé.' });
+  if (!al.length) al.push({ n:'ok', t:'Aucune alerte.' });
+  S.verif = { ha, perim, accMoy, al, geom:poly.geometry };
+  rendreFeuille();
+}
+function rendreFeuille(){
+  const f = $('feuille'); let h = '';
+  const nbtxt = S.pts.length+' point'+(S.pts.length>1?'s':'');
+  if (S.verif){
+    const v = S.verif;
+    h += '<h3>Résultat du tracé</h3><div class="rangee" style="gap:16px"><div><b style="font-size:20px">'+fmt(v.ha,2)+' ha</b><div class="gris">surface</div></div><div><b>'+Math.round(v.perim)+' m</b><div class="gris">périmètre</div></div><div><b>'+S.pts.length+'</b><div class="gris">points</div></div><div><b>'+(v.accMoy!=null?'±'+Math.round(v.accMoy)+' m':'—')+'</b><div class="gris">précision</div></div></div>'
+      + v.al.map(a=>'<div class="alerte '+a.n+'">'+esc(a.t)+'</div>').join('')
+      + '<div class="gris">Rien ne bloque : tu peux enregistrer quand même.</div>'
+      + '<label for="t-nom">Producteur</label><input id="t-nom" placeholder="Nom du producteur" autocomplete="off">'
+      + '<label for="t-code">Code de la parcelle (facultatif)</label><input id="t-code" placeholder="Ex. ECA_GB123-P1" autocomplete="off">'
+      + '<div class="rangee" style="margin-top:10px"><button class="btn plein" onclick="enregistrerTrace()">Enregistrer le tracé</button><button class="btn" onclick="S.verif=null;rendreFeuille()">Retour</button></div>';
+  } else {
+    h += '<h3>Tracer une parcelle</h3>'
+      + '<div class="gris" style="margin-bottom:6px">'+nbtxt+(S.manuel?' · mode test : touche la carte':' · marche le long de la limite, un point à chaque coin')+'</div>'
+      + '<div class="rangee">'
+      + (S.manuel ? '' : '<button class="btn plein" id="b-marquer" '+(S.collecte?'disabled':'')+' onclick="marquerPoint()">'+(S.collecte?'Mesure…':'Marquer un point ici')+'</button>')
+      + '<button class="btn" onclick="annulerDernier()" '+(S.pts.length?'':'disabled')+'>Annuler le dernier</button>'
+      + '<button class="btn" onclick="verifierTrace()" '+(S.pts.length>=3?'':'disabled')+'>Fermer et vérifier</button>'
+      + (S.pts.length?'<button class="btn petit" onclick="effacerTrace()">Effacer</button>':'')+'</div>'
+      + '<div class="rangee" style="margin-top:8px"><label style="margin:0;flex:1">Précision exigée par point'
+      + '<select id="s-acc" onchange="S.maxAcc=+this.value">'+[5,10,15,25,50].map(v=>'<option value="'+v+'" '+(S.maxAcc===v?'selected':'')+'>±'+v+' m</option>').join('')+'</select></label>'
+      + '<label style="margin:0;flex:1;display:flex;gap:8px;align-items:center;padding-top:18px"><input type="checkbox" style="width:auto" '+(S.manuel?'checked':'')+' onchange="S.manuel=this.checked;rendreFeuille()"> Placer à la main (test)</label></div>';
+  }
+  f.innerHTML = h;
+  const hh = f.offsetHeight; document.documentElement.style.setProperty('--feuille', hh+'px');
+}
+async function enregistrerTrace(){
+  const v = S.verif; if (!v) return;
+  const nom = ($('t-nom').value||'').trim(), code = ($('t-code').value||'').trim();
+  const manuel = S.pts.some(p=>p.acc===0);
+  const t = { id:'tr_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6), cooperative_id:S.coop.id, producteur_nom:nom||null, code_parcelle:code||null,
+    geojson:{ type:'Feature', properties:{ surface_ha:+v.ha.toFixed(4), precision_moy_m:v.accMoy!=null?+v.accMoy.toFixed(1):null, producteur:nom||null, code:code||null }, geometry:v.geom },
+    surface_ha:+v.ha.toFixed(4), precision_moy_m:v.accMoy!=null?+v.accMoy.toFixed(1):null, alertes:v.al.filter(a=>a.n!=='ok').map(a=>a.t), mode:manuel?'manuel':'gps',
+    appareil:navigator.userAgent.slice(0,140), releve_le:new Date().toISOString(), statut:'en_attente' };
+  await trPut(t); S.traces = await trAll(); S.pts = []; S.verif = null; dessiner(); rendreFeuille(); majAttente(); rendreTraces();
+  toast('Tracé enregistré sur le téléphone.'); synchroniser();
+}
+
+/* ---------- synchronisation ---------- */
+async function synchroniser(){
+  if (!navigator.onLine || !S.coop) return;
+  const att = (await trAll()).filter(t=>t.statut==='en_attente'); let envoyes = 0;
+  for (const t of att){
+    const r = await sb.from('traces_terrain').insert({ id:t.id, cooperative_id:t.cooperative_id, producteur_nom:t.producteur_nom, code_parcelle:t.code_parcelle, geojson:t.geojson, surface_ha:t.surface_ha, precision_moy_m:t.precision_moy_m, alertes:t.alertes, mode:t.mode, statut:'a_confirmer', appareil:t.appareil, releve_le:t.releve_le });
+    if (!r.error || r.error.code==='23505'){ t.statut = 'envoye'; delete t.erreur; envoyes++; } else t.erreur = r.error.message;
+    await trPut(t);
+  }
+  S.traces = await trAll(); majAttente(); rendreTraces(); if (envoyes) toast(envoyes+' tracé'+(envoyes>1?'s':'')+' envoyé'+(envoyes>1?'s':'')+' au bureau.');
+}
+function majAttente(){ const n = S.traces.filter(t=>t.statut==='en_attente').length; $('n-attente').innerHTML = n ? '<span class="badge warn">'+n+'</span>' : ''; }
+function majReseau(){ const e = $('h-reseau'); if (navigator.onLine){ e.textContent = 'En ligne'; e.className = 'pastille'; synchroniser(); } else { e.textContent = 'Hors réseau'; e.className = 'pastille hors'; } }
+addEventListener('online', majReseau); addEventListener('offline', majReseau);
+
+/* ---------- écran Couches ---------- */
+async function rendreCouches(){
+  const c = $('v-couches'); const pa = S.pa;
+  let h = '<div class="carte"><h2>Aires protégées et forêts classées</h2>'
+    + (pa ? '<p><span class="badge ok">Téléchargées</span> '+pa.json.features.length+' zones · '+fmt(pa.taille/1e6,1)+' Mo · le '+esc(new Date(pa.le).toLocaleDateString('fr-FR'))+'</p><p class="gris">Elles fonctionnent sans réseau.</p>' : '<p><span class="badge warn">Pas encore téléchargées</span></p><p class="gris">À télécharger avant de partir sur le terrain (environ 1 Mo).</p>')
+    + '<div class="barre" id="p-couche" style="display:none"><i></i></div><p class="gris" id="t-couche"></p>'
+    + '<button class="btn plein" '+(S.tel?'disabled':'')+' onclick="telechargerCouche()">'+(pa?'Mettre à jour':'Télécharger les couches')+'</button></div>';
+  h += '<div class="carte"><h2>Mes cartes de localisation</h2><div id="liste-cartes" class="gris">Chargement…</div></div>';
+  h += '<div class="carte"><h2>Stockage sur ce téléphone</h2><p class="gris" id="t-stock">…</p><button class="btn petit" onclick="stockageDurable()">Garder les données même si le téléphone manque de place</button></div>';
+  h += '<div class="carte"><h2>À savoir sur la précision</h2><p class="gris">Ce test utilise le GPS du navigateur : environ 3 à 10 m en terrain dégagé, moins bien sous couvert. Chaque point est moyenné sur 10 secondes et refusé si la précision dépasse ton seuil. Version '+APP_VERSION+'.</p></div>';
+  c.innerHTML = h; chargerCartes(); majStockage();
+}
+async function majStockage(){ try { const e = await navigator.storage.estimate(); const p = navigator.storage.persisted ? await navigator.storage.persisted() : false; const el = $('t-stock'); if (el) el.textContent = fmt((e.usage||0)/1e6,1)+' Mo utilisés sur '+fmt((e.quota||0)/1e6,0)+' Mo disponibles'+(p?' · stockage durable activé':''); } catch(e){ const el = $('t-stock'); if (el) el.textContent = 'Information indisponible.'; } }
+async function stockageDurable(){ try { const ok = await navigator.storage.persist(); toast(ok ? 'Stockage durable activé.' : 'Le navigateur n’a pas accepté.'); } catch(e){ toast('Non pris en charge sur ce navigateur.'); } majStockage(); }
+async function telechargerCouche(){
+  if (!navigator.onLine){ toast('Il faut du réseau pour télécharger les couches.'); return; }
+  S.tel = true; rendreCouches();
+  const barre = () => $('p-couche'), txt = () => $('t-couche');
+  try {
+    const u = await sb.storage.from('documents-coop').createSignedUrl(COUCHE_PA, 300); if (u.error) throw u.error;
+    const resp = await fetch(u.data.signedUrl); if (!resp.ok) throw new Error('Téléchargement refusé ('+resp.status+')');
+    const total = +resp.headers.get('content-length') || 0, rd = resp.body.getReader(), morceaux = []; let lu = 0;
+    if (barre()) barre().style.display = 'block';
+    for (;;){ const { done, value } = await rd.read(); if (done) break; morceaux.push(value); lu += value.length; if (barre()){ barre().firstChild.style.width = (total ? Math.round(100*lu/total) : 50)+'%'; txt().textContent = fmt(lu/1e6,2)+' Mo'+(total?' sur '+fmt(total/1e6,2)+' Mo':''); } }
+    const buf = new Uint8Array(lu); let o = 0; morceaux.forEach(m=>{ buf.set(m,o); o += m.length; });
+    const json = JSON.parse(new TextDecoder().decode(buf));
+    await kvSet('pa', { json, le:new Date().toISOString(), taille:lu });
+    await chargerPA(); toast('Couches téléchargées : elles marchent hors réseau.'); majBandeau();
+  } catch(e){ toast('Téléchargement impossible : '+((e&&e.message)||e)); }
+  S.tel = null; rendreCouches();
+}
+async function chargerCartes(){
+  const el = $('liste-cartes'); if (!el) return;
+  if (!navigator.onLine){ el.textContent = 'Il faut du réseau pour voir tes cartes.'; return; }
+  const r = await sb.from('demandes_coop').select('*').eq('cooperative_id', S.coop.id).eq('type','carte').in('statut',['livree','validee']).order('created_at',{ascending:false});
+  if (r.error){ el.textContent = 'Impossible de charger : '+r.error.message; return; }
+  if (!r.data.length){ el.textContent = 'Aucune carte livrée pour le moment. Demande-la depuis la plateforme de la coopérative.'; return; }
+  el.innerHTML = r.data.map(d=>'<div style="margin:8px 0"><span class="badge '+(d.statut==='validee'?'ok':'warn')+'">'+(d.statut==='validee'?'Validée':'À vérifier')+'</span> <span class="gris">'+esc(new Date(d.created_at).toLocaleDateString('fr-FR'))+'</span><div class="rangee" style="margin-top:6px">'+(d.fichiers||[]).map(f=>'<button class="btn petit" data-p="'+esc(f.path)+'" data-n="'+esc(f.nom)+'" onclick="telechargerFichier(this)">⬇ '+esc(f.nom)+'</button>').join('')+'</div></div>').join('');
+}
+async function telechargerFichier(b){
+  const r = await sb.storage.from('documents-coop').createSignedUrl(b.dataset.p, 300);
+  if (r.error){ toast('Téléchargement impossible : '+r.error.message); return; }
+  const a = document.createElement('a'); a.href = r.data.signedUrl; a.download = b.dataset.n||''; a.target = '_blank'; a.rel = 'noopener'; document.body.appendChild(a); a.click(); a.remove();
+}
+
+/* ---------- écran Mes tracés ---------- */
+function rendreTraces(){
+  const c = $('v-traces'); const l = S.traces.slice().sort((a,b)=>String(b.releve_le).localeCompare(String(a.releve_le)));
+  let h = '<div class="rangee" style="margin-bottom:10px"><button class="btn petit" onclick="synchroniser()">↻ Envoyer au bureau</button><button class="btn petit" onclick="exporterTout()" '+(l.length?'':'disabled')+'>Tout télécharger (GeoJSON)</button></div>';
+  if (!l.length) h += '<div class="carte"><p class="gris">Aucun tracé pour le moment. Trace une parcelle dans l’onglet Carte.</p></div>';
+  h += l.map(t=>'<div class="carte"><div class="rangee" style="justify-content:space-between"><b>'+esc(t.producteur_nom||'Producteur non renseigné')+'</b><span class="badge '+(t.statut==='envoye'?'ok':'warn')+'">'+(t.statut==='envoye'?'Envoyé':'En attente')+'</span></div>'
+    + '<p class="gris">'+fmt(t.surface_ha,2)+' ha'+(t.code_parcelle?' · '+esc(t.code_parcelle):'')+(t.precision_moy_m!=null?' · ±'+Math.round(t.precision_moy_m)+' m':'')+(t.mode==='manuel'?' · test à la main':'')+' · '+esc(new Date(t.releve_le).toLocaleString('fr-FR'))+'</p>'
+    + (t.alertes&&t.alertes.length ? t.alertes.map(a=>'<div class="alerte orange">'+esc(a)+'</div>').join('') : '')
+    + (t.erreur ? '<div class="alerte rouge">Envoi impossible : '+esc(t.erreur)+'</div>' : '')
+    + '<div class="rangee" style="margin-top:6px"><button class="btn petit" onclick="exporterUn(\''+t.id+'\')">⬇ GeoJSON</button><button class="btn petit" onclick="supprimerTrace(\''+t.id+'\')">Supprimer</button></div></div>').join('');
+  c.innerHTML = h;
+}
+function telecharger(nom, objet){ const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(objet)],{ type:'application/geo+json' })); a.download = nom; document.body.appendChild(a); a.click(); a.remove(); }
+function exporterUn(id){ const t = S.traces.find(x=>x.id===id); if (t) telecharger('trace_'+(t.code_parcelle||t.id)+'.geojson', t.geojson); }
+function exporterTout(){ telecharger('mes_traces.geojson', { type:'FeatureCollection', features:S.traces.map(t=>t.geojson) }); }
+async function supprimerTrace(id){ const t = S.traces.find(x=>x.id===id); if (!t) return; if (t.statut==='en_attente' && !confirm('Ce tracé n’a pas encore été envoyé. Le supprimer quand même ?')) return; await trDel(id); S.traces = await trAll(); majAttente(); rendreTraces(); }
+
+/* ---------- navigation ---------- */
+document.querySelectorAll('nav button').forEach(b=>b.onclick = ()=>{
+  S.vue = b.dataset.v; document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('actif', x===b));
+  document.querySelectorAll('.vue').forEach(v=>v.classList.toggle('actif', v.id==='v-'+S.vue));
+  if (S.vue==='carte') setTimeout(()=>S.map.invalidateSize(),50); if (S.vue==='couches') rendreCouches(); if (S.vue==='traces') rendreTraces();
+});
+initCarte(); majReseau(); activerGPS();
+sb.auth.onAuthStateChange(()=>{});
+demarrer();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('terrain-sw.js').catch(()=>{});
+</script>
+</body>
+</html>
