@@ -4677,7 +4677,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-03-442';
+const APP_VERSION = '2026-11-03-443';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -21814,16 +21814,87 @@ function carteDepuis(x){
   const m = Math.max(0, Math.round((Date.now()-t)/60000));
   return m<1 ? 'à l\'instant' : 'depuis '+m+' min';
 }
+// ---- Demandes des coopératives (cartes de localisation, corrections) : boîte de réception ----
+const DMC_STATUT = { demandee:['À traiter','warn'], en_cours:['En cours','warn'], livree:['Livrée, en attente de la coopérative','ok'], validee:['Validée par la coopérative','ok'], modification_demandee:['Modification demandée','danger'], annulee:['Annulée',''] };
+async function chargerDemandesCoopInbox(){
+  state.demCoopCharge = true;
+  try {
+    const { data, error } = await supabaseClient.from('demandes_coop').select('*').order('created_at', { ascending:false }).limit(200);
+    if (error) throw error;
+    state.demCoop = data || []; state.demCoopErr = null;
+  } catch(e){ state.demCoop = state.demCoop || []; state.demCoopErr = String(e.message||e); }
+  render();
+}
+function demCoopATraiter(){ return (state.demCoop||[]).filter(d=>d.statut==='demandee'||d.statut==='modification_demandee').length; }
+async function demCoopMaj(id, champs, action, extra){
+  const d = (state.demCoop||[]).find(x=>x.id===id); if (!d) return null;
+  const hist = (d.historique||[]).concat([Object.assign({ le:new Date().toISOString(), par:'ORIGEN', action }, extra||{})]);
+  const r = await supabaseClient.from('demandes_coop').update(Object.assign({}, champs, { historique:hist, updated_at:new Date().toISOString() })).eq('id', id).select().single();
+  if (r.error){ showToast('Mise à jour impossible : '+r.error.message); return null; }
+  state.demCoop = state.demCoop.map(x=>x.id===id ? r.data : x);
+  return r.data;
+}
+async function demCoopPrendre(id){ if (await demCoopMaj(id, { statut:'en_cours' }, 'en_cours')){ showToast('Demande prise en charge.', 'success'); render(); } }
+async function demCoopLivrer(id){
+  const d = (state.demCoop||[]).find(x=>x.id===id); if (!d) return;
+  const el = document.getElementById('demcoop-f-'+id), fl = Array.from((el&&el.files)||[]);
+  if (!fl.length){ showToast('Choisis le ou les fichiers à livrer.'); return; }
+  state.demCoopBusy = id; render();
+  try {
+    const dossier = d.cooperative_id+'/'+(d.type==='carte'?'cartes':'corrections')+'/'+d.id, stamp = Date.now().toString(36), fichiers = [];
+    for (const f of fl){
+      const path = dossier+'/livraison_'+stamp+'_'+nomFichierSur(f.name).slice(0,80)+(/\.[A-Za-z0-9]{2,5}$/.test(f.name) ? f.name.slice(f.name.lastIndexOf('.')) : '');
+      const up = await supabaseClient.storage.from('documents-coop').upload(path, f, { upsert:true }); if (up.error) throw up.error;
+      fichiers.push({ nom:f.name, path });
+    }
+    const ok = await demCoopMaj(id, { statut:'livree', fichiers }, 'livree', { fichiers:fichiers.map(x=>x.nom) });
+    if (ok) showToast('Livré à la coopérative.', 'success');
+  } catch(e){ showToast('Livraison impossible : '+((e&&e.message)||e)); }
+  state.demCoopBusy = null; render();
+}
+async function demCoopTelecharger(path, nom){
+  const r = await supabaseClient.storage.from('documents-coop').createSignedUrl(path, 300);
+  if (r.error || !r.data){ showToast('Téléchargement impossible : '+((r.error&&r.error.message)||'fichier introuvable')); return; }
+  const a = document.createElement('a'); a.href = r.data.signedUrl; a.download = nom||''; a.target = '_blank'; a.rel = 'noopener'; document.body.appendChild(a); a.click(); a.remove();
+}
+function renderDemandesCoopVue(){
+  if (!state.demCoopCharge){ setTimeout(chargerDemandesCoopInbox,0); return '<div class="panel"><div class="hint" style="padding:22px 18px">Chargement…</div></div>'; }
+  const liste = state.demCoop||[];
+  let h = '<div class="panel"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 18px"><div class="hint" style="margin:0">Cartes de localisation et corrections demandées par les coopératives depuis leur plateforme.</div><button class="btn btn-compact" onclick="chargerDemandesCoopInbox()">↻ Actualiser</button></div>';
+  if (state.demCoopErr) h += '<div style="padding:0 18px 14px;color:var(--danger);font-size:13px"><b>Chargement impossible.</b> '+esc(state.demCoopErr)+'</div>';
+  if (!liste.length) h += '<div class="hint" style="padding:0 18px 18px">Aucune demande pour le moment.</div>';
+  h += '</div>';
+  liste.forEach(d=>{
+    const st = DMC_STATUT[d.statut]||[d.statut,''], titre = d.type==='carte' ? 'Carte de localisation' : 'Correction des données';
+    const nom = d.cooperative_nom || (coopById(d.cooperative_id)||{}).nom || d.cooperative_id;
+    const det = d.details||{};
+    h += '<div class="panel" style="padding:14px 18px"><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span class="badge '+st[1]+'">'+esc(st[0])+'</span><b>'+esc(nom)+'</b><span>'+titre+'</span><span class="hint" style="margin:0">'+esc(new Date(d.created_at).toLocaleString('fr-FR'))+'</span></div>';
+    if (det.note) h += '<div style="margin-top:6px;font-size:13px"><span class="hint">Précisions de la coopérative :</span> '+esc(det.note)+'</div>';
+    if (det.localites) h += '<div style="margin-top:6px"><button class="btn btn-compact" onclick="demCoopTelecharger(\''+escJs(det.localites.path)+'\',\''+escJs(det.localites.nom)+'\')">⬇ Fichier des localités : '+esc(det.localites.nom)+'</button></div>';
+    if (d.type==='correction' && det.analyse_id) h += '<div class="hint" style="margin-top:6px">La coopérative a choisi de te transmettre ses données après l\'analyse '+esc(det.analyse_id)+'. Ses fichiers sont dans son dossier de stockage (« '+esc(d.cooperative_id)+'/defo »).</div>';
+    if (d.statut==='modification_demandee' && d.modifications) h += '<div style="margin-top:8px;padding:10px 12px;border-left:4px solid var(--danger);background:var(--danger-bg);border-radius:6px;font-size:13px;white-space:pre-line"><b>Modifications demandées par la coopérative :</b>\n'+esc(d.modifications)+'</div>';
+    if ((d.fichiers||[]).length && d.statut!=='demandee') h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">'+d.fichiers.map(f=>'<button class="btn btn-compact" onclick="demCoopTelecharger(\''+escJs(f.path)+'\',\''+escJs(f.nom)+'\')">⬇ '+esc(f.nom)+'</button>').join('')+'</div>';
+    if (d.statut==='demandee') h += '<div style="margin-top:10px"><button class="btn btn-primary" onclick="demCoopPrendre(\''+escJs(d.id)+'\')">Prendre en charge</button></div>';
+    if (d.statut==='en_cours' || d.statut==='modification_demandee' || d.statut==='livree'){
+      h += '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center"><input type="file" id="demcoop-f-'+esc(d.id)+'" multiple style="max-width:320px"><button class="btn '+(d.statut==='livree'?'':'btn-primary')+'" '+(state.demCoopBusy===d.id?'disabled':'')+' onclick="demCoopLivrer(\''+escJs(d.id)+'\')">'+(state.demCoopBusy===d.id?'Envoi…':(d.statut==='livree'?'Remplacer les fichiers livrés':'Livrer à la coopérative'))+'</button></div>';
+      if (d.statut==='modification_demandee') h += '<div class="hint" style="margin-top:6px">Tu peux aussi prendre la demande en charge avant de livrer.</div>';
+    }
+    h += '</div>';
+  });
+  return h;
+}
+
 function renderCartesTab(){
   if (!state.cartesCharge && !state.cartesChargeEnCours){ state.cartesChargeEnCours = true; setTimeout(()=>{ chargerCartes(); }, 0); }
   const vue = state.cartesVue || 'cartes';
   let h = '<div class="panel"><div class="panel-head"><h2>Cartes &amp; déforestation</h2></div>'
     + '<div style="display:flex;gap:8px;padding:0 18px 12px;flex-wrap:wrap">'
-    + [['cartes','🗺 Cartes de localisation'],['deforestation','🌳 Analyse déforestation']].map(([k,l])=>'<button class="'+(vue===k?'btn btn-primary':'btn')+' btn-compact" onclick="state.cartesVue=\''+k+'\';render()">'+l+'</button>').join('')
+    + [['cartes','🗺 Cartes de localisation'],['deforestation','🌳 Analyse déforestation'],['demcoop','📥 Demandes des coopératives'+(demCoopATraiter()?' ('+demCoopATraiter()+')':'')]].map(([k,l])=>'<button class="'+(vue===k?'btn btn-primary':'btn')+' btn-compact" onclick="state.cartesVue=\''+k+'\';render()">'+l+'</button>').join('')
     + '</div></div>';
   if (vue==='deforestation'){
     return h + renderDefoVue();
   }
+  if (vue==='demcoop') return h + renderDemandesCoopVue();
   const liste = state.cartes || [];
   carteSuivi();
   const nEnCours = liste.filter(x=>x.statut==='demandee'||x.statut==='en_cours').length;
