@@ -4677,7 +4677,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-02-431';
+const APP_VERSION = '2026-11-03-432';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -22834,6 +22834,13 @@ async function defoDiscOuvrir(id){
   const t = document.getElementById('defo-disc-q'); if (t) t.focus();
   // Première ouverture : le rapport s'écrit tout seul (l'équivalent du mot « Analyse »).
   if (!d.msgs.some(m=>m.role==='user' || m.role==='assistant')) defoDiscEnvoyer(id, 'Analyse');
+  await ddRafraichir(id);
+  const netts = (state.defo||[]).filter(z=>z.etape==='nettoyage' && z.entrees && z.entrees.analyse_id===id).sort((p,q)=>String(q.created_at).localeCompare(String(p.created_at)));
+  if (netts[0]){
+    if (netts[0].statut==='terminee' || netts[0].statut==='erreur') fil.insertAdjacentHTML('beforeend', ddNettBulle(id, netts[0]));
+    else if (netts[0].statut==='demandee' || netts[0].statut==='en_cours'){ fil.insertAdjacentHTML('beforeend', '<div id="dd-nett-att-'+escJs(netts[0].id)+'" style="align-self:center;font-size:12px;color:#1f5fa8;background:#e8f0fb;border-radius:8px;padding:5px 12px">⏳ Nettoyage en cours (environ 3 minutes)…</div>'); ddSuivreNettoyage(id, netts[0].id); }
+    fil.scrollTop = fil.scrollHeight;
+  }
   const fins = (state.defo||[]).filter(z=>z.etape==='base_finale' && z.entrees && z.entrees.analyse_id===id).sort((p,q)=>String(q.created_at).localeCompare(String(p.created_at)));
   if (fins[0]){
     if (fins[0].statut==='terminee' || fins[0].statut==='erreur') fil.insertAdjacentHTML('beforeend', ddFinaleBulle(id, fins[0]));
@@ -22891,8 +22898,9 @@ async function defoDiscEnvoyer(id, texte){
     // Décision donnée dans la conversation = ordre d'appliquer : le nettoyage se lance (sur une copie).
     if (Array.isArray(data.actions) && data.actions.length){
       const ok = await defoLancerNettoyage(id, data.actions);
-      const ms = { role:'systeme', contenu: ok ? '⚙️ Stratégie appliquée, nettoyage lancé : '+data.actions.join(', ')+'. Le résultat s\'affichera dans l\'onglet Nettoyage du dossier.' : "⚠ Le nettoyage n'a pas pu être lancé (un nettoyage est peut-être déjà en cours)." };
+      const ms = { role:'systeme', contenu: ok ? '⚙️ Stratégie appliquée, nettoyage lancé : '+data.actions.join(', ')+'. Le résultat s\'affiche ici dans environ 3 minutes.' : "⚠ Le nettoyage n'a pas pu être lancé (un nettoyage est peut-être déjà en cours)." };
       d.msgs.push(ms); ddAjouter(id, ms);
+      if (ok && state.defo && state.defo[0] && state.defo[0].etape==='nettoyage') ddSuivreNettoyage(id, state.defo[0].id);
     }
     // Base finale demandée dans la conversation : l'échelle a été validée et la question « base consolidée » répondue ici même ; la production se lance directement.
     if (data.base_finale){
@@ -22970,6 +22978,45 @@ function ddSuivreFinale(aid, finId){
     setTimeout(tour, 6000);
   };
   setTimeout(tour, 6000);
+}
+// Recharge depuis la base les nettoyages et productions de cette analyse (l'écran peut dater de plusieurs heures).
+async function ddRafraichir(aid){
+  try{
+    const r = await supabaseClient.from('analyses_defo').select('*').eq('entrees->>analyse_id', aid).in('etape', ['nettoyage','base_finale']);
+    (r.data||[]).forEach(z=>{ const i = (state.defo||[]).findIndex(q=>q.id===z.id); if (i>=0) state.defo[i] = z; else state.defo = [z].concat(state.defo||[]); });
+  }catch(e){}
+}
+// Suivi d'un nettoyage : toutes les 8 s ; à la fin, le résultat s'affiche dans la conversation (sans passer par Noah).
+function ddSuivreNettoyage(aid, nid){
+  state._ddSuiviN = state._ddSuiviN || {};
+  if (state._ddSuiviN[nid]) return; state._ddSuiviN[nid] = true;
+  const tour = async ()=>{
+    if (!document.getElementById('defo-disc-page')){ delete state._ddSuiviN[nid]; return; }
+    const r = await supabaseClient.from('analyses_defo').select('*').eq('id', nid).maybeSingle();
+    const z = r.data;
+    if (z){
+      const i = (state.defo||[]).findIndex(q=>q.id===nid); if (i>=0) state.defo[i] = z; else state.defo = [z].concat(state.defo||[]);
+      if (z.statut==='terminee' || z.statut==='erreur' || z.statut==='annulee'){
+        delete state._ddSuiviN[nid];
+        const fil = document.getElementById('defo-disc-fil'); if (!fil) return;
+        const att = document.getElementById('dd-nett-att-'+nid); if (att) att.remove();
+        const old = document.getElementById('dd-nett-'+nid); if (old) old.remove();
+        fil.insertAdjacentHTML('beforeend', ddNettBulle(aid, z)); fil.scrollTop = fil.scrollHeight;
+        return;
+      }
+    }
+    setTimeout(tour, 8000);
+  };
+  setTimeout(tour, 8000);
+}
+function ddNettBulle(aid, z){
+  const enc = 'id="dd-nett-'+escJs(z.id)+'" style="align-self:flex-start;max-width:96%;border:1px solid #b9d9c0;background:#eef6ef;border-radius:12px;padding:10px 13px;font-size:13.5px;line-height:1.5"';
+  if (z.statut==='erreur') return '<div '+enc+'><b>Le nettoyage a échoué.</b> '+esc(z.erreur||'erreur inconnue')+'<div class="hint" style="margin:4px 0 0">Dis-le à Noah pour le relancer.</div></div>';
+  if (z.statut==='annulee') return '<div '+enc+'>Nettoyage annulé.</div>';
+  const r = z.resume||{}, acts = ((z.entrees||{}).actions||[]).join(', ');
+  const res = (r.cloture && r.cloture.resultat) ? esc(r.cloture.resultat) : (r.restants!=null ? fmtNum(r.avant)+' → '+fmtNum(r.restants)+' polygones' : '');
+  const dl = defoUtiles(z.fichiers).map(defoChip).join('');
+  return '<div '+enc+'><b>✔ Nettoyage terminé</b>'+(acts ? ' ('+esc(acts)+')' : '')+(res ? '<div>'+res+'</div>' : '')+'<div class="hint" style="margin:4px 0 0">Dis « continue » ou pose ta question à Noah : il part de ce résultat.</div>'+(dl ? '<div style="margin-top:6px">'+dl+'</div>' : '')+'</div>';
 }
 function ddFinaleBulle(aid, z){
   const enc = 'id="dd-final-'+escJs(z.id)+'" style="align-self:flex-start;max-width:96%;border:1px solid #b9d9c0;background:#eef6ef;border-radius:12px;padding:10px 13px;font-size:13.5px;line-height:1.5"';
