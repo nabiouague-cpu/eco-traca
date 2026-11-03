@@ -34,8 +34,16 @@ jobs:
       - name: Clé de signature (mêmes mises à jour par-dessus l'ancienne version)
         env:
           KS_B64: ${{ secrets.KEYSTORE_B64 }}
+          KS_PW: ${{ secrets.KEYSTORE_PASSWORD }}
         run: |
-          if [ -n "$KS_B64" ]; then echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/origen.keystore"; echo "KEYSTORE_PATH=$RUNNER_TEMP/origen.keystore" >> $GITHUB_ENV; echo "KEYSTORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }}" >> $GITHUB_ENV; echo 'Clé fixe utilisée'; else echo 'ATTENTION : pas de clé fixe, signature temporaire'; fi
+          if [ -z "$KS_B64" ]; then echo 'ATTENTION : pas de clé fixe, signature temporaire'; exit 0; fi
+          CLEAN=$(printf %s "$KS_B64" | tr -d ' \r\n\t')
+          echo "Longueur du secret KEYSTORE_B64 : ${#CLEAN} caractères (attendu : 3512)"
+          printf %s "$CLEAN" | base64 -d > "$RUNNER_TEMP/origen.keystore" || { echo "ERREUR : KEYSTORE_B64 n'est pas un bloc valide : il faut coller uniquement la longue ligne du fichier"; exit 1; }
+          keytool -list -keystore "$RUNNER_TEMP/origen.keystore" -storepass "$KS_PW" > /dev/null || { echo "ERREUR : la clé ne s'ouvre pas avec KEYSTORE_PASSWORD"; exit 1; }
+          echo "KEYSTORE_PATH=$RUNNER_TEMP/origen.keystore" >> $GITHUB_ENV
+          echo "KEYSTORE_PASSWORD=$KS_PW" >> $GITHUB_ENV
+          echo 'Clé fixe utilisée'
       - name: Compiler l'APK
         working-directory: app-android/android
         run: ./gradlew assembleDebug --no-daemon
