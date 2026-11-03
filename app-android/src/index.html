@@ -108,7 +108,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
-const APP_VERSION = '2026-11-03-app1';
+const APP_VERSION = '2026-11-03-app2';
 const SB_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SB_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 const COUCHE_PA = 'couches/espaces_proteges_v1.json';
@@ -117,7 +117,7 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt = (n,d) => Number(n).toLocaleString('fr-FR',{minimumFractionDigits:d||0,maximumFractionDigits:d||0});
 const S = { coop:null, producteurs:[], sections:[], serveurIds:new Set(), traces:[], sectionSel:null, prod:null, ecran:'accueil', pile:[],
-  pa:null, paIdx:[], pos:null, pts:[], collecte:null, marche:null, rawTrail:null, meta:null, fermeture:null, verif:null, maxAcc:15, suivre:true, couchePA:true, tel:null, majLe:null };
+  pa:null, paIdx:[], eco:null, ecoCouches:new Map(), couchEco:true, ecoTel:null, pos:null, pts:[], collecte:null, marche:null, rawTrail:null, meta:null, fermeture:null, verif:null, maxAcc:15, suivre:true, couchePA:true, tel:null, majLe:null };
 
 /* ---------- stockage local ---------- */
 function idb(){ return new Promise((ok,ko)=>{ const r = indexedDB.open('origen-terrain',1); r.onupgradeneeded = ()=>{ r.result.createObjectStore('kv'); r.result.createObjectStore('traces',{keyPath:'id'}); }; r.onsuccess = ()=>ok(r.result); r.onerror = ()=>ko(r.error); }); }
@@ -151,6 +151,7 @@ async function demarrer(){
   S.traces = await trAll();
   activerGPS();
   await chargerPA();
+  await chargerEco();
   await chargerRegistre();
   aller('accueil'); synchroniser();
 }
@@ -159,7 +160,7 @@ async function chargerRegistre(){
     try {
       let prods = [];
       for (let de=0; ; de+=1000){
-        const r = await sb.from('producteurs').select('id,nom,code,section,village_district,polygon_filename').eq('cooperative_id',S.coop.id).order('nom').range(de,de+999);
+        const r = await sb.from('producteurs').select('id,nom,code,section,village_district,polygon_filename,lat,lon').eq('cooperative_id',S.coop.id).order('nom').range(de,de+999);
         if (r.error) throw r.error; prods = prods.concat(r.data); if (r.data.length<1000) break;
       }
       const sec = await sb.from('sections').select('id,nom,lat,lon,localite,infrastructures').eq('cooperative_id',S.coop.id).order('nom');
@@ -283,16 +284,20 @@ function initCarte(){
   const sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{ maxZoom:19, crossOrigin:true, attribution:'Imagerie © Esri' });
   const plan = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{ maxZoom:19, crossOrigin:true, attribution:'© OpenStreetMap' });
   S.fonds = { Satellite:sat, Plan:plan }; S.fond = 'Satellite'; sat.addTo(S.map);
+  S.canvas = L.canvas({ padding:0.5 });
+  S.ecoLayer = L.layerGroup().addTo(S.map);
   S.paLayer = L.layerGroup().addTo(S.map); S.traceLayer = L.layerGroup().addTo(S.map); S.marcheLayer = L.layerGroup().addTo(S.map); S.posLayer = L.layerGroup().addTo(S.map);
   S.map.on('dragstart', ()=>{ S.suivre = false; });
+  S.map.on('moveend zoomend', majEco);
   $('b-centrer').onclick = ()=>{ S.suivre = true; if (S.pos) S.map.setView([S.pos.lat,S.pos.lng], Math.max(S.map.getZoom(),17)); else activerGPS(); };
-  dessinerPA(); activerGPS();
+  dessinerPA(); activerGPS(); majEco();
 }
 function majCouchesMap(){
-  $('couches-map').innerHTML = '<button class="chip '+(S.couchePA?'on':'')+'" data-c="pa">Aires protégées</button><button class="chip '+(S.fond==='Satellite'?'on':'')+'" data-c="sat">Satellite</button><button class="chip '+(S.fond==='Plan'?'on':'')+'" data-c="plan">Plan</button>';
+  $('couches-map').innerHTML = '<button class="chip '+(S.couchePA?'on':'')+'" data-c="pa">Aires protégées</button><button class="chip '+(S.couchEco?'on':'')+'" data-c="eco">Parcelles ECORIGINE</button><button class="chip '+(S.fond==='Satellite'?'on':'')+'" data-c="sat">Satellite</button><button class="chip '+(S.fond==='Plan'?'on':'')+'" data-c="plan">Plan</button>';
   $('couches-map').querySelectorAll('[data-c]').forEach(b=>b.onclick = ()=>{
     const k = b.dataset.c;
-    if (k==='pa'){ S.couchePA = !S.couchePA; if (S.couchePA) S.paLayer.addTo(S.map); else S.map.removeLayer(S.paLayer); }
+    if (k==='eco'){ S.couchEco = !S.couchEco; majEco(); }
+    else if (k==='pa'){ S.couchePA = !S.couchePA; if (S.couchePA) S.paLayer.addTo(S.map); else S.map.removeLayer(S.paLayer); }
     else { const n = k==='sat'?'Satellite':'Plan'; if (n!==S.fond){ S.map.removeLayer(S.fonds[S.fond]); S.fonds[n].addTo(S.map); S.fonds[n].bringToBack(); S.fond = n; } }
     majCouchesMap();
   });
@@ -336,6 +341,69 @@ function majBandeau(){
   if (p && p.dedans){ b.className = 'rouge'; b.textContent = 'Tu es dans une aire protégée : '+p.nom+'. Tu peux continuer.'; }
   else if (p && p.d<=300){ b.className = 'orange'; b.textContent = 'Aire protégée dans '+Math.round(p.d)+' m : '+p.nom; }
   else { b.className = 'gris'; b.textContent = p && p.d<5000 ? 'Aire protégée la plus proche : '+(p.d>=1000?fmt(p.d/1000,1)+' km':Math.round(p.d)+' m') : 'Aucune aire protégée à moins de 5 km.'; }
+}
+
+/* ---------- parcelles ECORIGINE (autres coopératives, en pointillé, sans nom ni donnée) ---------- */
+async function chargerEco(){ S.eco = (await kvGet('eco')) || null; S.ecoCouches.forEach(l=>{ if (S.ecoLayer) S.ecoLayer.removeLayer(l); }); S.ecoCouches.clear(); majEco(); }
+function majEco(){
+  if (!S.map || !S.ecoLayer) return;
+  const z = S.map.getZoom(), garder = new Set();
+  if (S.eco && S.couchEco && z>=13){
+    const b = S.map.getBounds().pad(0.25), pas = S.eco.pas||0.25;
+    for (let ix=Math.floor(b.getWest()/pas); ix<=Math.floor(b.getEast()/pas); ix++) for (let iy=Math.floor(b.getSouth()/pas); iy<=Math.floor(b.getNorth()/pas); iy++){
+      const k = ix+'_'+iy, fc = S.eco.cases[k]; if (!fc) continue; garder.add(k);
+      if (!S.ecoCouches.has(k)){
+        const l = L.geoJSON({ type:'FeatureCollection', features:fc.features.filter(f=>!S.coop || f.properties.k!==S.coop.id) },{ renderer:S.canvas, interactive:false, style:{ color:'#ffffff', weight:1.4, dashArray:'4 4', fill:false, opacity:.9 } });
+        S.ecoCouches.set(k,l);
+      }
+    }
+  }
+  S.ecoCouches.forEach((l,k)=>{ if (garder.has(k)){ if (!S.ecoLayer.hasLayer(l)) S.ecoLayer.addLayer(l); } else if (S.ecoLayer.hasLayer(l)) S.ecoLayer.removeLayer(l); });
+}
+function boiteZone(){
+  const pts = [];
+  S.sections.forEach(x=>{ if (x.lat!=null && x.lon!=null) pts.push([+x.lon,+x.lat]); });
+  S.producteurs.forEach(p=>{ const la = parseFloat(p.lat), lo = parseFloat(p.lon); if (isFinite(la) && isFinite(lo) && la>0 && la<12 && lo<-1 && lo>-10) pts.push([lo,la]); });
+  if (S.pos) pts.push([S.pos.lng,S.pos.lat]);
+  if (!pts.length) return null;
+  const xs = pts.map(q=>q[0]), ys = pts.map(q=>q[1]), m = 0.3;
+  return { w:Math.min(...xs)-m, e:Math.max(...xs)+m, s:Math.min(...ys)-m, n:Math.max(...ys)+m };
+}
+async function telechargerEco(){
+  if (!navigator.onLine){ toast('Il faut du réseau pour télécharger la zone.'); return; }
+  const bz = boiteZone(); if (!bz){ toast('Attends le signal GPS ou charge d’abord les sections de la coopérative.'); activerGPS(); return; }
+  S.ecoTel = true; rendreCouches();
+  const txt = () => $('t-eco'), barre = () => $('p-eco');
+  try {
+    const bi = await sb.storage.from('documents-coop').download('couches/ecorigine/index.json'); if (bi.error) throw bi.error;
+    const index = JSON.parse(await bi.data.text()), pas = index.pas||0.25, cases = {}; let taille = 0;
+    const cles = Object.keys(index.cases).filter(k=>{ const [ix,iy] = k.split('_').map(Number); return (ix+1)*pas>=bz.w && ix*pas<=bz.e && (iy+1)*pas>=bz.s && iy*pas<=bz.n; });
+    if (barre()) barre().style.display = 'block';
+    let fait = 0;
+    for (const k of cles){
+      const r = await sb.storage.from('documents-coop').download('couches/ecorigine/c_'+k+'.json'); if (r.error) throw r.error;
+      const t = await r.data.text(); taille += t.length; cases[k] = JSON.parse(t); fait++;
+      if (barre()) barre().firstChild.style.width = Math.round(100*fait/cles.length)+'%'; if (txt()) txt().textContent = fait+' carreaux sur '+cles.length;
+    }
+    const nb = Object.values(cases).reduce((a,c)=>a+c.features.length,0);
+    await kvSet('eco', { version:index.version, le:new Date().toISOString(), pas, cases, taille, nb, zone:bz });
+    await chargerEco(); toast('Zone téléchargée : '+fmt(nb)+' parcelles, disponibles sans réseau.');
+  } catch(e){ toast('Téléchargement impossible : '+((e&&e.message)||e)); }
+  S.ecoTel = null; rendreCouches();
+}
+function chevauchementEco(poly){
+  if (!S.eco) return null;
+  const bb = turf.bbox(poly), pas = S.eco.pas||0.25; let total = 0, nb = 0;
+  for (let ix=Math.floor(bb[0]/pas); ix<=Math.floor(bb[2]/pas); ix++) for (let iy=Math.floor(bb[1]/pas); iy<=Math.floor(bb[3]/pas); iy++){
+    const fc = S.eco.cases[ix+'_'+iy]; if (!fc) continue;
+    for (const f of fc.features){
+      if (S.coop && f.properties.k===S.coop.id) continue;
+      if (!f._bb) f._bb = turf.bbox(f);
+      if (f._bb[2]<bb[0] || f._bb[0]>bb[2] || f._bb[3]<bb[1] || f._bb[1]>bb[3]) continue;
+      try { const i = turf.intersect(poly,f); if (i){ const h = turf.area(i)/10000; if (h>0.005){ total += h; nb++; } } } catch(e){}
+    }
+  }
+  return { ha:total, nb };
 }
 
 /* ---------- GPS ---------- */
@@ -444,10 +512,13 @@ function verifierTrace(){
     if (bb[2]<z.bbox[0] || bb[0]>z.bbox[2] || bb[3]<z.bbox[1] || bb[1]>z.bbox[3]) return;
     try { const inter = turf.intersect(poly, z.f); if (inter){ const h = turf.area(inter)/10000; if (h>0.0005) al.push({ n:'rouge', t:'Chevauche '+z.nom+' ('+z.type+') sur '+fmt(h,2)+' ha. Le bureau en sera informé.' }); } } catch(e){}
   });
+  const ce = chevauchementEco(poly);
+  if (ce && ce.nb) al.push({ n:'orange', t:'Chevauche '+ce.nb+' parcelle'+(ce.nb>1?'s':'')+' déjà cartographiée'+(ce.nb>1?'s':'')+' par d’autres coopératives, sur '+fmt(ce.ha,2)+' ha. Le bureau vérifiera.' });
   if (ha<0.1) al.push({ n:'orange', t:'Très petite parcelle ('+fmt(ha,3)+' ha) : vérifie le tracé.' });
   if (ha>4) al.push({ n:'orange', t:'Parcelle de plus de 4 ha : vérifie qu’elle n’en regroupe pas plusieurs.' });
   if (accMoy!=null && accMoy>10) al.push({ n:'orange', t:'Précision moyenne faible (±'+Math.round(accMoy)+' m).' });
   if (!S.paIdx.length) al.push({ n:'orange', t:'Couches non téléchargées : le chevauchement avec les aires protégées n’a pas été contrôlé.' });
+  if (!S.eco) al.push({ n:'orange', t:'Parcelles ECORIGINE non téléchargées : le chevauchement avec les autres coopératives n’a pas été contrôlé ici.' });
   if (!al.length || !al.some(a=>a.n!=='ok')) al.push({ n:'ok', t:'Aucun chevauchement avec une aire protégée.' });
   S.verif = { ha, perim, accMoy, al, marge, geom:poly.geometry };
   rendreFeuille();
@@ -518,11 +589,16 @@ function rendreCouches(){
     + (pa ? '<p><span class="st g">Téléchargées</span> '+pa.json.features.length+' zones · '+fmt(pa.taille/1e6,1)+' Mo · le '+esc(new Date(pa.le).toLocaleDateString('fr-FR'))+'</p><p class="mut petit">Elles fonctionnent sans réseau.</p>' : '<p><span class="st">Pas encore téléchargées</span></p><p class="mut petit">À télécharger avant de partir (environ 1 Mo).</p>')
     + '<div class="barre" id="p-couche" style="display:none"><i style="width:0"></i></div><p class="mut petit" id="t-couche"></p>'
     + '<button class="btn p" id="b-tel" '+(S.tel?'disabled':'')+'>'+(pa?'Mettre à jour':'Télécharger les couches')+'</button></div>';
+  const e = S.eco;
+  h += '<div class="carte"><h2>Parcelles ECORIGINE (en pointillé)</h2>'
+    + (e ? '<p><span class="st g">Téléchargées</span> '+fmt(e.nb)+' parcelles · '+fmt(e.taille/1e6,1)+' Mo · le '+esc(new Date(e.le).toLocaleDateString('fr-FR'))+'</p><p class="mut petit">Parcelles des autres coopératives de ta zone : contours seulement, sans nom ni donnée. Elles marchent sans réseau et s’affichent en zoomant.</p>' : '<p><span class="st">Pas encore téléchargées</span></p><p class="mut petit">À télécharger avant de partir : la zone de ta coopérative (environ 30 km autour).</p>')
+    + '<div class="barre" id="p-eco" style="display:none"><i style="width:0"></i></div><p class="mut petit" id="t-eco"></p>'
+    + '<button class="btn p" id="b-eco" '+(S.ecoTel?'disabled':'')+'>'+(e?'Mettre à jour':'Télécharger la zone')+'</button></div>';
   h += '<div class="carte"><h2>Images satellite et plan</h2><p class="mut petit" id="t-tuiles">…</p><p class="mut petit">Les images que tu as regardées avec du réseau restent disponibles sans réseau. Le téléchargement d’une zone entière viendra avec une source d’images sous licence.</p><button class="btn sm" id="b-vider">Vider les images gardées</button></div>';
   h += '<div class="carte"><h2>À propos</h2><p class="mut petit">ORIGEN, version '+APP_VERSION+'. Précision : GPS du téléphone ; chaque sommet est moyenné sur 10 secondes, ou le tour est marché en continu.</p><button class="btn sm" id="b-deco">Se déconnecter</button></div>';
   c.innerHTML = h; majTuiles();
   $('b-actu2').onclick = async ()=>{ await actualiser(); rendreCouches(); };
-  $('b-tel').onclick = telechargerCouche; $('b-vider').onclick = viderTuiles;
+  $('b-eco').onclick = telechargerEco; $('b-tel').onclick = telechargerCouche; $('b-vider').onclick = viderTuiles;
   $('b-deco').onclick = async ()=>{ if (S.traces.some(t=>t.statut==='en_attente') && !confirm('Des mappings ne sont pas encore envoyés. Se déconnecter quand même ?')) return; await sb.auth.signOut(); S.coop = null; $('connexion').classList.add('actif'); };
 }
 async function majTuiles(){ try { const n = (await (await caches.open('terrain-tuiles-v1')).keys()).length; const e = $('t-tuiles'); if (e) e.textContent = n+' image'+(n>1?'s':'')+' gardée'+(n>1?'s':'')+' sur ce téléphone.'; } catch(e){ const el = $('t-tuiles'); if (el) el.textContent = 'Information indisponible.'; } }
