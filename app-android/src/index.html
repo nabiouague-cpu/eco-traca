@@ -108,9 +108,10 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
-const APP_VERSION = '2026-11-04-app3';
+const APP_VERSION = '2026-11-04-app4';
 const SB_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SB_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
+const ECO_INCOMPLET = 'Contrôle ECORIGINE NON FAIT : les parcelles de cette zone ne sont pas sur le téléphone et il n’y a pas de réseau. Il sera refait automatiquement dès que le réseau revient, avant l’envoi.';
 const COUCHE_PA = 'couches/espaces_proteges_v1.json';
 const sb = supabase.createClient(SB_URL, SB_KEY);
 const $ = id => document.getElementById(id);
@@ -378,15 +379,36 @@ function boiteZone(){
   const xs = pts.map(q=>q[0]), ys = pts.map(q=>q[1]), m = 0.3;
   return { w:Math.min(...xs)-m, e:Math.max(...xs)+m, s:Math.min(...ys)-m, n:Math.max(...ys)+m };
 }
-async function telechargerEco(){
-  if (!navigator.onLine){ toast('Il faut du réseau pour télécharger la zone.'); return; }
-  const bz = boiteZone(); if (!bz){ toast('Attends le signal GPS ou charge d’abord les sections de la coopérative.'); activerGPS(); return; }
+// Cellules (grille ECORIGINE) déjà examinées : téléchargées, ou vérifiées vides. Sert à savoir si le contrôle de chevauchement est exact à un endroit.
+function ecoRects(e){
+  if (!e) return [];
+  if (e.couvert) return e.couvert;
+  const pas = e.pas||0.25, z = e.zone; if (!z) return [];       // anciennes données : on déduit la zone couverte
+  return [[Math.floor(z.w/pas), Math.floor(z.e/pas), Math.floor(z.s/pas), Math.floor(z.n/pas)]];
+}
+function ecoCellulesPour(bb, pas){
+  const c = []; for (let ix=Math.floor(bb[0]/pas); ix<=Math.floor(bb[2]/pas); ix++) for (let iy=Math.floor(bb[1]/pas); iy<=Math.floor(bb[3]/pas); iy++) c.push([ix,iy]);
+  return c;
+}
+function ecoCouvre(bb){
+  if (!S.eco) return false;
+  const R = ecoRects(S.eco);
+  return ecoCellulesPour(bb, S.eco.pas||0.25).every(([ix,iy])=>R.some(r=>ix>=r[0] && ix<=r[1] && iy>=r[2] && iy<=r[3]));
+}
+// Télécharge (et ajoute à ce qu'on a déjà) les parcelles ECORIGINE d'une zone. bzArg = {w,e,s,n} ; sinon la zone de travail de la coopérative.
+async function telechargerEco(bzArg, silencieux){
+  if (!navigator.onLine){ if (!silencieux) toast('Il faut du réseau pour télécharger la zone.'); return false; }
+  const bz = (bzArg && bzArg.w!=null) ? bzArg : boiteZone(); if (!bz){ if (!silencieux) toast('Attends le signal GPS ou charge d’abord les sections de la coopérative.'); activerGPS(); return false; }
   S.ecoTel = true; rendreCouches();
   const txt = () => $('t-eco'), barre = () => $('p-eco');
+  let ok = false;
   try {
     const bi = await sb.storage.from('documents-coop').download('couches/ecorigine/index.json'); if (bi.error) throw bi.error;
-    const index = JSON.parse(await bi.data.text()), pas = index.pas||0.25, cases = {}; let taille = 0;
-    const cles = Object.keys(index.cases).filter(k=>{ const [ix,iy] = k.split('_').map(Number); return (ix+1)*pas>=bz.w && ix*pas<=bz.e && (iy+1)*pas>=bz.s && iy*pas<=bz.n; });
+    const index = JSON.parse(await bi.data.text()), pas = index.pas||0.25;
+    const ancien = (S.eco && S.eco.version===index.version && S.eco.pas===pas) ? S.eco : null;        // nouvelle version de la base : on repart de zéro
+    const cases = ancien ? ancien.cases : {}; let taille = ancien ? ancien.taille : 0;
+    const ix0 = Math.floor(bz.w/pas), ix1 = Math.floor(bz.e/pas), iy0 = Math.floor(bz.s/pas), iy1 = Math.floor(bz.n/pas);
+    const cles = Object.keys(index.cases).filter(k=>{ const [ix,iy] = k.split('_').map(Number); return ix>=ix0 && ix<=ix1 && iy>=iy0 && iy<=iy1 && !cases[k]; });
     if (barre()) barre().style.display = 'block';
     let fait = 0;
     for (const k of cles){
@@ -395,10 +417,20 @@ async function telechargerEco(){
       if (barre()) barre().firstChild.style.width = Math.round(100*fait/cles.length)+'%'; if (txt()) txt().textContent = fait+' carreaux sur '+cles.length;
     }
     const nb = Object.values(cases).reduce((a,c)=>a+c.features.length,0);
-    await kvSet('eco', { version:index.version, le:new Date().toISOString(), pas, cases, taille, nb, zone:bz });
-    await chargerEco(); toast('Zone téléchargée : '+fmt(nb)+' parcelles, disponibles sans réseau.');
-  } catch(e){ toast('Téléchargement impossible : '+((e&&e.message)||e)); }
-  S.ecoTel = null; rendreCouches();
+    const couvert = (ancien ? ecoRects(ancien) : []).concat([[ix0,ix1,iy0,iy1]]);
+    await kvSet('eco', { version:index.version, le:new Date().toISOString(), pas, cases, taille, nb, zone:bz, couvert });
+    await chargerEco(); ok = true;
+    if (!silencieux) toast('Zone téléchargée : '+fmt(nb)+' parcelles, disponibles sans réseau.');
+  } catch(e){ if (!silencieux) toast('Téléchargement impossible : '+((e&&e.message)||e)); }
+  S.ecoTel = null; rendreCouches(); return ok;
+}
+// Garantit que le contrôle de chevauchement est EXACT autour d'un tracé : télécharge la zone manquante si besoin (réseau), sinon dit que le contrôle n'est pas fait.
+async function assurerEcoPour(bb){
+  if (ecoCouvre(bb)) return true;
+  if (!navigator.onLine) return false;
+  const m = 0.1; toast('Téléchargement des parcelles ECORIGINE de cette zone pour un contrôle exact…');
+  await telechargerEco({ w:bb[0]-m, e:bb[2]+m, s:bb[1]-m, n:bb[3]+m }, true);
+  return ecoCouvre(bb);
 }
 function chevauchementEco(poly){
   if (!S.eco) return null;
@@ -505,7 +537,7 @@ function marcherFin(){
 function annulerDernier(){ S.pts.pop(); S.verif = null; dessiner(); rendreFeuille(); }
 function effacerTrace(){ resetTrace(); dessiner(); rendreFeuille(); }
 function margeSurface(poly,r){ try { const plus = turf.buffer(poly,r,{ units:'meters' }), moins = turf.buffer(poly,-r,{ units:'meters' }); return { max:turf.area(plus)/10000, min:moins ? turf.area(moins)/10000 : 0 }; } catch(e){ return null; } }
-function verifierTrace(){
+async function verifierTrace(){
   if (S.pts.length<3){ toast('Il faut au moins 3 sommets.'); return; }
   const coords = S.pts.map(p=>[p.lng,p.lat]); const poly = turf.polygon([coords.concat([coords[0]])]);
   const ha = turf.area(poly)/10000, perim = turf.length(turf.polygonToLine(poly),{ units:'meters' });
@@ -521,15 +553,17 @@ function verifierTrace(){
     if (bb[2]<z.bbox[0] || bb[0]>z.bbox[2] || bb[3]<z.bbox[1] || bb[1]>z.bbox[3]) return;
     try { const inter = turf.intersect(poly, z.f); if (inter){ const h = turf.area(inter)/10000; if (h>0.0005) al.push({ n:'rouge', t:'Chevauche '+z.nom+' ('+z.type+') sur '+fmt(h,2)+' ha. Le bureau en sera informé.' }); } } catch(e){}
   });
-  const ce = chevauchementEco(poly);
+  const ecoExact = await assurerEcoPour(bb);
+  const ce = ecoExact ? chevauchementEco(poly) : null;
+  if (!ecoExact) al.push({ n:'rouge', t:ECO_INCOMPLET });
   if (ce && ce.nb) al.push({ n:'orange', t:'Chevauche '+ce.nb+' parcelle'+(ce.nb>1?'s':'')+' déjà cartographiée'+(ce.nb>1?'s':'')+' par d’autres coopératives, sur '+fmt(ce.ha,2)+' ha. Le bureau vérifiera.' });
   if (ha<0.1) al.push({ n:'orange', t:'Très petite parcelle ('+fmt(ha,3)+' ha) : vérifie le tracé.' });
   if (ha>4) al.push({ n:'orange', t:'Parcelle de plus de 4 ha : vérifie qu’elle n’en regroupe pas plusieurs.' });
   if (accMoy!=null && accMoy>10) al.push({ n:'orange', t:'Précision moyenne faible (±'+Math.round(accMoy)+' m).' });
   if (!S.paIdx.length) al.push({ n:'orange', t:'Couches non téléchargées : le chevauchement avec les aires protégées n’a pas été contrôlé.' });
-  if (!S.eco) al.push({ n:'orange', t:'Parcelles ECORIGINE non téléchargées : le chevauchement avec les autres coopératives n’a pas été contrôlé ici.' });
+  if (ecoExact && !al.some(a=>/déjà cartographiée/.test(a.t))) al.push({ n:'ok', t:'Aucun chevauchement avec les parcelles ECORIGINE.' });
   if (!al.length || !al.some(a=>a.n!=='ok')) al.push({ n:'ok', t:'Aucun chevauchement avec une aire protégée.' });
-  S.verif = { ha, perim, accMoy, al, marge, geom:poly.geometry };
+  S.verif = { ha, perim, accMoy, al, marge, geom:poly.geometry, ecoIncomplet:!ecoExact };
   rendreFeuille();
 }
 function rendreFeuille(){
@@ -568,7 +602,7 @@ async function enregistrerTrace(){
       releve:S.meta?S.meta.mode:(manuel?'manuel':'points'), fermeture_m:S.fermeture!=null?+S.fermeture.toFixed(1):null, sommets_deplaces:S.pts.filter(x=>x.edite).length, distance_marchee_m:S.meta?Math.round(S.meta.dist):null,
       piste:S.rawTrail?S.rawTrail.slice(0,1500).map(x=>[+x.lng.toFixed(6),+x.lat.toFixed(6),Math.round(x.acc),Math.round(x.t/1000)]):null }, geometry:v.geom },
     surface_ha:+v.ha.toFixed(4), precision_moy_m:v.accMoy!=null?+v.accMoy.toFixed(1):null, alertes:v.al.filter(a=>a.n!=='ok').map(a=>a.t), mode:manuel?'manuel':'gps',
-    appareil:navigator.userAgent.slice(0,140), releve_le:new Date().toISOString(), statut:'en_attente' };
+    appareil:navigator.userAgent.slice(0,140), releve_le:new Date().toISOString(), statut:'en_attente', eco_incomplet:!!v.ecoIncomplet };
   await trPut(t); S.traces = await trAll(); resetTrace(); dessiner();
   S.pile = []; S.prod = null; aller('accueil'); majAttente();
   toast('Mapping enregistré sur le téléphone. Il sera envoyé dès que le réseau est là.'); synchroniser();
@@ -579,6 +613,17 @@ async function synchroniser(){
   if (!navigator.onLine || !S.coop) return;
   const att = (await trAll()).filter(t=>t.statut==='en_attente'); let envoyes = 0;
   for (const t of att){
+    if (t.eco_incomplet){                                  // contrôle ECORIGINE pas fait au relevé : on le fait maintenant, avant d'envoyer
+      try {
+        const poly = turf.feature(t.geojson.geometry), bb = turf.bbox(poly);
+        if (await assurerEcoPour(bb)){
+          const ce = chevauchementEco(poly);
+          t.alertes = (t.alertes||[]).filter(x=>x!==ECO_INCOMPLET);
+          if (ce && ce.nb) t.alertes.push('Chevauche '+ce.nb+' parcelle'+(ce.nb>1?'s':'')+' déjà cartographiée'+(ce.nb>1?'s':'')+' par d’autres coopératives, sur '+fmt(ce.ha,2)+' ha. Le bureau vérifiera.');
+          t.eco_incomplet = false; delete t.erreur; await trPut(t);
+        } else { t.erreur = 'Contrôle ECORIGINE à refaire : réseau insuffisant pour télécharger la zone.'; await trPut(t); continue; }
+      } catch(e){ t.erreur = 'Contrôle ECORIGINE impossible : '+((e&&e.message)||e); await trPut(t); continue; }
+    }
     const r = await sb.from('traces_terrain').insert({ id:t.id, cooperative_id:t.cooperative_id, producteur_id:t.producteur_id||null, nouveau:!!t.nouveau, section:t.section||null, producteur_nom:t.producteur_nom, code_parcelle:t.code_parcelle, geojson:t.geojson, surface_ha:t.surface_ha, precision_moy_m:t.precision_moy_m, alertes:t.alertes, mode:t.mode, statut:'a_confirmer', appareil:t.appareil, releve_le:t.releve_le });
     if (!r.error || r.error.code==='23505'){ t.statut = 'envoye'; delete t.erreur; envoyes++; if (t.producteur_id) S.serveurIds.add(t.producteur_id); } else t.erreur = r.error.message;
     await trPut(t);
