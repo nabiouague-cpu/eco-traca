@@ -4715,7 +4715,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-04-447';
+const APP_VERSION = '2026-11-04-448';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -9836,14 +9836,14 @@ async function livraisonsClientsExporter(campagneId, filtre){
   const NB = '#,##0_ ;[Red]\\-#,##0\\ ';
   const cols = [['COOPERATIVES',15],['PRODUITS',15.44],['DATE LIVRAISON',14.89],['N° CONNAISSEMENT',22.66],['Immatriculation du véhicule',15.66],['Immatriculation de la remorque',15.66],['N° SACS',13],['POIDS ACCEPTE',15.11],['STATUT DÉCLARATION',19.89]];
   const wb = new ExcelJS.Workbook(); wb.creator = 'ORIGEN · ECORIGINE'; wb.created = new Date();
-  const noms = new Set();
+  const noms = new Set(), feuilles = [];
   const nomFeuille = n=>{ let b = String(n).replace(/[\\\/\?\*\[\]:]/g,' ').trim().slice(0,31) || 'Partenaire', k = b, i = 2; while (noms.has(k.toLowerCase())){ k = b.slice(0,28)+' '+i; i++; } noms.add(k.toLowerCase()); return k; };
   const dateXl = iso=>{ const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso||'')); return m ? new Date(Date.UTC(+m[1], +m[2]-1, +m[3])) : null; };
   liste.forEach(g=>{
     const cle = ccClefClient(g.client);
     const contrats = (state.contratsClients||[]).filter(c=>ccClefClient(c.client||'')===cle && (!camp || c.campagne_id===camp) && c.statut!=='annule' && c.statut!=='annulé');
     const niveaux = Array.from(new Set(contrats.map(c=>c.niveau_tracabilite).filter(Boolean))), niv = livrNiveauCode(niveaux.length===1 ? niveaux[0] : '');
-    const ws = wb.addWorksheet(nomFeuille(g.nom));
+    const ws = wb.addWorksheet(nomFeuille(g.nom)); const fe = { ws, coops:new Set() }; feuilles.push(fe);
     ws.columns = [{ width:9 }].concat(cols.map(c=>({ width:c[1] })));      // colonne A vide comme dans le modèle, tableau à partir de B
     const h = ws.getRow(4); h.height = 27.6;
     cols.forEach((c,i)=>{ const x = h.getCell(i+2); x.value = c[0]; x.font = { name:'Calibri', size:10, bold:true, color:{ argb:'FFFFFFFF' } }; x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:ENTETE } }; x.alignment = { horizontal:'center', vertical:'middle', wrapText:true }; x.border = cadre; });
@@ -9851,16 +9851,52 @@ async function livraisonsClientsExporter(campagneId, filtre){
     tri.forEach((a,i)=>{
       const c = coopById(a.cooperative_id), sd = livrStatutDecl(a), acc = Number(a.poids_brut_accepte)||0, sacs = achatSacsRetenus(a);
       const v = [ c ? c.nom : '', livrProduit(a, niv), dateXl(a.date), a.connaissement||'', a.immat_vehicule||'', a.immat_remorque||'', sacs||null, acc||null, sd.txt ];
-      const row = ws.getRow(5+i);
+      const row = ws.getRow(5+i); if (c && c.nom) fe.coops.add(c.nom);
       v.forEach((val,k)=>{ const x = row.getCell(k+2); x.value = val; x.border = cadre; x.font = { name:'Calibri', size:10 };
         x.alignment = k===0 ? { horizontal:'left' } : { horizontal:'right', indent:1 };
         if (k===1 || k===2) x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:VERT } };
         if (k===2) x.numFmt = 'mm-dd-yy'; if (k>=6) x.numFmt = NB; });
     });
   });
+  livrRecapCoops(wb, feuilles, { ENTETE, cadre, NB });
   const suffixe = filtre && filtre.traitant ? '_traitant_'+String(filtre.traitant).replace(/[^A-Za-z0-9]+/g,'_') : filtre && filtre.libelle ? '_'+String(filtre.libelle).replace(/[^A-Za-z0-9]+/g,'_').slice(0,40) : '';
   await qcTelechargerClasseur(wb, 'Point_livraisons_clients_'+String(campNom).replace(/[^A-Za-z0-9]+/g,'_')+suffixe+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
   showToast('Point des livraisons téléchargé ('+liste.length+' feuille'+(liste.length>1?'s':'')+').', 'success');
+}
+
+// 2e feuille du classeur : récap par coopérative qui a livré. Les volumes sont des formules SUMIF qui lisent les feuilles de détail
+// (clic sur un volume = la formule s'affiche) : si on corrige une ligne dans une feuille, le récap suit.
+function livrRecapCoops(wb, feuilles, st){
+  const coops = Array.from(new Set(feuilles.flatMap(f=>Array.from(f.coops)))).sort((a,b)=>a.localeCompare(b,'fr'));
+  if (!coops.length) return null;
+  const ws = wb.addWorksheet('Récap coopératives'); const plusieurs = feuilles.length>1;
+  const q = f=>"'"+String(f.ws.name).replace(/'/g,"''")+"'!";
+  const LIM = 2000, entetes = ['COOPERATIVES'].concat(plusieurs ? feuilles.map(f=>f.ws.name+' (kg)') : []).concat(['POIDS ACCEPTE TOTAL (kg)','POIDS ACCEPTE TOTAL (t)','NB LIVRAISONS']);
+  ws.columns = [{ width:9 }].concat(entetes.map((e,i)=>({ width: i===0 ? 34 : 19 })));
+  const font = (b)=>({ name:'Calibri', size:10, bold:!!b });
+  const h = ws.getRow(4); h.height = 27.6;
+  entetes.forEach((e,i)=>{ const x = h.getCell(i+2); x.value = e; x.font = { name:'Calibri', size:10, bold:true, color:{ argb:'FFFFFFFF' } }; x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:st.ENTETE } }; x.alignment = { horizontal:'center', vertical:'middle', wrapText:true }; x.border = st.cadre; });
+  const col = n=>{ let s = '', k = n; while (k>0){ const r = (k-1)%26; s = String.fromCharCode(65+r)+s; k = Math.floor((k-1)/26); } return s; };
+  const nP = plusieurs ? feuilles.length : 0, cTot = 3+nP, cT = cTot+1, cN = cT+1;   // colonnes : B = coopérative, C.. = une colonne par feuille
+  coops.forEach((nom,i)=>{
+    const r = 5+i, row = ws.getRow(r);
+    const b = row.getCell(2); b.value = nom; b.font = font(); b.border = st.cadre; b.alignment = { horizontal:'left' };
+    const somme = f=>'SUMIF('+q(f)+'$B$5:$B$'+LIM+',$B'+r+','+q(f)+'$I$5:$I$'+LIM+')';
+    const nb = f=>'COUNTIF('+q(f)+'$B$5:$B$'+LIM+',$B'+r+')';
+    if (plusieurs) feuilles.forEach((f,k)=>{ const x = row.getCell(3+k); x.value = { formula: somme(f) }; });
+    const xt = row.getCell(cTot); xt.value = { formula: plusieurs ? 'SUM(C'+r+':'+col(2+nP)+r+')' : somme(feuilles[0]) };
+    const xe = row.getCell(cT); xe.value = { formula: col(cTot)+r+'/1000' };
+    const xn = row.getCell(cN); xn.value = { formula: feuilles.map(nb).join('+') };
+    for (let c = 3; c<=cN; c++){ const x = row.getCell(c); x.font = font(); x.border = st.cadre; x.alignment = { horizontal:'right', indent:1 }; x.numFmt = c===cT ? '#,##0.00' : st.NB; }
+  });
+  const rt = 5+coops.length, tot = ws.getRow(rt);
+  const lt = tot.getCell(2); lt.value = 'TOTAL'; lt.font = font(true); lt.border = st.cadre;
+  for (let c = 3; c<=cN; c++){ const x = tot.getCell(c); x.value = { formula:'SUM('+col(c)+'5:'+col(c)+(rt-1)+')' }; x.font = font(true); x.border = st.cadre; x.alignment = { horizontal:'right', indent:1 }; x.numFmt = c===cT ? '#,##0.00' : st.NB; x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFF2F2F2' } }; }
+  lt.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFF2F2F2' } };
+  ws.views = [{ state:'frozen', ySplit:4 }];
+  // placée en 2e position, juste après la première feuille de détail
+  ws.orderNo = feuilles[0].ws.orderNo + 0.5;
+  return ws;
 }
 
 // ---- Formulaire du « Point des livraisons par client » : on choisit la campagne, puis un ou plusieurs partenaires, ou un seul traitant ----
