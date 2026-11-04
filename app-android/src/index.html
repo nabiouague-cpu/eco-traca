@@ -165,7 +165,7 @@
 <script src="https://cdn.jsdelivr.net/npm/pmtiles@3.2.1/dist/pmtiles.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/protomaps-leaflet@5.1.0/dist/protomaps-leaflet.js"></script>
 <script>
-const APP_VERSION = '2026-11-04-app8';
+const APP_VERSION = '2026-11-04-app9';
 const SB_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SB_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 const ECO_INCOMPLET = 'Contrôle ECORIGINE NON FAIT : les parcelles de cette zone ne sont pas sur le téléphone et il n’y a pas de réseau. Il sera refait automatiquement dès que le réseau revient, avant l’envoi.';
@@ -206,7 +206,7 @@ $('f-login').addEventListener('submit', async ev=>{
   $('connexion').classList.remove('actif'); await demarrer();
 });
 async function demarrer(){
-  let coop = null;
+  let coop = null; BG = trouverBG();
   const s = await sb.auth.getSession();
   if (s.data && s.data.session && navigator.onLine){
     const r = await sb.from('cooperatives').select('id,nom').order('nom').limit(100);
@@ -600,9 +600,18 @@ function activerGPS(){
 }
 /* ---------- GPS en arrière-plan (écran éteint, application réduite) : service Android de premier plan ----------
    Actif seulement pendant « Marcher le contour », avec une notification visible. Désactivable dans Zone (porte de sortie : on revient au GPS d'avant). */
-const BG = (()=>{ try { return (window.Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform()) ? Capacitor.registerPlugin('BackgroundGeolocation') : null; } catch(e){ return null; } })();
+function trouverBG(){
+  try {
+    const C = window.Capacitor; if (!C || (C.isNativePlatform && !C.isNativePlatform())) return null;
+    if (S.bgPlugin) return S.bgPlugin;
+    S.bgPlugin = (C.Plugins && C.Plugins.BackgroundGeolocation) || C.registerPlugin('BackgroundGeolocation'); return S.bgPlugin;
+  } catch(e){ S.bgErreur = (e && e.message) || String(e); return null; }
+}
+let BG = null;
+function diagGPS(){ const C = window.Capacitor; return C ? 'Capacitor présent, plateforme '+(C.getPlatform ? C.getPlatform() : '?')+(S.bgErreur ? ', erreur : '+S.bgErreur : '') : 'Capacitor absent : ouvre l’application installée, pas la page web'; }
 function gpsArriereActif(){ try { return localStorage.getItem('gps_arriere') !== 'non'; } catch(e){ return true; } }
 async function arriereDemarrer(){
+  if (!BG) BG = trouverBG();
   if (!BG || !gpsArriereActif() || S.bgId || S.bgVeut) return;
   S.bgVeut = true;
   try {
@@ -878,7 +887,8 @@ function rendreCouches(){
   h += '<div class="carte"><h2>Fond de carte hors ligne</h2><p class="mut petit">Carte OpenStreetMap de toute la Côte d’Ivoire (routes, pistes, villages, rivières, forêts), comme dans Maps.me : elle marche sans réseau. Environ 97 Mo, à télécharger de préférence en Wi-Fi. Une fois installée, elle apparaît dans le menu des couches de la carte, sous le nom « Hors ligne ». Le satellite et le plan en ligne restent disponibles.</p>'
     + '<div class="barre" id="p-fond" style="display:none"><i style="width:0"></i></div><p class="mut petit" id="t-fond"></p>'
     + '<div class="rang"><button class="btn p" id="b-fond" '+(S.fondTel?'disabled':'')+'>'+(fondPret()?'Mettre à jour':'Télécharger')+'</button>'+(fondPret()?'<button class="btn sm" id="b-fond-x" '+(S.fondTel?'disabled':'')+'>Supprimer</button>':'')+'</div></div>';
-  h += '<div class="carte"><h2>GPS pendant la marche</h2><p class="mut petit">'+(BG ? 'Quand tu marches le contour, le GPS continue même si l’écran s’éteint ou si tu quittes l’application. Une notification « ORIGEN enregistre ton tracé » reste affichée pendant ce temps.' : 'Disponible dans l’application Android.')+'</p>'+(BG ? '<button class="btn sm '+(gpsArriereActif()?'p':'')+'" id="b-bg">'+(gpsArriereActif()?'Activé · toucher pour désactiver':'Désactivé · toucher pour activer')+'</button>' : '')+'</div>';
+  if (!BG) BG = trouverBG();
+  h += '<div class="carte"><h2>GPS pendant la marche</h2><p class="mut petit">'+(BG ? 'Quand tu marches le contour, le GPS continue même si l’écran s’éteint ou si tu quittes l’application. Une notification « ORIGEN enregistre ton tracé » reste affichée pendant ce temps.' : 'Pas disponible ici ('+diagGPS()+').')+'</p>'+(BG ? '<button class="btn sm '+(gpsArriereActif()?'p':'')+'" id="b-bg">'+(gpsArriereActif()?'Activé · toucher pour désactiver':'Désactivé · toucher pour activer')+'</button>' : '')+'</div>';
   h += '<div class="carte"><h2>Lissage du GPS</h2><p class="mut petit">Comme dans Maps.me : les positions sont lissées et chaque mesure compte selon sa précision. Les mesures imprécises ne sont plus jetées, seules les mesures impossibles sont écartées. L’ancien filtre jetait toute mesure à plus de 15 m.</p><div class="rang"><button class="btn sm '+(gpsLisse()?'p':'')+'" id="b-gl">Lissage (nouveau)</button><button class="btn sm '+(!gpsLisse()?'p':'')+'" id="b-ga">Ancien filtre</button></div></div>';
   h += '<div class="carte"><h2>Affichage de la carte</h2><p class="mut petit">Le déroulement du mapping est le même dans les deux styles.</p><div class="rang"><button class="btn sm '+(S.styleCarte!=='classique'?'p':'')+'" id="b-st-mm">Style Maps.me (nouveau)</button><button class="btn sm '+(S.styleCarte==='classique'?'p':'')+'" id="b-st-cl">Classique (ancien)</button></div></div>';
   h += '<div class="carte"><h2>À propos</h2><p class="mut petit" id="t-stock">…</p><p class="mut petit">ORIGEN, version '+APP_VERSION+'. Précision : GPS du téléphone ; chaque sommet est moyenné sur 10 secondes, ou le tour est marché en continu.</p><button class="btn sm" id="b-deco">Se déconnecter</button></div>';
@@ -981,7 +991,7 @@ async function telechargerFond(){
     await kvSet('fond_meta', { version:idx.version, paquets:idx.paquets, le:new Date().toISOString(), taille:total });
     const etaitLa = S.map && S.fond==='Hors ligne';
     if (etaitLa){ S.map.removeLayer(S.fondGroupe); S.fond = 'Satellite'; S.fonds.Satellite.addTo(S.map); }
-    S.fondGroupe = null; S.fonds['Hors ligne'] = null; await chargerFondMeta();
+    S.fondGroupe = null; if (S.fonds) S.fonds['Hors ligne'] = null; await chargerFondMeta();
     if (etaitLa) await choisirFond('hl');
     toast('Fond de carte installé : il marche sans réseau.');
   } catch(e){ toast('Téléchargement impossible : '+((e&&e.message)||e)); }
