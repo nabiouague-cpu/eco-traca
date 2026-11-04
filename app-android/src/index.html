@@ -268,7 +268,7 @@
 <script src="https://cdn.jsdelivr.net/npm/pmtiles@3.2.1/dist/pmtiles.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/protomaps-leaflet@5.1.0/dist/protomaps-leaflet.js"></script>
 <script>
-const APP_VERSION = '2026-11-04-app23';
+const APP_VERSION = '2026-11-04-app24';
 const SB_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SB_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 const ECO_ZOOM_MIN = 8;      // les parcelles de la base se voient dès ce niveau de zoom
@@ -405,6 +405,7 @@ async function demarrer(){
   let coop = null, aucune = false; BG = trouverBG();
   const s = await sb.auth.getSession();
   if (s.data && s.data.session && navigator.onLine){
+    try { await sb.rpc('rattacher_mes_cooperatives'); } catch(e){}   // rattachement automatique : l'e-mail confirmé du compte est celui d'une coopérative ORIGEN
     const r = await sb.from('cooperatives').select('id,nom,ville').order('nom').limit(100);
     if (!r.error && r.data){
       S.coops = r.data; await kvSet('coops', r.data);
@@ -513,7 +514,7 @@ async function creerCoop(nom, ccc, ville){
   const liees = new Set(S.coops.map(x=>x.id)); const libre = (orph.data||[]).find(x=>!liees.has(x.id));
   let id = libre ? libre.id : 'coop_'+Date.now().toString(36)+Math.random().toString(36).slice(2,5);
   const r1 = libre ? await sb.from('cooperatives').update(fiche).eq('id', id) : await sb.from('cooperatives').insert(Object.assign({ id }, fiche));
-  if (r1.error){ if (doublon(r1.error)){ $('c-dup2').innerHTML = panneauDoublon(ccc, uid); brancherCopie(); return false; } toast('Création impossible : '+r1.error.message); return false; }
+  if (r1.error){ if (doublon(r1.error)){ $('c-dup2').innerHTML = await panneauDoublon(ccc, ses.user.email); const b = $('c-chg'); if (b) b.onclick = async ()=>{ await sb.auth.signOut(); S.coop = null; S.coops = []; vueLogin('login'); $('connexion').classList.add('actif'); }; return false; } toast('Création impossible : '+r1.error.message); return false; }
   let r2 = await sb.from('cooperative_users').insert({ user_id:uid, cooperative_id:id });
   if (r2.error) r2 = await sb.from('cooperative_users').insert({ user_id:uid, cooperative_id:id });
   if (r2.error){ toast('Coopérative créée mais non rattachée à ton compte : '+r2.error.message); return false; }
@@ -521,8 +522,14 @@ async function creerCoop(nom, ccc, ville){
   if (premiere){ try { localStorage.setItem('terrain_coop', id); } catch(e){} await demarrer(); } else await choisirCoop(c);
   toast(nom+' créée. Ajoute maintenant tes producteurs.'); return true;
 }
-function panneauDoublon(ccc, uid){
-  return '<div class="avert r"><b>Cette coopérative existe déjà'+(ccc?' (agrément « '+esc(ccc)+' »)':'')+'.</b><br>Pour éviter un doublon, rien n’a été créé. Envoie l’identifiant ci-dessous à l’administrateur ORIGEN : ton compte sera rattaché à la bonne coopérative.</div>'+champId(uid);
+async function panneauDoublon(ccc, monEmail){
+  let nom = '', mails = '';
+  try { const r = await sb.rpc('coop_existante_par_ccc', { p_ccc:ccc }); if (r.data && r.data[0]){ nom = r.data[0].nom || ''; mails = r.data[0].email_masque || ''; } } catch(e){}
+  const qui = nom ? '« '+esc(nom)+' »' : 'Cette coopérative';
+  const suite = mails
+    ? 'Pour l’ouvrir, connecte-toi avec l’e-mail enregistré pour elle sur ORIGEN ('+esc(mails)+') : elle s’ouvrira toute seule.'
+    : 'Aucun e-mail n’est enregistré pour elle sur ORIGEN. Fais ajouter ton e-mail ('+esc(monEmail||'')+') à sa fiche dans ORIGEN : elle s’ouvrira alors toute seule.';
+  return '<div class="avert r"><b>'+qui+' existe déjà sur ORIGEN.</b><br>Rien n’a été créé, pour éviter un doublon. '+suite+'</div><button class="btn sm" id="c-chg">Changer de compte</button>';
 }
 function champId(uid){ return '<div class="champ"><span>Identifiant de ton compte</span><input class="c-uid" readonly value="'+esc(uid)+'"></div><button class="btn sm c-copie">Copier l’identifiant</button>'; }
 function brancherCopie(){
@@ -545,9 +552,9 @@ async function rendreCoops(){
     + '<div class="champ"><span>Ville ou région (facultatif)</span><input id="c-ville" placeholder="Ex. Daloa" autocomplete="off"></div>'
     + '<button class="btn p plein" id="c-go" disabled>'+(prem?'Créer ma coopérative':'Ajouter cette coopérative')+'</button></div>';
   const ses2 = (await sb.auth.getSession()).data.session;
-  if (ses2) h += '<details class="carte"><summary><b>Ma coopérative existe déjà sur ORIGEN</b></summary><p class="mut petit">Envoie l’identifiant ci-dessous à l’administrateur ORIGEN : ton compte sera rattaché à ta coopérative, avec ses producteurs.</p>'+champId(ses2.user.id)+'</details>';
+  if (prem) h += '<div class="carte"><b>Ta coopérative est déjà sur ORIGEN ?</b><p class="mut petit">Connecte-toi avec l’e-mail enregistré pour elle : elle s’ouvre toute seule, avec ses producteurs. Pas besoin de la recréer.</p><button class="btn sm" id="c-reverif">Vérifier à nouveau</button></div>';
   if (!S.coop) h += '<p class="pied-acc"><button class="chip" id="c-deco">Se déconnecter</button></p>';
-  c.innerHTML = h; brancherCopie();
+  c.innerHTML = h; if ($('c-reverif')) $('c-reverif').onclick = async ()=>{ $('c-reverif').disabled = true; await demarrer(); if (!S.coop){ toast('Aucune coopérative ORIGEN liée à cet e-mail.'); $('c-reverif').disabled = false; } };
   c.querySelectorAll('[data-c]').forEach(b=>b.onclick = ()=>{ const k = S.coops.find(x=>x.id===b.dataset.c); if (k) choisirCoop(k); });
   const verif = ()=>{ const n = $('c-nom').value.trim(); const dup = n.length>2 && S.coops.find(x=>norm(x.nom).join(' ')===norm(n).join(' '));
     $('c-dup').innerHTML = dup ? '<div class="avert r"><b>'+esc(dup.nom)+' est déjà dans ta liste.</b></div>' : ''; $('c-go').disabled = n.length<3 || !!dup || $('c-ccc').value.trim().length<3; };
