@@ -165,7 +165,7 @@
 <script src="https://cdn.jsdelivr.net/npm/pmtiles@3.2.1/dist/pmtiles.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/protomaps-leaflet@5.1.0/dist/protomaps-leaflet.js"></script>
 <script>
-const APP_VERSION = '2026-11-04-app7';
+const APP_VERSION = '2026-11-04-app8';
 const SB_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SB_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 const ECO_INCOMPLET = 'Contrôle ECORIGINE NON FAIT : les parcelles de cette zone ne sont pas sur le téléphone et il n’y a pas de réseau. Il sera refait automatiquement dès que le réseau revient, avant l’envoi.';
@@ -358,7 +358,7 @@ function commencerTrace(p, depuisNouveau){
   if (!p.nouveau){ const deja = S.traces.filter(t=>t.producteur_id===p.id).length + (p.polygon_filename?1:0); S.parcelle = (p.code||'')+'-P'+(deja+1); } else S.parcelle = p.code+'-P1';
   aller('carte', true);
 }
-function resetTrace(){ arriereArreter(); S.pts = []; S.verif = null; S.fermeture = null; S.rawTrail = null; S.meta = null; S.marche = null; S.collecte = null; if (S.map){ S.traceLayer.clearLayers(); S.marcheLayer.clearLayers(); } }
+function resetTrace(){ arriereArreter(); S.journal = null; S.pts = []; S.verif = null; S.fermeture = null; S.rawTrail = null; S.meta = null; S.marche = null; S.collecte = null; if (S.map){ S.traceLayer.clearLayers(); S.marcheLayer.clearLayers(); } }
 function initCarte(){
   if (S.map) return;
   S.map = L.map('map',{ zoomControl:false, attributionControl:false }).setView([6.9,-5.5],7);
@@ -366,7 +366,8 @@ function initCarte(){
   const sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{ maxZoom:19, crossOrigin:true, attribution:'Imagerie © Esri' });
   const plan = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{ maxZoom:19, crossOrigin:true, attribution:'© OpenStreetMap' });
   S.fonds = { Satellite:sat, Plan:plan }; S.fond = 'Satellite'; sat.addTo(S.map);
-  chargerFondMeta().then(()=>{ let c = null; try { c = localStorage.getItem('fond_carte'); } catch(e){} if (c==='Hors ligne' && fondPret()) return choisirFond('hl'); }).then(()=>majCouchesMap()).catch(()=>{});
+  chargerFondMeta().then(()=>{ let c = null; try { c = localStorage.getItem('fond_carte'); } catch(e){} if (c==='Hors ligne' && fondPret()) return choisirFond('hl'); }).then(()=>{ fondAuto(); majCouchesMap(); }).catch(()=>{});
+  [sat, plan].forEach(c=>{ let n = 0; c.on('tileload', ()=>{ n = 0; }); c.on('tileerror', ()=>{ if (++n>=8 && fondPret() && S.fond!=='Hors ligne'){ n = 0; S.fondAvant = S.fond; S.fondAutoOn = true; choisirFond('hl', true).then(()=>{ if (S.fond==='Hors ligne') toast('Le réseau ne suffit pas pour les images : fond hors ligne.'); }); } }); });
   S.canvas = L.canvas({ padding:0.5 });
   S.ecoLayer = L.layerGroup().addTo(S.map);
   S.paLayer = L.layerGroup().addTo(S.map); S.traceLayer = L.layerGroup().addTo(S.map); S.marcheLayer = L.layerGroup().addTo(S.map); S.posLayer = L.layerGroup().addTo(S.map);
@@ -383,21 +384,24 @@ function majCouchesMap(){
   const m = $('menu-couches'); m.classList.toggle('vu', !!S.menuCouches);
   m.innerHTML = '<div class="seg"><button data-c="sat" class="'+(S.fond==='Satellite'?'on':'')+'">Satellite</button><button data-c="plan" class="'+(S.fond==='Plan'?'on':'')+'">Plan</button>'+(fondPret()?'<button data-c="hl" class="'+(S.fond==='Hors ligne'?'on':'')+'">Hors ligne</button>':'')+'</div>'
     + '<button class="lig '+(S.couchePA?'on':'')+'" data-c="pa"><i style="background:#C9462A"></i>Aires protégées<u></u></button>'
-    + '<button class="lig '+(S.couchEco?'on':'')+'" data-c="eco"><i style="background:#fff;border:2px dashed #12493F"></i>Parcelles ECORIGINE<u></u></button>';
+    + '<button class="lig '+(S.couchEco?'on':'')+'" data-c="eco"><i style="background:#fff;border:2px dashed #12493F"></i>Parcelles ECORIGINE<u></u></button>'
+    + '<button class="lig" data-c="zone"><i style="background:#2563eb"></i>Aller à la zone de ma coopérative</button>';
   m.querySelectorAll('[data-c]').forEach(b=>b.onclick = ()=>{
     const k = b.dataset.c;
     if (k==='eco'){ S.couchEco = !S.couchEco; majEco(); }
     else if (k==='pa'){ S.couchePA = !S.couchePA; if (S.couchePA) S.paLayer.addTo(S.map); else S.map.removeLayer(S.paLayer); }
+    else if (k==='zone') allerZone();
     else choisirFond(k);
     majCouchesMap();
   });
 }
 function majCouchesMapClassique(){
-  $('couches-map').innerHTML = '<button class="chip '+(S.couchePA?'on':'')+'" data-c="pa">Aires protégées</button><button class="chip '+(S.couchEco?'on':'')+'" data-c="eco">Parcelles ECORIGINE</button><button class="chip '+(S.fond==='Satellite'?'on':'')+'" data-c="sat">Satellite</button><button class="chip '+(S.fond==='Plan'?'on':'')+'" data-c="plan">Plan</button>'+(fondPret()?'<button class="chip '+(S.fond==='Hors ligne'?'on':'')+'" data-c="hl">Hors ligne</button>':'');
+  $('couches-map').innerHTML = '<button class="chip '+(S.couchePA?'on':'')+'" data-c="pa">Aires protégées</button><button class="chip '+(S.couchEco?'on':'')+'" data-c="eco">Parcelles ECORIGINE</button><button class="chip '+(S.fond==='Satellite'?'on':'')+'" data-c="sat">Satellite</button><button class="chip '+(S.fond==='Plan'?'on':'')+'" data-c="plan">Plan</button><button class="chip" data-c="zone">Ma zone</button>'+(fondPret()?'<button class="chip '+(S.fond==='Hors ligne'?'on':'')+'" data-c="hl">Hors ligne</button>':'');
   $('couches-map').querySelectorAll('[data-c]').forEach(b=>b.onclick = ()=>{
     const k = b.dataset.c;
     if (k==='eco'){ S.couchEco = !S.couchEco; majEco(); }
     else if (k==='pa'){ S.couchePA = !S.couchePA; if (S.couchePA) S.paLayer.addTo(S.map); else S.map.removeLayer(S.paLayer); }
+    else if (k==='zone') allerZone();
     else choisirFond(k);
     majCouchesMap();
   });
@@ -448,12 +452,15 @@ async function chargerEco(){ S.eco = (await kvGet('eco')) || null; S.ecoCouches.
 function majEco(){
   if (!S.map || !S.ecoLayer) return;
   const z = S.map.getZoom(), garder = new Set();
-  if (S.eco && S.couchEco && z>=13){
+  if (S.eco && S.couchEco && z>=12){
     const b = S.map.getBounds().pad(0.25), pas = S.eco.pas||0.25;
     for (let ix=Math.floor(b.getWest()/pas); ix<=Math.floor(b.getEast()/pas); ix++) for (let iy=Math.floor(b.getSouth()/pas); iy<=Math.floor(b.getNorth()/pas); iy++){
       const k = ix+'_'+iy, fc = S.eco.cases[k]; if (!fc) continue; garder.add(k);
       if (!S.ecoCouches.has(k)){
-        const l = L.geoJSON({ type:'FeatureCollection', features:fc.features.filter(f=>!S.coop || f.properties.k!==S.coop.id) },{ renderer:S.canvas, interactive:false, style:{ color:'#ffffff', weight:1.4, dashArray:'4 4', fill:false, opacity:.9 } });
+        const fs = fc.features.filter(f=>!S.coop || f.properties.k!==S.coop.id), fcl = { type:'FeatureCollection', features:fs };
+        const l = L.layerGroup([                                   // liseré blanc dessous + pointillé vert foncé dessus : visible sur satellite comme sur fond clair
+          L.geoJSON(fcl,{ renderer:S.canvas, interactive:false, style:{ color:'#ffffff', weight:3.6, fill:false, opacity:.85 } }),
+          L.geoJSON(fcl,{ renderer:S.canvas, interactive:false, style:{ color:'#0B3D35', weight:1.6, dashArray:'5 4', fill:false, opacity:1 } }) ]);
         S.ecoCouches.set(k,l);
       }
     }
@@ -538,10 +545,42 @@ function chevauchementEco(poly){
 }
 
 /* ---------- GPS ---------- */
+// ---- Filtre GPS ----
+// Nouveau (par défaut) : lissage de Kalman. Chaque mesure pèse selon sa précision : une mesure imprécise compte peu au lieu d'être jetée,
+// seules les mesures impossibles (précision > 50 m, saut plus rapide qu'un homme) sont écartées. Comme dans Maps.me, le point bouge de façon continue.
+// Ancien (porte de sortie, réglage dans Zone) : on jette toute mesure moins précise que 15 m.
+const GPS = { Q:2.0, ACC_MAX:50, VMAX:7 };      // Q : agitation normale d'un piéton (m/s) ; VMAX : vitesse maximale crédible (m/s)
+function gpsLisse(){ try { return localStorage.getItem('gps_filtre') !== 'ancien'; } catch(e){ return true; } }
+function filtrerFix(b){
+  const acc = Math.max(+b.acc || GPS.ACC_MAX+1, 1);
+  if (!gpsLisse()){ S.kf = null; return acc<=S.maxAcc ? { ok:true } : { ok:false, raison:'imprécise' }; }
+  if (acc>GPS.ACC_MAX) return { ok:false, raison:'imprécise' };
+  const k = S.kf;
+  if (!k || (S.kfRejets||0)>=5){ S.kf = { lat:b.lat, lng:b.lng, v:acc*acc, t:b.t }; S.kfRejets = 0; return { ok:true }; }   // départ, ou filtre perdu : on se recale
+  const dt = Math.max(0,(b.t-k.t)/1000), v = k.v + dt*GPS.Q*GPS.Q, d = dMetres(k,b);
+  if (d > 3*Math.sqrt(v+acc*acc) + GPS.VMAX*dt){ S.kfRejets = (S.kfRejets||0)+1; return { ok:false, raison:'saut' }; }
+  S.kfRejets = 0;
+  const K = v/(v+acc*acc);
+  k.lat += K*(b.lat-k.lat); k.lng += K*(b.lng-k.lng); k.v = (1-K)*v; k.t = b.t;
+  return { ok:true };
+}
 // Une position arrive (du GPS du navigateur, ou du service d'arrière-plan quand l'écran est éteint)
 function appliquerPosition(lat, lng, acc, tt){
-  if (S.pos && tt && S.pos.t && tt <= S.pos.t) return;          // même mesure reçue par les deux sources, ou plus ancienne
-  S.pos = { lat:lat, lng:lng, acc:acc, t:tt||Date.now() };
+  tt = tt || Date.now();
+  if (S.lastT && tt <= S.lastT) return;                         // même mesure reçue par les deux sources, ou plus ancienne
+  S.lastT = tt;
+  const b = { lat:lat, lng:lng, acc:acc, t:tt }, r = filtrerFix(b);
+  S.accEma = S.accEma==null || tt-(S.accT||0)>60000 ? acc : 0.8*S.accEma+0.2*acc; S.accT = tt;     // précision annoncée, en moyenne glissante
+  if (S.journal && (S.marche || S.collecte) && S.journal.length<4000) S.journal.push([Math.round(tt/1000), +lat.toFixed(6), +lng.toFixed(6), Math.round(acc), r.ok?1:(r.raison==='saut'?2:3)]);
+  if (!r.ok){
+    if (S.marche){ S.marche.rejetes++; S.marche.raisons[r.raison] = (S.marche.raisons[r.raison]||0)+1; majMarche(); }
+    if (!S.pos) S.pos = { lat:lat, lng:lng, acc:Math.max(acc,1), t:tt, faible:true };      // pas encore de bonne position : on montre au moins où l'on est, en rouge
+    else { S.pos.accBrut = acc; S.pos.acc = Math.max(S.pos.acc, 0.8*S.accEma); }
+    if (S.ecran==='carte') majPrec();
+    return;
+  }
+  const lisse = gpsLisse() && S.kf;
+  S.pos = lisse ? { lat:S.kf.lat, lng:S.kf.lng, acc:Math.max(3,Math.sqrt(S.kf.v),0.8*S.accEma), t:tt, accBrut:acc } : { lat:lat, lng:lng, acc:acc, t:tt, accBrut:acc };
   if (S.posLayer){
     S.posLayer.clearLayers();
     L.circle([S.pos.lat,S.pos.lng],{ radius:S.pos.acc, color:'#2563eb', weight:1, fillOpacity:.1 }).addTo(S.posLayer);
@@ -549,7 +588,7 @@ function appliquerPosition(lat, lng, acc, tt){
     if (S.suivre && !S.vuDejaCentre){ S.vuDejaCentre = true; S.map.setView([S.pos.lat,S.pos.lng],17); } else if (S.suivre && S.ecran==='carte') S.map.panTo([S.pos.lat,S.pos.lng],{ animate:true });
   }
   if (S.marche) marcheFix(S.pos);
-  if (S.collecte && S.pos.acc <= S.maxAcc) S.collecte.fixes.push({ lat:S.pos.lat, lng:S.pos.lng, acc:S.pos.acc });
+  if (S.collecte && b.acc <= 25) S.collecte.fixes.push(b);       // la mesure d'un sommet moyenne les mesures brutes, pondérées par leur précision
   if (S.ecran==='carte'){ majBandeau(); majPrec(); }
   if (S.ecran==='accueil' && !S.sectionSel && !S.accueilGPS){ S.accueilGPS = true; rendreAccueil(); }
 }
@@ -582,7 +621,7 @@ function majPrec(){
   const p = S.prod || {};
   t.textContent = p.nom||'Tracé'; const par = S.parcelle ? S.parcelle+' · ' : '';
   if (!S.pos){ s.innerHTML = '<i class="pt r" style="display:inline-block;border-radius:50%"></i>'+par+'recherche du signal GPS…'; return; }
-  const a = S.pos.acc, c = a<=5?'':a<=S.maxAcc?'o':'r';
+  const a = S.pos.faible ? 99 : S.pos.acc, c = a<=5?'':a<=S.maxAcc?'o':'r';
   s.innerHTML = '<i class="pt '+c+'" style="display:inline-block;border-radius:50%"></i>'+par+'GPS ±'+Math.round(a)+' m'+(a<=5?'':a<=S.maxAcc?'':' · trop faible');
 }
 // Pastille de surface en direct (ou de marche / mesure en cours)
@@ -590,7 +629,7 @@ function majChip(){
   const e = $('surface-live'); if (!e) return; if (S.styleCarte==='classique'){ e.style.display = 'none'; return; }
   let h = '';
   if (S.collecte) h = 'Mesure du point… '+(S.collecte.reste!=null?S.collecte.reste+' s':'');
-  else if (S.marche) h = Math.round(S.marche.dist)+' m <small>'+S.marche.trail.length+' points'+(S.marche.rejetes?' · '+S.marche.rejetes+' écartés':'')+'</small>';
+  else if (S.marche) h = Math.round(S.marche.dist)+' m <small>'+S.marche.trail.length+' points · ±'+Math.round(S.pos?S.pos.acc:0)+' m'+(S.marche.rejetes?' · '+S.marche.rejetes+' écartés'+marcheRaisons(S.marche):'')+'</small>';
   else if (S.pts.length>=3 && !S.verif){ try { const c = S.pts.map(p=>[p.lng,p.lat]); h = fmt(turf.area(turf.polygon([c.concat([c[0]])]))/10000,2)+' ha <small>provisoire</small>'; } catch(er){} }
   e.innerHTML = h; e.style.display = h ? 'block' : 'none';
 }
@@ -619,9 +658,9 @@ async function marquerPoint(){
   const duree = 10000; S.collecte = { fixes:[], debut:Date.now() }; rendreFeuille();
   await new Promise(r=>{ const iv = setInterval(()=>{ const reste = Math.max(0, Math.ceil((duree-(Date.now()-S.collecte.debut))/1000)); S.collecte.reste = reste; if (S.styleCarte==='classique'){ const b = $('b-marquer'); if (b) b.textContent = 'Mesure… '+reste+' s'; } else majChip(); if (Date.now()-S.collecte.debut>=duree){ clearInterval(iv); r(); } },250); });
   const f = S.collecte.fixes; S.collecte = null;
-  if (f.length<3){ toast('Précision insuffisante (±'+Math.round(S.pos.acc)+' m, seuil '+S.maxAcc+' m). Attends un meilleur signal.'); rendreFeuille(); return; }
-  const m = k=>f.reduce((a,x)=>a+x[k],0)/f.length;
-  ajouterPoint({ lat:m('lat'), lng:m('lng'), acc:m('acc'), n:f.length });
+  if (f.length<3){ toast('Signal GPS trop faible (±'+Math.round(S.pos.acc)+' m, '+f.length+' mesure'+(f.length>1?'s':'')+' utilisable'+(f.length>1?'s':'')+'). Va à découvert, loin des murs et des arbres, et attends un meilleur signal.'); rendreFeuille(); return; }
+  const w = f.map(x=>1/(Math.max(x.acc,2)**2)), sw = w.reduce((a,b)=>a+b,0), m = k=>f.reduce((a,x,i)=>a+x[k]*w[i],0)/sw;
+  ajouterPoint({ lat:m('lat'), lng:m('lng'), acc:Math.max(2,f.map(x=>x.acc).sort((a,b)=>a-b)[Math.floor(f.length/2)]), n:f.length });
 }
 function simplifier(pts,tol){
   if (pts.length<3) return pts.slice();
@@ -636,24 +675,32 @@ function simplifier(pts,tol){
 }
 function marcherDebut(){
   if (!S.pos){ toast('Attends le signal GPS.'); activerGPS(); return; }
-  S.pts = []; S.verif = null; S.fermeture = null; S.rawTrail = null; S.meta = null; dessiner();
-  S.marche = { trail:[], dist:0, rejetes:0, debut:Date.now() }; S.marcheLayer.clearLayers(); S.suivre = true;
+  if (gpsLisse() && (S.pos.faible || S.pos.acc>30)){ toast('Signal GPS trop faible (±'+Math.round(S.pos.acc)+' m). Va à découvert, loin des murs et des arbres, et attends que la précision passe sous ±30 m.'); return; }
+  S.pts = []; S.verif = null; S.fermeture = null; S.rawTrail = null; S.meta = null; S.journal = []; dessiner();
+  S.marche = { trail:[], dist:0, rejetes:0, raisons:{}, debut:Date.now() }; S.marcheLayer.clearLayers(); S.suivre = true;
   marcheFix(S.pos); rendreFeuille(); arriereDemarrer();
 }
 function marcheFix(p){
   const m = S.marche; if (!m) return;
-  if (p.acc>S.maxAcc){ m.rejetes++; majMarche(); return; }
   const dernier = m.trail[m.trail.length-1];
-  if (dernier){
-    const d = dMetres(dernier,p), dt = Math.max(0.5,(p.t-dernier.t)/1000);
-    if (d/dt>4){ m.rejetes++; majMarche(); return; }
-    if (d<Math.max(3,p.acc/2)) return;
+  if (!gpsLisse()){
+    if (p.acc>S.maxAcc){ m.rejetes++; majMarche(); return; }
+    if (dernier){
+      const d = dMetres(dernier,p), dt = Math.max(0.5,(p.t-dernier.t)/1000);
+      if (d/dt>4){ m.rejetes++; majMarche(); return; }
+      if (d<Math.max(3,p.acc/2)) return;
+      m.dist += d;
+    }
+  } else if (dernier){
+    const d = dMetres(dernier,p);
+    if (d<Math.max(3,p.acc*0.5)) return;                         // pas assez bougé par rapport à l'incertitude du moment
     m.dist += d;
   }
   m.trail.push({ lat:p.lat, lng:p.lng, acc:p.acc, t:p.t });
   S.marcheLayer.clearLayers(); L.polyline(m.trail.map(x=>[x.lat,x.lng]),{ color:'#F2B705', weight:4, interactive:false }).addTo(S.marcheLayer);
   majMarche();
 }
+function marcheRaisons(m){ const r = m.raisons||{}, l = []; if (r.imprécise) l.push(r.imprécise+' imprécis'); if (r.saut) l.push(r.saut+' sauts'); return l.length ? ' ('+l.join(', ')+')' : ''; }
 function majMarche(){ if (S.styleCarte==='classique') return majMarcheClassique(); majChip(); }
 function majMarcheClassique(){ const e = $('st-marche'), m = S.marche; if (e && m) e.textContent = m.trail.length+' points · '+Math.round(m.dist)+' m parcourus'+(m.rejetes?' · '+m.rejetes+' mesure'+(m.rejetes>1?'s':'')+' écartée'+(m.rejetes>1?'s':''):''); }
 
@@ -662,10 +709,12 @@ function marcherFin(){
   arriereArreter();
   const m = S.marche; S.marche = null; S.marcheLayer.clearLayers();
   if (!m || m.trail.length<5){ toast('Pas assez de points : marche un peu plus longtemps.'); rendreFeuille(); return; }
-  const accMoy = m.trail.reduce((a,x)=>a+x.acc,0)/m.trail.length, tol = Math.max(2,Math.min(8,accMoy*0.5));
-  let v = simplifier(m.trail,tol); S.fermeture = dMetres(m.trail[0], m.trail[m.trail.length-1]);
+  const accMoy = m.trail.reduce((a,x)=>a+x.acc,0)/m.trail.length; let tol = gpsLisse() ? Math.max(1.5,Math.min(5,accMoy*0.4)) : Math.max(2,Math.min(8,accMoy*0.5));
+  let v = simplifier(m.trail,tol);
+  while (gpsLisse() && v.length<4 && tol>0.8 && m.trail.length>=8){ tol *= 0.6; v = simplifier(m.trail,tol); }      // pas de tracé réduit à un triangle par excès de simplification
+  S.fermeture = dMetres(m.trail[0], m.trail[m.trail.length-1]);
   if (v.length>3 && S.fermeture<Math.max(tol*2,6)) v = v.slice(0,-1);
-  S.rawTrail = m.trail; S.meta = { mode:'marche', dist:m.dist, rejetes:m.rejetes, brut:m.trail.length };
+  S.rawTrail = m.trail; S.meta = { mode:'marche', dist:m.dist, rejetes:m.rejetes, raisons:m.raisons, brut:m.trail.length };
   S.pts = v.map(x=>({ lat:x.lat, lng:x.lng, acc:x.acc, n:1 })); dessiner(); verifierTrace();
 }
 function annulerDernier(){ S.pts.pop(); S.verif = null; dessiner(); rendreFeuille(); }
@@ -693,7 +742,8 @@ async function verifierTrace(){
   if (ce && ce.nb) al.push({ n:'orange', t:'Chevauche '+ce.nb+' parcelle'+(ce.nb>1?'s':'')+' déjà cartographiée'+(ce.nb>1?'s':'')+' par d’autres coopératives, sur '+fmt(ce.ha,2)+' ha. Le bureau vérifiera.' });
   if (ha<0.1) al.push({ n:'orange', t:'Très petite parcelle ('+fmt(ha,3)+' ha) : vérifie le tracé.' });
   if (ha>4) al.push({ n:'orange', t:'Parcelle de plus de 4 ha : vérifie qu’elle n’en regroupe pas plusieurs.' });
-  if (accMoy!=null && accMoy>10) al.push({ n:'orange', t:'Précision moyenne faible (±'+Math.round(accMoy)+' m).' });
+  if (accMoy!=null && accMoy>20) al.push({ n:'rouge', t:'Précision moyenne trop faible (±'+Math.round(accMoy)+' m) : la surface n’est pas fiable. Recommence à découvert, loin des murs et des arbres.' });
+  else if (accMoy!=null && accMoy>10) al.push({ n:'orange', t:'Précision moyenne faible (±'+Math.round(accMoy)+' m).' });
   if (!S.paIdx.length) al.push({ n:'orange', t:'Couches non téléchargées : le chevauchement avec les aires protégées n’a pas été contrôlé.' });
   if (ecoExact && !al.some(a=>/déjà cartographiée/.test(a.t))) al.push({ n:'ok', t:'Aucun chevauchement avec les parcelles ECORIGINE.' });
   if (!al.length || !al.some(a=>a.n!=='ok')) al.push({ n:'ok', t:'Aucun chevauchement avec une aire protégée.' });
@@ -775,6 +825,7 @@ async function enregistrerTrace(){
     producteur_nom:p.nom, code_parcelle:S.parcelle,
     geojson:{ type:'Feature', properties:{ surface_ha:+v.ha.toFixed(4), surface_min_ha:v.marge?+v.marge.min.toFixed(4):null, surface_max_ha:v.marge?+v.marge.max.toFixed(4):null, precision_moy_m:v.accMoy!=null?+v.accMoy.toFixed(1):null, producteur:p.nom, code:S.parcelle,
       releve:S.meta?S.meta.mode:(manuel?'manuel':'points'), fermeture_m:S.fermeture!=null?+S.fermeture.toFixed(1):null, sommets_deplaces:S.pts.filter(x=>x.edite).length, distance_marchee_m:S.meta?Math.round(S.meta.dist):null,
+      journal_gps:S.journal?S.journal.slice(0,2500):null, rejets_gps:S.meta?S.meta.raisons||null:null,
       piste:S.rawTrail?S.rawTrail.slice(0,1500).map(x=>[+x.lng.toFixed(6),+x.lat.toFixed(6),Math.round(x.acc),Math.round(x.t/1000)]):null }, geometry:v.geom },
     surface_ha:+v.ha.toFixed(4), precision_moy_m:v.accMoy!=null?+v.accMoy.toFixed(1):null, alertes:v.al.filter(a=>a.n!=='ok').map(a=>a.t), mode:manuel?'manuel':'gps',
     appareil:navigator.userAgent.slice(0,140), releve_le:new Date().toISOString(), statut:'en_attente', eco_incomplet:!!v.ecoIncomplet };
@@ -807,7 +858,7 @@ async function synchroniser(){
   if (envoyes) toast(envoyes+' mapping'+(envoyes>1?'s':'')+' envoyé'+(envoyes>1?'s':'')+' au bureau.');
 }
 function majAttente(){ const n = S.traces.filter(t=>t.statut==='en_attente').length; $('n-attente').innerHTML = n ? '<span class="st">'+n+'</span>' : ''; }
-function majReseau(){ const e = $('h-reseau'); if (navigator.onLine){ e.textContent = 'réseau'; e.className = 'reseau on'; synchroniser(); } else { e.textContent = 'hors réseau'; e.className = 'reseau'; } }
+function majReseau(){ fondAuto(); const e = $('h-reseau'); if (navigator.onLine){ e.textContent = 'réseau'; e.className = 'reseau on'; synchroniser(); } else { e.textContent = 'hors réseau'; e.className = 'reseau'; } }
 addEventListener('online', majReseau); addEventListener('offline', majReseau);
 
 /* ---------- zone et couches ---------- */
@@ -828,10 +879,13 @@ function rendreCouches(){
     + '<div class="barre" id="p-fond" style="display:none"><i style="width:0"></i></div><p class="mut petit" id="t-fond"></p>'
     + '<div class="rang"><button class="btn p" id="b-fond" '+(S.fondTel?'disabled':'')+'>'+(fondPret()?'Mettre à jour':'Télécharger')+'</button>'+(fondPret()?'<button class="btn sm" id="b-fond-x" '+(S.fondTel?'disabled':'')+'>Supprimer</button>':'')+'</div></div>';
   h += '<div class="carte"><h2>GPS pendant la marche</h2><p class="mut petit">'+(BG ? 'Quand tu marches le contour, le GPS continue même si l’écran s’éteint ou si tu quittes l’application. Une notification « ORIGEN enregistre ton tracé » reste affichée pendant ce temps.' : 'Disponible dans l’application Android.')+'</p>'+(BG ? '<button class="btn sm '+(gpsArriereActif()?'p':'')+'" id="b-bg">'+(gpsArriereActif()?'Activé · toucher pour désactiver':'Désactivé · toucher pour activer')+'</button>' : '')+'</div>';
+  h += '<div class="carte"><h2>Lissage du GPS</h2><p class="mut petit">Comme dans Maps.me : les positions sont lissées et chaque mesure compte selon sa précision. Les mesures imprécises ne sont plus jetées, seules les mesures impossibles sont écartées. L’ancien filtre jetait toute mesure à plus de 15 m.</p><div class="rang"><button class="btn sm '+(gpsLisse()?'p':'')+'" id="b-gl">Lissage (nouveau)</button><button class="btn sm '+(!gpsLisse()?'p':'')+'" id="b-ga">Ancien filtre</button></div></div>';
   h += '<div class="carte"><h2>Affichage de la carte</h2><p class="mut petit">Le déroulement du mapping est le même dans les deux styles.</p><div class="rang"><button class="btn sm '+(S.styleCarte!=='classique'?'p':'')+'" id="b-st-mm">Style Maps.me (nouveau)</button><button class="btn sm '+(S.styleCarte==='classique'?'p':'')+'" id="b-st-cl">Classique (ancien)</button></div></div>';
   h += '<div class="carte"><h2>À propos</h2><p class="mut petit" id="t-stock">…</p><p class="mut petit">ORIGEN, version '+APP_VERSION+'. Précision : GPS du téléphone ; chaque sommet est moyenné sur 10 secondes, ou le tour est marché en continu.</p><button class="btn sm" id="b-deco">Se déconnecter</button></div>';
   c.innerHTML = h; majTuiles(); majStock();
   $('b-actu2').onclick = async ()=>{ await actualiser(); rendreCouches(); };
+  const choisirGPS = v=>{ try { localStorage.setItem('gps_filtre', v); } catch(e){} S.kf = null; rendreCouches(); toast(v==='ancien' ? 'GPS : ancien filtre.' : 'GPS : lissage activé.'); };
+  $('b-gl').onclick = ()=>choisirGPS('lisse'); $('b-ga').onclick = ()=>choisirGPS('ancien');
   const bgb = $('b-bg'); if (bgb) bgb.onclick = ()=>{ try { localStorage.setItem('gps_arriere', gpsArriereActif() ? 'non' : 'oui'); } catch(e){} rendreCouches(); toast(gpsArriereActif() ? 'GPS en arrière-plan activé.' : 'GPS en arrière-plan désactivé.'); };
   const choisir = s=>{ S.styleCarte = s; try { localStorage.setItem('style_carte', s); } catch(e){} rendreCouches(); toast(s==='classique' ? 'Carte : style classique.' : 'Carte : style Maps.me.'); };
   $('b-st-mm').onclick = ()=>choisir('maps'); $('b-st-cl').onclick = ()=>choisir('classique');
@@ -877,13 +931,24 @@ async function construireFond(){
   g.bringToBack = ()=>g.eachLayer(l=>l.bringToBack());
   S.fondGroupe = g; return g;
 }
-async function choisirFond(k){
+function allerZone(){
+  const pts = S.sections.filter(x=>x.lat!=null && x.lon!=null).map(x=>[+x.lat,+x.lon]);
+  if (!pts.length || !S.map){ toast('La zone de la coopérative n’est pas connue.'); return; }
+  S.suivre = false; S.map.fitBounds(L.latLngBounds(pts).pad(0.3), { maxZoom:14 }); S.menuCouches = false; majCouchesMap();
+}
+// Fond hors ligne automatique : quand le réseau coupe (ou que les images ne chargent plus), on passe au fond installé ; quand il revient, on rend la main
+function fondAuto(){
+  if (!S.map || !fondPret()) return;
+  if (!navigator.onLine && S.fond!=='Hors ligne'){ S.fondAvant = S.fond; S.fondAutoOn = true; choisirFond('hl', true).then(()=>{ if (S.fond==='Hors ligne') toast('Pas de réseau : fond de carte hors ligne.'); }); }
+  else if (navigator.onLine && S.fondAutoOn && S.fond==='Hors ligne'){ S.fondAutoOn = false; choisirFond(S.fondAvant==='Plan'?'plan':'sat', true); }
+}
+async function choisirFond(k, auto){
   const n = k==='sat' ? 'Satellite' : k==='hl' ? 'Hors ligne' : 'Plan';
   if (!S.map || n===S.fond) return;
   let nouv = S.fonds[n];
   if (n==='Hors ligne'){ try { nouv = await construireFond(); } catch(e){ nouv = null; } if (!nouv){ toast('Fond hors ligne indisponible : télécharge-le à nouveau dans Zone.'); return; } S.fonds[n] = nouv; }
   S.map.removeLayer(S.fonds[S.fond]); nouv.addTo(S.map); nouv.bringToBack(); S.fond = n;
-  try { localStorage.setItem('fond_carte', n); } catch(e){}
+  if (!auto){ S.fondAutoOn = false; try { localStorage.setItem('fond_carte', n); } catch(e){} }
   majCouchesMap();
 }
 async function majFondTxt(){
