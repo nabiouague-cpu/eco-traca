@@ -217,9 +217,10 @@
 <script src="https://cdn.jsdelivr.net/npm/pmtiles@3.2.1/dist/pmtiles.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/protomaps-leaflet@5.1.0/dist/protomaps-leaflet.js"></script>
 <script>
-const APP_VERSION = '2026-11-04-app16';
+const APP_VERSION = '2026-11-04-app17';
 const SB_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SB_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
+const ECO_ZOOM_MIN = 8;      // les parcelles de la base se voient dès ce niveau de zoom
 const ECO_INCOMPLET = 'Contrôle de chevauchement NON FAIT : les parcelles de cette zone ne sont pas sur le téléphone et il n’y a pas de réseau. Il sera refait automatiquement dès que le réseau revient, avant l’envoi.';
 const COUCHE_PA = 'couches/espaces_proteges_v1.json';
 const IC = {
@@ -514,21 +515,48 @@ async function chargerEco(){ S.eco = (await kvGet('eco')) || null; S.ecoCouches.
 function majEco(){
   if (!S.map || !S.ecoLayer) return;
   const z = S.map.getZoom(), garder = new Set();
+  const bande = z>=13 ? 'fin' : z>=12 ? 'large' : 'points';   // de près : liseré blanc + pointillé ; zoom 12 : petits contours jaunes ; de loin : un point par parcelle (très léger)
+  const ptsOn = bande==='points' && !!S.eco && S.couchEco && z>=ECO_ZOOM_MIN;
+  if (ptsOn){ if (!S.ecoPts) S.ecoPts = nouvelleCoucheEcoPoints(); if (!S.map.hasLayer(S.ecoPts)) S.ecoPts.addTo(S.map); else S.ecoPts.redessiner(); }
+  else if (S.ecoPts && S.map.hasLayer(S.ecoPts)) S.map.removeLayer(S.ecoPts);
+  if (S.ecoBande!==bande){ S.ecoCouches.forEach(l=>{ if (S.ecoLayer.hasLayer(l)) S.ecoLayer.removeLayer(l); }); S.ecoCouches.clear(); S.ecoBande = bande; }
   if (S.eco && S.couchEco && z>=12){
     const b = S.map.getBounds().pad(0.25), pas = S.eco.pas||0.25;
     for (let ix=Math.floor(b.getWest()/pas); ix<=Math.floor(b.getEast()/pas); ix++) for (let iy=Math.floor(b.getSouth()/pas); iy<=Math.floor(b.getNorth()/pas); iy++){
       const k = ix+'_'+iy, fc = S.eco.cases[k]; if (!fc) continue; garder.add(k);
       if (!S.ecoCouches.has(k)){
         const fs = fc.features.filter(f=>!S.coop || f.properties.k!==S.coop.id), fcl = { type:'FeatureCollection', features:fs };
-        const l = L.layerGroup([                                   // liseré blanc dessous + pointillé vert foncé dessus : visible sur satellite comme sur fond clair
+        const l = bande==='fin' ? L.layerGroup([                   // liseré blanc dessous + pointillé vert foncé dessus : visible sur satellite comme sur fond clair
           L.geoJSON(fcl,{ renderer:S.canvas, interactive:false, style:{ color:'#ffffff', weight:3.6, fill:false, opacity:.85 } }),
-          L.geoJSON(fcl,{ renderer:S.canvas, interactive:false, style:{ color:'#0B3D35', weight:1.6, dashArray:'5 4', fill:false, opacity:1 } }) ]);
+          L.geoJSON(fcl,{ renderer:S.canvas, interactive:false, style:{ color:'#0B3D35', weight:1.6, dashArray:'5 4', fill:false, opacity:1 } }) ])
+          : L.layerGroup([ L.geoJSON(fcl,{ renderer:S.canvas, interactive:false, smoothFactor:2, style:{ color:'#0B3D35', weight:1.1, fill:true, fillColor:'#F2B705', fillOpacity:.55, opacity:1 } }) ]);
         S.ecoCouches.set(k,l);
       }
     }
   }
   S.ecoCouches.forEach((l,k)=>{ if (garder.has(k)){ if (!S.ecoLayer.hasLayer(l)) S.ecoLayer.addLayer(l); } else if (S.ecoLayer.hasLayer(l)) S.ecoLayer.removeLayer(l); });
   clearTimeout(S.ecoInfoT); S.ecoInfoT = setTimeout(majEcoInfo, 250);
+}
+// Couche de points : une seule passe sur un canvas, un petit carré par parcelle. Sert quand on regarde de loin, où les contours seraient trop lourds à dessiner.
+function nouvelleCoucheEcoPoints(){
+  return new (L.Layer.extend({
+    onAdd(map){ this._map = map; this._c = L.DomUtil.create('canvas','leaflet-zoom-hide'); this._c.style.pointerEvents = 'none'; map.getPanes().overlayPane.appendChild(this._c); this.redessiner(); },
+    onRemove(){ L.DomUtil.remove(this._c); this._c = null; },
+    redessiner(){
+      const m = this._map, c = this._c; if (!m || !c) return;
+      const sz = m.getSize(), dpr = window.devicePixelRatio||1;
+      c.width = Math.round(sz.x*dpr); c.height = Math.round(sz.y*dpr); c.style.width = sz.x+'px'; c.style.height = sz.y+'px';
+      L.DomUtil.setPosition(c, m.containerPointToLayerPoint([0,0]));
+      const g = c.getContext('2d'); g.scale(dpr, dpr);
+      const b = m.getBounds().pad(0.05), pas = (S.eco && S.eco.pas)||0.25;
+      for (let ix=Math.floor(b.getWest()/pas); ix<=Math.floor(b.getEast()/pas); ix++) for (let iy=Math.floor(b.getSouth()/pas); iy<=Math.floor(b.getNorth()/pas); iy++){
+        const fc = S.eco.cases[ix+'_'+iy]; if (!fc) continue;
+        if (!fc._pts){ const a = []; for (const f of fc.features){ if (S.coop && f.properties.k===S.coop.id) continue; let q = f.geometry.coordinates[0]; while (Array.isArray(q[0])) q = q[0]; a.push(q[1], q[0]); } fc._pts = a; }
+        const a = fc._pts;
+        for (let i=0; i<a.length; i+=2){ const p = m.latLngToContainerPoint([a[i], a[i+1]]); if (p.x<-4 || p.y<-4 || p.x>sz.x+4 || p.y>sz.y+4) continue; g.fillStyle = '#0B3D35'; g.fillRect(p.x-2.2, p.y-2.2, 4.4, 4.4); g.fillStyle = '#F2B705'; g.fillRect(p.x-1.2, p.y-1.2, 2.4, 2.4); }
+      }
+    }
+  }))();
 }
 // Explique à l'écran pourquoi on ne voit pas de pointillés : zone pas téléchargée, ou vraiment aucune parcelle de la base ici (et où est la plus proche).
 function ecoBB(f){ if (!f._bb) f._bb = turf.bbox(f); return f._bb; }
@@ -545,7 +573,7 @@ function cap(a, b){ const r = Math.PI/180, y = Math.sin((b.lng-a.lng)*r)*Math.co
 function majEcoInfo(){
   const el = $('eco-info'); if (!el || !S.map) return;
   const cacher = ()=>{ el.style.display = 'none'; el.innerHTML = ''; };
-  if (!S.couchEco || S.map.getZoom()<12) return cacher();
+  if (!S.couchEco || S.map.getZoom()<ECO_ZOOM_MIN) return cacher();
   const vue = S.map.getBounds(), c = vue.getCenter(), bb = [vue.getWest(), vue.getSouth(), vue.getEast(), vue.getNorth()];
   const montrer = (txt, bouton, fn)=>{ el.innerHTML = '<span>'+txt+'</span>'+(bouton?'<button>'+bouton+'</button>':''); el.style.display = 'block'; const b = el.querySelector('button'); if (b) b.onclick = fn; };
   if (!S.eco){
@@ -1000,7 +1028,7 @@ function rendreCouches(){
     + '<button class="btn p" id="b-tel" '+(S.tel?'disabled':'')+'>'+(pa?'Mettre à jour':'Télécharger les couches')+'</button></div>';
   const e = S.eco;
   h += '<div class="carte"><h2>Base de parcelles de Côte d’Ivoire (en pointillé)</h2>'
-    + (e ? '<p><span class="st g">Téléchargées</span> '+fmt(e.nb)+' parcelles · '+fmt(e.taille/1e6,1)+' Mo · le '+esc(new Date(e.le).toLocaleDateString('fr-FR'))+'</p><p class="mut petit">Toutes les parcelles de la base de parcelles, partout en Côte d’Ivoire : contours seulement, sans nom ni donnée. Elles marchent sans réseau et s’affichent en zoomant (à partir du niveau 12).'+(e.complet?'':' <b>La base n’est pas encore complète : touche « Télécharger ».</b>')+'</p>' : '<p><span class="st">Pas encore téléchargées</span></p><p class="mut petit">À télécharger avant de partir : toute la base de parcelles de Côte d’Ivoire (environ 22 Mo, de préférence en Wi-Fi).</p>')
+    + (e ? '<p><span class="st g">Téléchargées</span> '+fmt(e.nb)+' parcelles · '+fmt(e.taille/1e6,1)+' Mo · le '+esc(new Date(e.le).toLocaleDateString('fr-FR'))+'</p><p class="mut petit">Toutes les parcelles de la base de parcelles, partout en Côte d’Ivoire : contours seulement, sans nom ni donnée. Elles marchent sans réseau et se voient même de loin (petits contours jaunes), puis en pointillé de plus près.'+(e.complet?'':' <b>La base n’est pas encore complète : touche « Télécharger ».</b>')+'</p>' : '<p><span class="st">Pas encore téléchargées</span></p><p class="mut petit">À télécharger avant de partir : toute la base de parcelles de Côte d’Ivoire (environ 22 Mo, de préférence en Wi-Fi).</p>')
     + '<div class="barre" id="p-eco" style="display:none"><i style="width:0"></i></div><p class="mut petit" id="t-eco"></p>'
     + '<button class="btn p" id="b-eco" '+(S.ecoTel?'disabled':'')+'>'+(e&&e.complet?'Mettre à jour':'Télécharger toute la base')+'</button></div>';
   h += '<div class="carte"><h2>Images satellite et plan</h2><p class="mut petit" id="t-tuiles">…</p><p class="mut petit">Les images que tu as regardées avec du réseau restent disponibles sans réseau. Le téléchargement d’une zone entière viendra avec une source d’images sous licence.</p><button class="btn sm" id="b-vider">Vider les images gardées</button></div>';
