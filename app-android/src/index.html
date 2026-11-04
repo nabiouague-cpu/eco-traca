@@ -67,7 +67,7 @@
   #menu-couches{position:absolute;z-index:530;right:10px;top:calc(64px + env(safe-area-inset-top));background:#fff;border-radius:16px;box-shadow:0 4px 18px #0004;padding:10px;display:none;min-width:230px}
   #menu-couches.vu{display:block}
   #menu-couches .seg{display:flex;background:var(--soft);border-radius:11px;padding:3px;margin-bottom:8px}
-  #menu-couches .seg button{flex:1;padding:8px;border-radius:9px;background:none;font-weight:600;font-size:13px;color:var(--mut)}
+  #menu-couches .seg button{flex:1;padding:8px 4px;white-space:nowrap;border-radius:9px;background:none;font-weight:600;font-size:13px;color:var(--mut)}
   #menu-couches .seg button.on{background:#fff;color:var(--teal);box-shadow:0 1px 4px #0002}
   #menu-couches .lig{display:flex;align-items:center;gap:10px;width:100%;background:none;padding:9px 6px;font-size:14px;text-align:left;border-radius:10px}
   #menu-couches .lig i{width:14px;height:14px;border-radius:4px;flex:none}
@@ -162,8 +162,10 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/pmtiles@3.2.1/dist/pmtiles.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/protomaps-leaflet@5.1.0/dist/protomaps-leaflet.js"></script>
 <script>
-const APP_VERSION = '2026-11-04-app6';
+const APP_VERSION = '2026-11-04-app7';
 const SB_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SB_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 const ECO_INCOMPLET = 'Contrôle ECORIGINE NON FAIT : les parcelles de cette zone ne sont pas sur le téléphone et il n’y a pas de réseau. Il sera refait automatiquement dès que le réseau revient, avant l’envoi.';
@@ -189,6 +191,7 @@ const S = { styleCarte:STYLE0, coop:null, producteurs:[], sections:[], serveurId
 /* ---------- stockage local ---------- */
 function idb(){ return new Promise((ok,ko)=>{ const r = indexedDB.open('origen-terrain',1); r.onupgradeneeded = ()=>{ r.result.createObjectStore('kv'); r.result.createObjectStore('traces',{keyPath:'id'}); }; r.onsuccess = ()=>ok(r.result); r.onerror = ()=>ko(r.error); }); }
 async function kvGet(k){ try { const db = await idb(); return await new Promise((ok,ko)=>{ const q = db.transaction('kv').objectStore('kv').get(k); q.onsuccess = ()=>ok(q.result); q.onerror = ()=>ko(q.error); }); } catch(e){ return null; } }
+async function kvDel(k){ const db = await idb(); return new Promise((ok,ko)=>{ const t = db.transaction('kv','readwrite'); t.objectStore('kv').delete(k); t.oncomplete = ()=>ok(); t.onerror = ()=>ko(t.error); }); }
 async function kvSet(k,v){ const db = await idb(); return new Promise((ok,ko)=>{ const t = db.transaction('kv','readwrite'); t.objectStore('kv').put(v,k); t.oncomplete = ()=>ok(); t.onerror = ()=>ko(t.error); }); }
 async function trAll(){ try { const db = await idb(); return await new Promise((ok,ko)=>{ const q = db.transaction('traces').objectStore('traces').getAll(); q.onsuccess = ()=>ok(q.result||[]); q.onerror = ()=>ko(q.error); }); } catch(e){ return []; } }
 async function trPut(t){ const db = await idb(); return new Promise((ok,ko)=>{ const x = db.transaction('traces','readwrite'); x.objectStore('traces').put(t); x.oncomplete = ()=>ok(); x.onerror = ()=>ko(x.error); }); }
@@ -363,6 +366,7 @@ function initCarte(){
   const sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{ maxZoom:19, crossOrigin:true, attribution:'Imagerie © Esri' });
   const plan = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{ maxZoom:19, crossOrigin:true, attribution:'© OpenStreetMap' });
   S.fonds = { Satellite:sat, Plan:plan }; S.fond = 'Satellite'; sat.addTo(S.map);
+  chargerFondMeta().then(()=>{ let c = null; try { c = localStorage.getItem('fond_carte'); } catch(e){} if (c==='Hors ligne' && fondPret()) return choisirFond('hl'); }).then(()=>majCouchesMap()).catch(()=>{});
   S.canvas = L.canvas({ padding:0.5 });
   S.ecoLayer = L.layerGroup().addTo(S.map);
   S.paLayer = L.layerGroup().addTo(S.map); S.traceLayer = L.layerGroup().addTo(S.map); S.marcheLayer = L.layerGroup().addTo(S.map); S.posLayer = L.layerGroup().addTo(S.map);
@@ -377,24 +381,24 @@ function initCarte(){
 function majCouchesMap(){
   if (S.styleCarte==='classique') return majCouchesMapClassique();
   const m = $('menu-couches'); m.classList.toggle('vu', !!S.menuCouches);
-  m.innerHTML = '<div class="seg"><button data-c="sat" class="'+(S.fond==='Satellite'?'on':'')+'">Satellite</button><button data-c="plan" class="'+(S.fond==='Plan'?'on':'')+'">Plan</button></div>'
+  m.innerHTML = '<div class="seg"><button data-c="sat" class="'+(S.fond==='Satellite'?'on':'')+'">Satellite</button><button data-c="plan" class="'+(S.fond==='Plan'?'on':'')+'">Plan</button>'+(fondPret()?'<button data-c="hl" class="'+(S.fond==='Hors ligne'?'on':'')+'">Hors ligne</button>':'')+'</div>'
     + '<button class="lig '+(S.couchePA?'on':'')+'" data-c="pa"><i style="background:#C9462A"></i>Aires protégées<u></u></button>'
     + '<button class="lig '+(S.couchEco?'on':'')+'" data-c="eco"><i style="background:#fff;border:2px dashed #12493F"></i>Parcelles ECORIGINE<u></u></button>';
   m.querySelectorAll('[data-c]').forEach(b=>b.onclick = ()=>{
     const k = b.dataset.c;
     if (k==='eco'){ S.couchEco = !S.couchEco; majEco(); }
     else if (k==='pa'){ S.couchePA = !S.couchePA; if (S.couchePA) S.paLayer.addTo(S.map); else S.map.removeLayer(S.paLayer); }
-    else { const n = k==='sat'?'Satellite':'Plan'; if (n!==S.fond){ S.map.removeLayer(S.fonds[S.fond]); S.fonds[n].addTo(S.map); S.fonds[n].bringToBack(); S.fond = n; } }
+    else choisirFond(k);
     majCouchesMap();
   });
 }
 function majCouchesMapClassique(){
-  $('couches-map').innerHTML = '<button class="chip '+(S.couchePA?'on':'')+'" data-c="pa">Aires protégées</button><button class="chip '+(S.couchEco?'on':'')+'" data-c="eco">Parcelles ECORIGINE</button><button class="chip '+(S.fond==='Satellite'?'on':'')+'" data-c="sat">Satellite</button><button class="chip '+(S.fond==='Plan'?'on':'')+'" data-c="plan">Plan</button>';
+  $('couches-map').innerHTML = '<button class="chip '+(S.couchePA?'on':'')+'" data-c="pa">Aires protégées</button><button class="chip '+(S.couchEco?'on':'')+'" data-c="eco">Parcelles ECORIGINE</button><button class="chip '+(S.fond==='Satellite'?'on':'')+'" data-c="sat">Satellite</button><button class="chip '+(S.fond==='Plan'?'on':'')+'" data-c="plan">Plan</button>'+(fondPret()?'<button class="chip '+(S.fond==='Hors ligne'?'on':'')+'" data-c="hl">Hors ligne</button>':'');
   $('couches-map').querySelectorAll('[data-c]').forEach(b=>b.onclick = ()=>{
     const k = b.dataset.c;
     if (k==='eco'){ S.couchEco = !S.couchEco; majEco(); }
     else if (k==='pa'){ S.couchePA = !S.couchePA; if (S.couchePA) S.paLayer.addTo(S.map); else S.map.removeLayer(S.paLayer); }
-    else { const n = k==='sat'?'Satellite':'Plan'; if (n!==S.fond){ S.map.removeLayer(S.fonds[S.fond]); S.fonds[n].addTo(S.map); S.fonds[n].bringToBack(); S.fond = n; } }
+    else choisirFond(k);
     majCouchesMap();
   });
 }
@@ -820,6 +824,9 @@ function rendreCouches(){
     + '<div class="barre" id="p-eco" style="display:none"><i style="width:0"></i></div><p class="mut petit" id="t-eco"></p>'
     + '<button class="btn p" id="b-eco" '+(S.ecoTel?'disabled':'')+'>'+(e?'Mettre à jour':'Télécharger la zone')+'</button></div>';
   h += '<div class="carte"><h2>Images satellite et plan</h2><p class="mut petit" id="t-tuiles">…</p><p class="mut petit">Les images que tu as regardées avec du réseau restent disponibles sans réseau. Le téléchargement d’une zone entière viendra avec une source d’images sous licence.</p><button class="btn sm" id="b-vider">Vider les images gardées</button></div>';
+  h += '<div class="carte"><h2>Fond de carte hors ligne</h2><p class="mut petit">Carte OpenStreetMap de toute la Côte d’Ivoire (routes, pistes, villages, rivières, forêts), comme dans Maps.me : elle marche sans réseau. Environ 97 Mo, à télécharger de préférence en Wi-Fi. Une fois installée, elle apparaît dans le menu des couches de la carte, sous le nom « Hors ligne ». Le satellite et le plan en ligne restent disponibles.</p>'
+    + '<div class="barre" id="p-fond" style="display:none"><i style="width:0"></i></div><p class="mut petit" id="t-fond"></p>'
+    + '<div class="rang"><button class="btn p" id="b-fond" '+(S.fondTel?'disabled':'')+'>'+(fondPret()?'Mettre à jour':'Télécharger')+'</button>'+(fondPret()?'<button class="btn sm" id="b-fond-x" '+(S.fondTel?'disabled':'')+'>Supprimer</button>':'')+'</div></div>';
   h += '<div class="carte"><h2>GPS pendant la marche</h2><p class="mut petit">'+(BG ? 'Quand tu marches le contour, le GPS continue même si l’écran s’éteint ou si tu quittes l’application. Une notification « ORIGEN enregistre ton tracé » reste affichée pendant ce temps.' : 'Disponible dans l’application Android.')+'</p>'+(BG ? '<button class="btn sm '+(gpsArriereActif()?'p':'')+'" id="b-bg">'+(gpsArriereActif()?'Activé · toucher pour désactiver':'Désactivé · toucher pour activer')+'</button>' : '')+'</div>';
   h += '<div class="carte"><h2>Affichage de la carte</h2><p class="mut petit">Le déroulement du mapping est le même dans les deux styles.</p><div class="rang"><button class="btn sm '+(S.styleCarte!=='classique'?'p':'')+'" id="b-st-mm">Style Maps.me (nouveau)</button><button class="btn sm '+(S.styleCarte==='classique'?'p':'')+'" id="b-st-cl">Classique (ancien)</button></div></div>';
   h += '<div class="carte"><h2>À propos</h2><p class="mut petit" id="t-stock">…</p><p class="mut petit">ORIGEN, version '+APP_VERSION+'. Précision : GPS du téléphone ; chaque sommet est moyenné sur 10 secondes, ou le tour est marché en continu.</p><button class="btn sm" id="b-deco">Se déconnecter</button></div>';
@@ -828,6 +835,7 @@ function rendreCouches(){
   const bgb = $('b-bg'); if (bgb) bgb.onclick = ()=>{ try { localStorage.setItem('gps_arriere', gpsArriereActif() ? 'non' : 'oui'); } catch(e){} rendreCouches(); toast(gpsArriereActif() ? 'GPS en arrière-plan activé.' : 'GPS en arrière-plan désactivé.'); };
   const choisir = s=>{ S.styleCarte = s; try { localStorage.setItem('style_carte', s); } catch(e){} rendreCouches(); toast(s==='classique' ? 'Carte : style classique.' : 'Carte : style Maps.me.'); };
   $('b-st-mm').onclick = ()=>choisir('maps'); $('b-st-cl').onclick = ()=>choisir('classique');
+  $('b-fond').onclick = telechargerFond; const bfx = $('b-fond-x'); if (bfx) bfx.onclick = supprimerFond; majFondTxt();
   $('b-eco').onclick = ()=>telechargerEco(); $('b-tel').onclick = telechargerCouche; $('b-vider').onclick = viderTuiles;
   $('b-deco').onclick = async ()=>{ if (S.traces.some(t=>t.statut==='en_attente') && !confirm('Des mappings ne sont pas encore envoyés. Se déconnecter quand même ?')) return; await sb.auth.signOut(); S.coop = null; $('connexion').classList.add('actif'); };
 }
@@ -850,6 +858,79 @@ async function telechargerCouche(){
     await chargerPA(); toast('Couches téléchargées : elles marchent hors réseau.');
   } catch(e){ toast('Téléchargement impossible : '+((e&&e.message)||e)); }
   S.tel = null; rendreCouches();
+}
+
+/* ---------- fond de carte hors ligne (OpenStreetMap, 3 paquets PMTiles gardés dans le téléphone) ---------- */
+const FOND_DIR = 'couches/fond/';
+async function chargerFondMeta(){ S.fondMeta = (await kvGet('fond_meta')) || null; }
+function fondPret(){ return !!(S.fondMeta && S.fondMeta.paquets && S.fondMeta.paquets.length && window.pmtiles && window.protomapsL); }
+async function construireFond(){
+  if (!fondPret()) return null;
+  if (S.fondGroupe) return S.fondGroupe;
+  const g = L.layerGroup();
+  for (const p of S.fondMeta.paquets){
+    const blob = await kvGet('fond_'+p.fichier); if (!blob) continue;
+    const src = new pmtiles.PMTiles(new pmtiles.FileSource(new File([blob], p.fichier)));
+    g.addLayer(protomapsL.leafletLayer({ url:src, flavor:'light', lang:'fr', maxDataZoom:14, maxZoom:19, attribution:'© OpenStreetMap' }));
+  }
+  if (!g.getLayers().length) return null;
+  g.bringToBack = ()=>g.eachLayer(l=>l.bringToBack());
+  S.fondGroupe = g; return g;
+}
+async function choisirFond(k){
+  const n = k==='sat' ? 'Satellite' : k==='hl' ? 'Hors ligne' : 'Plan';
+  if (!S.map || n===S.fond) return;
+  let nouv = S.fonds[n];
+  if (n==='Hors ligne'){ try { nouv = await construireFond(); } catch(e){ nouv = null; } if (!nouv){ toast('Fond hors ligne indisponible : télécharge-le à nouveau dans Zone.'); return; } S.fonds[n] = nouv; }
+  S.map.removeLayer(S.fonds[S.fond]); nouv.addTo(S.map); nouv.bringToBack(); S.fond = n;
+  try { localStorage.setItem('fond_carte', n); } catch(e){}
+  majCouchesMap();
+}
+async function majFondTxt(){
+  const e = $('t-fond'); if (!e || S.fondTel) return;
+  if (!S.fondMeta){ await chargerFondMeta(); }
+  if (!fondPret()){ e.textContent = 'Pas encore installé.'; return; }
+  const d = String(S.fondMeta.version||''), dt = d.length===8 ? new Date(d.slice(0,4)+'-'+d.slice(4,6)+'-'+d.slice(6)).toLocaleDateString('fr-FR',{ day:'numeric', month:'long', year:'numeric' }) : '';
+  e.textContent = 'Installé : '+fmt(S.fondMeta.taille/1e6,1)+' Mo'+(dt?', carte du '+dt:'')+'.';
+  if (navigator.onLine){ try { const bi = await sb.storage.from('documents-coop').download(FOND_DIR+'index.json'); if (!bi.error){ const idx = JSON.parse(await bi.data.text()); if (idx.version && idx.version!==S.fondMeta.version && $('t-fond')) $('t-fond').textContent += ' Une carte plus récente est disponible.'; } } catch(x){} }
+}
+async function telechargerFond(){
+  if (S.fondTel) return;
+  if (!navigator.onLine){ toast('Il faut du réseau pour télécharger le fond de carte.'); return; }
+  S.fondTel = true; rendreCouches();
+  const barre = ()=>$('p-fond'), txt = ()=>$('t-fond');
+  try {
+    const bi = await sb.storage.from('documents-coop').download(FOND_DIR+'index.json'); if (bi.error) throw bi.error;
+    const idx = JSON.parse(await bi.data.text()); if (!idx.paquets || !idx.paquets.length) throw new Error('carte indisponible');
+    const total = idx.paquets.reduce((a,p)=>a+p.taille,0); let fait = 0;
+    if (barre()) barre().style.display = 'block';
+    for (let i=0; i<idx.paquets.length; i++){
+      const p = idx.paquets[i];
+      const u = await sb.storage.from('documents-coop').createSignedUrl(FOND_DIR+p.fichier, 1800); if (u.error) throw u.error;
+      const resp = await fetch(u.data.signedUrl); if (!resp.ok) throw new Error('Téléchargement refusé ('+resp.status+')');
+      const rd = resp.body.getReader(), morceaux = []; let lu = 0;
+      for (;;){ const { done, value } = await rd.read(); if (done) break; morceaux.push(value); lu += value.length; fait += value.length; if (barre()){ barre().firstChild.style.width = Math.round(100*fait/total)+'%'; txt().textContent = 'Morceau '+(i+1)+' sur '+idx.paquets.length+' : '+fmt(fait/1e6,1)+' Mo sur '+fmt(total/1e6,1)+' Mo'; } }
+      if (lu !== p.taille) throw new Error('fichier incomplet, réessaie avec un meilleur réseau');
+      await kvSet('fond_'+p.fichier, new Blob(morceaux, { type:'application/octet-stream' }));
+    }
+    await kvSet('fond_meta', { version:idx.version, paquets:idx.paquets, le:new Date().toISOString(), taille:total });
+    const etaitLa = S.map && S.fond==='Hors ligne';
+    if (etaitLa){ S.map.removeLayer(S.fondGroupe); S.fond = 'Satellite'; S.fonds.Satellite.addTo(S.map); }
+    S.fondGroupe = null; S.fonds['Hors ligne'] = null; await chargerFondMeta();
+    if (etaitLa) await choisirFond('hl');
+    toast('Fond de carte installé : il marche sans réseau.');
+  } catch(e){ toast('Téléchargement impossible : '+((e&&e.message)||e)); }
+  S.fondTel = null; rendreCouches(); majStock();
+}
+async function supprimerFond(){
+  if (!confirm('Supprimer le fond de carte hors ligne de ce téléphone ?')) return;
+  try {
+    if (S.map && S.fond==='Hors ligne'){ S.map.removeLayer(S.fondGroupe); S.fond = 'Satellite'; S.fonds.Satellite.addTo(S.map); try { localStorage.setItem('fond_carte','Satellite'); } catch(e){} }
+    for (const p of ((S.fondMeta||{}).paquets||[])) await kvDel('fond_'+p.fichier);
+    await kvDel('fond_meta'); S.fondMeta = null; S.fondGroupe = null; if (S.fonds) S.fonds['Hors ligne'] = null;
+    toast('Fond de carte supprimé.');
+  } catch(e){ toast('Suppression impossible.'); }
+  rendreCouches(); majStock();
 }
 
 /* ---------- mes tracés ---------- */

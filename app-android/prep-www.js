@@ -8,6 +8,8 @@ sub('https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css', 'lib
 sub('https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js', 'lib/leaflet.js');
 sub('https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js', 'lib/turf.min.js');
 sub('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2', 'lib/supabase.js');
+sub('https://cdn.jsdelivr.net/npm/pmtiles@3.2.1/dist/pmtiles.js', 'lib/pmtiles.js');
+sub('https://cdn.jsdelivr.net/npm/protomaps-leaflet@5.1.0/dist/protomaps-leaflet.js', 'lib/protomaps-leaflet.js');
 h = h.replace(/APP_VERSION = '([^']+)'/, "APP_VERSION = '$1-android'");
 fs.writeFileSync(R('www', 'index.html'), h);
 const cp = (a, b) => fs.copyFileSync(a, R('www', b));
@@ -15,6 +17,8 @@ cp(R('node_modules/leaflet/dist/leaflet.css'), 'lib/leaflet.css');
 cp(R('node_modules/leaflet/dist/leaflet.js'), 'lib/leaflet.js');
 for (const f of fs.readdirSync(R('node_modules/leaflet/dist/images'))) cp(R('node_modules/leaflet/dist/images', f), 'lib/images/' + f);
 cp(R('node_modules/@turf/turf/turf.min.js'), 'lib/turf.min.js');
+cp(R('node_modules/pmtiles/dist/pmtiles.js'), 'lib/pmtiles.js');
+cp(R('node_modules/protomaps-leaflet/dist/protomaps-leaflet.js'), 'lib/protomaps-leaflet.js');
 cp(R('node_modules/@supabase/supabase-js/dist/umd/supabase.js'), 'lib/supabase.js');
 cp(R('node_modules/@supabase/supabase-js/dist/umd/591.supabase.js'), 'lib/591.supabase.js');
 cp(R('..', 'terrain-192.png'), 'terrain-192.png'); cp(R('..', 'terrain-sw.js'), 'terrain-sw.js');
