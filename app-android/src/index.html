@@ -172,7 +172,7 @@
 <script src="https://cdn.jsdelivr.net/npm/pmtiles@3.2.1/dist/pmtiles.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/protomaps-leaflet@5.1.0/dist/protomaps-leaflet.js"></script>
 <script>
-const APP_VERSION = '2026-11-04-app11';
+const APP_VERSION = '2026-11-04-app12';
 const SB_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SB_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 const ECO_INCOMPLET = 'Contrôle ECORIGINE NON FAIT : les parcelles de cette zone ne sont pas sur le téléphone et il n’y a pas de réseau. Il sera refait automatiquement dès que le réseau revient, avant l’envoi.';
@@ -240,7 +240,7 @@ async function autoCouches(){
   if (!navigator.onLine || S.tel || S.ecoTel) return;
   const vieux = o => !o || !o.le || (Date.now()-new Date(o.le).getTime()) > 7*864e5;
   try { if (vieux(S.pa)) await telechargerCouche(); } catch(e){}
-  try { if (vieux(S.eco) && boiteZone()) await telechargerEco(); } catch(e){}
+  try { if (vieux(S.eco) || !S.eco.complet) await telechargerEco(); } catch(e){}
 }
 async function chargerRegistre(){
   if (navigator.onLine){
@@ -495,10 +495,10 @@ function majEcoInfo(){
   const vue = S.map.getBounds(), c = vue.getCenter(), bb = [vue.getWest(), vue.getSouth(), vue.getEast(), vue.getNorth()];
   const montrer = (txt, bouton, fn)=>{ el.innerHTML = '<span>'+txt+'</span>'+(bouton?'<button>'+bouton+'</button>':''); el.style.display = 'block'; const b = el.querySelector('button'); if (b) b.onclick = fn; };
   if (!S.eco){
-    return montrer('Parcelles ECORIGINE pas encore téléchargées.', navigator.onLine?'Télécharger ici':null, ()=>telechargerEco({ w:bb[0]-0.1, e:bb[2]+0.1, s:bb[1]-0.1, n:bb[3]+0.1 }).then(majEcoInfo));
+    return montrer('Les parcelles ECORIGINE ne sont pas encore téléchargées.', navigator.onLine?'Télécharger la base (≈ 22 Mo)':null, ()=>telechargerEco());
   }
   if (!ecoCouvre(bb)){
-    return montrer('Les parcelles de cet endroit ne sont pas téléchargées.', navigator.onLine?'Télécharger ici':null, ()=>telechargerEco({ w:bb[0]-0.1, e:bb[2]+0.1, s:bb[1]-0.1, n:bb[3]+0.1 }).then(majEcoInfo));
+    return montrer('La base ECORIGINE n’est pas complète sur ce téléphone.', navigator.onLine?'Télécharger la base (≈ 22 Mo)':null, ()=>telechargerEco());
   }
   for (const k in S.eco.cases) for (const f of S.eco.cases[k].features){      // y a-t-il au moins un contour dans la vue ?
     if (S.coop && f.properties.k===S.coop.id) continue;
@@ -536,32 +536,40 @@ function ecoCouvre(bb){
 }
 // Télécharge (et ajoute à ce qu'on a déjà) les parcelles ECORIGINE d'une zone. bzArg = {w,e,s,n} ; sinon la zone de travail de la coopérative.
 async function telechargerEco(bzArg, silencieux){
+  let partiel = null;
   if (!navigator.onLine){ if (!silencieux) toast('Il faut du réseau pour télécharger la zone.'); return false; }
-  const bz = (bzArg && bzArg.w!=null) ? bzArg : boiteZone(); if (!bz){ if (!silencieux) toast('Attends le signal GPS ou charge d’abord les sections de la coopérative.'); activerGPS(); return false; }
-  S.ecoTel = true; rendreCouches();
+  const toutes = !(bzArg && bzArg.w!=null);                       // sans zone précisée : toute la base ECORIGINE de Côte d’Ivoire
+  S.ecoTel = true; rendreCouches(); majEcoInfo();
   const txt = () => $('t-eco'), barre = () => $('p-eco');
   let ok = false;
   try {
     const bi = await sb.storage.from('documents-coop').download('couches/ecorigine/index.json'); if (bi.error) throw bi.error;
     const index = JSON.parse(await bi.data.text()), pas = index.pas||0.25;
+    let bz = bzArg;
+    if (toutes){ const ks = Object.keys(index.cases).map(k=>k.split('_').map(Number)); if (!ks.length) throw new Error('base vide'); bz = { w:Math.min(...ks.map(a=>a[0]))*pas, e:(Math.max(...ks.map(a=>a[0]))+0.5)*pas, s:Math.min(...ks.map(a=>a[1]))*pas, n:(Math.max(...ks.map(a=>a[1]))+0.5)*pas }; }
     const ancien = (S.eco && S.eco.version===index.version && S.eco.pas===pas) ? S.eco : null;        // nouvelle version de la base : on repart de zéro
     const cases = ancien ? ancien.cases : {}; let taille = ancien ? ancien.taille : 0;
     const ix0 = Math.floor(bz.w/pas), ix1 = Math.floor(bz.e/pas), iy0 = Math.floor(bz.s/pas), iy1 = Math.floor(bz.n/pas);
     const cles = Object.keys(index.cases).filter(k=>{ const [ix,iy] = k.split('_').map(Number); return ix>=ix0 && ix<=ix1 && iy>=iy0 && iy<=iy1 && !cases[k]; });
     if (barre()) barre().style.display = 'block';
-    let fait = 0;
+    let fait = 0; partiel = { version:index.version, pas, cases, taille, ancien };
     for (const k of cles){
       const r = await sb.storage.from('documents-coop').download('couches/ecorigine/c_'+k+'.json'); if (r.error) throw r.error;
-      const t = await r.data.text(); taille += t.length; cases[k] = JSON.parse(t); fait++;
+      const t = await r.data.text(); taille += t.length; cases[k] = JSON.parse(t); fait++; partiel.taille = taille;
       if (barre()) barre().firstChild.style.width = Math.round(100*fait/cles.length)+'%'; if (txt()) txt().textContent = fait+' carreaux sur '+cles.length;
     }
     const nb = Object.values(cases).reduce((a,c)=>a+c.features.length,0);
     const couvert = (ancien ? ecoRects(ancien) : []).concat([[ix0,ix1,iy0,iy1]]);
-    await kvSet('eco', { version:index.version, le:new Date().toISOString(), pas, cases, taille, nb, zone:bz, couvert });
+    await kvSet('eco', { version:index.version, le:new Date().toISOString(), pas, cases, taille, nb, zone:bz, couvert, complet: !!(toutes || (ancien && ancien.complet)) });
     await chargerEco(); ok = true;
-    if (!silencieux) toast('Zone téléchargée : '+fmt(nb)+' parcelles, disponibles sans réseau.');
-  } catch(e){ if (!silencieux) toast('Téléchargement impossible : '+((e&&e.message)||e)); }
-  S.ecoTel = null; rendreCouches(); return ok;
+    if (!silencieux) toast('Base ECORIGINE téléchargée : '+fmt(nb)+' parcelles, disponibles sans réseau.');
+  } catch(e){
+    if (partiel && Object.keys(partiel.cases).length){        // réseau coupé : on garde ce qui est déjà arrivé, la suite reprendra de là
+      try { const a = partiel.ancien; await kvSet('eco', { version:partiel.version, le:(a&&a.le)||new Date(0).toISOString(), pas:partiel.pas, cases:partiel.cases, taille:partiel.taille, nb:Object.values(partiel.cases).reduce((n,c)=>n+c.features.length,0), zone:a&&a.zone, couvert:a?ecoRects(a):[], complet:false }); await chargerEco(); } catch(e2){}
+    }
+    if (!silencieux) toast('Téléchargement interrompu : '+((e&&e.message)||e)+'. Il reprendra là où il s’est arrêté.');
+  }
+  S.ecoTel = null; rendreCouches(); majEcoInfo(); return ok;
 }
 // Garantit que le contrôle de chevauchement est EXACT autour d'un tracé : télécharge la zone manquante si besoin (réseau), sinon dit que le contrôle n'est pas fait.
 async function assurerEcoPour(bb){
@@ -921,10 +929,10 @@ function rendreCouches(){
     + '<div class="barre" id="p-couche" style="display:none"><i style="width:0"></i></div><p class="mut petit" id="t-couche"></p>'
     + '<button class="btn p" id="b-tel" '+(S.tel?'disabled':'')+'>'+(pa?'Mettre à jour':'Télécharger les couches')+'</button></div>';
   const e = S.eco;
-  h += '<div class="carte"><h2>Parcelles ECORIGINE (en pointillé)</h2>'
-    + (e ? '<p><span class="st g">Téléchargées</span> '+fmt(e.nb)+' parcelles · '+fmt(e.taille/1e6,1)+' Mo · le '+esc(new Date(e.le).toLocaleDateString('fr-FR'))+'</p><p class="mut petit">Parcelles des autres coopératives de ta zone : contours seulement, sans nom ni donnée. Elles marchent sans réseau et s’affichent en zoomant.</p>' : '<p><span class="st">Pas encore téléchargées</span></p><p class="mut petit">À télécharger avant de partir : la zone de ta coopérative (environ 30 km autour).</p>')
+  h += '<div class="carte"><h2>Base ECORIGINE de Côte d’Ivoire (en pointillé)</h2>'
+    + (e ? '<p><span class="st g">Téléchargées</span> '+fmt(e.nb)+' parcelles · '+fmt(e.taille/1e6,1)+' Mo · le '+esc(new Date(e.le).toLocaleDateString('fr-FR'))+'</p><p class="mut petit">Toutes les parcelles de la base ECORIGINE, partout en Côte d’Ivoire : contours seulement, sans nom ni donnée. Elles marchent sans réseau et s’affichent en zoomant (à partir du niveau 12).'+(e.complet?'':' <b>La base n’est pas encore complète : touche « Télécharger ».</b>')+'</p>' : '<p><span class="st">Pas encore téléchargées</span></p><p class="mut petit">À télécharger avant de partir : toute la base ECORIGINE de Côte d’Ivoire (environ 22 Mo, de préférence en Wi-Fi).</p>')
     + '<div class="barre" id="p-eco" style="display:none"><i style="width:0"></i></div><p class="mut petit" id="t-eco"></p>'
-    + '<button class="btn p" id="b-eco" '+(S.ecoTel?'disabled':'')+'>'+(e?'Mettre à jour':'Télécharger la zone')+'</button></div>';
+    + '<button class="btn p" id="b-eco" '+(S.ecoTel?'disabled':'')+'>'+(e&&e.complet?'Mettre à jour':'Télécharger toute la base')+'</button></div>';
   h += '<div class="carte"><h2>Images satellite et plan</h2><p class="mut petit" id="t-tuiles">…</p><p class="mut petit">Les images que tu as regardées avec du réseau restent disponibles sans réseau. Le téléchargement d’une zone entière viendra avec une source d’images sous licence.</p><button class="btn sm" id="b-vider">Vider les images gardées</button></div>';
   h += '<div class="carte"><h2>Fond de carte hors ligne</h2><p class="mut petit">Carte OpenStreetMap de toute la Côte d’Ivoire (routes, pistes, villages, rivières, forêts), comme dans Maps.me : elle marche sans réseau. Environ 97 Mo, à télécharger de préférence en Wi-Fi. Une fois installée, elle apparaît dans le menu des couches de la carte, sous le nom « Hors ligne ». Le satellite et le plan en ligne restent disponibles.</p>'
     + '<div class="barre" id="p-fond" style="display:none"><i style="width:0"></i></div><p class="mut petit" id="t-fond"></p>'
