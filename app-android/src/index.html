@@ -63,6 +63,8 @@
   #e-carte.mm #bandeau{position:absolute;z-index:510;left:50%;transform:translateX(-50%);width:max-content;max-width:calc(100% - 20px);top:calc(64px + env(safe-area-inset-top));padding:6px 14px;border-radius:18px;font-size:12.5px;font-weight:600;display:none;box-shadow:0 2px 8px #0003;text-align:center}
   #e-carte.mm #bandeau.rouge{display:block;background:var(--rouge);color:#fff} #e-carte.mm #bandeau.orange{display:block;background:var(--or);color:var(--teal)} #e-carte.mm #bandeau.gris{display:block;background:#ffffffee;color:var(--teal);font-weight:500}
   #surface-live{position:absolute;z-index:510;left:50%;transform:translateX(-50%);top:calc(104px + env(safe-area-inset-top));padding:7px 16px;border-radius:20px;background:var(--teal);color:#fff;font-size:15px;font-weight:700;display:none;box-shadow:0 2px 10px #0004;white-space:nowrap}
+  #eco-info{position:absolute;z-index:505;left:50%;transform:translateX(-50%);width:max-content;max-width:calc(100% - 24px);top:calc(142px + env(safe-area-inset-top));padding:8px 12px;border-radius:16px;background:#ffffffef;color:var(--teal);font-size:12.5px;font-weight:600;display:none;box-shadow:0 2px 8px #0003;text-align:center}
+  #eco-info button{display:block;margin:6px auto 0;padding:6px 14px;border-radius:12px;background:var(--teal);color:#fff;font-weight:700;font-size:12.5px}
   #surface-live small{font-weight:500;opacity:.8;font-size:12px;margin-left:6px}
   #menu-couches{position:absolute;z-index:530;right:10px;top:calc(64px + env(safe-area-inset-top));background:#fff;border-radius:16px;box-shadow:0 4px 18px #0004;padding:10px;display:none;min-width:230px}
   #menu-couches.vu{display:block}
@@ -137,6 +139,7 @@
     <div id="bandeau"></div>
     <div id="couches-map"></div>
     <div id="surface-live"></div>
+    <div id="eco-info"></div>
     <div id="menu-couches"></div>
     <div id="flottants"><button class="rond" id="b-centrer" aria-label="Me centrer"></button></div>
     <div id="action"></div>
@@ -169,7 +172,7 @@
 <script src="https://cdn.jsdelivr.net/npm/pmtiles@3.2.1/dist/pmtiles.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/protomaps-leaflet@5.1.0/dist/protomaps-leaflet.js"></script>
 <script>
-const APP_VERSION = '2026-11-04-app10';
+const APP_VERSION = '2026-11-04-app11';
 const SB_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SB_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 const ECO_INCOMPLET = 'Contrôle ECORIGINE NON FAIT : les parcelles de cette zone ne sont pas sur le téléphone et il n’y a pas de réseau. Il sera refait automatiquement dès que le réseau revient, avant l’envoi.';
@@ -471,6 +474,40 @@ function majEco(){
     }
   }
   S.ecoCouches.forEach((l,k)=>{ if (garder.has(k)){ if (!S.ecoLayer.hasLayer(l)) S.ecoLayer.addLayer(l); } else if (S.ecoLayer.hasLayer(l)) S.ecoLayer.removeLayer(l); });
+  clearTimeout(S.ecoInfoT); S.ecoInfoT = setTimeout(majEcoInfo, 250);
+}
+// Explique à l'écran pourquoi on ne voit pas de pointillés : zone pas téléchargée, ou vraiment aucune parcelle ECORIGINE ici (et où est la plus proche).
+function ecoBB(f){ if (!f._bb) f._bb = turf.bbox(f); return f._bb; }
+function ecoProche(c){
+  let best = null;
+  for (const k in S.eco.cases) for (const f of S.eco.cases[k].features){
+    if (S.coop && f.properties.k===S.coop.id) continue;
+    const b = ecoBB(f), la = (b[1]+b[3])/2, lo = (b[0]+b[2])/2, d = S.map.distance(c, [la,lo]);
+    if (!best || d<best.d) best = { d, lat:la, lng:lo };
+  }
+  return best;
+}
+function cap(a, b){ const r = Math.PI/180, y = Math.sin((b.lng-a.lng)*r)*Math.cos(b.lat*r), x = Math.cos(a.lat*r)*Math.sin(b.lat*r)-Math.sin(a.lat*r)*Math.cos(b.lat*r)*Math.cos((b.lng-a.lng)*r); return (Math.atan2(y,x)/r+360)%360; }
+function majEcoInfo(){
+  const el = $('eco-info'); if (!el || !S.map) return;
+  const cacher = ()=>{ el.style.display = 'none'; el.innerHTML = ''; };
+  if (!S.couchEco || S.map.getZoom()<12) return cacher();
+  const vue = S.map.getBounds(), c = vue.getCenter(), bb = [vue.getWest(), vue.getSouth(), vue.getEast(), vue.getNorth()];
+  const montrer = (txt, bouton, fn)=>{ el.innerHTML = '<span>'+txt+'</span>'+(bouton?'<button>'+bouton+'</button>':''); el.style.display = 'block'; const b = el.querySelector('button'); if (b) b.onclick = fn; };
+  if (!S.eco){
+    return montrer('Parcelles ECORIGINE pas encore téléchargées.', navigator.onLine?'Télécharger ici':null, ()=>telechargerEco({ w:bb[0]-0.1, e:bb[2]+0.1, s:bb[1]-0.1, n:bb[3]+0.1 }).then(majEcoInfo));
+  }
+  if (!ecoCouvre(bb)){
+    return montrer('Les parcelles de cet endroit ne sont pas téléchargées.', navigator.onLine?'Télécharger ici':null, ()=>telechargerEco({ w:bb[0]-0.1, e:bb[2]+0.1, s:bb[1]-0.1, n:bb[3]+0.1 }).then(majEcoInfo));
+  }
+  for (const k in S.eco.cases) for (const f of S.eco.cases[k].features){      // y a-t-il au moins un contour dans la vue ?
+    if (S.coop && f.properties.k===S.coop.id) continue;
+    const b = ecoBB(f); if (b[2]>=bb[0] && b[0]<=bb[2] && b[3]>=bb[1] && b[1]<=bb[3]) return cacher();
+  }
+  const p = ecoProche(c);
+  if (!p) return montrer('Aucune parcelle ECORIGINE dans la zone téléchargée.');
+  const dir = ['au nord','au nord-est','à l’est','au sud-est','au sud','au sud-ouest','à l’ouest','au nord-ouest'][Math.round(cap({lat:c.lat,lng:c.lng}, p)/45)%8];
+  montrer('Pas de parcelle ECORIGINE ici. La plus proche : '+(p.d>=1000?fmt(p.d/1000,0)+' km':Math.round(p.d)+' m')+' '+dir+'.', 'Y aller', ()=>{ S.suivre = false; S.map.setView([p.lat,p.lng], 15); });
 }
 function boiteZone(){
   const pts = [];
