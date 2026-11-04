@@ -4715,7 +4715,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-03-445';
+const APP_VERSION = '2026-11-04-446';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -9805,10 +9805,13 @@ function livrStatutDecl(a){
   if (faits.length) return { txt:'Partiel : reste '+sig(manque), date:dates, code:'part' };
   return { txt:'Non déclaré ('+sig(pf)+')', date:'', code:'non' };
 }
-async function livraisonsClientsExporter(campagneId){
+async function livraisonsClientsExporter(campagneId, filtre){
   let ExcelJS; try{ ExcelJS = await qcChargerExcelJS(); }catch(e){ showToast('Impossible de préparer le classeur : '+e.message, 'error'); return; }
   const camp = campagneId || null, campNom = camp ? lotsCampagneNom(camp) : 'toutes campagnes';
-  const achats = (state.achats||[]).filter(a=>!a.producteur_id && !a.refoulee && (!camp || a.campagne_id===camp));
+  let achats = (state.achats||[]).filter(a=>!a.producteur_id && !a.refoulee && (!camp || a.campagne_id===camp));
+  // Choix fait dans le formulaire : seulement certains partenaires, ou seulement les livraisons d'un traitant
+  if (filtre && filtre.clients) achats = achats.filter(a=>{ const n = achatClientEffectif(a); return filtre.clients.has(n ? ccClefClient(n) : '__sans__'); });
+  else if (filtre && filtre.traitant) achats = achats.filter(a=>{ const e = livrExecutantDe(a); return !!e && e.traitant===filtre.traitant; });
   const connus = ccClientsConnus(), groupes = new Map(), sans = [];
   achats.forEach(a=>{
     const nom = achatClientEffectif(a); if (!nom){ sans.push(a); return; }
@@ -9855,8 +9858,64 @@ async function livraisonsClientsExporter(campagneId){
         if (k===2) x.numFmt = 'mm-dd-yy'; if (k>=6) x.numFmt = NB; });
     });
   });
-  await qcTelechargerClasseur(wb, 'Point_livraisons_clients_'+String(campNom).replace(/[^A-Za-z0-9]+/g,'_')+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
+  const suffixe = filtre && filtre.traitant ? '_traitant_'+String(filtre.traitant).replace(/[^A-Za-z0-9]+/g,'_') : filtre && filtre.libelle ? '_'+String(filtre.libelle).replace(/[^A-Za-z0-9]+/g,'_').slice(0,40) : '';
+  await qcTelechargerClasseur(wb, 'Point_livraisons_clients_'+String(campNom).replace(/[^A-Za-z0-9]+/g,'_')+suffixe+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
   showToast('Point des livraisons téléchargé ('+liste.length+' feuille'+(liste.length>1?'s':'')+').', 'success');
+}
+
+// ---- Formulaire du « Point des livraisons par client » : on choisit la campagne, puis un ou plusieurs partenaires, ou un seul traitant ----
+function livrExpDonnees(camp){
+  const achats = (state.achats||[]).filter(a=>!a.producteur_id && !a.refoulee && (!camp || a.campagne_id===camp));
+  const connus = ccClientsConnus(), cl = new Map(), tr = new Map();
+  achats.forEach(a=>{
+    const n = achatClientEffectif(a), cle = n ? ccClefClient(n) : '__sans__';
+    const g = cl.get(cle) || { cle, nom: n ? (connus.get(cle)||n) : 'Sans client attribué', n:0, kg:0 }; g.n++; g.kg += Number(a.poids_brut_accepte)||0; cl.set(cle, g);
+    const e = livrExecutantDe(a);
+    if (e && e.traitant && !/^coops?\s/i.test(String(e.traitant).trim())){ const t = tr.get(e.traitant) || { nom:e.traitant, n:0, kg:0, usines:new Set() }; t.n++; t.kg += Number(a.poids_brut_accepte)||0; t.usines.add(e.usine); tr.set(e.traitant, t); }
+  });
+  return { clients: Array.from(cl.values()).sort((x,y)=>x.nom.localeCompare(y.nom,'fr')), traitants: Array.from(tr.values()).sort((x,y)=>x.nom.localeCompare(y.nom,'fr')) };
+}
+function livrExportOuvrir(){
+  const camp = (state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : '';
+  const d = livrExpDonnees(camp);
+  state.modal = { type:'livrExport', payload:{ camp, mode:'clients', sel:new Set(d.clients.map(c=>c.cle)), traitant:'' } }; render();
+}
+function livrExpCampagne(v){ const pl = state.modal && state.modal.payload; if (!pl) return; pl.camp = v; const d = livrExpDonnees(v); pl.sel = new Set(d.clients.map(c=>c.cle)); if (!d.traitants.some(t=>t.nom===pl.traitant)) pl.traitant = ''; render(); }
+function livrExpMode(m){ const pl = state.modal && state.modal.payload; if (!pl) return; pl.mode = m; render(); }
+function livrExpCoche(cle, on){ const pl = state.modal && state.modal.payload; if (!pl) return; if (on) pl.sel.add(cle); else pl.sel.delete(cle); const b = document.getElementById('lx-n'); if (b) b.textContent = pl.sel.size; }
+function livrExpTout(on){ const pl = state.modal && state.modal.payload; if (!pl) return; const d = livrExpDonnees(pl.camp); pl.sel = on ? new Set(d.clients.map(c=>c.cle)) : new Set(); render(); }
+function livrExpTraitant(v){ const pl = state.modal && state.modal.payload; if (pl) pl.traitant = v; }
+function renderLivrExportModal(m){
+  const pl = m.payload, d = livrExpDonnees(pl.camp), t = kg=>fmtNum(Math.round(kg/10)/100)+' t';
+  const campOpts = '<option value="">Toutes les campagnes</option>'+(state.campagnes||[]).slice().sort((a,b)=>String(b.nom||'').localeCompare(String(a.nom||''))).map(c=>'<option value="'+esc(c.id)+'"'+(c.id===pl.camp?' selected':'')+'>'+esc(c.nom)+'</option>').join('');
+  let corps;
+  if (pl.mode==='traitant'){
+    corps = d.traitants.length
+      ? '<div class="hint" style="margin-bottom:6px">Toutes les livraisons déchargées chez ce traitant, une feuille par client (et par usine si besoin).</div>'
+        + d.traitants.map(x=>'<label style="display:flex;gap:8px;align-items:flex-start;padding:6px 4px;cursor:pointer"><input type="radio" name="lx_tr" value="'+esc(x.nom)+'" '+(pl.traitant===x.nom?'checked':'')+' onchange="livrExpTraitant(this.value)" style="margin-top:3px"><span><b>'+esc(x.nom)+'</b><br><span class="hint" style="margin:0">'+esc(Array.from(x.usines).join(', '))+' · '+fmtNum(x.n)+' livraison'+(x.n>1?'s':'')+' · '+t(x.kg)+'</span></span></label>').join('')
+      : '<div class="hint">Aucun traitant trouvé pour cette campagne.</div>';
+  } else {
+    corps = d.clients.length
+      ? '<div style="display:flex;gap:8px;margin-bottom:6px"><button type="button" class="btn-ghost btn-compact" onclick="livrExpTout(true)">Tout cocher</button><button type="button" class="btn-ghost btn-compact" onclick="livrExpTout(false)">Tout décocher</button></div>'
+        + d.clients.map(x=>'<label style="display:flex;gap:8px;align-items:center;padding:5px 4px;cursor:pointer"><input type="checkbox" '+(pl.sel.has(x.cle)?'checked':'')+' onchange="livrExpCoche(\''+escJs(x.cle)+'\', this.checked)"><span><b>'+esc(x.nom)+'</b> <span class="hint" style="margin:0">· '+fmtNum(x.n)+' livraison'+(x.n>1?'s':'')+' · '+t(x.kg)+'</span></span></label>').join('')
+      : '<div class="hint">Aucune livraison pour cette campagne.</div>';
+  }
+  return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>Point des livraisons par client</h3><div id="modal-fields">'
+    + '<label class="field">Campagne<select onchange="livrExpCampagne(this.value)">'+campOpts+'</select></label>'
+    + '<div style="display:flex;gap:16px;margin:4px 0 10px;flex-wrap:wrap"><label style="cursor:pointer"><input type="radio" name="lx_mode" '+(pl.mode!=='traitant'?'checked':'')+' onchange="livrExpMode(\'clients\')"> Par partenaire (client)</label><label style="cursor:pointer"><input type="radio" name="lx_mode" '+(pl.mode==='traitant'?'checked':'')+' onchange="livrExpMode(\'traitant\')"> Par traitant</label></div>'
+    + '<div style="max-height:46vh;overflow:auto;border:1px solid var(--line,#D5DDD9);border-radius:10px;padding:6px 8px">'+corps+'</div>'
+    + (pl.mode!=='traitant' ? '<div class="hint" style="margin-top:6px"><b id="lx-n">'+pl.sel.size+'</b> partenaire(s) coché(s) : une feuille par partenaire dans le classeur Excel.</div>' : '')
+    + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="livrExportLancer()">⬇ Télécharger (Excel)</button></div></div></div>';
+}
+async function livrExportLancer(){
+  const pl = state.modal && state.modal.type==='livrExport' ? state.modal.payload : null; if (!pl) return;
+  let filtre;
+  if (pl.mode==='traitant'){ if (!pl.traitant){ showToast('Choisis un traitant.', 'error'); return; } filtre = { traitant: pl.traitant }; }
+  else { if (!pl.sel.size){ showToast('Coche au moins un partenaire.', 'error'); return; }
+    const d = livrExpDonnees(pl.camp), noms = d.clients.filter(c=>pl.sel.has(c.cle)).map(c=>c.nom);
+    filtre = { clients: new Set(pl.sel), libelle: noms.length<=2 ? noms.join('_') : '' }; if (pl.sel.size===d.clients.length) filtre = null; }
+  const camp = pl.camp; closeModal();
+  await livraisonsClientsExporter(camp, filtre);
 }
 
 // ---- Livraisons d'une coopérative (ou de toutes) : UN seul tableau, au modèle TRACA (mêmes couleurs, mêmes colonnes), sans découpage par client ----
@@ -12168,6 +12227,7 @@ function lotsModalsHtml(){
   if (m.type==='finPrime') return renderFinPrimeModal(m);
   if (m.type==='finPartDetail') return renderFinPartDetailModal(m);
   if (m.type==='finPartPaiement') return renderFinPartPaiementModal(m);
+  if (m.type==='livrExport') return renderLivrExportModal(m);
   if (m.type==='finLtdLots') return renderFinLtdLotsModal(m);
   if (m.type==='lotsPoidsEntrepot'){
     const pl = m.payload, lots = lotsPoidsEntrepotLots(pl);
@@ -27278,7 +27338,7 @@ function renderAchatsConnaissementPanel(){
   html += '<div class="panel-head"><h2>Achats par connaissement ('+fmtNum(list.length)+')</h2>'
     + '<button type="button" class="btn" onclick="telechargerRapportLivraisons()" title="Toutes les livraisons de toutes les coopératives et de toutes les campagnes, avec leur statut de déclaration Multitrace / Fairtrace">⬇ Rapport des livraisons (Excel)</button>'
     + '<button type="button" class="btn" style="margin-left:8px" onclick="livraisonsCoopExporter()" title="Un seul tableau au modèle TRACA : les livraisons de la coopérative choisie, ou de toutes les coopératives si aucune n\'est choisie, avec poids et statut de déclaration RA / FT">⬇ '+(state.coopFilter && state.coopFilter!=='all' ? 'Livraisons de cette coopérative' : 'Livraisons de toutes les coopératives')+' (Excel)</button>'
-    + '<button type="button" class="btn" style="margin-left:8px" onclick="livraisonsClientsExporter(\''+escJs((state.campagneFilter && state.campagneFilter!=="all") ? state.campagneFilter : "")+'\')" title="Un classeur Excel : une feuille par client, 9 colonnes du modèle TRACA">⬇ Point des livraisons par client (Excel)</button>'
+    + '<button type="button" class="btn" style="margin-left:8px" onclick="livrExportOuvrir()" title="Choisir la campagne puis un ou plusieurs partenaires (ou un seul traitant) : un classeur Excel, une feuille par partenaire, 9 colonnes du modèle TRACA">⬇ Point des livraisons par client (Excel)</button>'
     + '<button type="button" class="btn btn-primary" style="margin-left:8px" onclick="ouvrirPresentationAchats()" title="Quatre fenêtres : suivi des achats, achats quotidien, tracking brousse, prévisions">🖼 Présentation des achats</button>'
     + '<button type="button" class="btn" style="margin-left:8px" onclick="ouvrirPrevisionsEditeur()" title="Saisir les coopératives qui peuvent livrer, le volume et le jour">✏ Prévisions de la semaine</button></div>';
   if (list.length===0){
