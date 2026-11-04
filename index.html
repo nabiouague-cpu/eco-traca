@@ -4715,7 +4715,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-05-450';
+const APP_VERSION = '2026-11-05-451';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8000,7 +8000,7 @@ function finPartenaires(){
 function renderFinPartenaires(){
   if (!state.finPaCharge){ finChargerPaiementsAnnexes().then(()=>render()); return '<div class="panel"><div class="hint" style="padding:18px">Chargement…</div></div>'; }
   const ps = finPartenaires();
-  let html = '<div class="panel"><div class="panel-head"><div><h2>Partenaires — usiniers et traitants</h2><p class="hint" style="margin:4px 0 0">Cacao livré par chaque partenaire (Awahus, Sitapa, Bobby Vo…) et ce qu\'on leur doit : prix loco-magasin moins la sacherie fournie par ECORIGINE, sur le poids pesé à l\'entrée du magasin export pour les usines loco-magasin, sinon sur le poids net pesé à l\'usine. Les prix se règlent dans la fiche de chaque usine (Lots &amp; export › Usines).</p></div></div><div style="padding:0 18px 18px">';
+  let html = '<div class="panel"><div class="panel-head" style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap"><div><h2>Partenaires — usiniers et traitants</h2><p class="hint" style="margin:4px 0 0">Cacao livré par chaque partenaire (Awahus, Sitapa, Bobby Vo…) et ce qu\'on leur doit : prix loco-magasin moins la sacherie fournie par ECORIGINE, sur le poids pesé à l\'entrée du magasin export pour les usines loco-magasin, sinon sur le poids net pesé à l\'usine. Les prix se règlent dans la fiche de chaque usine (Lots &amp; export › Usines).</p></div><div><button class="btn btn-primary" onclick="ctrTousGenerer(this)" title="Génère d\'un coup le contrat Loco-magasin de chaque usinier (fichier ZIP de documents Word).">📄 Contrats de tous les usiniers (ZIP)</button></div></div><div style="padding:0 18px 18px">';
   if (!ps.length) return html + '<div class="hint">Aucun partenaire : renseigne le traitant des usines dans leur fiche.</div></div></div>';
   html += '<div class="achats-defile"><table class="tbl-fiches tbl-dense"><thead><tr><th>Partenaire</th><th>Usines</th><th class="num">Livraisons</th><th class="num">Poids usine (kg)</th><th class="num">Poids magasin export (kg)</th><th>Base</th><th class="num">Dû</th><th class="num">Payé</th><th class="num">Reste</th><th></th></tr></thead><tbody>';
   ps.forEach(p=>{
@@ -8119,10 +8119,10 @@ async function ctrGenerer(f, o){
   if (typeof JSZip==='undefined') throw new Error('la bibliothèque de compression n\'a pas pu se charger (connexion internet requise)');
   const x = ctrContexte(f, o);
   const r = await pfEditerDocx(await pfChargerModele(CTR_MODELE), dom=>ctrRemplir(dom, x));
-  return { blob:r.blob, nom:assainirNomFichier('Contrat_Loco-mag_'+String(f.nom).replace(/\s+/g,'_')+'_26-27.docx'), manques:ctrManques(f, x), bilan:r.bilan };
+  return { blob:r.blob, nom:assainirNomFichier('Contrat_Loco-mag_'+String(((String(f.denomination||'').match(/\(([^)]{2,20})\)\s*$/)||[])[1]) || f.nom).replace(/\s+/g,'_')+'_26-27.docx'), manques:ctrManques(f, x), bilan:r.bilan };
 }
 function ctrOuvrir(t){
-  const nom = decodeURIComponent(t), sites = ctrSitesDe(nom);
+  const nom = decodeURIComponent(t), sites = ctrSitesContrat(nom);
   state.modal = { type:'ctrTraitant', payload:{ traitant:nom, sitesSel:sites.map(s=>s.code) } }; render();
 }
 function ctrLire(nom){
@@ -8140,6 +8140,28 @@ async function ctrEnregistrerFiche(nom, silencieux){
   if (!silencieux) showToast('Fiche de '+nom+' enregistrée.', 'success');
   return true;
 }
+function ctrSitesContrat(nom){ const sites = ctrSitesDe(nom), n = x=>String(x||'').toUpperCase().replace(/[^A-Z0-9]/g,''), den = n((ctrFiche(nom)).denomination); const propres = den ? sites.filter(x=>n(x.nom).length>2 && den.includes(n(x.nom))) : []; return propres.length ? propres : sites; }
+function ctrPrixCommun(){ return (state.sitesUsinage||[]).find(s=>s.actif!==false && Number(s.prix_loco_fcfa_kg)>0) || {}; }
+function ctrAnneeCampagne(){ const camp = (state.campagnes||[]).find(c=>c.id===finCampagneId()); return camp && camp.date_debut ? String(camp.date_debut).slice(0,4) : '2026'; }
+async function ctrTousGenerer(btn){
+  const txt = btn ? btn.textContent : ''; if (btn){ btn.disabled = true; btn.textContent = 'Génération…'; }
+  try{
+    if (typeof JSZip==='undefined') throw new Error('la bibliothèque de compression n\'a pas pu se charger (connexion internet requise)');
+    if (!state.finPaCharge) await finChargerPaiementsAnnexes();
+    const noms = finPartenaires().map(p=>p.traitant); if (!noms.length) throw new Error('aucun partenaire');
+    const zip = new JSZip(), manques = [], commun = ctrPrixCommun();
+    for (const nom of noms){
+      const f = ctrFiche(nom), sites = ctrSitesContrat(nom), avec = sites.find(s=>Number(s.prix_loco_fcfa_kg)>0) || commun;
+      const o = { nom, sites, qte:1000, loco:String(avec.prix_loco_fcfa_kg||''), sac:String(avec.cout_sacherie_fcfa_kg||''), dateLimite:ctrAnneeCampagne()+'-12-15', dateSign:aujourdhuiIso() };
+      const d = await ctrGenerer(f, o);
+      zip.file(d.nom, d.blob);
+      if (d.manques.length) manques.push(nom+' ('+d.manques.join(', ')+')');
+    }
+    telechargerBlob(await zip.generateAsync({ type:'blob' }), 'Contrats_Loco-mag_26-27.zip');
+    showToast(manques.length ? noms.length+' contrats téléchargés. À compléter à la main : '+manques.join(' ; ')+'.' : noms.length+' contrats téléchargés (un par usinier).', manques.length ? '' : 'success');
+  }catch(e){ showToast('Échec : '+(e && e.message ? e.message : e)); }
+  finally{ if (btn){ btn.disabled = false; btn.textContent = txt; } }
+}
 async function ctrTelecharger(nom, btn){
   const txt = btn ? btn.textContent : ''; if (btn){ btn.disabled = true; btn.textContent = 'Génération…'; }
   try{
@@ -8154,7 +8176,7 @@ async function ctrTelecharger(nom, btn){
 }
 function renderCtrModal(m){
   const nom = m.payload.traitant, f = ctrFiche(nom), sites = ctrSitesDe(nom), sel = sites.filter(s=>m.payload.sitesSel.includes(s.code));
-  const avecPrix = sel.find(s=>Number(s.prix_loco_fcfa_kg)>0) || sites.find(s=>Number(s.prix_loco_fcfa_kg)>0) || {};
+  const avecPrix = sel.find(s=>Number(s.prix_loco_fcfa_kg)>0) || sites.find(s=>Number(s.prix_loco_fcfa_kg)>0) || ctrPrixCommun();
   const prixDiff = new Set(sel.map(s=>String(s.prix_loco_fcfa_kg||'')+'/'+String(s.cout_sacherie_fcfa_kg||''))).size>1;
   const camp = (state.campagnes||[]).find(c=>c.id===finCampagneId());
   const inp = (k, lib, ph, large)=>'<label class="field"'+(large?' style="grid-column:1/-1"':'')+'>'+lib+'<input type="text" name="ct_'+k+'" value="'+esc(f[k]||'')+'"'+(ph?' placeholder="'+esc(ph)+'"':'')+'></label>';
