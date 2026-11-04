@@ -163,7 +163,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
-const APP_VERSION = '2026-11-04-app5';
+const APP_VERSION = '2026-11-04-app6';
 const SB_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SB_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 const ECO_INCOMPLET = 'Contrôle ECORIGINE NON FAIT : les parcelles de cette zone ne sont pas sur le téléphone et il n’y a pas de réseau. Il sera refait automatiquement dès que le réseau revient, avant l’envoi.';
@@ -355,7 +355,7 @@ function commencerTrace(p, depuisNouveau){
   if (!p.nouveau){ const deja = S.traces.filter(t=>t.producteur_id===p.id).length + (p.polygon_filename?1:0); S.parcelle = (p.code||'')+'-P'+(deja+1); } else S.parcelle = p.code+'-P1';
   aller('carte', true);
 }
-function resetTrace(){ S.pts = []; S.verif = null; S.fermeture = null; S.rawTrail = null; S.meta = null; S.marche = null; S.collecte = null; if (S.map){ S.traceLayer.clearLayers(); S.marcheLayer.clearLayers(); } }
+function resetTrace(){ arriereArreter(); S.pts = []; S.verif = null; S.fermeture = null; S.rawTrail = null; S.meta = null; S.marche = null; S.collecte = null; if (S.map){ S.traceLayer.clearLayers(); S.marcheLayer.clearLayers(); } }
 function initCarte(){
   if (S.map) return;
   S.map = L.map('map',{ zoomControl:false, attributionControl:false }).setView([6.9,-5.5],7);
@@ -534,22 +534,43 @@ function chevauchementEco(poly){
 }
 
 /* ---------- GPS ---------- */
+// Une position arrive (du GPS du navigateur, ou du service d'arrière-plan quand l'écran est éteint)
+function appliquerPosition(lat, lng, acc, tt){
+  if (S.pos && tt && S.pos.t && tt <= S.pos.t) return;          // même mesure reçue par les deux sources, ou plus ancienne
+  S.pos = { lat:lat, lng:lng, acc:acc, t:tt||Date.now() };
+  if (S.posLayer){
+    S.posLayer.clearLayers();
+    L.circle([S.pos.lat,S.pos.lng],{ radius:S.pos.acc, color:'#2563eb', weight:1, fillOpacity:.1 }).addTo(S.posLayer);
+    L.circleMarker([S.pos.lat,S.pos.lng],{ radius:7, color:'#fff', weight:2, fillColor:'#2563eb', fillOpacity:1 }).addTo(S.posLayer);
+    if (S.suivre && !S.vuDejaCentre){ S.vuDejaCentre = true; S.map.setView([S.pos.lat,S.pos.lng],17); } else if (S.suivre && S.ecran==='carte') S.map.panTo([S.pos.lat,S.pos.lng],{ animate:true });
+  }
+  if (S.marche) marcheFix(S.pos);
+  if (S.collecte && S.pos.acc <= S.maxAcc) S.collecte.fixes.push({ lat:S.pos.lat, lng:S.pos.lng, acc:S.pos.acc });
+  if (S.ecran==='carte'){ majBandeau(); majPrec(); }
+  if (S.ecran==='accueil' && !S.sectionSel && !S.accueilGPS){ S.accueilGPS = true; rendreAccueil(); }
+}
 function activerGPS(){
   if (!navigator.geolocation){ toast('Ce téléphone ne donne pas la position.'); return; }
   if (S.watch != null) return;
-  S.watch = navigator.geolocation.watchPosition(p=>{
-    S.pos = { lat:p.coords.latitude, lng:p.coords.longitude, acc:p.coords.accuracy, t:p.timestamp };
-    if (S.posLayer){
-      S.posLayer.clearLayers();
-      L.circle([S.pos.lat,S.pos.lng],{ radius:S.pos.acc, color:'#2563eb', weight:1, fillOpacity:.1 }).addTo(S.posLayer);
-      L.circleMarker([S.pos.lat,S.pos.lng],{ radius:7, color:'#fff', weight:2, fillColor:'#2563eb', fillOpacity:1 }).addTo(S.posLayer);
-      if (S.suivre && !S.vuDejaCentre){ S.vuDejaCentre = true; S.map.setView([S.pos.lat,S.pos.lng],17); } else if (S.suivre && S.ecran==='carte') S.map.panTo([S.pos.lat,S.pos.lng],{ animate:true });
-    }
-    if (S.marche) marcheFix(S.pos);
-    if (S.collecte && S.pos.acc <= S.maxAcc) S.collecte.fixes.push({ lat:S.pos.lat, lng:S.pos.lng, acc:S.pos.acc });
-    if (S.ecran==='carte'){ majBandeau(); majPrec(); }
-    if (S.ecran==='accueil' && !S.sectionSel && !S.accueilGPS){ S.accueilGPS = true; rendreAccueil(); }
-  }, e=>{ S.watch = null; if (S.ecran==='carte') toast(e.code===1 ? 'Position refusée : autorise la position pour ORIGEN.' : 'GPS indisponible : '+e.message); }, { enableHighAccuracy:true, maximumAge:0, timeout:20000 });
+  S.watch = navigator.geolocation.watchPosition(p=>appliquerPosition(p.coords.latitude, p.coords.longitude, p.coords.accuracy, p.timestamp),
+    e=>{ S.watch = null; if (S.ecran==='carte') toast(e.code===1 ? 'Position refusée : autorise la position pour ORIGEN.' : 'GPS indisponible : '+e.message); }, { enableHighAccuracy:true, maximumAge:0, timeout:20000 });
+}
+/* ---------- GPS en arrière-plan (écran éteint, application réduite) : service Android de premier plan ----------
+   Actif seulement pendant « Marcher le contour », avec une notification visible. Désactivable dans Zone (porte de sortie : on revient au GPS d'avant). */
+const BG = (()=>{ try { return (window.Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform()) ? Capacitor.registerPlugin('BackgroundGeolocation') : null; } catch(e){ return null; } })();
+function gpsArriereActif(){ try { return localStorage.getItem('gps_arriere') !== 'non'; } catch(e){ return true; } }
+async function arriereDemarrer(){
+  if (!BG || !gpsArriereActif() || S.bgId || S.bgVeut) return;
+  S.bgVeut = true;
+  try {
+    const id = await BG.addWatcher({ backgroundTitle:'ORIGEN enregistre ton tracé', backgroundMessage:'Le GPS reste actif écran éteint. Reviens dans l’application pour terminer le tour.', requestPermissions:true, stale:false, distanceFilter:0 },
+      (l, err)=>{ if (err){ if (err.code==='NOT_AUTHORIZED') toast('Autorise la position pour ORIGEN, même application réduite.'); return; } if (l) appliquerPosition(l.latitude, l.longitude, l.accuracy, l.time||Date.now()); });
+    if (S.bgVeut) S.bgId = id; else { try { await BG.removeWatcher({ id }); } catch(e){} }
+  } catch(e){ S.bgId = null; S.bgVeut = false; }
+}
+async function arriereArreter(){
+  S.bgVeut = false; if (!BG || !S.bgId) return;
+  const id = S.bgId; S.bgId = null; try { await BG.removeWatcher({ id }); } catch(e){}
 }
 function majPrec(){
   if (S.styleCarte==='classique') return majPrecClassique();
@@ -613,7 +634,7 @@ function marcherDebut(){
   if (!S.pos){ toast('Attends le signal GPS.'); activerGPS(); return; }
   S.pts = []; S.verif = null; S.fermeture = null; S.rawTrail = null; S.meta = null; dessiner();
   S.marche = { trail:[], dist:0, rejetes:0, debut:Date.now() }; S.marcheLayer.clearLayers(); S.suivre = true;
-  marcheFix(S.pos); rendreFeuille();
+  marcheFix(S.pos); rendreFeuille(); arriereDemarrer();
 }
 function marcheFix(p){
   const m = S.marche; if (!m) return;
@@ -632,8 +653,9 @@ function marcheFix(p){
 function majMarche(){ if (S.styleCarte==='classique') return majMarcheClassique(); majChip(); }
 function majMarcheClassique(){ const e = $('st-marche'), m = S.marche; if (e && m) e.textContent = m.trail.length+' points · '+Math.round(m.dist)+' m parcourus'+(m.rejetes?' · '+m.rejetes+' mesure'+(m.rejetes>1?'s':'')+' écartée'+(m.rejetes>1?'s':''):''); }
 
-function marcherAnnuler(){ S.marche = null; S.marcheLayer.clearLayers(); rendreFeuille(); }
+function marcherAnnuler(){ arriereArreter(); S.marche = null; S.marcheLayer.clearLayers(); rendreFeuille(); }
 function marcherFin(){
+  arriereArreter();
   const m = S.marche; S.marche = null; S.marcheLayer.clearLayers();
   if (!m || m.trail.length<5){ toast('Pas assez de points : marche un peu plus longtemps.'); rendreFeuille(); return; }
   const accMoy = m.trail.reduce((a,x)=>a+x.acc,0)/m.trail.length, tol = Math.max(2,Math.min(8,accMoy*0.5));
@@ -798,10 +820,12 @@ function rendreCouches(){
     + '<div class="barre" id="p-eco" style="display:none"><i style="width:0"></i></div><p class="mut petit" id="t-eco"></p>'
     + '<button class="btn p" id="b-eco" '+(S.ecoTel?'disabled':'')+'>'+(e?'Mettre à jour':'Télécharger la zone')+'</button></div>';
   h += '<div class="carte"><h2>Images satellite et plan</h2><p class="mut petit" id="t-tuiles">…</p><p class="mut petit">Les images que tu as regardées avec du réseau restent disponibles sans réseau. Le téléchargement d’une zone entière viendra avec une source d’images sous licence.</p><button class="btn sm" id="b-vider">Vider les images gardées</button></div>';
+  h += '<div class="carte"><h2>GPS pendant la marche</h2><p class="mut petit">'+(BG ? 'Quand tu marches le contour, le GPS continue même si l’écran s’éteint ou si tu quittes l’application. Une notification « ORIGEN enregistre ton tracé » reste affichée pendant ce temps.' : 'Disponible dans l’application Android.')+'</p>'+(BG ? '<button class="btn sm '+(gpsArriereActif()?'p':'')+'" id="b-bg">'+(gpsArriereActif()?'Activé · toucher pour désactiver':'Désactivé · toucher pour activer')+'</button>' : '')+'</div>';
   h += '<div class="carte"><h2>Affichage de la carte</h2><p class="mut petit">Le déroulement du mapping est le même dans les deux styles.</p><div class="rang"><button class="btn sm '+(S.styleCarte!=='classique'?'p':'')+'" id="b-st-mm">Style Maps.me (nouveau)</button><button class="btn sm '+(S.styleCarte==='classique'?'p':'')+'" id="b-st-cl">Classique (ancien)</button></div></div>';
   h += '<div class="carte"><h2>À propos</h2><p class="mut petit" id="t-stock">…</p><p class="mut petit">ORIGEN, version '+APP_VERSION+'. Précision : GPS du téléphone ; chaque sommet est moyenné sur 10 secondes, ou le tour est marché en continu.</p><button class="btn sm" id="b-deco">Se déconnecter</button></div>';
   c.innerHTML = h; majTuiles(); majStock();
   $('b-actu2').onclick = async ()=>{ await actualiser(); rendreCouches(); };
+  const bgb = $('b-bg'); if (bgb) bgb.onclick = ()=>{ try { localStorage.setItem('gps_arriere', gpsArriereActif() ? 'non' : 'oui'); } catch(e){} rendreCouches(); toast(gpsArriereActif() ? 'GPS en arrière-plan activé.' : 'GPS en arrière-plan désactivé.'); };
   const choisir = s=>{ S.styleCarte = s; try { localStorage.setItem('style_carte', s); } catch(e){} rendreCouches(); toast(s==='classique' ? 'Carte : style classique.' : 'Carte : style Maps.me.'); };
   $('b-st-mm').onclick = ()=>choisir('maps'); $('b-st-cl').onclick = ()=>choisir('classique');
   $('b-eco').onclick = ()=>telechargerEco(); $('b-tel').onclick = telechargerCouche; $('b-vider').onclick = viderTuiles;
