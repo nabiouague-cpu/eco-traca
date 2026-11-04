@@ -172,7 +172,7 @@
 <script src="https://cdn.jsdelivr.net/npm/pmtiles@3.2.1/dist/pmtiles.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/protomaps-leaflet@5.1.0/dist/protomaps-leaflet.js"></script>
 <script>
-const APP_VERSION = '2026-11-04-app12';
+const APP_VERSION = '2026-11-04-app13';
 const SB_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SB_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 const ECO_INCOMPLET = 'Contrôle ECORIGINE NON FAIT : les parcelles de cette zone ne sont pas sur le téléphone et il n’y a pas de réseau. Il sera refait automatiquement dès que le réseau revient, avant l’envoi.';
@@ -1100,13 +1100,49 @@ function afficherMaj(v, force){
     + '<button class="btn p" id="maj-ok">Mettre à jour maintenant</button>'
     + (force ? '<p class="mut petit" style="margin-top:8px">Cette mise à jour est obligatoire.</p>' : '<button class="btn" id="maj-plus">Plus tard</button>')+'</div>';
   m.style.display = 'flex';
-  $('maj-ok').onclick = ()=>{
-    const a = document.createElement('a'); a.href = v.apk_url; a.target = '_blank'; a.rel = 'noopener'; document.body.appendChild(a); a.click(); a.remove();
-    m.querySelector('.maj-b').innerHTML = '<h3>Téléchargement lancé</h3><p class="petit">Quand le fichier est téléchargé, ouvre-le et appuie sur <b>Installer</b> (ou <b>Mettre à jour</b>). Android peut demander d’autoriser l’installation : accepte. Tes données seront gardées.</p><button class="btn" id="maj-fermer">J’ai compris</button>';
-    $('maj-fermer').onclick = ()=>{ m.style.display = 'none'; };
-  };
+  $('maj-ok').onclick = ()=>lancerMaj(v, m);
   const pl = $('maj-plus'); if (pl) pl.onclick = ()=>{ try { localStorage.setItem('maj_report_'+v.app_n, String(Date.now()+12*3600*1000)); } catch(e){} m.style.display = 'none'; };
 }
+
+// Mise à jour dans l'application : téléchargement avec barre de progression, puis installateur Android (un seul appui sur « Installer »)
+function majPlugin(){ try { const C = window.Capacitor; if (!C || !C.isNativePlatform || !C.isNativePlatform()) return null; return S.apkPlugin || (S.apkPlugin = C.registerPlugin('ApkInstaller')); } catch(e){ return null; } }
+function majBoite(m, html){ const b = m.querySelector('.maj-b'); if (b) b.innerHTML = html; }
+function majLienManuel(v, m){
+  const a = document.createElement('a'); a.href = v.apk_url; a.target = '_blank'; a.rel = 'noopener'; document.body.appendChild(a); a.click(); a.remove();
+  majBoite(m, '<h3>Téléchargement lancé</h3><p class="petit">Quand le fichier est téléchargé, ouvre-le et appuie sur <b>Installer</b>. Tes données seront gardées.</p><button class="btn" id="maj-fermer">Fermer</button>');
+  $('maj-fermer').onclick = ()=>{ m.style.display = 'none'; };
+}
+async function lancerMaj(v, m){
+  const P = majPlugin(); if (!P) return majLienManuel(v, m);
+  majBoite(m, '<h3>Téléchargement de la mise à jour…</h3><div class="barre" style="display:block"><i id="maj-bar" style="width:0"></i></div><p class="mut petit" id="maj-txt">Démarrage…</p>');
+  let h = null;
+  try { h = await P.addListener('progres', e=>{ const bar = $('maj-bar'), t = $('maj-txt'); if (!bar || !t) return; const pc = e.total>0 ? Math.min(100, Math.round(100*e.recu/e.total)) : 0; bar.style.width = (e.total>0 ? pc : 50)+'%'; t.textContent = fmt(e.recu/1e6,1)+(e.total>0 ? ' Mo sur '+fmt(e.total/1e6,1)+' Mo ('+pc+' %)' : ' Mo'); }); } catch(e){}
+  try {
+    await P.telecharger({ url:v.apk_url });
+    if (h) h.remove();
+    await installerMaj(v, m, P);
+  } catch(e){
+    if (h) h.remove();
+    majBoite(m, '<h3>Téléchargement impossible</h3><p class="petit">'+esc((e&&e.message)||String(e))+'</p><p class="mut petit">Vérifie ta connexion et réessaie. Tes données sont intactes.</p><button class="btn p" id="maj-re">Réessayer</button><button class="btn" id="maj-fermer">Fermer</button>');
+    $('maj-re').onclick = ()=>lancerMaj(v, m); $('maj-fermer').onclick = ()=>{ m.style.display = 'none'; };
+  }
+}
+async function installerMaj(v, m, P){
+  let ok = true; try { ok = (await P.peutInstaller()).ok; } catch(e){}
+  if (!ok){
+    S.majAttend = { v, m, P };
+    majBoite(m, '<h3>Une autorisation, une seule fois</h3><p class="petit">Android demande d’autoriser ORIGEN Terrain à installer ses propres mises à jour. Touche <b>Autoriser</b>, active l’interrupteur, puis reviens dans l’application : l’installation démarre toute seule.</p><button class="btn p" id="maj-aut">Autoriser</button>');
+    $('maj-aut').onclick = ()=>P.autoriser().catch(()=>{});
+    return;
+  }
+  S.majAttend = null;
+  majBoite(m, '<h3>Mise à jour prête</h3><p class="petit">Android va te demander de confirmer : touche <b>Installer</b>. L’application se rouvre ensuite. Tes producteurs, tracés et cartes sont gardés.</p><button class="btn p" id="maj-inst">Installer</button><button class="btn" id="maj-fermer">Fermer</button>');
+  const go = ()=>P.installer().catch(e=>toast('Installation impossible : '+((e&&e.message)||e)));
+  $('maj-inst').onclick = go; $('maj-fermer').onclick = ()=>{ m.style.display = 'none'; };
+  go();
+}
+function majReprise(){ const a = S.majAttend; if (!a || document.hidden) return; a.P.peutInstaller().then(r=>{ if (r.ok && S.majAttend===a) installerMaj(a.v, a.m, a.P); }).catch(()=>{}); }
+document.addEventListener('visibilitychange', majReprise); window.addEventListener('focus', majReprise);
 
 /* ---------- mes tracés ---------- */
 function rendreTraces(){
