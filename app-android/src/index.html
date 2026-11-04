@@ -108,7 +108,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
-const APP_VERSION = '2026-11-03-app2';
+const APP_VERSION = '2026-11-04-app3';
 const SB_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SB_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 const COUCHE_PA = 'couches/espaces_proteges_v1.json';
@@ -154,6 +154,15 @@ async function demarrer(){
   await chargerEco();
   await chargerRegistre();
   aller('accueil'); synchroniser();
+  try { if (navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch(e){}
+  setTimeout(autoCouches, 1500);
+}
+// Les couches se téléchargent toutes seules (absentes, ou plus vieilles que 7 jours) : plus rien à faire à la main
+async function autoCouches(){
+  if (!navigator.onLine || S.tel || S.ecoTel) return;
+  const vieux = o => !o || !o.le || (Date.now()-new Date(o.le).getTime()) > 7*864e5;
+  try { if (vieux(S.pa)) await telechargerCouche(); } catch(e){}
+  try { if (vieux(S.eco) && boiteZone()) await telechargerEco(); } catch(e){}
 }
 async function chargerRegistre(){
   if (navigator.onLine){
@@ -595,12 +604,13 @@ function rendreCouches(){
     + '<div class="barre" id="p-eco" style="display:none"><i style="width:0"></i></div><p class="mut petit" id="t-eco"></p>'
     + '<button class="btn p" id="b-eco" '+(S.ecoTel?'disabled':'')+'>'+(e?'Mettre à jour':'Télécharger la zone')+'</button></div>';
   h += '<div class="carte"><h2>Images satellite et plan</h2><p class="mut petit" id="t-tuiles">…</p><p class="mut petit">Les images que tu as regardées avec du réseau restent disponibles sans réseau. Le téléchargement d’une zone entière viendra avec une source d’images sous licence.</p><button class="btn sm" id="b-vider">Vider les images gardées</button></div>';
-  h += '<div class="carte"><h2>À propos</h2><p class="mut petit">ORIGEN, version '+APP_VERSION+'. Précision : GPS du téléphone ; chaque sommet est moyenné sur 10 secondes, ou le tour est marché en continu.</p><button class="btn sm" id="b-deco">Se déconnecter</button></div>';
-  c.innerHTML = h; majTuiles();
+  h += '<div class="carte"><h2>À propos</h2><p class="mut petit" id="t-stock">…</p><p class="mut petit">ORIGEN, version '+APP_VERSION+'. Précision : GPS du téléphone ; chaque sommet est moyenné sur 10 secondes, ou le tour est marché en continu.</p><button class="btn sm" id="b-deco">Se déconnecter</button></div>';
+  c.innerHTML = h; majTuiles(); majStock();
   $('b-actu2').onclick = async ()=>{ await actualiser(); rendreCouches(); };
   $('b-eco').onclick = telechargerEco; $('b-tel').onclick = telechargerCouche; $('b-vider').onclick = viderTuiles;
   $('b-deco').onclick = async ()=>{ if (S.traces.some(t=>t.statut==='en_attente') && !confirm('Des mappings ne sont pas encore envoyés. Se déconnecter quand même ?')) return; await sb.auth.signOut(); S.coop = null; $('connexion').classList.add('actif'); };
 }
+async function majStock(){ try { const e = $('t-stock'); if (!e || !navigator.storage || !navigator.storage.estimate) { if (e) e.textContent = ''; return; } const s = await navigator.storage.estimate(), p = navigator.storage.persisted ? await navigator.storage.persisted() : false; e.textContent = 'Stockage : '+fmt((s.usage||0)/1e6,0)+' Mo utilisés sur '+fmt((s.quota||0)/1e6,0)+' Mo disponibles · '+(p?'données protégées : une mise à jour de l’application ne les efface pas.':'données non protégées.'); } catch(e){} }
 async function majTuiles(){ try { const n = (await (await caches.open('terrain-tuiles-v1')).keys()).length; const e = $('t-tuiles'); if (e) e.textContent = n+' image'+(n>1?'s':'')+' gardée'+(n>1?'s':'')+' sur ce téléphone.'; } catch(e){ const el = $('t-tuiles'); if (el) el.textContent = 'Information indisponible.'; } }
 async function viderTuiles(){ try { await caches.delete('terrain-tuiles-v1'); toast('Images supprimées.'); } catch(e){} majTuiles(); }
 async function telechargerCouche(){
