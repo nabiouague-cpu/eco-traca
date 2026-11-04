@@ -21,5 +21,6 @@ cp(R('node_modules/pmtiles/dist/pmtiles.js'), 'lib/pmtiles.js');
 cp(R('node_modules/protomaps-leaflet/dist/protomaps-leaflet.js'), 'lib/protomaps-leaflet.js');
 cp(R('node_modules/@supabase/supabase-js/dist/umd/supabase.js'), 'lib/supabase.js');
 cp(R('node_modules/@supabase/supabase-js/dist/umd/591.supabase.js'), 'lib/591.supabase.js');
+cp(R('node_modules/xlsx/dist/xlsx.full.min.js'), 'lib/xlsx.min.js');
 cp(R('..', 'terrain-192.png'), 'terrain-192.png'); cp(R('..', 'terrain-sw.js'), 'terrain-sw.js');
 console.log('www prêt :', fs.readdirSync(W).join(', '));

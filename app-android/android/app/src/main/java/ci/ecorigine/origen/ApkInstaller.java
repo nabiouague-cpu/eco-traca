@@ -1,17 +1,20 @@
 package ci.ecorigine.origen;
 
+import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
 import android.provider.Settings;
 
+import androidx.activity.result.ActivityResult;
 import androidx.core.content.FileProvider;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
+import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
 import java.io.File;
@@ -31,6 +34,7 @@ import java.net.URL;
 public class ApkInstaller extends Plugin {
     private static final String PREFIXE = "https://github.com/nabiouague-cpu/eco-traca/releases/";
     private volatile boolean enCours = false;
+    private byte[] donnees = null;
 
     private File fichier() {
         File d = new File(getContext().getCacheDir(), "maj");
@@ -142,6 +146,56 @@ public class ApkInstaller extends Plugin {
             call.resolve();
         } catch (Exception e) {
             call.reject("Installation impossible : " + e.getMessage());
+        }
+    }
+
+    /** Enregistre un fichier généré par l'application (Excel, ZIP…) : l'utilisateur choisit le dossier et le nom. */
+    @PluginMethod
+    public void enregistrer(PluginCall call) {
+        String b64 = call.getString("base64");
+        String nom = call.getString("nom", "fichier");
+        String mime = call.getString("mime", "application/octet-stream");
+        if (b64 == null || b64.isEmpty()) {
+            call.reject("Fichier vide");
+            return;
+        }
+        try {
+            donnees = android.util.Base64.decode(b64, android.util.Base64.DEFAULT);
+            Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.setType(mime);
+            i.putExtra(Intent.EXTRA_TITLE, nom);
+            startActivityForResult(call, i, "apresEnregistrer");
+        } catch (Exception e) {
+            donnees = null;
+            call.reject("Enregistrement impossible : " + e.getMessage());
+        }
+    }
+
+    @ActivityCallback
+    private void apresEnregistrer(PluginCall call, ActivityResult result) {
+        if (call == null) return;
+        if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null || result.getData().getData() == null) {
+            donnees = null;
+            call.reject("annulé");
+            return;
+        }
+        try {
+            OutputStream out = getContext().getContentResolver().openOutputStream(result.getData().getData());
+            if (out == null) throw new IOException("Dossier inaccessible");
+            try {
+                out.write(donnees);
+                out.flush();
+            } finally {
+                out.close();
+            }
+            JSObject r = new JSObject();
+            r.put("ok", true);
+            call.resolve(r);
+        } catch (Exception e) {
+            call.reject("Enregistrement impossible : " + e.getMessage());
+        } finally {
+            donnees = null;
         }
     }
 }

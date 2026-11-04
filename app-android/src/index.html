@@ -185,6 +185,9 @@
   .coop-it{display:flex;align-items:center;gap:12px;width:100%;text-align:left;background:#fff;border:1.5px solid var(--bord);border-radius:15px;padding:11px 12px;margin:8px 0;font:inherit;color:var(--txt)} .coop-it.on{border-color:var(--teal2);background:var(--vertsoft)}
   .coop-it .av{flex:none;width:40px;height:40px;border-radius:12px;background:var(--teal2);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px} .coop-it .pi{flex:1;min-width:0} .coop-it .pi b{display:block;font-size:15px} .coop-it .pi small{color:var(--mut);font-size:12.5px}
   .coop-bt{margin-top:10px;background:rgba(255,255,255,.14);color:#fff;border:0;border-radius:99px;padding:6px 12px;font:inherit;font-size:12.5px;font-weight:700}
+  .src-t{font-size:13px;font-weight:700;color:var(--teal);margin:16px 2px 6px} .src-info{display:flex;gap:9px;align-items:flex-start;font-size:12.5px;color:var(--mut);padding:8px 4px 2px;line-height:1.4} .src-info svg{flex:none;width:16px;height:16px;stroke:var(--teal2);fill:none;stroke-width:2;margin-top:1px}
+  .absent small{display:block;font-weight:500;font-size:11.5px;color:var(--mut)} .imp-k{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0} .imp-k span{background:var(--soft);border-radius:99px;padding:5px 11px;font-size:12.5px;font-weight:600} .imp-k span.v{background:var(--vertsoft);color:var(--teal2)} .imp-k span.o{background:var(--orsoft)}
+  details.imp-d{margin:6px 0;font-size:12.5px} details.imp-d summary{font-weight:700;cursor:pointer} details.imp-d li{margin:2px 0}
   .nouv-ok{background:var(--vertsoft);border-radius:12px;padding:10px 12px;margin:8px 0;font-size:13.5px}
 
   @media (max-height:470px){ .lg-marque,.lg-pied,.lg-carte .mut,.lg-carte h2{display:none} }
@@ -224,6 +227,7 @@
   <section class="ecran" id="e-couches"></section>
   <section class="ecran" id="e-traces"></section>
   <section class="ecran" id="e-coops"></section>
+  <section class="ecran" id="e-import"></section>
   <section id="connexion">
     <div class="lg">
       <div class="lg-orbes" aria-hidden="true"><i></i><i></i><i></i></div>
@@ -264,7 +268,7 @@
 <script src="https://cdn.jsdelivr.net/npm/pmtiles@3.2.1/dist/pmtiles.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/protomaps-leaflet@5.1.0/dist/protomaps-leaflet.js"></script>
 <script>
-const APP_VERSION = '2026-11-04-app21';
+const APP_VERSION = '2026-11-04-app22';
 const SB_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SB_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 const ECO_ZOOM_MIN = 8;      // les parcelles de la base se voient dès ce niveau de zoom
@@ -448,7 +452,9 @@ async function chargerRegistre(){
   }
   const reg = await kvGet('registre:'+S.coop.id);
   S.producteurs = reg ? reg.prods.slice() : []; S.sections = reg ? reg.sections.slice() : []; S.serveurIds = new Set(reg ? reg.serveur : []); S.majLe = reg ? reg.le : null;
-  try { const f = await fileGet(); S.fileN = f.length; f.forEach(o=>{ if (!o.row || o.row.cooperative_id!==S.coop.id) return;
+  try { const f = await fileGet(); S.fileN = nbFile(f); f.forEach(o=>{
+    if (o.t==='producteurs'){ if (o.rows[0] && o.rows[0].cooperative_id===S.coop.id){ const ids = new Set(S.producteurs.map(x=>x.id)); o.rows.forEach(x=>{ if (!ids.has(x.id)) S.producteurs.push(x); }); } return; }
+    if (!o.row || o.row.cooperative_id!==S.coop.id) return;
     if (o.t==='producteur' && !S.producteurs.some(x=>x.id===o.row.id)) S.producteurs.push(o.row);
     if (o.t==='section' && !S.sections.some(x=>x.nom===o.row.nom)) S.sections.push({ nom:o.row.nom }); }); } catch(e){}
   if (reg){ const noms = new Set(S.producteurs.map(p=>p.section).filter(Boolean)); S.sections.forEach(x=>noms.delete(x.nom)); noms.forEach(n=>S.sections.push({ nom:n })); }
@@ -465,12 +471,14 @@ function sectionProposee(){
 
 /* ---------- file d'attente : producteurs et sections créés dans l'application ---------- */
 async function fileGet(){ return (await kvGet('file')) || []; }
-async function filePush(o){ const f = await fileGet(); f.push(o); await kvSet('file', f); S.fileN = f.length; }
+const nbFile = f=>f.reduce((n,o)=>n+(o.rows?o.rows.length:1),0);
+async function filePush(o){ const f = await fileGet(); f.push(o); await kvSet('file', f); S.fileN = nbFile(f); }
 async function ajouterAuCache(o){
-  const r = await kvGet('registre:'+o.row.cooperative_id); if (!r) return;
+  const r = await kvGet('registre:'+(o.row||o.rows[0]).cooperative_id); if (!r) return;
   if (o.t==='producteur' && !r.prods.some(x=>x.id===o.row.id)) r.prods.push(o.row);
+  if (o.t==='producteurs'){ const ids = new Set(r.prods.map(x=>x.id)); o.rows.forEach(x=>{ if (!ids.has(x.id)) r.prods.push(x); }); }
   if (o.t==='section' && !r.sections.some(x=>x.nom===o.row.nom)) r.sections.push({ nom:o.row.nom });
-  await kvSet('registre:'+o.row.cooperative_id, r);
+  await kvSet('registre:'+(o.row||o.rows[0]).cooperative_id, r);
 }
 async function envoyerFile(){
   if (!navigator.onLine || S.fileEnCours) return 0;
@@ -478,11 +486,11 @@ async function envoyerFile(){
   try {
     const f = await fileGet(), reste = []; let n = 0;
     for (const o of f){
-      const r = await sb.from(o.t==='section' ? 'sections' : 'producteurs').insert(o.row);
+      const r = await sb.from(o.t==='section' ? 'sections' : 'producteurs').insert(o.rows || o.row);
       if (!r.error || r.error.code==='23505'){ n++; try { await ajouterAuCache(o); } catch(e){} }
       else { o.erreur = r.error.message; reste.push(o); }
     }
-    await kvSet('file', reste); S.fileN = reste.length;
+    await kvSet('file', reste); S.fileN = nbFile(reste);
     return n;
   } finally { S.fileEnCours = false; }
 }
@@ -549,7 +557,7 @@ async function rendreCoops(){
 }
 
 /* ---------- navigation ---------- */
-const TITRES = { accueil:null, nouveau:'Nouveau producteur', carte:null, couches:'Zone et couches', traces:'Mes tracés', coops:'Mes coopératives' };
+const TITRES = { accueil:null, nouveau:'Nouveau producteur', carte:null, couches:'Zone et couches', traces:'Mes tracés', coops:'Mes coopératives', import:'Importer un registre' };
 function aller(e, push){
   if (push) S.pile.push(S.ecran); else S.pile = [];
   S.ecran = e;
@@ -562,7 +570,7 @@ function aller(e, push){
   document.querySelector('header').style.display = (e==='carte' && S.styleCarte!=='classique') ? 'none' : '';
   let t = TITRES[e]; if (e==='accueil') t = S.coop ? S.coop.nom : 'ORIGEN'; if (e==='carte') t = S.prod ? S.prod.nom : 'Tracé';
   $('h-t').textContent = t || 'ORIGEN';
-  if (e==='accueil') rendreAccueil(); if (e==='couches') rendreCouches(); if (e==='traces') rendreTraces(); if (e==='nouveau') rendreNouveau(); if (e==='coops') rendreCoops();
+  if (e==='accueil') rendreAccueil(); if (e==='couches') rendreCouches(); if (e==='traces') rendreTraces(); if (e==='nouveau') rendreNouveau(); if (e==='coops') rendreCoops(); if (e==='import') rendreImport();
   if (e==='carte'){ initCarte(); S.menuCouches = false; setTimeout(()=>{ S.map.invalidateSize(); rendreFeuille(); majCouchesMap(); majBandeau(); majPrec(); }, 60); }
 }
 function retour(){ if (S.ecran==='carte' && (S.pts.length||S.marche||S.verif) && !confirm('Abandonner ce tracé ?')) return; if (S.ecran==='carte') resetTrace(); const e = S.pile.pop() || 'accueil'; S.pile = []; aller(e); }
@@ -570,6 +578,13 @@ $('h-retour').onclick = retour;
 document.querySelectorAll('nav button').forEach(b=>b.onclick = ()=>aller(b.dataset.e));
 
 /* ---------- accueil : lecture automatique de la coopérative ---------- */
+function blocSources(){
+  const orig = S.producteurs.filter(p=>!String(p.id).startsWith('p_app_') && !estMappe(p)).length;
+  return '<div class="src-t">Ajouter des producteurs</div>'
+    + '<button class="absent" id="b-import">'+IC.telecharger+'<span>Importer un registre Excel<small>nom, section, code producteur</small></span></button>'
+    + '<button class="absent" id="b-nouveau">'+IC.plus+'<span>Nouveau producteur<small>le code est généré avec la codification de la coopérative</small></span></button>'
+    + (orig ? '<div class="src-info">'+IC.pin+'<span>'+fmt(orig)+' producteur'+(orig>1?'s':'')+' du registre ORIGEN sans polygone '+(orig>1?'sont déjà':'est déjà')+' dans ta liste à mapper.</span></div>' : '<div class="src-info">'+IC.pin+'<span>Les producteurs de ton registre ORIGEN sans polygone apparaissent tout seuls dans la liste à mapper.</span></div>');
+}
 function initiales(n){ const m = String(n||'?').trim().split(/\s+/).filter(Boolean); return ((m[0]||'?')[0]+(m.length>1 ? m[m.length-1][0] : '')).toUpperCase(); }
 function rendreAccueil(){
   const c = $('e-accueil'); const tot = S.producteurs.length, map = S.producteurs.filter(estMappe).length, rest = tot-map;
@@ -577,8 +592,8 @@ function rendreAccueil(){
   let h = '';
   if (!tot){
     h = '<div class="hero"><div class="hero-t"><div class="hero-nom">'+esc((S.coop&&S.coop.nom)||'Ma coopérative')+'</div><div class="hero-s">Aucun producteur enregistré</div><button class="coop-bt" id="b-coops">Mes coopératives ('+S.coops.length+')</button></div></div>'
-      + '<div class="vide"><div class="vide-ic">'+IC.pin+'</div><b>Bienvenue ! Voici la suite</b><ol class="etapes"><li class="ok">Ton accès est créé</li><li class="ok">Ta coopérative est créée</li><li>Ajoute tes producteurs, un par un</li><li>Trace leurs parcelles sur le terrain</li></ol><p class="mut petit">Pas besoin de registre. Si ta coopérative en a déjà un sur la plateforme, touche Actualiser.</p><button class="btn p" id="b-nouveau">'+IC.plus+'Ajouter un producteur</button><button class="btn" id="b-actu0">'+IC.actualiser+'Actualiser</button></div>';
-    c.innerHTML = h; $('b-actu0').onclick = actualiser; $('b-nouveau').onclick = ()=>aller('nouveau', true); $('b-coops').onclick = ()=>aller('coops', true); return;
+      + '<div class="vide"><div class="vide-ic">'+IC.pin+'</div><b>Bienvenue ! Voici la suite</b><ol class="etapes"><li class="ok">Ton accès est créé</li><li class="ok">Ta coopérative est créée</li><li>Ajoute tes producteurs, un par un</li><li>Trace leurs parcelles sur le terrain</li></ol><p class="mut petit">Pas besoin de saisir à la main : importe un registre Excel, ou ajoute un producteur à la fois.</p><button class="btn" id="b-actu0">'+IC.actualiser+'Actualiser</button></div>'+blocSources();
+    c.innerHTML = h; $('b-actu0').onclick = actualiser; $('b-nouveau').onclick = ()=>aller('nouveau', true); $('b-import').onclick = ()=>aller('import', true); $('b-coops').onclick = ()=>aller('coops', true); return;
   }
   const pc = Math.round(100*map/tot), R = 30, CI = 2*Math.PI*R;
   h += '<div class="hero"><div class="hero-t"><div class="hero-nom">'+esc((S.coop&&S.coop.nom)||'Ma coopérative')+'</div><div class="hero-s">'+fmt(map)+' sur '+fmt(tot)+' producteurs mappés</div><button class="coop-bt" id="b-coops">Mes coopératives ('+S.coops.length+')</button></div>'
@@ -590,13 +605,13 @@ function rendreAccueil(){
   h += '<div class="sec-av"><div><b>'+esc(prop||'—')+'</b><span>'+aMap.length+' à mapper · '+fait+' mappé'+(fait>1?'s':'')+'</span></div><div class="barre"><i style="width:'+ps+'%"></i></div></div>';
   h += '<label class="rech">'+IC.loupe+'<input id="q" placeholder="Chercher un nom ou un code" autocomplete="off"></label>';
   h += '<div id="liste-prod"></div>';
-  h += '<button class="absent" id="b-nouveau">'+IC.plus+'Ajouter un producteur</button>';
+  h += blocSources();
   const att = S.traces.filter(t=>t.statut==='en_attente').length + (S.fileN||0);
   if (att) h += '<div class="attente">'+IC.sync+'<div><b>'+att+' élément'+(att>1?'s':'')+' en attente d’envoi</b><span>Ils partiront dès le retour du réseau.</span></div></div>';
   h += '<p class="pied-acc">'+(S.majLe?'Liste mise à jour le '+esc(new Date(S.majLe).toLocaleString('fr-FR'))+' ':'')+'<button class="chip" id="b-actu">'+IC.actualiser+'Actualiser</button></p>';
   c.innerHTML = h;
   c.querySelectorAll('[data-sec]').forEach(b=>b.onclick = ()=>{ S.sectionSel = b.dataset.sec; rendreAccueil(); });
-  $('b-nouveau').onclick = ()=>aller('nouveau', true); $('b-coops').onclick = ()=>aller('coops', true);
+  $('b-nouveau').onclick = ()=>aller('nouveau', true); $('b-import').onclick = ()=>aller('import', true); $('b-coops').onclick = ()=>aller('coops', true);
   $('b-actu').onclick = actualiser;
   const dessinerListe = ()=>{
     const q = $('q').value.trim().toLowerCase();
@@ -613,20 +628,28 @@ async function actualiser(){ if (!navigator.onLine){ toast('Il faut du réseau p
 function norm(s){ return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/[^a-z0-9 ]/g,' ').split(/\s+/).filter(Boolean); }
 function similaire(a,b){ const A = norm(a), B = norm(b); if (!A.length||!B.length) return false; const [p,g] = A.length<=B.length ? [A,B] : [B,A]; return p.length>=2 ? p.every(t=>g.includes(t)) : (p[0].length>3 && g.includes(p[0]) && g.length<=2); }
 function tousLesNoms(){ return S.producteurs.map(p=>({ nom:p.nom, code:p.code })).concat(S.traces.filter(t=>t.nouveau && t.cooperative_id===S.coop.id).map(t=>({ nom:t.producteur_nom, code:t.code_producteur }))); }
-function prefixeCode(){ const c = S.producteurs.map(p=>p.code).find(x=>x&&x.includes('-')); if (c){ const p = c.split('-'); return p.length>=3 ? p[0] : p[0]; } return (S.coop.nom.match(/[A-Za-zÀ-ÿ]+/g)||['COP']).map(w=>w[0]).join('').toUpperCase().slice(0,4); }
-function codePropose(section){
-  const pre = prefixeCode(); const tous = new Set(tousLesNoms().map(x=>x.code).filter(Boolean)); let max = 0;
-  tous.forEach(c=>{ const m = String(c).match(/(\d+)\s*$/); if (m && String(c).startsWith(pre)) max = Math.max(max,+m[1]); });
-  const ab = section && section!=='Sans section' ? '-'+norm(section).join('').slice(0,3).toUpperCase() : '';
-  return pre+ab+'-'+String(max+1).padStart(4,'0');
+function prefixeCode(){ const c = S.producteurs.map(p=>p.code).find(x=>x&&x.includes('-')); if (c) return c.split('-')[0]; return (S.coop.nom.match(/[A-Za-zÀ-ÿ]+/g)||['COP']).map(w=>w[0]).join('').toUpperCase().slice(0,4); }
+// La codification est apprise du registre de la coopérative : préfixe, segment de section (ex. GNA), nombre de chiffres, dernier numéro
+function genCodeur(){
+  const pre = prefixeCode();
+  const codes = S.producteurs.map(p=>({ c:p.code, s:p.section })).concat(S.traces.filter(t=>t.nouveau && t.cooperative_id===S.coop.id).map(t=>({ c:t.code_producteur, s:t.section }))).filter(x=>x.c);
+  let max = 0, pad = 0, avec = 0, sans = 0; const seg = new Map();
+  codes.forEach(({c,s:sec})=>{ c = String(c); const m = c.match(/(\d+)\s*$/); if (!c.startsWith(pre)) return;
+    if (m){ max = Math.max(max, +m[1]); pad = Math.max(pad, m[1].length); }
+    const parts = c.split('-'); if (parts.length>=3){ avec++; if (sec && !seg.has(sec)) seg.set(sec, parts[1]); } else sans++; });
+  if (!pad) pad = 4; const avecSeg = !codes.length || avec>=sans;
+  const f = section=>{ max++; const ab = avecSeg && section && section!=='Sans section' ? '-'+(seg.get(section) || norm(section).join('').slice(0,3).toUpperCase()) : ''; return pre+ab+'-'+String(max).padStart(pad,'0'); };
+  f.vu = c=>{ c = String(c||''); const m = c.match(/(\d+)\s*$/); if (m && c.startsWith(pre)) max = Math.max(max, +m[1]); };
+  return f;
 }
+function codePropose(section){ return genCodeur()(section); }
 function rendreNouveau(){
   const c = $('e-nouveau'); const sec = sectionProposee();
   c.innerHTML = '<div id="n-ok"></div><div class="champ"><span>Nom du producteur</span><input id="n-nom" placeholder="Ex. Koffi Yao" autocomplete="off"></div><div id="n-dup"></div>'
     + '<div class="champ"><span>Village ou campement (facultatif)</span><input id="n-vil" placeholder="Ex. Gnamagui" autocomplete="off"></div>'
     + '<div class="champ auto"><span>Section</span><b id="n-sec">'+esc(sec||'—')+'</b></div><div class="defile" id="n-secs">'+sectionsListe().map(n=>'<button class="chip '+(n===sec?'on':'')+'" data-s="'+esc(n)+'">'+esc(n)+'</button>').join('')+'<button class="chip" id="n-nsec">+ Nouvelle section</button></div>'
     + '<div id="n-nsec-f" style="display:none"><div class="champ"><span>Nom de la nouvelle section</span><input id="n-nsec-n" placeholder="Ex. Gnamagui" autocomplete="off"></div><button class="btn sm" id="n-nsec-ok">Ajouter la section</button></div>'
-    + '<div class="champ auto"><span>Code (modifiable)</span><input id="n-code" value="'+esc(codePropose(sec))+'"></div><div id="n-codeerr"></div>'
+    + '<div class="champ auto"><span>Code (généré avec la codification de la coopérative, modifiable)</span><input id="n-code" value="'+esc(codePropose(sec))+'"></div><div id="n-codeerr"></div>'
     + '<button class="btn p plein" id="n-go" disabled>Enregistrer et tracer maintenant</button>'
     + '<button class="btn plein" id="n-go2" style="margin-top:8px" disabled>Enregistrer seulement</button>'
     + '<p class="mut petit" style="margin-top:8px">Le producteur est ajouté à la liste de cette coopérative'+(S.coop?' ('+esc(S.coop.nom)+')':'')+'. Sans réseau, il part au retour du réseau.</p>';
@@ -666,6 +689,105 @@ function rendreNouveau(){
     $('n-nom').value = ''; $('n-vil').value = ''; $('n-code').dataset.touche = ''; $('n-code').value = codePropose(secChoisie); $('n-nom').focus(); verif();
   };
   $('n-go').onclick = ()=>enregistrer(true); $('n-go2').onclick = ()=>enregistrer(false);
+}
+
+/* ---------- importer un registre Excel ---------- */
+let xlsxPret = null;
+function chargerXlsx(){
+  if (window.XLSX) return Promise.resolve();
+  if (!xlsxPret) xlsxPret = new Promise((ok,ko)=>{ const sc = document.createElement('script'); sc.src = 'lib/xlsx.min.js'; sc.onload = ok; sc.onerror = ()=>{ xlsxPret = null; ko(new Error('Bibliothèque Excel introuvable')); }; document.head.appendChild(sc); });
+  return xlsxPret;
+}
+async function enregistrerFichier(nom, base64, mime){
+  const P = (()=>{ try { return pluginNatif('ApkInstaller'); } catch(e){ return null; } })();
+  if (P){
+    try { await P.enregistrer({ nom, mime, base64 }); toast('Fichier enregistré.'); return true; }
+    catch(e){ const m = String((e&&e.message)||e); if (/annul/i.test(m)){ return false; } if (!/not implemented|UNIMPLEMENTED/i.test(m)){ toast('Enregistrement impossible : '+m); return false; } }
+  }
+  const bin = atob(base64), u = new Uint8Array(bin.length); for (let i=0;i<bin.length;i++) u[i] = bin.charCodeAt(i);
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([u],{ type:mime })); a.download = nom; document.body.appendChild(a); a.click(); a.remove(); return true;
+}
+const MIME_XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+async function telechargerModele(){
+  try { await chargerXlsx(); } catch(e){ toast(e.message); return; }
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([['Nom et prénoms du producteur','Section','Code producteur']]); ws['!cols'] = [{ wch:40 },{ wch:24 },{ wch:22 }];
+  XLSX.utils.book_append_sheet(wb, ws, 'Registre');
+  const info = XLSX.utils.aoa_to_sheet([['Mode d’emploi du registre'],[''],['1. Remplis la feuille « Registre » : une ligne par producteur.'],['2. Nom et prénoms du producteur : obligatoire.'],['3. Section : le regroupement du producteur (village, secteur). Vide = « Sans section ».'],['4. Code producteur : facultatif. S’il est vide, l’application le génère avec la codification de la coopérative.'],['5. Ne change pas les titres des colonnes.'],[''],['Exemple : KOFFI Yao Jean | Gnamagui | ABC-GNA-0001']]); info['!cols'] = [{ wch:110 }];
+  XLSX.utils.book_append_sheet(wb, info, 'Mode d’emploi');
+  await enregistrerFichier('Modele_registre_producteurs.xlsx', XLSX.write(wb, { bookType:'xlsx', type:'base64' }), MIME_XLSX);
+}
+function lireLignes(matrice){
+  let h = -1, cn = -1, cs = -1, cc = -1;
+  for (let i=0; i<Math.min(matrice.length,15); i++){
+    const t = matrice[i].map(x=>norm(x).join(' ')); const iN = t.findIndex(x=>/\b(nom|prenoms?)\b/.test(x) && !/\bcode\b/.test(x)), iC = t.findIndex(x=>/\bcode\b/.test(x)), iS = t.findIndex(x=>/\b(section|secteur)\b/.test(x));
+    if (iN>=0 && (iC>=0 || iS>=0)){ h = i; cn = iN; cc = iC; cs = iS; break; }
+  }
+  if (h<0) return null;
+  const out = [];
+  for (let i=h+1; i<matrice.length; i++){
+    const r = matrice[i]; const nom = String(r[cn]||'').replace(/\s+/g,' ').trim(); const section = cs>=0 ? String(r[cs]||'').replace(/\s+/g,' ').trim() : ''; const code = cc>=0 ? String(r[cc]||'').trim() : '';
+    if (!nom && !section && !code) continue;
+    out.push({ ligne:i+1, nom, section, code });
+  }
+  return out;
+}
+function analyserRegistre(lignes){
+  const cle = (n,sec)=>norm(n).join(' ')+'|'+norm(sec||'').join(' ');
+  const exist = new Set(S.producteurs.map(p=>cle(p.nom,p.section))), codes = new Set(tousLesNoms().map(x=>x.code).filter(Boolean).map(c=>String(c).toLowerCase()));
+  const vus = new Set(), cvus = new Set(), a = { ok:[], deja:[], dblFic:[], codeUtilise:[], invalides:[] };
+  for (const r of lignes){
+    if (r.nom.length<3){ a.invalides.push(r); continue; }
+    const k = cle(r.nom, r.section);
+    if (exist.has(k)){ a.deja.push(r); continue; }
+    if (vus.has(k)){ a.dblFic.push(r); continue; }
+    const lc = r.code.toLowerCase();
+    if (r.code && (codes.has(lc) || cvus.has(lc))){ a.codeUtilise.push(r); continue; }
+    vus.add(k); if (r.code) cvus.add(lc); a.ok.push(r);
+  }
+  return a;
+}
+async function lireRegistre(fic){
+  const zone = $('i-res'); zone.innerHTML = '<p class="mut petit">Lecture du fichier…</p>';
+  try {
+    await chargerXlsx();
+    const wb = XLSX.read(await fic.arrayBuffer(), { type:'array' });
+    const noms = wb.SheetNames, pref = noms.find(n=>/registre/i.test(n)) || noms[0];
+    let lignes = null;
+    for (const n of [pref].concat(noms.filter(x=>x!==pref))){ lignes = lireLignes(XLSX.utils.sheet_to_json(wb.Sheets[n], { header:1, defval:'', raw:false })); if (lignes) break; }
+    if (!lignes){ zone.innerHTML = '<div class="avert r"><b>Colonnes introuvables.</b><br>Il faut une colonne « Nom et prénoms du producteur » et une colonne « Section » ou « Code producteur ». Utilise le modèle.</div>'; return; }
+    if (!lignes.length){ zone.innerHTML = '<div class="avert r">Le fichier ne contient aucun producteur.</div>'; return; }
+    const a = analyserRegistre(lignes); S.imp = a;
+    const nbCode = a.ok.filter(r=>r.code).length, secs = new Set(a.ok.map(r=>r.section).filter(Boolean)), nouvSecs = [...secs].filter(x=>!S.sections.some(y=>y.nom===x)).length;
+    const liste = (t,l,f)=>l.length ? '<details class="imp-d"><summary>'+t+' ('+l.length+')</summary><ul>'+l.slice(0,30).map(f).join('')+(l.length>30?'<li>… et '+(l.length-30)+' autres</li>':'')+'</ul></details>' : '';
+    zone.innerHTML = '<div class="imp-k"><span>'+fmt(lignes.length)+' ligne'+(lignes.length>1?'s':'')+' lue'+(lignes.length>1?'s':'')+'</span><span class="v">'+fmt(a.ok.length)+' à importer</span><span>'+fmt(nbCode)+' avec code</span><span class="o">'+fmt(a.ok.length-nbCode)+' code'+(a.ok.length-nbCode>1?'s':'')+' à générer</span><span>'+secs.size+' section'+(secs.size>1?'s':'')+(nouvSecs?' ('+nouvSecs+' nouvelle'+(nouvSecs>1?'s':'')+')':'')+'</span></div>'
+      + liste('Déjà dans la coopérative, ignorés', a.deja, r=>'<li>'+esc(r.nom)+(r.section?' · '+esc(r.section):'')+'</li>')
+      + liste('En double dans le fichier, ignorés', a.dblFic, r=>'<li>ligne '+r.ligne+' : '+esc(r.nom)+'</li>')
+      + liste('Code déjà utilisé, ignorés', a.codeUtilise, r=>'<li>ligne '+r.ligne+' : '+esc(r.nom)+' · '+esc(r.code)+'</li>')
+      + liste('Lignes sans nom valide, ignorées', a.invalides, r=>'<li>ligne '+r.ligne+'</li>')
+      + (a.ok.length ? '<button class="btn p plein" id="i-go" style="margin-top:10px">Importer '+fmt(a.ok.length)+' producteur'+(a.ok.length>1?'s':'')+'</button>' : '<div class="avert">Rien de nouveau à importer.</div>');
+    if (a.ok.length) $('i-go').onclick = importerRegistre;
+  } catch(e){ zone.innerHTML = '<div class="avert r"><b>Fichier illisible.</b><br>'+esc((e&&e.message)||e)+'</div>'; }
+}
+async function importerRegistre(){
+  const a = S.imp; if (!a || !a.ok.length || !S.coop) return; $('i-go').disabled = true;
+  const gen = genCodeur(); a.ok.forEach(r=>{ if (r.code) gen.vu(r.code); });
+  for (const nom of new Set(a.ok.map(r=>r.section).filter(Boolean))){
+    if (S.sections.some(x=>x.nom===nom)) continue;
+    const o = { t:'section', row:{ cooperative_id:S.coop.id, nom } }; await filePush(o); await ajouterAuCache(o).catch(()=>{}); S.sections.push({ nom });
+  }
+  const base = Date.now().toString(36), rows = a.ok.map((r,i)=>({ id:'p_app_'+base+i.toString(36)+Math.random().toString(36).slice(2,4), nom:r.nom, code:r.code || gen(r.section||null), cooperative_id:S.coop.id, section:r.section||null, village_district:null, pays:'CIV' }));
+  for (let i=0; i<rows.length; i+=250){ const o = { t:'producteurs', rows:rows.slice(i,i+250) }; await filePush(o); await ajouterAuCache(o).catch(()=>{}); }
+  rows.forEach(r=>S.producteurs.push(r)); S.imp = null;
+  envoyerFile().then(()=>{ if (S.ecran==='accueil') rendreAccueil(); }).catch(()=>{});
+  toast(fmt(rows.length)+' producteurs importés.'); aller('accueil');
+}
+function rendreImport(){
+  const c = $('e-import');
+  c.innerHTML = '<div class="carte"><h2>1. Télécharge le modèle</h2><p class="mut petit">Un fichier Excel à trois colonnes : nom et prénoms du producteur, section, code producteur. Le code est facultatif : vide, il est généré avec la codification de ta coopérative'+(S.coop?' ('+esc(S.coop.nom)+')':'')+'.</p><button class="btn p plein" id="i-modele">'+IC.telecharger+'Télécharger le modèle</button></div>'
+    + '<div class="carte"><h2>2. Importe ton registre rempli</h2><p class="mut petit">Fichier Excel (.xlsx, .xls) ou .csv. Tu verras le résultat avant de valider.</p><button class="btn plein" id="i-choisir">Choisir mon fichier</button><input type="file" id="i-fic" accept=".xlsx,.xls,.csv" hidden><div id="i-res"></div></div>';
+  $('i-modele').onclick = telechargerModele; $('i-choisir').onclick = ()=>$('i-fic').click();
+  $('i-fic').onchange = ev=>{ const f = ev.target.files && ev.target.files[0]; if (f) lireRegistre(f); ev.target.value = ''; };
 }
 
 /* ---------- carte et tracé ---------- */
