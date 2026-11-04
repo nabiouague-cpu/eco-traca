@@ -4715,7 +4715,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-05-451';
+const APP_VERSION = '2026-11-05-452';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7789,8 +7789,8 @@ function finSetSous(v){ state.finSous = v; render(); }
 function renderFinancementTab(){
   const actif = finSousOnglet();
   let html = '<div class="oc-subtabs" style="margin:0 0 12px">'
-    + [['coops','Paiements coopératives'],['partenaires','Paiements partenaires'],['prefi','Préfinancements'],['ltd','LTD & nantissement']].map(([k,l])=>'<button class="'+(actif===k?'active':'')+'" onclick="finSetSous(\''+k+'\')">'+l+'</button>').join('')+'</div>';
-  return html + (actif==='ltd' ? renderFinLtd() : actif==='coops' ? renderFinCoops() : actif==='partenaires' ? renderFinPartenaires() : renderPrefinancementsTab());
+    + [['coops','Paiements coopératives'],['partenaires','Paiements partenaires'],['usinage','Frais d\'usinage'],['prefi','Préfinancements'],['ltd','LTD & nantissement']].map(([k,l])=>'<button class="'+(actif===k?'active':'')+'" onclick="finSetSous(\''+k+'\')">'+l+'</button>').join('')+'</div>';
+  return html + (actif==='ltd' ? renderFinLtd() : actif==='coops' ? renderFinCoops() : actif==='partenaires' ? renderFinPartenaires() : actif==='usinage' ? renderFinUsinage() : renderPrefinancementsTab());
 }
 function renderFinLtd(){
   if (!state.lotsCharges) chargerLots().then(()=>render());
@@ -8044,6 +8044,169 @@ async function finPartPaiementSupprimer(id){
   const { error } = await supabaseClient.from('paiements_partenaires').delete().eq('id', id); if (error){ showToast('Échec : '+error.message); return; }
   await finChargerPaiementsAnnexes(); render();
 }
+
+// ---- Financement › Frais d'usinage : ce qu'on doit à chaque usinier (SUV…) pour l'usinage et le refoulement du cacao déchargé chez lui ----
+// Camion usiné : poids net accepté à l'usine × tarif d'usinage. Camion refoulé : poids du connaissement × tarif de refoulement. Camion pas encore pesé : simple prévision.
+// Les tarifs sont ceux de la fiche de l'usine (hors sacherie, fournie par ECORIGINE). On retire peu à peu les factures reçues (avec les camions qu'elles couvrent) et les paiements faits.
+async function usiCharger(){
+  if (!supabaseClient || state.usiChargement) return; state.usiChargement = true;
+  try{
+    const [a, b] = await Promise.all([ supabaseClient.from('factures_usinage').select('*').order('date_facture', {ascending:false}), supabaseClient.from('paiements_usinage').select('*').order('date_paiement', {ascending:false}) ]);
+    state.usiFactures = (a && !a.error) ? (a.data||[]) : (state.usiFactures||[]);
+    state.usiPaiements = (b && !b.error) ? (b.data||[]) : (state.usiPaiements||[]);
+  } finally { state.usiChargement = false; state.usiCharge = true; }
+}
+function usiSites(){
+  return (state.sitesUsinage||[]).filter(s=>s.actif!==false && (Number(s.tarif_usinage_fcfa_kg)>0 || Number(s.tarif_refoulement_fcfa_kg)>0)).slice().sort((a,b)=>String(a.nom).localeCompare(String(b.nom),'fr'));
+}
+function usiCamions(s){
+  const c = finCampagneId(), code = String(s.code||'').toUpperCase(), tu = Number(s.tarif_usinage_fcfa_kg)||0, tr = Number(s.tarif_refoulement_fcfa_kg)||0;
+  return (state.achats||[]).filter(a=>!a.producteur_id && (!c || (a.campagne_id||'')===c) && String(a.usine_dechargement||'').trim().toUpperCase().indexOf(code)===0).map(a=>{
+    const net = Number(a.poids_net_produit)||0, decl = Number(a.quantite_kg)||0;
+    if (a.refoulee) return { a, statut:'refoule', kg:decl, tarif:tr, montant:Math.round(decl*tr), prevision:0 };
+    if (net>0) return { a, statut:'usine', kg:net, tarif:tu, montant:Math.round(net*tu), prevision:0 };
+    return { a, statut:'attente', kg:decl, tarif:tu, montant:0, prevision:Math.round(decl*tu) };
+  }).sort((x,y)=>String(x.a.date||'').localeCompare(String(y.a.date||'')) || String(x.a.connaissement||'').localeCompare(String(y.a.connaissement||''),'fr',{numeric:true}));
+}
+function usiSituation(s){
+  const c = finCampagneId(), cams = usiCamions(s);
+  const fs = (state.usiFactures||[]).filter(x=>x.site_code===s.code && (!c || (x.campagne_id||'')===c));
+  const ps = (state.usiPaiements||[]).filter(x=>x.site_code===s.code && (!c || (x.campagne_id||'')===c));
+  const somme = (liste, f)=>liste.reduce((t,x)=>t+f(x),0);
+  const usinage = somme(cams.filter(x=>x.statut==='usine'), x=>x.montant), refoul = somme(cams.filter(x=>x.statut==='refoule'), x=>x.montant);
+  const du = usinage + refoul, facture = somme(fs, x=>Number(x.montant_fcfa)||0), paye = somme(ps, x=>Number(x.montant_fcfa)||0);
+  return { s, cams, fs, ps, kgUsine:somme(cams.filter(x=>x.statut==='usine'), x=>x.kg), kgRefoule:somme(cams.filter(x=>x.statut==='refoule'), x=>x.kg),
+    usinage, refoul, du, facture, paye, prevision:somme(cams, x=>x.prevision), nbAttente:cams.filter(x=>x.statut==='attente').length,
+    reste:du-paye, resteFact:facture-paye, aFacturer:du-facture };
+}
+function usiFacturesDuCamion(sit, achatId){ return sit.fs.filter(f=>Array.isArray(f.achat_ids) && f.achat_ids.indexOf(achatId)>=0); }
+function usiAttenduFacture(sit, f){ const ids = Array.isArray(f.achat_ids) ? f.achat_ids : []; return sit.cams.filter(x=>ids.indexOf(x.a.id)>=0).reduce((t,x)=>t+x.montant,0); }
+function usiTarifTxt(v){ return Number(v)>0 ? String(Number(v)).replace('.', ',')+' F/kg' : '—'; }
+function usiPuce(label, valeur, classe, aide){ return '<div style="border:1px solid var(--border);border-radius:10px;padding:8px 12px;min-width:130px"'+(aide?' title="'+esc(aide)+'"':'')+'><div class="hint" style="margin:0">'+esc(label)+'</div><div style="font-weight:700;font-size:16px" class="'+(classe||'')+'">'+valeur+'</div></div>'; }
+function renderFinUsinage(){
+  if (!state.usiCharge){ usiCharger().then(()=>render()); return '<div class="panel"><div class="panel-head"><h2>Frais d\'usinage</h2></div><div class="hint" style="padding:18px">Chargement…</div></div>'; }
+  const sites = usiSites(), sans = (state.sitesUsinage||[]).filter(s=>s.actif!==false && !sites.some(x=>x.code===s.code));
+  let html = '<div class="panel"><div class="panel-head" style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap"><div><h2>Frais d\'usinage — usiniers</h2><p class="hint" style="margin:4px 0 0">Pour chaque camion déchargé chez l\'usinier : cacao usiné = poids net accepté × tarif d\'usinage ; cacao refoulé = poids × tarif de refoulement ; camion pas encore pesé = simple prévision. Les tarifs sont hors sacherie (fournie par ECORIGINE). On retire ensuite peu à peu les factures reçues et les chèques faits.</p></div>'
+    + '<div><select id="usi-ajout" onchange="if(this.value){usiTarifOuvrir(this.value);this.value=\'\'}" style="min-width:210px"><option value="">+ Ajouter une usine…</option>'+sans.map(s=>'<option value="'+esc(s.code)+'">'+esc(s.nom)+' ('+esc(s.code)+')</option>').join('')+'</select></div></div><div style="padding:0 18px 18px">';
+  if (!sites.length) return html + '<div class="hint">Aucune usine avec des tarifs d\'usinage. Ajoute-en une avec le menu ci-dessus (ex. SUV/SITP : usinage 13,6 F/kg, refoulement 3,8 F/kg).</div></div></div>';
+  sites.forEach(s=>{
+    const t = usiSituation(s), cd = esc(s.code);
+    html += '<div style="border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:16px">'
+      + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap"><div><h3 style="margin:0">'+esc(s.nom)+' <span class="hint" style="margin:0">('+cd+(s.ville?' · '+esc(s.ville):'')+')</span></h3>'
+      + '<div class="hint" style="margin:3px 0 0">Usinage <b>'+usiTarifTxt(s.tarif_usinage_fcfa_kg)+'</b> · refoulement <b>'+usiTarifTxt(s.tarif_refoulement_fcfa_kg)+'</b></div></div>'
+      + '<div style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="usiTarifOuvrir(\''+cd+'\')">Tarifs</button> <button class="btn-ghost btn-compact" onclick="usiFactureOuvrir(\''+cd+'\')">+ Facture reçue</button> <button class="btn btn-primary btn-compact" onclick="usiPaiementOuvrir(\''+cd+'\')">+ Paiement</button></div></div>'
+      + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:12px 0">'
+      + usiPuce('Cacao usiné (poids net accepté)', fmtNum(t.kgUsine)+' kg') + usiPuce('Usinage dû', fmtNum(t.usinage)) + usiPuce('Refoulement dû'+(t.kgRefoule?' ('+fmtNum(t.kgRefoule)+' kg)':''), fmtNum(t.refoul))
+      + usiPuce('Total dû', fmtNum(t.du), '', 'Usinage + refoulement sur les camions pesés') + usiPuce('Facturé par l\'usinier', fmtNum(t.facture)) + usiPuce('Payé', fmtNum(t.paye))
+      + usiPuce('Reste à payer', fmtNum(t.reste), t.reste>0?'txt-danger':'', 'Total dû − payé') + usiPuce('Reste à facturer', fmtNum(Math.max(0,t.aFacturer)), '', 'Total dû − déjà facturé')
+      + (t.nbAttente ? usiPuce('Prévision ('+t.nbAttente+' camion'+(t.nbAttente>1?'s':'')+' à peser)', fmtNum(t.prevision), '', 'Usinage sur le poids du connaissement, à ajuster après la pesée') : '')
+      + '</div>';
+    html += '<div style="font-weight:600;margin:8px 0 4px">Camions déchargés</div>';
+    html += t.cams.length ? '<div class="achats-defile"><table class="tbl-fiches tbl-dense"><thead><tr><th>Date</th><th>Connaissement</th><th>Coopérative</th><th>Statut</th><th class="num">Poids (kg)</th><th class="num">Tarif (F/kg)</th><th class="num">Frais (FCFA)</th><th>Facture</th></tr></thead><tbody>'
+      + t.cams.map(x=>{ const co = coopById(x.a.cooperative_id), fac = usiFacturesDuCamion(t, x.a.id).map(f=>f.numero||'sans n°');
+          const st = x.statut==='usine' ? '<span class="badge ok">Usiné</span>' : x.statut==='refoule' ? '<span class="badge danger" title="'+esc(((x.a.pesee_detail||{})['Motif Refoulement']||[''])[0]||'')+'">Refoulé</span>' : '<span class="badge neutral">À peser</span>';
+          return '<tr><td>'+esc(dateFr(x.a.date))+'</td><td><b>'+esc(x.a.connaissement||'—')+'</b></td><td>'+esc(co?co.nom:'—')+'</td><td>'+st+'</td><td class="num">'+(x.kg>0?fmtNum(x.kg):'—')+(x.statut==='attente'?' <span class="hint" style="margin:0">(déclaré)</span>':'')+'</td><td class="num">'+(x.tarif>0?String(x.tarif).replace('.', ','):'—')+'</td>'
+            + '<td class="num">'+(x.statut==='attente' ? '<span class="hint" style="margin:0">prév. '+fmtNum(x.prevision)+'</span>' : '<b>'+fmtNum(x.montant)+'</b>')+'</td><td>'+(fac.length?esc(fac.join(', ')):'<span class="hint" style="margin:0">—</span>')+'</td></tr>'; }).join('')
+      + '</tbody></table></div>' : '<div class="hint">Aucun camion déchargé dans cette usine pour la campagne.</div>';
+    html += '<div style="font-weight:600;margin:12px 0 4px">Factures reçues</div>';
+    html += t.fs.length ? '<table class="tbl-fiches tbl-dense"><thead><tr><th>N°</th><th>Date</th><th class="num">Montant facturé</th><th class="num">Camions couverts</th><th class="num">Attendu d\'après les camions</th><th class="num">Écart</th><th>Notes</th><th></th></tr></thead><tbody>'
+      + t.fs.map(f=>{ const n = Array.isArray(f.achat_ids)?f.achat_ids.length:0, att = usiAttenduFacture(t, f), ec = (Number(f.montant_fcfa)||0)-att;
+          return '<tr><td><b>'+esc(f.numero||'—')+'</b></td><td>'+esc(dateFr(f.date_facture))+'</td><td class="num">'+fmtNum(f.montant_fcfa)+'</td><td class="num">'+(n||'—')+'</td><td class="num">'+(n?fmtNum(att):'—')+'</td><td class="num">'+(n ? (ec===0 ? '<span class="badge ok">0</span>' : '<b class="txt-danger">'+(ec>0?'+':'')+fmtNum(ec)+'</b>') : '—')+'</td><td>'+esc(f.notes||'')+'</td>'
+            + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="usiFactureOuvrir(\''+cd+'\',\''+esc(f.id)+'\')">Modifier</button> <button class="btn-danger-text btn-compact" onclick="usiFactureSupprimer(\''+esc(f.id)+'\')">Retirer</button></td></tr>'; }).join('')
+      + '</tbody></table>' : '<div class="hint">Aucune facture enregistrée. Quand l\'usinier en envoie une, ajoute-la et coche les camions qu\'elle couvre : l\'écart avec le calcul apparaît.</div>';
+    html += '<div style="font-weight:600;margin:12px 0 4px">Paiements</div>';
+    html += t.ps.length ? '<table class="tbl-fiches tbl-dense"><thead><tr><th>Date</th><th class="num">Montant</th><th>Mode</th><th>Référence</th><th>Banque</th><th>Facture</th><th>Notes</th><th></th></tr></thead><tbody>'
+      + t.ps.map(x=>{ const f = t.fs.find(y=>y.id===x.facture_id);
+          return '<tr><td>'+esc(dateFr(x.date_paiement))+'</td><td class="num"><b>'+fmtNum(x.montant_fcfa)+'</b></td><td>'+esc(x.mode||'—')+'</td><td>'+esc(x.reference||'—')+'</td><td>'+esc(x.banque||'—')+'</td><td>'+esc(f?(f.numero||'sans n°'):'—')+'</td><td>'+esc(x.notes||'')+'</td><td><button class="btn-danger-text btn-compact" onclick="usiPaiementSupprimer(\''+esc(x.id)+'\')">Retirer</button></td></tr>'; }).join('')
+      + '</tbody></table>' : '<div class="hint">Aucun paiement enregistré.</div>';
+    html += '</div>';
+  });
+  return html + '<div class="hint">Montants en FCFA. Le « Reste à payer » diminue à chaque paiement enregistré.</div></div></div>';
+}
+// Tarifs d'une usine
+function usiTarifOuvrir(code){ const s = lotsSiteParCode(code); if (!s) return; state.modal = { type:'usiTarif', payload:{ code } }; render(); }
+function renderUsiTarifModal(m){
+  const s = lotsSiteParCode(m.payload.code); if (!s) return '';
+  const v = x=>x!=null ? String(x).replace('.', ',') : '';
+  return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>Tarifs d\'usinage — '+esc(s.nom)+'</h3><div id="modal-fields">'
+    + '<div class="hint" style="margin-bottom:8px">Tarifs de l\'usinier en FCFA par kilo, hors sacherie (fournie par ECORIGINE).</div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Usinage (F/kg)<input type="text" name="ut_usi" value="'+esc(v(s.tarif_usinage_fcfa_kg))+'"></label><label class="field">Refoulement (F/kg)<input type="text" name="ut_ref" value="'+esc(v(s.tarif_refoulement_fcfa_kg))+'"></label></div>'
+    + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="usiTarifEnregistrer()">Enregistrer</button></div></div></div>';
+}
+async function usiTarifEnregistrer(){
+  const pl = state.modal && state.modal.type==='usiTarif' ? state.modal.payload : null; if (!pl) return;
+  const nb = n=>{ const t = String(fv(n)||'').trim().replace(/\s/g,'').replace(',', '.'); return t==='' ? null : Number(t); };
+  const u = nb('ut_usi'), r = nb('ut_ref');
+  if ((u!=null && !(u>=0)) || (r!=null && !(r>=0))){ showToast('Tarif invalide.'); return; }
+  const { error } = await supabaseClient.from('sites_usinage').update({ tarif_usinage_fcfa_kg:u, tarif_refoulement_fcfa_kg:r }).eq('code', pl.code); if (error){ showToast('Échec : '+error.message); return; }
+  const s = lotsSiteParCode(pl.code); if (s){ s.tarif_usinage_fcfa_kg = u; s.tarif_refoulement_fcfa_kg = r; }
+  closeModal(); render(); showToast('Tarifs enregistrés.', 'success');
+}
+// Facture reçue de l'usinier : numéro, date, montant et camions couverts
+function usiFactureOuvrir(code, id){
+  const x = id ? (state.usiFactures||[]).find(y=>y.id===id) : null;
+  state.modal = { type:'usiFacture', payload: x ? Object.assign({}, x, { code }) : { code, numero:'', date_facture:aujourdhuiIso(), montant_fcfa:'', achat_ids:[], notes:'' } };
+  render(); setTimeout(usiFactureRecalc, 0);
+}
+function renderUsiFactureModal(m){
+  const s = lotsSiteParCode(m.payload.code); if (!s) return '';
+  const t = usiSituation(s), sel = new Set(m.payload.achat_ids||[]);
+  const lignes = t.cams.filter(x=>x.statut!=='attente').map(x=>{ const co = coopById(x.a.cooperative_id), deja = usiFacturesDuCamion(t, x.a.id).filter(f=>f.id!==m.payload.id).map(f=>f.numero||'sans n°');
+    return '<label style="display:flex;gap:8px;align-items:center;margin:3px 0"><input type="checkbox" name="uf_c_'+esc(x.a.id)+'"'+(sel.has(x.a.id)?' checked':'')+' onchange="usiFactureRecalc()"> <span>'+esc(dateFr(x.a.date))+' · <b>'+esc(co?co.nom:(x.a.connaissement||'—'))+'</b> · '+(x.statut==='refoule'?'refoulé ':'usiné ')+fmtNum(x.kg)+' kg · '+fmtNum(x.montant)+' F'+(deja.length?' <span class="badge warn">déjà sur '+esc(deja.join(', '))+'</span>':'')+'</span></label>'; }).join('');
+  return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>Facture reçue — '+esc(s.nom)+'</h3><div id="modal-fields">'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 12px"><label class="field">N° de facture<input type="text" name="uf_num" value="'+esc(m.payload.numero||'')+'"></label><label class="field">Date<input type="date" name="uf_date" value="'+esc(m.payload.date_facture||'')+'"></label><label class="field">Montant facturé (FCFA)<input type="number" name="uf_montant" min="0" step="1" value="'+esc(m.payload.montant_fcfa===''?'':m.payload.montant_fcfa)+'" oninput="usiFactureRecalc()"></label></div>'
+    + '<div style="font-weight:600;margin:6px 0 4px">Camions couverts par cette facture</div><div style="max-height:34vh;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:6px 10px">'+(lignes||'<div class="hint">Aucun camion pesé.</div>')+'</div>'
+    + '<div id="uf-ecart" class="hint" style="margin:8px 0"></div><label class="field">Notes<input type="text" name="uf_notes" value="'+esc(m.payload.notes||'')+'"></label>'
+    + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="usiFactureEnregistrer()">Enregistrer</button></div></div></div>';
+}
+function usiFactureCochesIds(){ return Array.from(document.querySelectorAll('#modal-fields input[type=checkbox][name^="uf_c_"]')).filter(e=>e.checked).map(e=>e.name.slice(5)); }
+function usiFactureRecalc(){
+  const pl = state.modal && state.modal.type==='usiFacture' ? state.modal.payload : null, box = document.getElementById('uf-ecart'); if (!pl || !box) return;
+  const s = lotsSiteParCode(pl.code); if (!s) return;
+  const ids = usiFactureCochesIds(), att = usiCamions(s).filter(x=>ids.indexOf(x.a.id)>=0).reduce((t,x)=>t+x.montant,0), mt = Math.round(Number(fv('uf_montant'))||0);
+  box.innerHTML = ids.length ? 'Attendu d\'après les '+ids.length+' camion'+(ids.length>1?'s':'')+' coché'+(ids.length>1?'s':'')+' : <b>'+fmtNum(att)+' FCFA</b>'+(mt>0 ? ' · écart avec la facture : <b>'+(mt-att>0?'+':'')+fmtNum(mt-att)+'</b>' : '') : 'Coche les camions couverts pour comparer la facture au calcul.';
+}
+async function usiFactureEnregistrer(){
+  const pl = state.modal && state.modal.type==='usiFacture' ? state.modal.payload : null; if (!pl) return;
+  const montant = Math.round(Number(fv('uf_montant'))||0); if (!(montant>0)){ showToast('Indique le montant de la facture.'); return; }
+  const ligne = { site_code:pl.code, campagne_id:finCampagneId(), numero:fv('uf_num').trim()||null, date_facture:fv('uf_date')||null, montant_fcfa:montant, achat_ids:usiFactureCochesIds(), notes:fv('uf_notes').trim()||null };
+  let error;
+  if (pl.id){ ({ error } = await supabaseClient.from('factures_usinage').update(ligne).eq('id', pl.id)); }
+  else { ligne.id = genId('fus'); ({ error } = await supabaseClient.from('factures_usinage').insert(ligne)); }
+  if (error){ showToast('Échec : '+error.message); return; }
+  await usiCharger(); closeModal(); render(); showToast('Facture enregistrée.', 'success');
+}
+async function usiFactureSupprimer(id){
+  if (!confirm('Retirer cette facture ? Les paiements rattachés restent enregistrés.')) return;
+  const { error } = await supabaseClient.from('factures_usinage').delete().eq('id', id); if (error){ showToast('Échec : '+error.message); return; }
+  await usiCharger(); render();
+}
+// Paiement (chèque, virement) à l'usinier
+function usiPaiementOuvrir(code){ state.modal = { type:'usiPaiement', payload:{ code, date:aujourdhuiIso() } }; render(); }
+function renderUsiPaiementModal(m){
+  const s = lotsSiteParCode(m.payload.code); if (!s) return '';
+  const t = usiSituation(s);
+  return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>Paiement — '+esc(s.nom)+'</h3><div id="modal-fields">'
+    + '<div class="hint" style="margin-bottom:8px">Dû '+fmtNum(t.du)+' FCFA · facturé '+fmtNum(t.facture)+' FCFA · déjà payé '+fmtNum(t.paye)+' FCFA · reste à payer <b>'+fmtNum(t.reste)+'</b> FCFA</div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Date<input type="date" name="up_date" value="'+esc(m.payload.date)+'"></label><label class="field">Montant payé (FCFA)<input type="number" name="up_montant" min="0" step="1" value="'+(t.reste>0?t.reste:'')+'"></label>'
+    + '<label class="field">Mode<select name="up_mode"><option>Chèque</option><option>Virement</option><option>Espèces</option></select></label><label class="field">N° de chèque / référence<input type="text" name="up_ref"></label>'
+    + '<label class="field">Banque<input type="text" name="up_banque"></label><label class="field">Facture réglée<select name="up_fact"><option value="">— aucune / plusieurs —</option>'+t.fs.map(f=>'<option value="'+esc(f.id)+'">'+esc((f.numero||'sans n°')+' · '+fmtNum(f.montant_fcfa)+' F')+'</option>').join('')+'</select></label></div>'
+    + '<label class="field">Notes<input type="text" name="up_notes"></label>'
+    + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="usiPaiementEnregistrer()">Enregistrer</button></div></div></div>';
+}
+async function usiPaiementEnregistrer(){
+  const pl = state.modal && state.modal.type==='usiPaiement' ? state.modal.payload : null; if (!pl) return;
+  const montant = Math.round(Number(fv('up_montant'))||0); if (!(montant>0)){ showToast('Indique le montant payé.'); return; }
+  const ligne = { id:genId('pus'), site_code:pl.code, campagne_id:finCampagneId(), date_paiement:fv('up_date')||null, montant_fcfa:montant, mode:fv('up_mode')||null, reference:fv('up_ref').trim()||null, banque:fv('up_banque').trim()||null, facture_id:fv('up_fact')||null, notes:fv('up_notes').trim()||null };
+  const { error } = await supabaseClient.from('paiements_usinage').insert(ligne); if (error){ showToast('Échec : '+error.message); return; }
+  await usiCharger(); closeModal(); render(); showToast('Paiement enregistré.', 'success');
+}
+async function usiPaiementSupprimer(id){
+  if (!confirm('Retirer ce paiement ?')) return;
+  const { error } = await supabaseClient.from('paiements_usinage').delete().eq('id', id); if (error){ showToast('Échec : '+error.message); return; }
+  await usiCharger(); render();
+}
+
 
 
 // =====================================================================================================================
@@ -12426,6 +12589,9 @@ function lotsModalsHtml(){
   if (m.type==='finPrime') return renderFinPrimeModal(m);
   if (m.type==='finPartDetail') return renderFinPartDetailModal(m);
   if (m.type==='finPartPaiement') return renderFinPartPaiementModal(m);
+  if (m.type==='usiTarif') return renderUsiTarifModal(m);
+  if (m.type==='usiFacture') return renderUsiFactureModal(m);
+  if (m.type==='usiPaiement') return renderUsiPaiementModal(m);
   if (m.type==='ctrTraitant') return renderCtrModal(m);
   if (m.type==='livrExport') return renderLivrExportModal(m);
   if (m.type==='finLtdLots') return renderFinLtdLotsModal(m);
