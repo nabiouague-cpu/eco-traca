@@ -4715,7 +4715,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-04-449';
+const APP_VERSION = '2026-11-05-450';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7886,7 +7886,8 @@ async function finLtdLotsEnregistrer(){
 async function finChargerPaiementsAnnexes(){
   if (!supabaseClient || state.finPaChargement) return; state.finPaChargement = true;
   try{
-    const [a, b] = await Promise.all([ supabaseClient.from('paiements_primes').select('*').order('date_paiement', {ascending:false}), supabaseClient.from('paiements_partenaires').select('*').order('date_paiement', {ascending:false}) ]);
+    const [a, b, c] = await Promise.all([ supabaseClient.from('paiements_primes').select('*').order('date_paiement', {ascending:false}), supabaseClient.from('paiements_partenaires').select('*').order('date_paiement', {ascending:false}), supabaseClient.from('traitants').select('*') ]);
+    state.traitantsFiches = (c && !c.error) ? (c.data||[]) : (state.traitantsFiches||[]);
     state.paiementsPrimes = (a && !a.error) ? (a.data||[]) : (state.paiementsPrimes||[]);
     state.paiementsPartenaires = (b && !b.error) ? (b.data||[]) : (state.paiementsPartenaires||[]);
   } finally { state.finPaChargement = false; state.finPaCharge = true; }
@@ -8006,7 +8007,7 @@ function renderFinPartenaires(){
     const note = (p.sansPrix ? '<span class="badge warn" title="Prix loco-magasin non renseigné sur l\'usine">'+p.sansPrix+' sans prix</span> ' : '')+(p.sansPoids ? '<span class="badge neutral" title="Poids de base pas encore saisi">'+p.sansPoids+' sans poids</span>' : '');
     html += '<tr><td><b>'+esc(p.traitant)+'</b>'+(note?'<div style="margin-top:3px">'+note+'</div>':'')+'</td><td>'+esc(p.sites.map(s=>s.code).join(', '))+'</td><td class="num">'+p.achats.length+'</td><td class="num">'+fmtNum(p.kgUsine)+'</td><td class="num">'+(p.kgAgl?fmtNum(p.kgAgl):'—')+'</td><td>'+esc(p.base)+'</td>'
       + '<td class="num">'+fmtNum(p.du)+'</td><td class="num">'+fmtNum(p.paye)+'</td><td class="num"><b class="'+(p.reste>0?'txt-danger':'')+'">'+fmtNum(p.reste)+'</b></td>'
-      + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="finPartenaireDetail(\''+esc(encodeURIComponent(p.traitant))+'\')">Détail</button> <button class="btn-ghost btn-compact" onclick="finPartPaiementOuvrir(\''+esc(encodeURIComponent(p.traitant))+'\')">Paiement</button></td></tr>';
+      + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="finPartenaireDetail(\''+esc(encodeURIComponent(p.traitant))+'\')">Détail</button> <button class="btn-ghost btn-compact" onclick="finPartPaiementOuvrir(\''+esc(encodeURIComponent(p.traitant))+'\')">Paiement</button> <button class="btn-ghost btn-compact" onclick="ctrOuvrir(\''+esc(encodeURIComponent(p.traitant))+'\')">Contrat</button></td></tr>';
   });
   return html + '</tbody></table></div><div class="hint" style="margin-top:8px">Montants en FCFA.</div></div></div>';
 }
@@ -8042,6 +8043,146 @@ async function finPartPaiementSupprimer(id){
   if (!confirm('Retirer ce paiement ?')) return;
   const { error } = await supabaseClient.from('paiements_partenaires').delete().eq('id', id); if (error){ showToast('Échec : '+error.message); return; }
   await finChargerPaiementsAnnexes(); render();
+}
+
+
+// =====================================================================================================================
+// CONTRAT DE PRESTATION « LOCO-MAGASIN » DES TRAITANTS (Awahus, Sitapa, M Bobby Vo…) : généré en éditant directement le modèle
+// Word fourni (modeles/contrat_loco-mag_traitant_26-27.docx). Le bloc du traitant est rédigé comme celui d'ECORIGINE
+// (dénomination complète, forme, capital, RCCM, adresse, siège, représentant). Le lieu de livraison (usine + port) vient des
+// sites d'usinage du traitant ; les prix viennent de la fiche de ces sites. Ce qui manque reste en pointillés et est signalé.
+// La fiche du traitant est enregistrée dans la table « traitants » (clé = nom du traitant dans les sites d'usinage).
+// =====================================================================================================================
+const CTR_MODELE = 'modeles/contrat_loco-mag_traitant_26-27.docx';
+const CTR_MOIS = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
+const CTR_FICHE_CHAMPS = ['type_partie','denomination','forme_juridique','capital','rccm','compte_contribuable','siege_social','adresse_postale','telephone','email','representant_nom','representant_fonction','representant_cni','notes'];
+function ctrFiche(nom){ return (state.traitantsFiches||[]).find(t=>t.nom===nom) || { nom, type_partie:'societe' }; }
+function ctrSitesDe(nom){ return (state.sitesUsinage||[]).filter(s=>String(s.traitant||'').trim()===nom && s.actif!==false); }
+function ctrNb3(n){ const v = Number(n); if (!(v>0)) return ''; const [e, d] = v.toFixed(3).split('.'); return e.replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0')+','+d; }
+function ctrDateLongue(iso, zero){ const m = String(iso||'').match(/^(\d{4})-(\d{2})-(\d{2})/); if (!m) return ''; const j = zero ? m[3] : String(Number(m[3])); return j+' '+CTR_MOIS[Number(m[2])-1]+' '+m[1]; }
+function ctrVilleTexte(v){ v = String(v||'').trim(); return /^[AEIOUYÂÉÈÊH]/i.test(v) ? "d'"+v : 'de '+v; }
+// « au port d'Abidjan, à l'usine SICOCOA » ; plusieurs usines du même port : « aux usines IPSC ou SGC-CI » ; plusieurs ports séparés par « ou ».
+function ctrLieuLivraison(sites){
+  const par = {}; sites.forEach(s=>{ const v = String(s.ville||'').trim() || '…………'; (par[v] = par[v] || []).push(String(s.nom||s.code||'').trim()); });
+  const morceaux = Object.keys(par).map(v=>'au port '+ctrVilleTexte(v)+', '+(par[v].length>1 ? 'aux usines ' : 'à l\'usine ')+par[v].join(' ou '));
+  return 'La livraison du produit devra se faire '+(morceaux.join(' ou ') || 'à …………………')+'.';
+}
+function ctrManques(f, x){
+  const m = []; const add = (ok, t)=>{ if (!ok) m.push(t); };
+  if (f.type_partie==='personne'){ add(x.nomSigne, 'nom du traitant'); add(f.representant_cni, 'n° de CNI'); add(f.adresse_postale||f.siege_social, 'adresse'); }
+  else { add(f.denomination, 'dénomination complète'); add(f.forme_juridique, 'forme juridique'); add(f.capital, 'capital'); add(f.rccm, 'n° RCCM'); add(f.adresse_postale, 'adresse postale'); add(f.siege_social, 'siège social'); add(f.representant_nom, 'représentant'); add(f.representant_fonction, 'fonction du représentant'); }
+  add(x.sites.length, 'site de déchargement'); add(x.loco>0, 'prix loco-magasin'); add(x.sac>0, 'coût de la sacherie');
+  return m;
+}
+function ctrContexte(f, o){
+  const sites = o.sites || [], loco = Number(o.loco)||0, sac = Number(o.sac)||0;
+  return { f, sites, qte:Math.round(Number(o.qte)||0), dateLimite:o.dateLimite, dateSign:o.dateSign, loco, sac, total:Math.round((loco-sac)*1000)/1000,
+    nomSigne: String(f.type_partie==='personne' ? (f.representant_nom||f.denomination||o.nom) : (f.representant_nom||'')).trim() };
+}
+function ctrRemplir(dom, x){
+  const bilan = { introuvables:[] }; const f = x.f;
+  const essai = (n, nom)=>{ if (!n) bilan.introuvables.push(nom); };
+  const par = pfParContenant(dom, /Le traitant\s+\S/);
+  if (par){
+    if (f.type_partie==='personne'){
+      pfReecrire(dom, par, [
+        { t:'Le traitant ' }, { t:pfV(x.nomSigne), b:true },
+        { t:', titulaire de la carte nationale d’identité numéro N° '+pfV(f.representant_cni)+', domicilié à '+pfV(f.adresse_postale||f.siege_social)+(f.rccm ? ', RCCM : '+f.rccm : '')+', ci-après désigné ' }
+      ]);
+    } else {
+      const den = String(f.denomination||'').trim();
+      const prefixe = /^(soci[ée]t[ée]|st[ée]|centre|groupe|entreprise|etablissements?|établissements?)\b/i.test(den) ? 'La ' : 'La Société ';
+      pfReecrire(dom, par, [
+        { t:prefixe }, { t:pfV(den), b:true },
+        { t:', '+pfV(f.forme_juridique)+' au capital de '+(f.capital ? f.capital+' FCFA' : PF_TRAIT)+', Numéro RCCM : '+pfV(f.rccm)+(f.compte_contribuable ? ', N° compte contribuable : '+f.compte_contribuable : '')+', '+pfV(f.adresse_postale)+', Siège social : '+pfV(f.siege_social)+', représentée par '+pfV(f.representant_fonction)+', Monsieur ' },
+        { t:pfV(x.nomSigne), b:true }, { t:', ci-après désigné ' }
+      ]);
+    }
+  } else bilan.introuvables.push('identité du traitant');
+  const parQ = pfParContenant(dom, /Tonnes\s+de\s+lots/);
+  essai(parQ && x.qte>0 ? pfRemplacerPar(parQ, /mille\s*\(\s*1[\s\u00a0\u202f]*0[\s\u00a0\u202f]*0[\s\u00a0\u202f]*0\s*\)/, prefLettres(x.qte)+' ('+pfNb(x.qte).replace(/ /g,'\u00a0')+')') : (x.qte>0 ? 0 : 1), 'quantité');
+  const parD = pfParContenant(dom, /au\s+plus\s+tard/);
+  essai(parD && x.dateLimite ? pfRemplacerPar(parD, /\d{1,2}\s+décembre\s+20\d\d/, ctrDateLongue(x.dateLimite, false)) : (x.dateLimite ? 0 : 1), 'date limite de livraison');
+  const parL = pfParContenant(dom, /La\s+livraison\s+du\s+produit/);
+  if (parL) pfReecrire(dom, parL, [{ t:ctrLieuLivraison(x.sites) }]); else bilan.introuvables.push('lieu de livraison');
+  const nombre = /\d[\d\s\u00a0]*,\s*\d+/;
+  const parP = pfParContenant(dom, /Prix\s+Loco-magasin/), parS = pfParContenant(dom, /Sacherie\s+F\/KG/), parT = pfParContenant(dom, /^\s*Total\s*:/);
+  essai(parP && pfRemplacerPar(parP, nombre, x.loco>0 ? ctrNb3(x.loco) : PF_TRAIT), 'prix loco-magasin');
+  essai(parS && pfRemplacerPar(parS, nombre, x.sac>0 ? ctrNb3(x.sac) : PF_TRAIT), 'sacherie');
+  essai(parT && pfRemplacerPar(parT, nombre, x.loco>0 ? ctrNb3(x.total) : PF_TRAIT), 'total');
+  const parF = pfParContenant(dom, /^\s*Abidjan,\s+le\s+\d/);
+  essai(parF && x.dateSign ? pfRemplacerPar(parF, /le\s+\d{1,2}\s+\S+\s+\d{4}/, 'le '+ctrDateLongue(x.dateSign, true)) : (x.dateSign ? 0 : 1), 'date de signature');
+  pfRemplacerTout(dom, 'Hadi Khallil', pfV(x.nomSigne));
+  return bilan;
+}
+async function ctrGenerer(f, o){
+  if (typeof JSZip==='undefined') throw new Error('la bibliothèque de compression n\'a pas pu se charger (connexion internet requise)');
+  const x = ctrContexte(f, o);
+  const r = await pfEditerDocx(await pfChargerModele(CTR_MODELE), dom=>ctrRemplir(dom, x));
+  return { blob:r.blob, nom:assainirNomFichier('Contrat_Loco-mag_'+String(f.nom).replace(/\s+/g,'_')+'_26-27.docx'), manques:ctrManques(f, x), bilan:r.bilan };
+}
+function ctrOuvrir(t){
+  const nom = decodeURIComponent(t), sites = ctrSitesDe(nom);
+  state.modal = { type:'ctrTraitant', payload:{ traitant:nom, sitesSel:sites.map(s=>s.code) } }; render();
+}
+function ctrLire(nom){
+  const f = { nom }; CTR_FICHE_CHAMPS.forEach(k=>{ f[k] = String(fv('ct_'+k)||'').trim() || null; });
+  f.type_partie = fvRadio('ct_type_partie') || 'societe';
+  const sites = ctrSitesDe(nom).filter(s=>{ const el = document.querySelector('#modal-fields [name="ct_site_'+s.code+'"]'); return el && el.checked; });
+  return { f, o:{ nom, sites, qte:fv('ct_qte'), loco:String(fv('ct_loco')).replace(',', '.'), sac:String(fv('ct_sac')).replace(',', '.'), dateLimite:fv('ct_limite'), dateSign:fv('ct_sign') } };
+}
+async function ctrEnregistrerFiche(nom, silencieux){
+  const { f } = ctrLire(nom); const ligne = Object.assign({}, f, { updated_at:new Date().toISOString() });
+  const { error } = await supabaseClient.from('traitants').upsert(ligne);
+  if (error){ showToast('Échec de l\'enregistrement de la fiche : '+error.message); return false; }
+  const i = (state.traitantsFiches||[]).findIndex(t=>t.nom===nom); state.traitantsFiches = state.traitantsFiches || [];
+  if (i>=0) state.traitantsFiches[i] = ligne; else state.traitantsFiches.push(ligne);
+  if (!silencieux) showToast('Fiche de '+nom+' enregistrée.', 'success');
+  return true;
+}
+async function ctrTelecharger(nom, btn){
+  const txt = btn ? btn.textContent : ''; if (btn){ btn.disabled = true; btn.textContent = 'Génération…'; }
+  try{
+    const { f, o } = ctrLire(nom);
+    await ctrEnregistrerFiche(nom, true);
+    const d = await ctrGenerer(f, o);
+    telechargerBlob(d.blob, d.nom);
+    showToast(d.manques.length ? 'Contrat téléchargé. À compléter à la main (pointillés) : '+d.manques.join(', ')+'.' : 'Contrat téléchargé : '+d.nom, d.manques.length ? '' : 'success');
+    if (d.bilan.introuvables.length) console.warn('Contrat traitant : éléments du modèle non remplacés', d.bilan.introuvables);
+  }catch(e){ showToast('Échec : '+(e && e.message ? e.message : e)); }
+  finally{ if (btn){ btn.disabled = false; btn.textContent = txt; } }
+}
+function renderCtrModal(m){
+  const nom = m.payload.traitant, f = ctrFiche(nom), sites = ctrSitesDe(nom), sel = sites.filter(s=>m.payload.sitesSel.includes(s.code));
+  const avecPrix = sel.find(s=>Number(s.prix_loco_fcfa_kg)>0) || sites.find(s=>Number(s.prix_loco_fcfa_kg)>0) || {};
+  const prixDiff = new Set(sel.map(s=>String(s.prix_loco_fcfa_kg||'')+'/'+String(s.cout_sacherie_fcfa_kg||''))).size>1;
+  const camp = (state.campagnes||[]).find(c=>c.id===finCampagneId());
+  const inp = (k, lib, ph, large)=>'<label class="field"'+(large?' style="grid-column:1/-1"':'')+'>'+lib+'<input type="text" name="ct_'+k+'" value="'+esc(f[k]||'')+'"'+(ph?' placeholder="'+esc(ph)+'"':'')+'></label>';
+  const pers = f.type_partie==='personne';
+  return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal xl"><h3>Contrat de prestation « Loco-magasin » — '+esc(nom)+'</h3><div id="modal-fields">'
+    + '<div class="hint" style="margin-bottom:10px">Modèle : <i>Contrat Loco-mag Traitant 26-27</i>. Les informations d\'ECORIGINE sont celles du modèle. Ce qui manque reste en pointillés dans le contrat.</div>'
+    + '<div style="font-weight:600;margin:6px 0">Le traitant (partie « Vendeur »)</div>'
+    + '<div style="margin-bottom:8px"><label style="margin-right:16px"><input type="radio" name="ct_type_partie" value="societe"'+(pers?'':' checked')+'> Société</label><label><input type="radio" name="ct_type_partie" value="personne"'+(pers?' checked':'')+'> Personne physique</label></div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px">'
+    + inp('denomination','Dénomination complète','ex. AWAHUS SERVICE', true)
+    + inp('forme_juridique','Forme juridique','ex. Société Anonyme, SARL') + inp('capital','Capital (FCFA)','ex. 10 000 000')
+    + inp('rccm','N° RCCM','') + inp('compte_contribuable','N° compte contribuable (facultatif)','')
+    + inp('adresse_postale','Adresse postale','ex. 01 BP 389 San Pedro 01') + inp('siege_social','Siège social','ex. Zone industrielle de San Pedro')
+    + inp('representant_nom','Représentant (nom et prénoms) — ou nom du traitant si personne physique','') + inp('representant_fonction','Fonction du représentant','ex. Directeur Général')
+    + inp('representant_cni','N° de CNI (personne physique)','') + inp('telephone','Téléphone','')
+    + '</div>'
+    + '<div style="font-weight:600;margin:14px 0 6px">Livraison</div>'
+    + (sites.length ? sites.map(s=>'<label style="display:block;margin:2px 0"><input type="checkbox" name="ct_site_'+esc(s.code)+'"'+(sel.some(x=>x.code===s.code)?' checked':'')+'> '+esc(s.nom)+' <span class="hint">('+esc(s.code)+' · port '+esc(s.ville||'?')+(Number(s.prix_loco_fcfa_kg)>0 ? ' · loco '+ctrNb3(s.prix_loco_fcfa_kg) : ' · prix non renseigné')+')</span></label>').join('') : '<div class="hint">Aucun site d\'usinage actif n\'est rattaché à ce traitant.</div>')
+    + (prixDiff ? '<div class="hint" style="margin-top:4px">⚠ Les sites cochés n\'ont pas le même prix : vérifie les prix ci-dessous.</div>' : '')
+    + '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:0 12px;margin-top:8px">'
+    + '<label class="field">Quantité (tonnes)<input type="number" name="ct_qte" min="1" step="1" value="1000"></label>'
+    + '<label class="field">Livraison au plus tard le<input type="date" name="ct_limite" value="'+esc((camp&&camp.date_debut ? String(camp.date_debut).slice(0,4) : '2026')+'-12-15')+'"></label>'
+    + '<label class="field">Date de signature<input type="date" name="ct_sign" value="'+esc(aujourdhuiIso())+'"></label>'
+    + '<label class="field">Prix loco-magasin (F/kg)<input type="text" name="ct_loco" value="'+esc(avecPrix.prix_loco_fcfa_kg||'')+'"></label>'
+    + '<label class="field">Sacherie (F/kg)<input type="text" name="ct_sac" value="'+esc(avecPrix.cout_sacherie_fcfa_kg||'')+'"></label>'
+    + '<div class="hint" style="align-self:end;padding-bottom:10px">Total = prix loco − sacherie</div>'
+    + '</div>'
+    + '</div><div class="actions"><button class="btn" onclick="closeModal()">Fermer</button><button class="btn" onclick="ctrEnregistrerFiche(\''+esc(nom).replace(/'/g,"\\'")+'\')">Enregistrer la fiche</button><button class="btn btn-primary" onclick="ctrTelecharger(\''+esc(nom).replace(/'/g,"\\'")+'\', this)">Générer le contrat (Word)</button></div></div></div>';
 }
 
 function renderPrefinancementsTab(){
@@ -12263,6 +12404,7 @@ function lotsModalsHtml(){
   if (m.type==='finPrime') return renderFinPrimeModal(m);
   if (m.type==='finPartDetail') return renderFinPartDetailModal(m);
   if (m.type==='finPartPaiement') return renderFinPartPaiementModal(m);
+  if (m.type==='ctrTraitant') return renderCtrModal(m);
   if (m.type==='livrExport') return renderLivrExportModal(m);
   if (m.type==='finLtdLots') return renderFinLtdLotsModal(m);
   if (m.type==='lotsPoidsEntrepot'){
