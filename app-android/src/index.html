@@ -221,7 +221,7 @@
 <script src="https://cdn.jsdelivr.net/npm/pmtiles@3.2.1/dist/pmtiles.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/protomaps-leaflet@5.1.0/dist/protomaps-leaflet.js"></script>
 <script>
-const APP_VERSION = '2026-11-04-app14';
+const APP_VERSION = '2026-11-04-app15';
 const SB_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SB_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 const ECO_INCOMPLET = 'Contrôle ECORIGINE NON FAIT : les parcelles de cette zone ne sont pas sur le téléphone et il n’y a pas de réseau. Il sera refait automatiquement dès que le réseau revient, avant l’envoi.';
@@ -708,12 +708,28 @@ function activerGPS(){
 }
 /* ---------- GPS en arrière-plan (écran éteint, application réduite) : service Android de premier plan ----------
    Actif seulement pendant « Marcher le contour », avec une notification visible. Désactivable dans Zone (porte de sortie : on revient au GPS d'avant). */
+// Accès aux modules natifs Android SANS la bibliothèque @capacitor/core (absente de cette application) : on parle directement au pont natif.
+function pluginNatif(nom){
+  const C = window.Capacitor; if (!C || !C.isNativePlatform || !C.isNativePlatform()) return null;
+  S.plugs = S.plugs || {}; if (S.plugs[nom]) return S.plugs[nom];
+  let P = null;
+  if (typeof C.registerPlugin === 'function'){ try { P = C.registerPlugin(nom); } catch(e){} }
+  if (!P && C.Plugins && C.Plugins[nom]) P = C.Plugins[nom];
+  if (!P && typeof C.nativePromise === 'function'){
+    P = new Proxy({}, { get:(_, m)=>{
+      if (m==='then') return undefined;
+      if (m==='addListener') return async (ev, cb)=>C.addListener(nom, ev, cb);
+      return (opts, cb)=>{
+        if (typeof cb==='function') return Promise.resolve(C.nativeCallback(nom, m, opts||{}, cb));   // l'identifiant renvoyé sert à retirer la surveillance
+        return C.nativePromise(nom, m, opts||{});
+      };
+    } });
+  }
+  if (P) S.plugs[nom] = P; return P;
+}
 function trouverBG(){
-  try {
-    const C = window.Capacitor; if (!C || (C.isNativePlatform && !C.isNativePlatform())) return null;
-    if (S.bgPlugin) return S.bgPlugin;
-    S.bgPlugin = (C.Plugins && C.Plugins.BackgroundGeolocation) || C.registerPlugin('BackgroundGeolocation'); return S.bgPlugin;
-  } catch(e){ S.bgErreur = (e && e.message) || String(e); return null; }
+  try { if (S.bgPlugin) return S.bgPlugin; S.bgPlugin = pluginNatif('BackgroundGeolocation'); return S.bgPlugin; }
+  catch(e){ S.bgErreur = (e && e.message) || String(e); return null; }
 }
 let BG = null;
 function diagGPS(){ const C = window.Capacitor; return C ? 'Capacitor présent, plateforme '+(C.getPlatform ? C.getPlatform() : '?')+(S.bgErreur ? ', erreur : '+S.bgErreur : '') : 'Capacitor absent : ouvre l’application installée, pas la page web'; }
@@ -1163,7 +1179,7 @@ function afficherMaj(v, force){
 }
 
 // Mise à jour dans l'application : téléchargement avec barre de progression, puis installateur Android (un seul appui sur « Installer »)
-function majPlugin(){ try { const C = window.Capacitor; if (!C || !C.isNativePlatform || !C.isNativePlatform()) return null; return S.apkPlugin || (S.apkPlugin = C.registerPlugin('ApkInstaller')); } catch(e){ return null; } }
+function majPlugin(){ try { return pluginNatif('ApkInstaller'); } catch(e){ return null; } }
 function majBoite(m, html){ const b = m.querySelector('.maj-b'); if (b) b.innerHTML = html; }
 function majLienManuel(v, m){
   const a = document.createElement('a'); a.href = v.apk_url; a.target = '_blank'; a.rel = 'noopener'; document.body.appendChild(a); a.click(); a.remove();
@@ -1181,6 +1197,7 @@ async function lancerMaj(v, m){
     await installerMaj(v, m, P);
   } catch(e){
     if (h) h.remove();
+    if (/not implemented|unimplemented|not available/i.test((e&&e.message)||String(e))) return majLienManuel(v, m);
     majBoite(m, '<h3>Téléchargement impossible</h3><p class="petit">'+esc((e&&e.message)||String(e))+'</p><p class="mut petit">Vérifie ta connexion et réessaie. Tes données sont intactes.</p><button class="btn p" id="maj-re">Réessayer</button><button class="btn" id="maj-fermer">Fermer</button>');
     $('maj-re').onclick = ()=>lancerMaj(v, m); $('maj-fermer').onclick = ()=>{ m.style.display = 'none'; };
   }
