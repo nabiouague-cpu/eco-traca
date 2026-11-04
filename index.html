@@ -4715,7 +4715,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-04-448';
+const APP_VERSION = '2026-11-04-449';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -9871,13 +9871,13 @@ function livrRecapCoops(wb, feuilles, st){
   if (!coops.length) return null;
   const ws = wb.addWorksheet('Récap coopératives'); const plusieurs = feuilles.length>1;
   const q = f=>"'"+String(f.ws.name).replace(/'/g,"''")+"'!";
-  const LIM = 2000, entetes = ['COOPERATIVES'].concat(plusieurs ? feuilles.map(f=>f.ws.name+' (kg)') : []).concat(['POIDS ACCEPTE TOTAL (kg)','POIDS ACCEPTE TOTAL (t)','NB LIVRAISONS']);
+  const LIM = 2000, entetes = ['COOPERATIVES'].concat(plusieurs ? feuilles.map(f=>f.ws.name+' (kg)') : []).concat(['POIDS ACCEPTE TOTAL (kg)','POIDS ACCEPTE TOTAL (t)','NB LIVRAISONS','DONT PAS ENCORE PESEES']);
   ws.columns = [{ width:9 }].concat(entetes.map((e,i)=>({ width: i===0 ? 34 : 19 })));
   const font = (b)=>({ name:'Calibri', size:10, bold:!!b });
   const h = ws.getRow(4); h.height = 27.6;
   entetes.forEach((e,i)=>{ const x = h.getCell(i+2); x.value = e; x.font = { name:'Calibri', size:10, bold:true, color:{ argb:'FFFFFFFF' } }; x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:st.ENTETE } }; x.alignment = { horizontal:'center', vertical:'middle', wrapText:true }; x.border = st.cadre; });
   const col = n=>{ let s = '', k = n; while (k>0){ const r = (k-1)%26; s = String.fromCharCode(65+r)+s; k = Math.floor((k-1)/26); } return s; };
-  const nP = plusieurs ? feuilles.length : 0, cTot = 3+nP, cT = cTot+1, cN = cT+1;   // colonnes : B = coopérative, C.. = une colonne par feuille
+  const nP = plusieurs ? feuilles.length : 0, cTot = 3+nP, cT = cTot+1, cN = cT+1, cP = cN+1;   // colonnes : B = coopérative, C.. = une colonne par feuille
   coops.forEach((nom,i)=>{
     const r = 5+i, row = ws.getRow(r);
     const b = row.getCell(2); b.value = nom; b.font = font(); b.border = st.cadre; b.alignment = { horizontal:'left' };
@@ -9887,11 +9887,13 @@ function livrRecapCoops(wb, feuilles, st){
     const xt = row.getCell(cTot); xt.value = { formula: plusieurs ? 'SUM(C'+r+':'+col(2+nP)+r+')' : somme(feuilles[0]) };
     const xe = row.getCell(cT); xe.value = { formula: col(cTot)+r+'/1000' };
     const xn = row.getCell(cN); xn.value = { formula: feuilles.map(nb).join('+') };
-    for (let c = 3; c<=cN; c++){ const x = row.getCell(c); x.font = font(); x.border = st.cadre; x.alignment = { horizontal:'right', indent:1 }; x.numFmt = c===cT ? '#,##0.00' : st.NB; }
+    const vide = f=>'COUNTIFS('+q(f)+'$B$5:$B$'+LIM+',$B'+r+','+q(f)+'$I$5:$I$'+LIM+',"")';   // livrée mais poids accepté pas encore saisi (pas pesée)
+    row.getCell(cP).value = { formula: feuilles.map(vide).join('+') };
+    for (let c = 3; c<=cP; c++){ const x = row.getCell(c); x.font = font(); x.border = st.cadre; x.alignment = { horizontal:'right', indent:1 }; x.numFmt = c===cT ? '#,##0.00' : st.NB; }
   });
   const rt = 5+coops.length, tot = ws.getRow(rt);
   const lt = tot.getCell(2); lt.value = 'TOTAL'; lt.font = font(true); lt.border = st.cadre;
-  for (let c = 3; c<=cN; c++){ const x = tot.getCell(c); x.value = { formula:'SUM('+col(c)+'5:'+col(c)+(rt-1)+')' }; x.font = font(true); x.border = st.cadre; x.alignment = { horizontal:'right', indent:1 }; x.numFmt = c===cT ? '#,##0.00' : st.NB; x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFF2F2F2' } }; }
+  for (let c = 3; c<=cP; c++){ const x = tot.getCell(c); x.value = { formula:'SUM('+col(c)+'5:'+col(c)+(rt-1)+')' }; x.font = font(true); x.border = st.cadre; x.alignment = { horizontal:'right', indent:1 }; x.numFmt = c===cT ? '#,##0.00' : st.NB; x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFF2F2F2' } }; }
   lt.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFF2F2F2' } };
   ws.views = [{ state:'frozen', ySplit:4 }];
   // placée en 2e position, juste après la première feuille de détail
