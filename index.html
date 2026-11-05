@@ -4716,7 +4716,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-05-456';
+const APP_VERSION = '2026-11-05-457';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -14971,9 +14971,12 @@ function ocSimExporter(){
 // ===== Dossier de traçabilité par coopérative (toutes les coopératives) =====
 // Pour chaque coopérative : tous les n° de sa série (1 à N), ce qui est tracé pour de bon, ce qui est simulé (livré ailleurs ou pas encore tracé) et ce qui reste à tracer.
 // Le premier camion reçu chez nous peut être le n° 15 : « Tracer avec la simulation » simule d'abord les n° 1 à 14 pour adapter le n° 15 à ce qui reste.
+function ocSitapaSite(a){ const s = sachSiteDe(a.usine_dechargement); return !!s && (/sitapa/i.test(s.traitant||'') || String(s.code||'').toUpperCase()==='US40'); }
+// Usines dont les coopératives sont à tracer par nous : Awahus (IPSC, SGC-CI) et Sitapa.
+function ocATracerSite(a){ return ocAwahusSite(a) || ocSitapaSite(a); }
 function ocAwahusSite(a){ const s = sachSiteDe(a.usine_dechargement); return !!s && (/awahus/i.test(s.traitant||'') || String(s.code||'').toUpperCase()==='US34'); }
 function ocAwahusCoops(){
-  const ids = new Set((state.achats||[]).filter(a=>!a.producteur_id && !a.refoulee && a.connaissement && ocAwahusSite(a)).map(a=>a.cooperative_id));
+  const ids = new Set((state.achats||[]).filter(a=>!a.producteur_id && !a.refoulee && a.connaissement && ocATracerSite(a)).map(a=>a.cooperative_id));
   return Array.from(ids).map(id=>coopById(id)).filter(Boolean).sort((x,y)=>String(x.nom).localeCompare(String(y.nom),'fr'));
 }
 function ocDossierDonnees(coopId, cle){
@@ -14984,7 +14987,7 @@ function ocDossierDonnees(coopId, cle){
   const lignes = [];
   for (let seq=1; seq<=g.max; seq++){
     const c = nous.get(seq), code = c ? c.code : g.cle+'-'+seq;
-    const awa = c ? ocAwahusSite({ usine_dechargement:c.usine }) : false;
+    const awa = c ? ocATracerSite({ usine_dechargement:c.usine }) : false;
     const st = c ? (nParCode.has(code) ? 'trace' : (sim.has(seq) ? 'simule' : (awa ? 'atracer' : 'autre'))) : (sim.has(seq) ? 'simule' : 'asimuler');
     lignes.push({ seq, code, nous:!!c, awa, usine: c ? c.usine : '', kg:c ? c.kg : 0, iso:c ? c.iso : '', st, nProd: c ? (nParCode.get(code)||0) : (sim.has(seq) ? (sim.get(seq).alloc||[]).length : 0) });
   }
@@ -15003,7 +15006,8 @@ function ocDossiersListe(){
     const d = gs.map(g=>ocDossierDonnees(c.id, g.cle)).filter(Boolean); if (!d.length) return;
     const usines = Array.from(new Set((state.achats||[]).filter(a=>a.cooperative_id===c.id && !a.producteur_id && !a.refoulee && a.connaissement && a.usine_dechargement).map(a=>{ const st = sachSiteDe(a.usine_dechargement); return st ? st.nom : String(a.usine_dechargement).trim(); })));
     liste.push({ c, nAutre:d.reduce((t,x)=>t+x.nAutre,0), nNous:d.reduce((t,x)=>t+x.nNous,0), nTrace:d.reduce((t,x)=>t+x.nTrace,0), nSimule:d.reduce((t,x)=>t+x.nSimule,0), nATracer:d.reduce((t,x)=>t+x.nATracer,0), usines,
-      awahus:(state.achats||[]).some(a=>a.cooperative_id===c.id && !a.producteur_id && !a.refoulee && a.connaissement && ocAwahusSite(a)),
+      awahus:(state.achats||[]).some(a=>a.cooperative_id===c.id && !a.producteur_id && !a.refoulee && a.connaissement && ocATracerSite(a)),
+      awahusSeul:(state.achats||[]).some(a=>a.cooperative_id===c.id && !a.producteur_id && !a.refoulee && a.connaissement && ocAwahusSite(a)),
       nProd:(state.producteurs||[]).filter(p=>p.cooperative_id===c.id && p.farm_id).length });
   });
   liste.sort((a,b)=>b.nATracer-a.nATracer || String(a.c.nom).localeCompare(String(b.c.nom),'fr'));
@@ -15021,13 +15025,13 @@ function renderDossiersTab(){
   let html = '<div class="panel"><div class="panel-head"><div><h2>📁 Dossiers de traçabilité</h2>'
     + '<p style="margin:2px 0 0;color:var(--ink-soft);font-size:13px;max-width:800px">Un dossier par coopérative : tous les n° de sa série (1 à N), ce qui est tracé, simulé (livré ailleurs ou pas encore tracé) ou à tracer. « Tracer avec la simulation » simule d\'abord les numéros précédents pour adapter le tracé à ce qu\'il reste. Ce qui s\'applique à une coopérative vaut pour toutes : une coopérative qui livre chez nous peut aussi livrer ailleurs puis revenir.</p></div>'
     + '<div class="trc-actions"><button class="btn" title="Simule, camion par camion, la traçabilité d\'une coopérative en tenant compte des connaissements livrés ailleurs (numéros manquants)" onclick="ocSimOuvrir()">🧮 Simulation libre</button>'
-    + (A.some(x=>x.nTrace>0) ? '<button class="btn" style="color:#a33;border-color:#e3b3b3" title="Retire les anciens traçages des connaissements déchargés chez Awahus (après sauvegarde) pour tout retracer avec la simulation" onclick="ocRefaireToutAwahus()">♻ Tout refaire de zéro (Awahus)</button>' : '')
+    + (A.some(x=>x.awahusSeul && x.nTrace>0) ? '<button class="btn" style="color:#a33;border-color:#e3b3b3" title="Retire les anciens traçages des connaissements déchargés chez Awahus (après sauvegarde) pour tout retracer avec la simulation" onclick="ocRefaireToutAwahus()">♻ Tout refaire de zéro (Awahus)</button>' : '')
     + '</div></div><div class="doss-corps">'
-    + '<div style="margin:2px 0 8px;font-weight:700;font-size:14px;color:#14402a">🟢 À tracer par nous — Awahus (IPSC)</div>'
+    + '<div style="margin:2px 0 8px;font-weight:700;font-size:14px;color:#14402a">🟢 À tracer par nous — Awahus (IPSC) et Sitapa</div>'
     + '<div style="display:flex;gap:10px;flex-wrap:wrap;margin:0 0 12px">'
     + puce(A.length, 'coopérative'+(A.length>1?'s':''), 'var(--ink)') + puce(tot('nNous'), 'connaissements chez nous', 'var(--ink)') + puce(tot('nTrace'), 'tracés', '#1e8449') + puce(tot('nSimule'), 'simulés', '#1F4E8C') + puce(nA, 'à tracer', nA ? '#b36b00' : '#1e8449') + '</div>'
     + '<div style="display:flex;gap:8px;margin:0 0 12px"><button class="'+(filtre==='tous'?'btn btn-primary':'btn')+' btn-compact" onclick="ocDossiersFiltre(\'tous\')">Toutes ('+A.length+')</button><button class="'+(filtre==='atracer'?'btn btn-primary':'btn')+' btn-compact" onclick="ocDossiersFiltre(\'atracer\')">À tracer seulement ('+A.filter(x=>x.nATracer>0).length+')</button></div>';
-  if (!vue.length) html += '<div class="hint" style="margin-bottom:14px">'+(filtre==='atracer' ? 'Plus aucun connaissement Awahus à tracer. 🎉' : 'Aucune coopérative n\'a encore de connaissement déchargé chez Awahus.')+'</div>';
+  if (!vue.length) html += '<div class="hint" style="margin-bottom:14px">'+(filtre==='atracer' ? 'Plus aucun connaissement Awahus ou Sitapa à tracer. 🎉' : 'Aucune coopérative n\'a encore de connaissement déchargé chez Awahus ou Sitapa.')+'</div>';
   else html += '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th>Coopérative</th><th>N° CCC</th><th>Usine(s)</th><th class="num">Producteurs</th><th class="num">Chez nous</th><th class="num">Tracés</th><th class="num">Simulés</th><th class="num">Reste à tracer</th><th></th></tr></thead><tbody>'
     + vue.map(x=>'<tr><td><b>'+esc(x.c.nom)+'</b></td><td>'+esc(x.c.ccc_num||'—')+'</td><td class="hint">'+esc(x.usines.join(', ')||'—')+'</td>'
       + '<td class="num">'+(x.nProd ? fmtNum(x.nProd) : '<span class="badge warn" title="Base producteurs non importée : traçabilité impossible">aucun</span>')+'</td><td class="num">'+x.nNous+'</td><td class="num">'+x.nTrace+'</td><td class="num">'+x.nSimule+'</td>'
@@ -15101,7 +15105,7 @@ async function ocRefaireOk(P){
   }catch(e){ showToast('Échec : '+(e && e.message ? e.message : e), 'error'); }
 }
 function ocRefaireToutAwahus(){
-  const items = ocDossiersListe().filter(x=>x.awahus).map(x=>({ coopId:x.c.id, codes:ocRefaireCodes(x.c.id, null, true) })).filter(x=>x.codes.length);
+  const items = ocDossiersListe().filter(x=>x.awahusSeul).map(x=>({ coopId:x.c.id, codes:ocRefaireCodes(x.c.id, null, true) })).filter(x=>x.codes.length);
   ocRefaireDemander(items, 'Refaire de zéro la traçabilité de TOUTES les coopératives déchargées chez Awahus (IPSC) ?');
 }
 function ocRefaireDossier(){
