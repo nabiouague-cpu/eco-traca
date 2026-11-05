@@ -4716,7 +4716,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-05-457';
+const APP_VERSION = '2026-11-05-458';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -14973,7 +14973,71 @@ function ocSimExporter(){
 // Le premier camion reçu chez nous peut être le n° 15 : « Tracer avec la simulation » simule d'abord les n° 1 à 14 pour adapter le n° 15 à ce qui reste.
 function ocSitapaSite(a){ const s = sachSiteDe(a.usine_dechargement); return !!s && (/sitapa/i.test(s.traitant||'') || String(s.code||'').toUpperCase()==='US40'); }
 // Usines dont les coopératives sont à tracer par nous : Awahus (IPSC, SGC-CI) et Sitapa.
-function ocATracerSite(a){ return ocAwahusSite(a) || ocSitapaSite(a); }
+function ocATracerSite(a){
+  const site = sachSiteDe(a.usine_dechargement);
+  if (site && site.trace_par) return site.trace_par==='nous';
+  return ocAwahusSite(a) || ocSitapaSite(a);
+}
+// ---- Partenaires (traitants / usiniers) : chacun regroupe ses usines et les coopératives qui y livrent ; on marque qui trace : nous, le partenaire, ou pas encore décidé ----
+function ocPartenaireCle(site){ return String(site.traitant || site.nom || site.code || '').trim(); }
+function ocPartenairesGroupes(){
+  const groupes = new Map();
+  (state.sitesUsinage||[]).filter(s=>s.actif!==false).forEach(s=>{
+    const cle = ocPartenaireCle(s); if (!cle) return;
+    if (!groupes.has(cle)) groupes.set(cle, { cle, sites:[], coops:new Map() });
+    groupes.get(cle).sites.push(s);
+  });
+  (state.achats||[]).forEach(a=>{
+    if (a.producteur_id || a.refoulee || !a.connaissement || !a.cooperative_id) return;
+    const s = sachSiteDe(a.usine_dechargement); if (!s || s.actif===false) return;
+    const g = groupes.get(ocPartenaireCle(s)); if (!g) return;
+    g.coops.set(a.cooperative_id, (g.coops.get(a.cooperative_id)||0) + 1);
+  });
+  const ordre = { nous:0, a_decider:1, partenaire:2 };
+  return Array.from(groupes.values()).map(g=>{
+    g.mode = (g.sites.find(x=>x.trace_par==='nous') ? 'nous' : (g.sites.every(x=>x.trace_par==='partenaire') ? 'partenaire' : 'a_decider'));
+    return g;
+  }).sort((x,y)=>(ordre[x.mode]-ordre[y.mode]) || x.cle.localeCompare(y.cle,'fr'));
+}
+async function ocPartenaireMode(cle, mode){
+  const sites = (state.sitesUsinage||[]).filter(s=>s.actif!==false && ocPartenaireCle(s)===cle); if (!sites.length) return;
+  const codes = sites.map(s=>s.code);
+  const { error } = await supabaseClient.from('sites_usinage').update({ trace_par:mode }).in('code', codes);
+  if (error){ showToast('Échec : '+error.message); return; }
+  state.sitesUsinage.forEach(s=>{ if (codes.indexOf(s.code)>=0) s.trace_par = mode; });
+  _dossCache = null; render();
+  showToast(cle+' : '+(mode==='nous' ? 'nous traçons' : mode==='partenaire' ? 'le partenaire trace' : 'à décider'));
+}
+function ocPartenaireOuvrir(cle){ state.partOuvert = state.partOuvert || {}; state.partOuvert[cle] = !state.partOuvert[cle]; render(); }
+function ocPartenairesHtml(){
+  const G = ocPartenairesGroupes(), L = ocDossiersListe(), parId = new Map(L.map(x=>[x.c.id, x]));
+  const ouvert = state.partOuvert || {};
+  const btn = (g, mode, lib)=>'<button class="'+(g.mode===mode?'btn btn-primary':'btn')+' btn-compact" onclick="ocPartenaireMode(\''+escJs(g.cle)+'\',\''+mode+'\')">'+lib+'</button>';
+  const vus = new Set();
+  let html = '<div style="margin:2px 0 6px;font-weight:700;font-size:14px;color:#14402a">🤝 Clients et partenaires — qui trace ?</div>'
+    + '<div class="hint" style="margin:0 0 10px">Chaque partenaire regroupe ses usines et les coopératives qui y livrent. Marque « Nous » si nous traçons, « Partenaire » s\'il trace lui-même. Seuls les partenaires « Nous » comptent dans « à tracer ».</div>'
+    + '<div class="achats-defile"><table class="tbl-fiches tbl-dense"><thead><tr><th>Partenaire</th><th>Usine(s)</th><th class="num">Coopératives</th><th>Qui trace ?</th><th></th></tr></thead><tbody>';
+  G.forEach(g=>{
+    g.coops.forEach((n,id)=>vus.add(id));
+    const nom = g.sites.map(s=>s.nom).join(', ');
+    html += '<tr><td><b>'+esc(g.cle)+'</b></td><td class="hint">'+esc(nom)+'</td><td class="num">'+g.coops.size+'</td>'
+      + '<td><div style="display:flex;gap:6px;flex-wrap:wrap">'+btn(g,'nous','Nous')+btn(g,'partenaire','Partenaire')+btn(g,'a_decider','À décider')+'</div></td>'
+      + '<td><button class="btn-ghost btn-compact" onclick="ocPartenaireOuvrir(\''+escJs(g.cle)+'\')">'+(ouvert[g.cle] ? 'Masquer' : 'Voir les coopératives')+'</button></td></tr>';
+    if (ouvert[g.cle]){
+      const lignes = Array.from(g.coops.keys()).map(id=>coopById(id)).filter(Boolean).sort((a,b)=>String(a.nom).localeCompare(String(b.nom),'fr'));
+      html += '<tr><td colspan="5" style="background:var(--surface-2)">'+(lignes.length ? lignes.map(c=>{ const x = parId.get(c.id); const nb = g.coops.get(c.id);
+        return '<span style="display:inline-block;margin:2px 10px 2px 0"><a href="#" onclick="ocDossierOuvrir(\''+escJs(c.id)+'\');return false;">'+esc(c.nom)+'</a> <span class="hint">('+nb+' camion'+(nb>1?'s':'')+(x && g.mode==='nous' && x.nATracer ? ', '+x.nATracer+' à tracer' : '')+')</span></span>'; }).join('') : '<span class="hint">Aucune coopérative n\'a encore livré chez ce partenaire.</span>')+'</td></tr>';
+    }
+  });
+  html += '</tbody></table></div>';
+  // Coopératives qu'on ne verrait nulle part : aucun camion connu chez aucun partenaire.
+  const sans = (state.cooperatives||[]).filter(c=>!vus.has(c.id)).sort((a,b)=>String(a.nom).localeCompare(String(b.nom),'fr'));
+  const ouvS = !!ouvert.__sans;
+  html += '<div style="margin:12px 0 4px;display:flex;align-items:center;gap:10px;flex-wrap:wrap"><span style="font-weight:700;font-size:13px;color:#555">⚪ Coopératives sans camion chez un partenaire ('+sans.length+')</span>'
+    + '<button class="btn-ghost btn-compact" onclick="ocPartenaireOuvrir(\'__sans\')">'+(ouvS ? 'Masquer' : 'Afficher')+'</button></div>';
+  if (ouvS) html += '<div class="hint" style="margin:0 0 12px;line-height:1.9">'+(sans.length ? sans.map(c=>'<span style="display:inline-block;margin-right:12px">'+esc(c.nom)+'</span>').join('') : 'Aucune : toutes les coopératives sont rattachées à un partenaire.')+'</div>';
+  return html + '<div style="height:10px"></div>';
+}
 function ocAwahusSite(a){ const s = sachSiteDe(a.usine_dechargement); return !!s && (/awahus/i.test(s.traitant||'') || String(s.code||'').toUpperCase()==='US34'); }
 function ocAwahusCoops(){
   const ids = new Set((state.achats||[]).filter(a=>!a.producteur_id && !a.refoulee && a.connaissement && ocATracerSite(a)).map(a=>a.cooperative_id));
@@ -15018,7 +15082,7 @@ function ocDossiersFiltre(f){ state.dossiersFiltre = f; render(); }
 function ocDossiersAutresBascule(){ state.dossiersAutresOuvert = !state.dossiersAutresOuvert; render(); }
 function renderDossiersTab(){
   const L = ocDossiersListe(), filtre = state.dossiersFiltre || 'tous';
-  const A = L.filter(x=>x.awahus), B = L.filter(x=>!x.awahus);
+  const A = L.filter(x=>x.awahus);
   const tot = k=>A.reduce((t,x)=>t+x[k],0), nA = tot('nATracer');
   const vue = filtre==='atracer' ? A.filter(x=>x.nATracer>0) : A;
   const puce = (n, lib, couleur)=>'<div class="doss-puce"><div style="font-size:22px;font-weight:700;line-height:1.1;color:'+couleur+'">'+fmtNum(n)+'</div><div class="hint" style="margin:0">'+lib+'</div></div>';
@@ -15026,28 +15090,18 @@ function renderDossiersTab(){
     + '<p style="margin:2px 0 0;color:var(--ink-soft);font-size:13px;max-width:800px">Un dossier par coopérative : tous les n° de sa série (1 à N), ce qui est tracé, simulé (livré ailleurs ou pas encore tracé) ou à tracer. « Tracer avec la simulation » simule d\'abord les numéros précédents pour adapter le tracé à ce qu\'il reste. Ce qui s\'applique à une coopérative vaut pour toutes : une coopérative qui livre chez nous peut aussi livrer ailleurs puis revenir.</p></div>'
     + '<div class="trc-actions"><button class="btn" title="Simule, camion par camion, la traçabilité d\'une coopérative en tenant compte des connaissements livrés ailleurs (numéros manquants)" onclick="ocSimOuvrir()">🧮 Simulation libre</button>'
     + (A.some(x=>x.awahusSeul && x.nTrace>0) ? '<button class="btn" style="color:#a33;border-color:#e3b3b3" title="Retire les anciens traçages des connaissements déchargés chez Awahus (après sauvegarde) pour tout retracer avec la simulation" onclick="ocRefaireToutAwahus()">♻ Tout refaire de zéro (Awahus)</button>' : '')
-    + '</div></div><div class="doss-corps">'
-    + '<div style="margin:2px 0 8px;font-weight:700;font-size:14px;color:#14402a">🟢 À tracer par nous — Awahus (IPSC) et Sitapa</div>'
+    + '</div></div><div class="doss-corps">' + ocPartenairesHtml()
+    + '<div style="margin:2px 0 8px;font-weight:700;font-size:14px;color:#14402a">🟢 À tracer par nous</div>'
     + '<div style="display:flex;gap:10px;flex-wrap:wrap;margin:0 0 12px">'
     + puce(A.length, 'coopérative'+(A.length>1?'s':''), 'var(--ink)') + puce(tot('nNous'), 'connaissements chez nous', 'var(--ink)') + puce(tot('nTrace'), 'tracés', '#1e8449') + puce(tot('nSimule'), 'simulés', '#1F4E8C') + puce(nA, 'à tracer', nA ? '#b36b00' : '#1e8449') + '</div>'
     + '<div style="display:flex;gap:8px;margin:0 0 12px"><button class="'+(filtre==='tous'?'btn btn-primary':'btn')+' btn-compact" onclick="ocDossiersFiltre(\'tous\')">Toutes ('+A.length+')</button><button class="'+(filtre==='atracer'?'btn btn-primary':'btn')+' btn-compact" onclick="ocDossiersFiltre(\'atracer\')">À tracer seulement ('+A.filter(x=>x.nATracer>0).length+')</button></div>';
-  if (!vue.length) html += '<div class="hint" style="margin-bottom:14px">'+(filtre==='atracer' ? 'Plus aucun connaissement Awahus ou Sitapa à tracer. 🎉' : 'Aucune coopérative n\'a encore de connaissement déchargé chez Awahus ou Sitapa.')+'</div>';
+  if (!vue.length) html += '<div class="hint" style="margin-bottom:14px">'+(filtre==='atracer' ? 'Plus aucun connaissement à tracer chez les partenaires marqués « Nous ». 🎉 🎉' : 'Aucun partenaire n\'est marqué « Nous » avec des connaissements déchargés.')+'</div>';
   else html += '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th>Coopérative</th><th>N° CCC</th><th>Usine(s)</th><th class="num">Producteurs</th><th class="num">Chez nous</th><th class="num">Tracés</th><th class="num">Simulés</th><th class="num">Reste à tracer</th><th></th></tr></thead><tbody>'
     + vue.map(x=>'<tr><td><b>'+esc(x.c.nom)+'</b></td><td>'+esc(x.c.ccc_num||'—')+'</td><td class="hint">'+esc(x.usines.join(', ')||'—')+'</td>'
       + '<td class="num">'+(x.nProd ? fmtNum(x.nProd) : '<span class="badge warn" title="Base producteurs non importée : traçabilité impossible">aucun</span>')+'</td><td class="num">'+x.nNous+'</td><td class="num">'+x.nTrace+'</td><td class="num">'+x.nSimule+'</td>'
       + '<td class="num">'+(x.nATracer ? '<span class="badge warn" style="font-weight:700;font-size:13px">'+x.nATracer+' à tracer</span>' : '<span class="badge ok">à jour</span>')+'</td>'
       + '<td><button class="btn btn-primary btn-compact" onclick="ocDossierOuvrir(\''+escJs(x.c.id)+'\')">Ouvrir le dossier</button></td></tr>').join('')
     + '</tbody></table></div>';
-  // Autres usines : séparées, repliées, sans compteur (pas encore décidé si nous gérons leur traçabilité)
-  const ouvertB = !!state.dossiersAutresOuvert;
-  html += '<div style="margin:18px 0 6px;display:flex;align-items:center;gap:10px;flex-wrap:wrap"><span style="font-weight:700;font-size:14px;color:#555">⚪ Autres usines — traçabilité pas encore décidée ('+B.length+' coopérative'+(B.length>1?'s':'')+')</span>'
-    + '<button class="btn-ghost btn-compact" onclick="ocDossiersAutresBascule()">'+(ouvertB ? 'Masquer' : 'Afficher')+'</button></div>'
-    + '<div class="hint" style="margin:0 0 8px">Ces connaissements sont déchargés dans d\'autres usines : on ne sait pas encore si nous en gérerons la traçabilité. Ils ne sont pas comptés dans « à tracer ».</div>';
-  if (ouvertB){
-    html += B.length ? '<div class="achats-defile" style="opacity:.85"><table class="tbl-fiches tbl-dense"><thead><tr><th>Coopérative</th><th>N° CCC</th><th>Usine(s)</th><th class="num">Producteurs</th><th class="num">Chez nous</th><th class="num">Tracés</th><th></th></tr></thead><tbody>'
-      + B.map(x=>'<tr><td>'+esc(x.c.nom)+'</td><td>'+esc(x.c.ccc_num||'—')+'</td><td class="hint">'+esc(x.usines.join(', ')||'—')+'</td><td class="num">'+(x.nProd ? fmtNum(x.nProd) : '—')+'</td><td class="num">'+x.nNous+'</td><td class="num">'+x.nTrace+'</td><td><button class="btn-ghost btn-compact" onclick="ocDossierOuvrir(\''+escJs(x.c.id)+'\')">Voir</button></td></tr>').join('')
-      + '</tbody></table></div>' : '<div class="hint">Aucune.</div>';
-  }
   return html + '</div></div>';
 }
 function ocDossierOuvrir(coopId){ const gs = ocSimGroupes(coopId); state.modal = { type:'ocDossier', payload:{ coopId, cle: gs.length ? gs[0].cle : '' } }; render(); }
