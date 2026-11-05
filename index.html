@@ -4715,7 +4715,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-05-452';
+const APP_VERSION = '2026-11-05-453';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8046,7 +8046,7 @@ async function finPartPaiementSupprimer(id){
 }
 
 // ---- Financement › Frais d'usinage : ce qu'on doit à chaque usinier (SUV…) pour l'usinage et le refoulement du cacao déchargé chez lui ----
-// Camion usiné : poids net accepté à l'usine × tarif d'usinage. Camion refoulé : poids du connaissement × tarif de refoulement. Camion pas encore pesé : simple prévision.
+// Camion usiné : poids net pesé à l'usine AVANT réfaction (celui que l'usinier retient) × tarif d'usinage. La réfaction est une perte théorique : elle réduit le poids payé à la coopérative, pas le poids usiné. Camion refoulé : poids du connaissement × tarif de refoulement. Camion pas encore pesé : simple prévision.
 // Les tarifs sont ceux de la fiche de l'usine (hors sacherie, fournie par ECORIGINE). On retire peu à peu les factures reçues (avec les camions qu'elles couvrent) et les paiements faits.
 async function usiCharger(){
   if (!supabaseClient || state.usiChargement) return; state.usiChargement = true;
@@ -8062,10 +8062,10 @@ function usiSites(){
 function usiCamions(s){
   const c = finCampagneId(), code = String(s.code||'').toUpperCase(), tu = Number(s.tarif_usinage_fcfa_kg)||0, tr = Number(s.tarif_refoulement_fcfa_kg)||0;
   return (state.achats||[]).filter(a=>!a.producteur_id && (!c || (a.campagne_id||'')===c) && String(a.usine_dechargement||'').trim().toUpperCase().indexOf(code)===0).map(a=>{
-    const net = Number(a.poids_net_produit)||0, decl = Number(a.quantite_kg)||0;
-    if (a.refoulee) return { a, statut:'refoule', kg:decl, tarif:tr, montant:Math.round(decl*tr), prevision:0 };
-    if (net>0) return { a, statut:'usine', kg:net, tarif:tu, montant:Math.round(net*tu), prevision:0 };
-    return { a, statut:'attente', kg:decl, tarif:tu, montant:0, prevision:Math.round(decl*tu) };
+    const net = Number(a.poids_net_produit)||0, decl = Number(a.quantite_kg)||0, avant = Number(a.poids_brut_accepte)||0;
+    if (a.refoulee) return { a, statut:'refoule', kg:decl, tarif:tr, montant:Math.round(decl*tr), prevision:0, refac:0 };
+    if (net>0) { const base = avant>0 ? avant : net; return { a, statut:'usine', kg:base, tarif:tu, montant:Math.round(base*tu), prevision:0, refac:Math.max(0, base-net) }; }
+    return { a, statut:'attente', kg:decl, tarif:tu, montant:0, prevision:Math.round(decl*tu), refac:0 };
   }).sort((x,y)=>String(x.a.date||'').localeCompare(String(y.a.date||'')) || String(x.a.connaissement||'').localeCompare(String(y.a.connaissement||''),'fr',{numeric:true}));
 }
 function usiSituation(s){
@@ -8086,7 +8086,7 @@ function usiPuce(label, valeur, classe, aide){ return '<div style="border:1px so
 function renderFinUsinage(){
   if (!state.usiCharge){ usiCharger().then(()=>render()); return '<div class="panel"><div class="panel-head"><h2>Frais d\'usinage</h2></div><div class="hint" style="padding:18px">Chargement…</div></div>'; }
   const sites = usiSites(), sans = (state.sitesUsinage||[]).filter(s=>s.actif!==false && !sites.some(x=>x.code===s.code));
-  let html = '<div class="panel"><div class="panel-head" style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap"><div><h2>Frais d\'usinage — usiniers</h2><p class="hint" style="margin:4px 0 0">Pour chaque camion déchargé chez l\'usinier : cacao usiné = poids net accepté × tarif d\'usinage ; cacao refoulé = poids × tarif de refoulement ; camion pas encore pesé = simple prévision. Les tarifs sont hors sacherie (fournie par ECORIGINE). On retire ensuite peu à peu les factures reçues et les chèques faits.</p></div>'
+  let html = '<div class="panel"><div class="panel-head" style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap"><div><h2>Frais d\'usinage — usiniers</h2><p class="hint" style="margin:4px 0 0">Pour chaque camion déchargé chez l\'usinier : cacao usiné = poids net avant réfaction × tarif d\'usinage (la réfaction est une perte théorique : elle baisse le poids payé à la coopérative, pas le poids usiné) ; cacao refoulé = poids × tarif de refoulement ; camion pas encore pesé = simple prévision. Les tarifs sont hors sacherie (fournie par ECORIGINE). On retire ensuite peu à peu les factures reçues et les chèques faits.</p></div>'
     + '<div><select id="usi-ajout" onchange="if(this.value){usiTarifOuvrir(this.value);this.value=\'\'}" style="min-width:210px"><option value="">+ Ajouter une usine…</option>'+sans.map(s=>'<option value="'+esc(s.code)+'">'+esc(s.nom)+' ('+esc(s.code)+')</option>').join('')+'</select></div></div><div style="padding:0 18px 18px">';
   if (!sites.length) return html + '<div class="hint">Aucune usine avec des tarifs d\'usinage. Ajoute-en une avec le menu ci-dessus (ex. SUV/SITP : usinage 13,6 F/kg, refoulement 3,8 F/kg).</div></div></div>';
   sites.forEach(s=>{
@@ -8096,7 +8096,7 @@ function renderFinUsinage(){
       + '<div class="hint" style="margin:3px 0 0">Usinage <b>'+usiTarifTxt(s.tarif_usinage_fcfa_kg)+'</b> · refoulement <b>'+usiTarifTxt(s.tarif_refoulement_fcfa_kg)+'</b></div></div>'
       + '<div style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="usiTarifOuvrir(\''+cd+'\')">Tarifs</button> <button class="btn-ghost btn-compact" onclick="usiFactureOuvrir(\''+cd+'\')">+ Facture reçue</button> <button class="btn btn-primary btn-compact" onclick="usiPaiementOuvrir(\''+cd+'\')">+ Paiement</button></div></div>'
       + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:12px 0">'
-      + usiPuce('Cacao usiné (poids net accepté)', fmtNum(t.kgUsine)+' kg') + usiPuce('Usinage dû', fmtNum(t.usinage)) + usiPuce('Refoulement dû'+(t.kgRefoule?' ('+fmtNum(t.kgRefoule)+' kg)':''), fmtNum(t.refoul))
+      + usiPuce('Cacao usiné (net avant réfaction)', fmtNum(t.kgUsine)+' kg', '', 'Poids net pesé à l\'usine avant réfaction : c\'est le poids que l\'usinier facture') + usiPuce('Usinage dû', fmtNum(t.usinage)) + usiPuce('Refoulement dû'+(t.kgRefoule?' ('+fmtNum(t.kgRefoule)+' kg)':''), fmtNum(t.refoul))
       + usiPuce('Total dû', fmtNum(t.du), '', 'Usinage + refoulement sur les camions pesés') + usiPuce('Facturé par l\'usinier', fmtNum(t.facture)) + usiPuce('Payé', fmtNum(t.paye))
       + usiPuce('Reste à payer', fmtNum(t.reste), t.reste>0?'txt-danger':'', 'Total dû − payé') + usiPuce('Reste à facturer', fmtNum(Math.max(0,t.aFacturer)), '', 'Total dû − déjà facturé')
       + (t.nbAttente ? usiPuce('Prévision ('+t.nbAttente+' camion'+(t.nbAttente>1?'s':'')+' à peser)', fmtNum(t.prevision), '', 'Usinage sur le poids du connaissement, à ajuster après la pesée') : '')
@@ -8105,7 +8105,7 @@ function renderFinUsinage(){
     html += t.cams.length ? '<div class="achats-defile"><table class="tbl-fiches tbl-dense"><thead><tr><th>Date</th><th>Connaissement</th><th>Coopérative</th><th>Statut</th><th class="num">Poids (kg)</th><th class="num">Tarif (F/kg)</th><th class="num">Frais (FCFA)</th><th>Facture</th></tr></thead><tbody>'
       + t.cams.map(x=>{ const co = coopById(x.a.cooperative_id), fac = usiFacturesDuCamion(t, x.a.id).map(f=>f.numero||'sans n°');
           const st = x.statut==='usine' ? '<span class="badge ok">Usiné</span>' : x.statut==='refoule' ? '<span class="badge danger" title="'+esc(((x.a.pesee_detail||{})['Motif Refoulement']||[''])[0]||'')+'">Refoulé</span>' : '<span class="badge neutral">À peser</span>';
-          return '<tr><td>'+esc(dateFr(x.a.date))+'</td><td><b>'+esc(x.a.connaissement||'—')+'</b></td><td>'+esc(co?co.nom:'—')+'</td><td>'+st+'</td><td class="num">'+(x.kg>0?fmtNum(x.kg):'—')+(x.statut==='attente'?' <span class="hint" style="margin:0">(déclaré)</span>':'')+'</td><td class="num">'+(x.tarif>0?String(x.tarif).replace('.', ','):'—')+'</td>'
+          return '<tr><td>'+esc(dateFr(x.a.date))+'</td><td><b>'+esc(x.a.connaissement||'—')+'</b></td><td>'+esc(co?co.nom:'—')+'</td><td>'+st+'</td><td class="num">'+(x.kg>0?fmtNum(x.kg):'—')+(x.statut==='attente'?' <span class="hint" style="margin:0">(déclaré)</span>':'')+(x.refac>0?' <span class="hint" style="margin:0" title="Réfaction : perte théorique retirée du poids payé à la coopérative, mais comptée pour l\'usinage">(réfaction '+fmtNum(x.refac)+')</span>':'')+'</td><td class="num">'+(x.tarif>0?String(x.tarif).replace('.', ','):'—')+'</td>'
             + '<td class="num">'+(x.statut==='attente' ? '<span class="hint" style="margin:0">prév. '+fmtNum(x.prevision)+'</span>' : '<b>'+fmtNum(x.montant)+'</b>')+'</td><td>'+(fac.length?esc(fac.join(', ')):'<span class="hint" style="margin:0">—</span>')+'</td></tr>'; }).join('')
       + '</tbody></table></div>' : '<div class="hint">Aucun camion déchargé dans cette usine pour la campagne.</div>';
     html += '<div style="font-weight:600;margin:12px 0 4px">Factures reçues</div>';
