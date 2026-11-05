@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.13
+// @version      0.4.14
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.13';
+  const VERSION = '0.4.14';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -111,7 +111,8 @@
     for (const r of l) await rapporter(r.achat_id, r.statut, r.message, r.bordereau_numero);
   }
   const fileActive = () => !!lireFile().actif;
-  const transitoire = (m) => /session OBC expirée|ne répond pas|Failed to fetch|NetworkError|HTTP 5\d\d|Connecte-toi/i.test(m || '');
+  const transitoire = (m) => /session OBC expirée|ne répond pas|Failed to fetch|NetworkError|HTTP 5\d\d|Connecte-toi|OBC ne reste pas sur/i.test(m || '');
+  const maxEssais = (m) => (/OBC ne reste pas sur/.test(m || '') ? 4 : 30);   // redirection d'OBC vers le menu : quelques nouveaux essais suffisent, pas 10 minutes
   async function suivantFile() {
     const f = lireFile(); if (!f.actif || f.pause) return false;
     await viderRapports();
@@ -1107,7 +1108,7 @@
           try { const r = await sousEtapeOrigine(e); if (r === 'navigation') return; continue; }
           catch (err) {
             const msg = err && err.message ? err.message : String(err);
-            if (e.enFile) { if (transitoire(msg) && (e.retries || 0) < 30) { e.retries = (e.retries || 0) + 1; journal(e, 'Erreur passagère, nouvel essai dans 20 s : ' + msg); dormir(20000).then(boucle); return; } e.etape = e.etape; await echecLot(e, (e.sous === 'usine' ? 'usine : ' : 'origine : ') + msg); return; }
+            if (e.enFile) { if (transitoire(msg) && (e.retries || 0) < maxEssais(msg)) { e.retries = (e.retries || 0) + 1; journal(e, 'Erreur passagère, nouvel essai dans 20 s : ' + msg); dormir(20000).then(boucle); return; } e.etape = e.etape; await echecLot(e, (e.sous === 'usine' ? 'usine : ' : 'origine : ') + msg); return; }
             e.erreur = 'Origine : ' + msg; journal(e, 'Erreur : ' + e.erreur); return;
           }
         }
@@ -1117,7 +1118,7 @@
         catch (err) {
           const msg = err && err.message ? err.message : String(err);
           if (e.enFile) {
-            if (transitoire(msg) && (e.retries || 0) < 30) { e.retries = (e.retries || 0) + 1; e.erreur = ETAPES[e.etape - 1] + ' : ' + msg; journal(e, 'Erreur passagère, nouvel essai dans 20 s : ' + msg); dormir(20000).then(boucle); return; }
+            if (transitoire(msg) && (e.retries || 0) < maxEssais(msg)) { e.retries = (e.retries || 0) + 1; e.erreur = ETAPES[e.etape - 1] + ' : ' + msg; journal(e, 'Erreur passagère, nouvel essai dans 20 s : ' + msg); dormir(20000).then(boucle); return; }
             await echecLot(e, msg); return;
           }
           e.erreur = ETAPES[e.etape - 1] + ' : ' + msg; journal(e, 'Erreur : ' + e.erreur); return;
