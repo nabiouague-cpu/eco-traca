@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.12
+// @version      0.4.13
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.12';
+  const VERSION = '0.4.13';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -181,7 +181,6 @@
       + '<div style="font-weight:700;">🤖 File ORIGEN <span id="oo-file-etat" style="font-weight:400;color:#5b6b68;"></span></div>'
       + '<input id="oo-token" placeholder="Code de liaison (ORIGEN › Saisie OBC › 🔑) — une seule fois" style="width:100%;box-sizing:border-box;border:1px solid #cfd8d4;border-radius:6px;padding:5px;margin:6px 0;font:12px monospace;">'
       + '<label style="display:flex;gap:6px;align-items:center;margin-bottom:6px;"><input type="checkbox" id="oo-auto" checked> Enregistrer automatiquement</label>'
-      + '<label style="display:flex;gap:6px;align-items:center;margin-bottom:6px;" title="Pour les coopératives qui déchargent à SUV (UA10) : SUCDEN = rattachées au gros traitant SUCDEN dans OBC ; ECORIGINE = coopératives en propre, aucun gros traitant (rien à créer)">Cacao déchargé à SUV : responsable <select id="oo-resp" style="border:1px solid #cfd8d4;border-radius:6px;padding:3px;"><option value="ECORIGINE">ECORIGINE</option><option value="SUCDEN">SUCDEN</option></select></label>'
       + '<button id="oo-file-go" style="background:#0E3B36;color:#fff;border:0;border-radius:8px;padding:8px 12px;font-weight:700;cursor:pointer;">▶ Lancer la file</button> '
       + '<button id="oo-file-stop" style="background:#fff;border:1px solid #cfd8d4;border-radius:8px;padding:8px 12px;cursor:pointer;">⏹ Arrêter la file</button></div>'
       + '<textarea id="oo-lot" placeholder="Colle ici le lot copié depuis ORIGEN (bouton « Saisir dans OBC »)" style="width:100%;box-sizing:border-box;height:60px;border:1px solid #cfd8d4;border-radius:8px;padding:6px;font:12px monospace;"></textarea>'
@@ -211,13 +210,12 @@
     panneau.querySelector('#oo-file-go').onclick = async () => {
       const f = lireFile(); const t = panneau.querySelector('#oo-token').value.trim(); if (t) f.token = t;
       if (!f.token) { alert('Colle d\'abord le code de liaison (ORIGEN › Saisie OBC › 🔑 Code de liaison).'); return; }
-      f.auto = panneau.querySelector('#oo-auto').checked; f.responsableSuv = panneau.querySelector('#oo-resp').value === 'SUCDEN' ? 'SUCDEN' : 'ECORIGINE'; f.actif = true; f.pause = false; f.saisis = 0; f.rattrapes = []; f.echecs = nbEchecs(f); f.consecutifs = 0; f.dernier = ''; f.erreurApi = null; ecrireFile(f);
+      f.auto = panneau.querySelector('#oo-auto').checked; f.actif = true; f.pause = false; f.saisis = 0; f.rattrapes = []; f.echecs = nbEchecs(f); f.consecutifs = 0; f.dernier = ''; f.erreurApi = null; ecrireFile(f);
       try { await api('liberer'); } catch (err) { f.actif = false; f.erreurApi = err.message; ecrireFile(f); afficherFile(); return; }
       afficherFile(); boucle();
     };
     panneau.querySelector('#oo-file-stop').onclick = () => { const f = lireFile(); f.actif = false; ecrireFile(f); afficherFile(); };
     panneau.querySelector('#oo-auto').onchange = (ev) => { const f = lireFile(); f.auto = ev.target.checked; ecrireFile(f); };
-    panneau.querySelector('#oo-resp').onchange = (ev) => { const f = lireFile(); f.responsableSuv = ev.target.value === 'SUCDEN' ? 'SUCDEN' : 'ECORIGINE'; ecrireFile(f); };
     panneau.querySelector('#oo-continuer').onclick = () => { const e = lireEtat(); if (!e) return; e.pause = false; e.erreur = null; if (e.statut === 'attente_enregistrement') e.statut = 'verifier'; ecrireEtat(e); boucle(); };
     panneau.querySelector('#oo-pause').onclick = () => { const e = lireEtat(); if (!e) return; e.pause = !e.pause; ecrireEtat(e); afficherEtat(); if (!e.pause) boucle(); };
     panneau.querySelector('#oo-journal').onclick = () => { const e = lireEtat(); navigator.clipboard.writeText(JSON.stringify({ origen_obc_journal: true, etape: e && e.etape, statut: e && e.statut, ids: e && e.ids, journal: e && e.journal }, null, 1)); };
@@ -245,7 +243,6 @@
     const z = document.getElementById('oo-file-etat'); if (!z) return; const f = lireFile();
     const tok = document.getElementById('oo-token'); if (tok) tok.style.display = f.token ? 'none' : '';
     const auto = document.getElementById('oo-auto'); if (auto && f.auto === false) auto.checked = false;
-    const resp = document.getElementById('oo-resp'); if (resp && f.responsableSuv) resp.value = f.responsableSuv;
     z.innerHTML = (f.actif ? '<b style="color:#1f7a4d">en marche</b> — ' + (f.saisis || 0) + ' saisi(s), ' + nbEchecs(f) + ' échec(s) à reprendre' + ((f.rattrapes || []).length ? ', ' + f.rattrapes.length + ' rattrapé(s)' : '') : 'arrêtée' + (f.token ? ' — liaison ✓' : '')) + (f.erreurApi ? '<div style="color:#B3261E">⚠ ' + f.erreurApi + '</div>' : '') + (f.dernier ? '<div style="color:#0E3B36;font-weight:700">' + f.dernier + '</div>' : '')
       + ((f.rattrapes || []).length ? '<div style="margin-top:4px;padding:6px 8px;border-radius:8px;background:#fff6e0;color:#8f5209;font-size:11.5px"><b>✓ Échecs rattrapés (validés après reprise)</b>' + f.rattrapes.map((x) => '<div>' + x.num + ' — ' + x.texte + ' <i>(rattrapé à ' + x.quand + ')</i></div>').join('') + '</div>' : '')
       + (nbEchecs(f) ? '<div style="margin-top:4px;padding:6px 8px;border-radius:8px;background:#fdecea;color:#B3261E;font-size:11.5px"><b>✗ À reprendre</b>' + Object.values(f.echecsLots).map((x) => '<div>' + x.num + ' — ' + x.texte + '</div>').join('') + '</div>' : '');
@@ -416,14 +413,18 @@
   }
   // Gros traitants à créer dans OBC s'ils y manquent. Un nouveau code est donné même si l'entreprise existe déjà comme simple fournisseur (TOU002 TOUTON NEGOCE CI, SUC002 SUCDEN-CI : ces comptes restent intacts).
   const GROS_TRAITANTS = [{ cle: 'BOBBY VO', code: 'BOBB001', nom: 'BOBBY VO' }, { cle: 'SUCDEN', code: 'SUCD001', nom: 'SUCDEN' }, { cle: 'TOUTON', code: 'TOUT001', nom: 'TOUTON' }];
-  // Cacao déchargé à SUV (UA10) : le responsable (SUCDEN ou ECORIGINE) est choisi une fois pour toutes dans le panneau, avant de lancer la file.
+  // Cacao déchargé à SUV (UA10) : le responsable (SUCDEN ou ECORIGINE) est choisi camion par camion dans ORIGEN (Saisie OBC) et arrive dans le lot.
   const USINE_A_CHOIX = 'UA10';
   const usineDuLotCode = (lot) => String((lot.connaissement && lot.connaissement.usine_code) || '').toUpperCase();
-  function responsableSuv() { return lireFile().responsableSuv === 'SUCDEN' ? 'SUCDEN' : 'ECORIGINE'; }
-  function coopEnPropre(lot) { return usineDuLotCode(lot) === USINE_A_CHOIX ? responsableSuv() === 'ECORIGINE' : !!lot.cooperative.coop_propre; }
+  function responsableSuv(lot) {
+    const r = String((lot.connaissement && lot.connaissement.responsable_suv) || '').toUpperCase();
+    if (r !== 'SUCDEN' && r !== 'ECORIGINE') throw new Error('Cacao déchargé à SUV : responsable non choisi dans ORIGEN. Dans ORIGEN › Saisie OBC, choisis ECORIGINE ou SUCDEN sur la ligne du camion, puis renvoie-le à l\'automate.');
+    return r;
+  }
+  function coopEnPropre(lot) { return usineDuLotCode(lot) === USINE_A_CHOIX ? responsableSuv(lot) === 'ECORIGINE' : !!lot.cooperative.coop_propre; }
   function grosTraitantCible(lot) {
     const c = lot.cooperative;
-    if (usineDuLotCode(lot) === USINE_A_CHOIX) return responsableSuv() === 'SUCDEN' ? GROS_TRAITANTS.find((x) => x.cle === 'SUCDEN') : null;
+    if (usineDuLotCode(lot) === USINE_A_CHOIX) return responsableSuv(lot) === 'SUCDEN' ? GROS_TRAITANTS.find((x) => x.cle === 'SUCDEN') : null;
     if (c.coop_propre) return null;
     for (const cand of (c.gros_traitants || [])) { const n = N(cand); const g = GROS_TRAITANTS.find((x) => n.includes(x.cle)); if (g) return g; }
     return null;
