@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.14
+// @version      0.4.15
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.14';
+  const VERSION = '0.4.15';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -159,7 +159,11 @@
   async function enregistrerAuto(e) {
     if (/⚠/.test(e.note || '')) { await echecLot(e, 'contrôle non concordant, rien n\'a été enregistré. ' + e.note); return false; }
     const b = await attendre(() => boutonEnregistrer(e.etape), 8000, 300);
-    if (!b) { await echecLot(e, 'bouton « Enregistrer » introuvable'); return false; }
+    if (!b) {
+      // formulaire disparu avant d'enregistrer (OBC a rechargé ou redirigé la page) : rien n'a été enregistré, on rouvre le formulaire (2 essais)
+      if ((e.reEnreg || 0) < 2) { e.reEnreg = (e.reEnreg || 0) + 1; e.statut = 'a_faire'; ecrireEtat(e); journal(e, ETAPES[e.etape - 1] + ' : formulaire disparu avant « Enregistrer », nouvel essai (' + e.reEnreg + '/2)'); dormir(3000).then(boucle); return false; }
+      await echecLot(e, 'bouton « Enregistrer » introuvable'); return false;
+    }
     await attendre(() => !b.disabled, 6000, 300);
     if (b.disabled) { await echecLot(e, 'bouton « Enregistrer » inactif (champ obligatoire non rempli). ' + erreurVisible()); return false; }
     e.t_save = Date.now(); e.cliques = (e.cliques || 0) + 1; ecrireEtat(e);
@@ -338,14 +342,18 @@
   async function ouvrirFormulaire(k) {
     if (q(FORMS[k - 1])) return q(FORMS[k - 1]);
     const surPage = location.pathname.toLowerCase().startsWith(PAGES[k - 1].toLowerCase());
-    // OBC renvoie parfois vers /AgroParametrage/Index?xMenuParam=… : on cherche alors le bouton directement sur cette page
-    const redirige = !surPage && /^\/agroparametrage\/index/i.test(location.pathname);
-    if (!surPage && !redirige) { location.href = PAGES[k - 1]; return null; }
-    if (redirige && !(await attendre(() => q(BTN_NOUVEAU[k - 1]), 8000))) {
-      let n = 0; try { n = Number(sessionStorage.getItem('origen_obc_nav' + k) || 0) + 1; sessionStorage.setItem('origen_obc_nav' + k, String(n)); } catch (er) { n = 1; }
-      if (n > 2) { try { sessionStorage.removeItem('origen_obc_nav' + k); } catch (er) { /* ignoré */ } throw new Error('OBC ne reste pas sur ' + PAGES[k - 1] + ' (page atteinte : ' + location.pathname + location.search + ') : ouvre cette page à la main dans OBC, puis « Continuer ».'); }
-      location.href = PAGES[k - 1]; return null;
-    }
+    // OBC renvoie parfois vers /AgroParametrage/Index?xMenuParam=… (page d'accueil du module) : on utilise alors le bouton / le lien de menu présent sur cette page.
+    const cleNav = 'origen_obc_nav' + k;
+    const nav = (delta) => { let n = 0; try { n = Math.max(0, Number(sessionStorage.getItem(cleNav) || 0) + delta); if (delta < 0) n = 0; sessionStorage.setItem(cleNav, String(n)); } catch (er) { n = delta > 0 ? 1 : 0; } return n; };
+    if (surPage) nav(-1);
+    else if (!(/^\/agroparametrage\/index/i.test(location.pathname) && await attendre(() => q(BTN_NOUVEAU[k - 1]), 8000))) {
+      const n = nav(1);
+      if (n > 3) { nav(-1); throw new Error('OBC ne reste pas sur ' + PAGES[k - 1] + ' (page atteinte : ' + location.pathname + location.search + ') : ouvre cette page à la main dans OBC, puis « Continuer ».'); }
+      // comme une personne : on clique l'entrée du menu si elle existe (OBC y met son contexte de menu), sinon adresse directe
+      const lien = document.querySelector('a[href^="' + PAGES[k - 1] + '"]');
+      if (lien && n > 1) lien.click(); else location.href = PAGES[k - 1];
+      return null;
+    } else nav(-1);
     const enErreur = () => /Une erreur est survenue/.test((document.body && document.body.innerText) || '');
     const btn = await attendre(() => q(BTN_NOUVEAU[k - 1]) || (enErreur() ? 'erreur' : null), 10000);
     if (btn === 'erreur') throw new Error('La page « ' + ETAPES[k - 1] + ' » d\'OBC est en erreur : OBC plante à l\'affichage de sa liste (un enregistrement a une donnée vide, souvent une parcelle sans code). Corrige cet enregistrement dans OBC, puis « Continuer ».');
@@ -1123,7 +1131,7 @@
           }
           e.erreur = ETAPES[e.etape - 1] + ' : ' + msg; journal(e, 'Erreur : ' + e.erreur); return;
         }
-        if (res === 'suivant') { e.statut = 'a_faire'; e.etape++; e.note = ''; ecrireEtat(e); afficherEtat(); continue; }
+        if (res === 'suivant') { e.statut = 'a_faire'; e.etape++; e.note = ''; e.reEnreg = 0; ecrireEtat(e); afficherEtat(); continue; }
         if (res === 'rempli') {
           e.statut = 'attente_enregistrement'; journal(e, ETAPES[e.etape - 1] + ' : formulaire rempli' + (e.enFile && lireFile().auto !== false ? '' : ', en attente d\'Enregistrer'));
           if (e.enFile && lireFile().auto !== false) { if (!(await enregistrerAuto(e))) return; }
