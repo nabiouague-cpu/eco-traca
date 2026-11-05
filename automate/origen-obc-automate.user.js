@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.11
+// @version      0.4.12
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.11';
+  const VERSION = '0.4.12';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -339,7 +339,15 @@
   // NB : la page /Create ouverte seule est un formulaire brut (sans les scripts d'OBC : listes en cascade absentes) : on passe toujours par le bouton « Nouveau » de la page Historique.
   async function ouvrirFormulaire(k) {
     if (q(FORMS[k - 1])) return q(FORMS[k - 1]);
-    if (!location.pathname.toLowerCase().startsWith(PAGES[k - 1].toLowerCase())) { location.href = PAGES[k - 1]; return null; }
+    const surPage = location.pathname.toLowerCase().startsWith(PAGES[k - 1].toLowerCase());
+    // OBC renvoie parfois vers /AgroParametrage/Index?xMenuParam=… : on cherche alors le bouton directement sur cette page
+    const redirige = !surPage && /^\/agroparametrage\/index/i.test(location.pathname);
+    if (!surPage && !redirige) { location.href = PAGES[k - 1]; return null; }
+    if (redirige && !(await attendre(() => q(BTN_NOUVEAU[k - 1]), 8000))) {
+      let n = 0; try { n = Number(sessionStorage.getItem('origen_obc_nav' + k) || 0) + 1; sessionStorage.setItem('origen_obc_nav' + k, String(n)); } catch (er) { n = 1; }
+      if (n > 2) { try { sessionStorage.removeItem('origen_obc_nav' + k); } catch (er) { /* ignoré */ } throw new Error('OBC ne reste pas sur ' + PAGES[k - 1] + ' (page atteinte : ' + location.pathname + location.search + ') : ouvre cette page à la main dans OBC, puis « Continuer ».'); }
+      location.href = PAGES[k - 1]; return null;
+    }
     const enErreur = () => /Une erreur est survenue/.test((document.body && document.body.innerText) || '');
     const btn = await attendre(() => q(BTN_NOUVEAU[k - 1]) || (enErreur() ? 'erreur' : null), 10000);
     if (btn === 'erreur') throw new Error('La page « ' + ETAPES[k - 1] + ' » d\'OBC est en erreur : OBC plante à l\'affichage de sa liste (un enregistrement a une donnée vide, souvent une parcelle sans code). Corrige cet enregistrement dans OBC, puis « Continuer ».');
