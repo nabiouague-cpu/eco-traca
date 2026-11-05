@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.8
+// @version      0.4.9
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.8';
+  const VERSION = '0.4.9';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -720,7 +720,13 @@
       journal(e, (usine ? 'Usine' : 'Origine') + ' prête : retour aux données livraison'); location.href = PAGES[7]; return 'navigation';
     };
     const page = urlReferentiel(type);
-    if (location.pathname.toLowerCase() !== page.split('?')[0].toLowerCase()) { journal(e, (usine ? 'Usines' : 'Origine') + ' : ouverture de ' + page); location.href = page; return 'navigation'; }
+    // OBC ajoute parfois un complément à l'adresse (ex. /Index) : on reconnaît la page par son début, comme pour les autres écrans, sinon le robot la rouvre sans fin.
+    if (!location.pathname.toLowerCase().startsWith(page.split('?')[0].toLowerCase())) {
+      e.navRef = (e.navRef || 0) + 1; ecrireEtat(e);
+      if (e.navRef > 3) { e.navRef = 0; ecrireEtat(e); throw new Error((usine ? 'Usines' : 'Origine') + ' : OBC ne reste pas sur ' + page + ' (page atteinte : ' + location.pathname + ')'); }
+      journal(e, (usine ? 'Usines' : 'Origine') + ' : ouverture de ' + page); location.href = page; return 'navigation';
+    }
+    if (e.navRef) { e.navRef = 0; ecrireEtat(e); }
     await attendre(() => document.querySelector('table tbody tr') || /aucun|no data|pas de donn/i.test(document.body.innerText), 15000, 400); await dormir(1000);
     if (usine) {
       const liste = e.preEtape ? usinesManquantes(e) : usinesDuLot(e, false);
