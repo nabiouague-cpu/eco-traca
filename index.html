@@ -4716,7 +4716,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-05-460';
+const APP_VERSION = '2026-11-05-461';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -14755,8 +14755,8 @@ function ocTelechargerBlob(blob, nomFichier){
   setTimeout(()=>URL.revokeObjectURL(url), 1500);
 }
 // ---- Format Cargill (EUDR Delivery Template) : un fichier par connaissement, rempli depuis la traçabilité réelle (achats producteurs) ----
-// Réglages à ajuster ici si Cargill change ses valeurs : destination « SCIPAV » (livraison locale → n° de connaissement CCC), pays, matière selon le type du contrat.
-const CARGILL_REGLAGES = { destination:'SCIPAV', pays:'Ivory Coast', fournisseur:'ECORIGINE' };
+// Réglages à ajuster ici si Cargill change ses valeurs : destination par défaut du modèle (Amsterdam), pays, matière selon le type du contrat. Le n° de connaissement est mis comme « Bill of Lading ».
+const CARGILL_REGLAGES = { destination:'Amsterdam', pays:'Ivory Coast', fournisseur:'ECORIGINE' };
 function ocCargillCamion(coopId, code){
   const a = (state.achats||[]).find(x=>x.cooperative_id===coopId && !x.producteur_id && String(x.connaissement)===String(code));
   return a || null;
@@ -14764,9 +14764,12 @@ function ocCargillCamion(coopId, code){
 function ocCargillEstCamion(coopId, code){
   const a = ocCargillCamion(coopId, code); return !!a && /cargill/i.test(String(a.client||''));
 }
-function ocCargillContrat(){
-  const l = (state.contratsClients||[]).filter(c=>/cargill/i.test(String(c.client||'')) && c.statut!=='annule' && c.statut!=='annulé');
-  return l.find(c=>c.statut==='actif') || l[0] || null;
+// Contrat Cargill de la bonne période : OD (octobre–décembre) ou JM (janvier–mars) selon la date du connaissement. S'il n'y en a pas un seul qui colle, le n° reste vide.
+function ocCargillContrat(iso){
+  const mois = Number(String(iso||'').slice(5,7)), code = (mois>=10 && mois<=12) ? 'OD' : ((mois>=1 && mois<=3) ? 'JM' : '');
+  if (!code) return null;
+  const l = (state.contratsClients||[]).filter(c=>/cargill/i.test(String(c.client||'')) && c.statut!=='annule' && c.statut!=='annulé' && String(c.periode_embarquement||'').trim().toUpperCase().indexOf(code)===0);
+  return l.length===1 ? l[0] : null;
 }
 function ocCargillMatiere(contrat){
   const t = String((contrat && contrat.type_cacao) || '').toUpperCase();
@@ -14783,27 +14786,32 @@ async function ocConstruireFicheCargill(coopId, code){
   const prods = new Map(); (state.producteurs||[]).filter(p=>p.cooperative_id===coopId).forEach(p=>{ if (p.farm_id) prods.set(p.farm_id, p); prods.set(p.id, p); });
   const lignes = lig.map(a=>{ const p = prods.get(a.producteur_id); return { date:String(a.date).slice(0,10), farmer:(p && (p.code||p.farm_id)) || a.producteur_id, farm:(p && p.farm_id) || a.producteur_id, kg:Math.round(Number(a.quantite_kg)||0) }; })
     .sort((x,y)=>x.date.localeCompare(y.date) || String(x.farmer).localeCompare(String(y.farmer)));
-  const cam = ocCargillCamion(coopId, code), contrat = ocCargillContrat();
-  const dateConn = String((cam && cam.date) || lignes[lignes.length-1].date).slice(0,10);
+  const cam = ocCargillCamion(coopId, code);
+  const dateConn = String((cam && cam.date) || lignes[lignes.length-1].date).slice(0,10), contrat = ocCargillContrat(dateConn);
   const rep = await fetch('modele-cargill-eudr.xlsx?v='+encodeURIComponent(APP_VERSION));
   if (!rep.ok) throw new Error('modèle Cargill introuvable (fichier modele-cargill-eudr.xlsx)');
   const zip = await JSZip.loadAsync(await rep.arrayBuffer());
   let sh = await zip.file('xl/worksheets/sheet2.xml').async('string');
+  // Dates au format Cargill MM/DD/YYYY quel que soit le réglage régional d'Excel : format de date explicite, ajouté aux styles du modèle.
+  let styles = await zip.file('xl/styles.xml').async('string');
+  const nXf = Number(/<cellXfs count="(\d+)">/.exec(styles)[1]), sDate = String(nXf), sDate13 = String(nXf+1);
+  styles = styles.replace('<numFmts count="2">','<numFmts count="3">').replace('</numFmts>','<numFmt numFmtId="165" formatCode="mm/dd/yyyy"/></numFmts>')
+    .replace('<cellXfs count="'+nXf+'">','<cellXfs count="'+(nXf+2)+'">')
+    .replace('</cellXfs>','<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyAlignment="1"><alignment horizontal="left" vertical="top"/></xf><xf numFmtId="165" fontId="6" fillId="0" borderId="15" xfId="0" applyNumberFormat="1" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="top"/></xf></cellXfs>');
+  zip.file('xl/styles.xml', styles);
   const txt = (ref, st, t)=>'<c r="'+ref+'" s="'+st+'" t="inlineStr"><is><t>'+escXmlTracabilite(t)+'</t></is></c>';
   const poser = (ref, fabrique)=>{ const re = new RegExp('<c r="'+ref+'" s="(\\d+)"(?: t="s")?(?:/>|>[\\s\\S]*?</c>)'); const m = re.exec(sh); if (!m) throw new Error('Cellule '+ref+" introuvable dans le modèle Cargill."); sh = sh.slice(0,m.index)+fabrique(m[1])+sh.slice(m.index+m[0].length); };
   poser('F7',  s=>txt('F7', s, CARGILL_REGLAGES.destination));
-  poser('F9',  s=>txt('F9', s, (contrat && contrat.reference) || ''));
+  if (contrat && contrat.reference) poser('F9', s=>txt('F9', s, contrat.reference));
   poser('F10', s=>txt('F10', s, CARGILL_REGLAGES.pays));
   poser('F11', s=>txt('F11', s, ocCargillMatiere(contrat)));
   poser('F12', s=>txt('F12', s, String(code)));
-  poser('F13', s=>'<c r="F13" s="'+s+'"><v>'+ocSerialExcel(dateConn)+'</v></c>');
+  poser('F13', s=>'<c r="F13" s="'+sDate13+'"><v>'+ocSerialExcel(dateConn)+'</v></c>');
   poser('F14', s=>txt('F14', s, ocCargillCampagne(dateConn)));
-  sh = sh.replace('"Connaissement CCC number",""))</f><v>Bill of Lading/Way Bill Number</v>', '"Connaissement CCC number",""))</f><v>Connaissement CCC number</v>')
-         .replace('"Connaissement CCC edition date (MM/DD/YYYY)",""))</f><v>Bill of Lading/Way Bill Issue Date (MM/DD/YYYY)</v>', '"Connaissement CCC edition date (MM/DD/YYYY)",""))</f><v>Connaissement CCC edition date (MM/DD/YYYY)</v>');
   const nv = {};
   lignes.forEach((l,i)=>{ const r = 18+i, bord = r<=254;
     nv[r] = '<row r="'+r+'" spans="1:7" x14ac:dyDescent="0.25">'+(bord?'<c r="A'+r+'" s="46"/><c r="B'+r+'" s="46"/>':'')
-      + '<c r="C'+r+'" s="10"><v>'+ocSerialExcel(l.date)+'</v></c>'+txt('D'+r,'0',l.farmer)+txt('E'+r,'0',l.farm)+'<c r="F'+r+'" s="15"><v>'+l.kg+'</v></c>'+(bord?'<c r="G'+r+'" s="46"/>':'')+'</row>'; });
+      + '<c r="C'+r+'" s="'+sDate+'"><v>'+ocSerialExcel(l.date)+'</v></c>'+txt('D'+r,'0',l.farmer)+txt('E'+r,'0',l.farm)+'<c r="F'+r+'" s="15"><v>'+l.kg+'</v></c>'+(bord?'<c r="G'+r+'" s="46"/>':'')+'</row>'; });
   sh = sh.replace(/<row r="(\d+)"[^>]*>[\s\S]*?<\/row>/g, (m0, r)=>{ const k = Number(r); if (nv[k]){ const x = nv[k]; delete nv[k]; return x; } return m0; });
   const reste = Object.keys(nv).map(Number).sort((a,b)=>a-b).map(k=>nv[k]).join('');
   sh = sh.replace('</sheetData>', reste+'</sheetData>').replace('<dimension ref="A1:I254"/>', '<dimension ref="A1:I'+Math.max(254, 17+lignes.length)+'"/>');
