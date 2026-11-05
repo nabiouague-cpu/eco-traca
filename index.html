@@ -4716,7 +4716,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-05-461';
+const APP_VERSION = '2026-11-05-462';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -14764,15 +14764,13 @@ function ocCargillCamion(coopId, code){
 function ocCargillEstCamion(coopId, code){
   const a = ocCargillCamion(coopId, code); return !!a && /cargill/i.test(String(a.client||''));
 }
-// Contrat Cargill de la bonne période : OD (octobre–décembre) ou JM (janvier–mars) selon la date du connaissement. S'il n'y en a pas un seul qui colle, le n° reste vide.
-function ocCargillContrat(iso){
-  const mois = Number(String(iso||'').slice(5,7)), code = (mois>=10 && mois<=12) ? 'OD' : ((mois>=1 && mois<=3) ? 'JM' : '');
-  if (!code) return null;
-  const l = (state.contratsClients||[]).filter(c=>/cargill/i.test(String(c.client||'')) && c.statut!=='annule' && c.statut!=='annulé' && String(c.periode_embarquement||'').trim().toUpperCase().indexOf(code)===0);
-  return l.length===1 ? l[0] : null;
-}
+// Contrat Cargill selon la période d'embarquement des volumes cédés : pour l'instant tout part sur JM, dont le contrat est le 7700082394.
+// Pour une autre période (ex. OD), tant que son n° n'est pas renseigné ici, le champ reste vide dans le fichier.
+const CARGILL_CONTRATS = { JM:'7700082394' };
+const CARGILL_PERIODE_EN_COURS = 'JM';
+function ocCargillContrat(){ const ref = CARGILL_CONTRATS[CARGILL_PERIODE_EN_COURS]; return ref ? { reference:ref } : null; }
 function ocCargillMatiere(contrat){
-  const t = String((contrat && contrat.type_cacao) || '').toUpperCase();
+  const t = String((contrat && contrat.type_cacao) || 'RA').toUpperCase();
   return /^RA|RAINFOREST/.test(t) ? 'RA SEG EUDR' : (/^FT|FAIR/.test(t) ? 'FT SEG EUDR' : 'Standard EUDR');
 }
 function ocCargillCampagne(iso){
@@ -14787,7 +14785,7 @@ async function ocConstruireFicheCargill(coopId, code){
   const lignes = lig.map(a=>{ const p = prods.get(a.producteur_id); return { date:String(a.date).slice(0,10), farmer:(p && (p.code||p.farm_id)) || a.producteur_id, farm:(p && p.farm_id) || a.producteur_id, kg:Math.round(Number(a.quantite_kg)||0) }; })
     .sort((x,y)=>x.date.localeCompare(y.date) || String(x.farmer).localeCompare(String(y.farmer)));
   const cam = ocCargillCamion(coopId, code);
-  const dateConn = String((cam && cam.date) || lignes[lignes.length-1].date).slice(0,10), contrat = ocCargillContrat(dateConn);
+  const dateConn = String((cam && cam.date) || lignes[lignes.length-1].date).slice(0,10), contrat = ocCargillContrat();
   const rep = await fetch('modele-cargill-eudr.xlsx?v='+encodeURIComponent(APP_VERSION));
   if (!rep.ok) throw new Error('modèle Cargill introuvable (fichier modele-cargill-eudr.xlsx)');
   const zip = await JSZip.loadAsync(await rep.arrayBuffer());
