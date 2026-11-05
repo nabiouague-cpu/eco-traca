@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.15
+// @version      0.4.16
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.15';
+  const VERSION = '0.4.16';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -142,6 +142,18 @@
   }
   async function echecLot(e, msg) {
     const f = lireFile(); const texte = ETAPES[e.etape - 1] + ' : ' + msg;
+    // Incident passager d'OBC (redirection vers le menu, formulaire disparu) avant la pesée : rien de risqué n'est enregistré ;
+    // Noah remet lui-même le lot en file (3 fois au plus) après une pause, sans le compter comme échec.
+    if (e.etape <= 7 && /OBC ne reste pas sur|Enregistrer.{0,3} introuvable/.test(msg)) {
+      f.relances = f.relances || {}; const n = (f.relances[e.lot.achat_id] || 0) + 1; f.relances[e.lot.achat_id] = n;
+      if (n <= 3) {
+        ecrireFile(f);
+        if (await rapporter(e.lot.achat_id, 'attente', 'Incident passager OBC, nouvel essai automatique (' + n + '/3) : ' + texte, '')) {
+          journal(e, 'Incident passager OBC : lot remis en file automatiquement (' + n + '/3), reprise dans 30 s');
+          effacerEtat(); afficherEtat(); afficherFile(); dormir(30000).then(boucle); return;
+        }
+      }
+    }
     await rapporter(e.lot.achat_id, 'echec', texte, '');
     noterEchec(f, e.lot, texte); f.consecutifs = (f.consecutifs || 0) + 1;
     if (f.consecutifs >= 3) { f.actif = false; f.dernier = 'File arrêtée : 3 échecs de suite. Dernier : ' + texte; }
