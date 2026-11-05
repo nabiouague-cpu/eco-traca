@@ -4715,7 +4715,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-05-453';
+const APP_VERSION = '2026-11-05-454';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8059,14 +8059,24 @@ async function usiCharger(){
 function usiSites(){
   return (state.sitesUsinage||[]).filter(s=>s.actif!==false && (Number(s.tarif_usinage_fcfa_kg)>0 || Number(s.tarif_refoulement_fcfa_kg)>0)).slice().sort((a,b)=>String(a.nom).localeCompare(String(b.nom),'fr'));
 }
+// Nature du cacao pour l'usinage : l'usinier travaille chaque nature séparément (RA, Fairtrade, ordinaire) et facture séparément. Un camion refoulé n'est plus certifié : il suit la facture « ordinaire ».
+const USI_NATURES = [['RA','Rainforest (RA)'],['FT','Fairtrade'],['ORD','Ordinaire']];
+function usiNatureLabel(k){ const x = USI_NATURES.find(n=>n[0]===k); return x ? x[1] : (k==='MIXTE' ? 'Mixte' : k==='?' ? 'À peser (nature connue au ticket)' : '—'); }
+function usiNature(a){
+  if (a.refoulee) return 'ORD';
+  const n = String(((a.pesee_detail||{})['Nature']||[''])[0]||'').toUpperCase();
+  if (/RAINFOREST|^RA\b/.test(n)) return 'RA';
+  if (/FAIR|^FT\b/.test(n)) return 'FT';
+  return n ? 'ORD' : '?';
+}
 function usiCamions(s){
   const c = finCampagneId(), code = String(s.code||'').toUpperCase(), tu = Number(s.tarif_usinage_fcfa_kg)||0, tr = Number(s.tarif_refoulement_fcfa_kg)||0;
   return (state.achats||[]).filter(a=>!a.producteur_id && (!c || (a.campagne_id||'')===c) && String(a.usine_dechargement||'').trim().toUpperCase().indexOf(code)===0).map(a=>{
     const net = Number(a.poids_net_produit)||0, decl = Number(a.quantite_kg)||0, avant = Number(a.poids_brut_accepte)||0;
-    if (a.refoulee) return { a, statut:'refoule', kg:decl, tarif:tr, montant:Math.round(decl*tr), prevision:0, refac:0 };
-    if (net>0) { const base = avant>0 ? avant : net; return { a, statut:'usine', kg:base, tarif:tu, montant:Math.round(base*tu), prevision:0, refac:Math.max(0, base-net) }; }
-    return { a, statut:'attente', kg:decl, tarif:tu, montant:0, prevision:Math.round(decl*tu), refac:0 };
-  }).sort((x,y)=>String(x.a.date||'').localeCompare(String(y.a.date||'')) || String(x.a.connaissement||'').localeCompare(String(y.a.connaissement||''),'fr',{numeric:true}));
+    if (a.refoulee) return { a, nature:usiNature(a), statut:'refoule', kg:decl, tarif:tr, montant:Math.round(decl*tr), prevision:0, refac:0 };
+    if (net>0) { const base = avant>0 ? avant : net; return { a, nature:usiNature(a), statut:'usine', kg:base, tarif:tu, montant:Math.round(base*tu), prevision:0, refac:Math.max(0, base-net) }; }
+    return { a, nature:usiNature(a), statut:'attente', kg:decl, tarif:tu, montant:0, prevision:Math.round(decl*tu), refac:0 };
+  }).sort((x,y)=>USI_NATURES.findIndex(n=>n[0]===x.nature)-USI_NATURES.findIndex(n=>n[0]===y.nature) || String(x.a.date||'').localeCompare(String(y.a.date||'')) || String(x.a.connaissement||'').localeCompare(String(y.a.connaissement||''),'fr',{numeric:true}));
 }
 function usiSituation(s){
   const c = finCampagneId(), cams = usiCamions(s);
@@ -8075,7 +8085,13 @@ function usiSituation(s){
   const somme = (liste, f)=>liste.reduce((t,x)=>t+f(x),0);
   const usinage = somme(cams.filter(x=>x.statut==='usine'), x=>x.montant), refoul = somme(cams.filter(x=>x.statut==='refoule'), x=>x.montant);
   const du = usinage + refoul, facture = somme(fs, x=>Number(x.montant_fcfa)||0), paye = somme(ps, x=>Number(x.montant_fcfa)||0);
-  return { s, cams, fs, ps, kgUsine:somme(cams.filter(x=>x.statut==='usine'), x=>x.kg), kgRefoule:somme(cams.filter(x=>x.statut==='refoule'), x=>x.kg),
+  const natFact = f=>{ const ids = Array.isArray(f.achat_ids) ? f.achat_ids : [], ns = Array.from(new Set(cams.filter(x=>ids.indexOf(x.a.id)>=0).map(x=>x.nature))); return ns.length===1 ? ns[0] : (ns.length>1 ? 'MIXTE' : null); };
+  const parNature = USI_NATURES.map(n=>n[0]).concat(['?','MIXTE']).map(k=>{
+    const cc = cams.filter(x=>x.nature===k), ff = fs.filter(f=>natFact(f)===k), idsF = ff.map(f=>f.id);
+    const us = somme(cc.filter(x=>x.statut==='usine'), x=>x.montant), rf = somme(cc.filter(x=>x.statut==='refoule'), x=>x.montant), fa = somme(ff, x=>Number(x.montant_fcfa)||0), pa = somme(ps.filter(p=>idsF.indexOf(p.facture_id)>=0), x=>Number(x.montant_fcfa)||0);
+    return { k, label:usiNatureLabel(k), n:cc.length, kg:somme(cc.filter(x=>x.statut==='usine'), x=>x.kg), kgRef:somme(cc.filter(x=>x.statut==='refoule'), x=>x.kg), usinage:us, refoul:rf, du:us+rf, facture:fa, paye:pa, prevision:somme(cc, x=>x.prevision), nFact:ff.length };
+  }).filter(r=>r.n>0 || r.nFact>0);
+  return { s, cams, fs, ps, natFact, parNature, kgUsine:somme(cams.filter(x=>x.statut==='usine'), x=>x.kg), kgRefoule:somme(cams.filter(x=>x.statut==='refoule'), x=>x.kg),
     usinage, refoul, du, facture, paye, prevision:somme(cams, x=>x.prevision), nbAttente:cams.filter(x=>x.statut==='attente').length,
     reste:du-paye, resteFact:facture-paye, aFacturer:du-facture };
 }
@@ -8086,7 +8102,7 @@ function usiPuce(label, valeur, classe, aide){ return '<div style="border:1px so
 function renderFinUsinage(){
   if (!state.usiCharge){ usiCharger().then(()=>render()); return '<div class="panel"><div class="panel-head"><h2>Frais d\'usinage</h2></div><div class="hint" style="padding:18px">Chargement…</div></div>'; }
   const sites = usiSites(), sans = (state.sitesUsinage||[]).filter(s=>s.actif!==false && !sites.some(x=>x.code===s.code));
-  let html = '<div class="panel"><div class="panel-head" style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap"><div><h2>Frais d\'usinage — usiniers</h2><p class="hint" style="margin:4px 0 0">Pour chaque camion déchargé chez l\'usinier : cacao usiné = poids net avant réfaction × tarif d\'usinage (la réfaction est une perte théorique : elle baisse le poids payé à la coopérative, pas le poids usiné) ; cacao refoulé = poids × tarif de refoulement ; camion pas encore pesé = simple prévision. Les tarifs sont hors sacherie (fournie par ECORIGINE). On retire ensuite peu à peu les factures reçues et les chèques faits.</p></div>'
+  let html = '<div class="panel"><div class="panel-head" style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap"><div><h2>Frais d\'usinage — usiniers</h2><p class="hint" style="margin:4px 0 0">Les camions sont classés par nature (RA, Fairtrade, ordinaire) car l\'usinier travaille et facture chaque nature à part. Pour chaque camion déchargé chez l\'usinier : cacao usiné = poids net avant réfaction × tarif d\'usinage (la réfaction est une perte théorique : elle baisse le poids payé à la coopérative, pas le poids usiné) ; cacao refoulé = poids × tarif de refoulement ; camion pas encore pesé = simple prévision. Les tarifs sont hors sacherie (fournie par ECORIGINE). On retire ensuite peu à peu les factures reçues et les chèques faits.</p></div>'
     + '<div><select id="usi-ajout" onchange="if(this.value){usiTarifOuvrir(this.value);this.value=\'\'}" style="min-width:210px"><option value="">+ Ajouter une usine…</option>'+sans.map(s=>'<option value="'+esc(s.code)+'">'+esc(s.nom)+' ('+esc(s.code)+')</option>').join('')+'</select></div></div><div style="padding:0 18px 18px">';
   if (!sites.length) return html + '<div class="hint">Aucune usine avec des tarifs d\'usinage. Ajoute-en une avec le menu ci-dessus (ex. SUV/SITP : usinage 13,6 F/kg, refoulement 3,8 F/kg).</div></div></div>';
   sites.forEach(s=>{
@@ -8101,17 +8117,21 @@ function renderFinUsinage(){
       + usiPuce('Reste à payer', fmtNum(t.reste), t.reste>0?'txt-danger':'', 'Total dû − payé') + usiPuce('Reste à facturer', fmtNum(Math.max(0,t.aFacturer)), '', 'Total dû − déjà facturé')
       + (t.nbAttente ? usiPuce('Prévision ('+t.nbAttente+' camion'+(t.nbAttente>1?'s':'')+' à peser)', fmtNum(t.prevision), '', 'Usinage sur le poids du connaissement, à ajuster après la pesée') : '')
       + '</div>';
+    html += '<div style="font-weight:600;margin:8px 0 4px">Par nature de cacao <span class="hint" style="margin:0;font-weight:400">— l\'usinier usine et facture chaque nature séparément</span></div>'
+      + '<div class="achats-defile"><table class="tbl-fiches tbl-dense"><thead><tr><th>Nature</th><th class="num">Camions</th><th class="num">Usiné (kg)</th><th class="num">Usinage dû</th><th class="num">Refoulement dû</th><th class="num">Total dû</th><th class="num">Facturé</th><th class="num">Payé</th><th class="num">Reste à facturer</th></tr></thead><tbody>'
+      + t.parNature.map(r=>'<tr><td><b>'+esc(r.label)+'</b></td><td class="num">'+r.n+'</td><td class="num">'+(r.kg>0?fmtNum(r.kg):'—')+'</td><td class="num">'+fmtNum(r.usinage)+'</td><td class="num">'+(r.refoul?fmtNum(r.refoul)+' <span class="hint" style="margin:0">('+fmtNum(r.kgRef)+' kg)</span>':'—')+'</td><td class="num"><b>'+fmtNum(r.du)+'</b></td><td class="num">'+(r.facture?fmtNum(r.facture):'—')+'</td><td class="num">'+(r.paye?fmtNum(r.paye):'—')+'</td><td class="num">'+(r.k==='MIXTE'?'—':fmtNum(Math.max(0,r.du-r.facture)))+(r.prevision?' <span class="hint" style="margin:0">(+ prév. '+fmtNum(r.prevision)+')</span>':'')+'</td></tr>').join('')
+      + '</tbody></table></div>';
     html += '<div style="font-weight:600;margin:8px 0 4px">Camions déchargés</div>';
-    html += t.cams.length ? '<div class="achats-defile"><table class="tbl-fiches tbl-dense"><thead><tr><th>Date</th><th>Connaissement</th><th>Coopérative</th><th>Statut</th><th class="num">Poids (kg)</th><th class="num">Tarif (F/kg)</th><th class="num">Frais (FCFA)</th><th>Facture</th></tr></thead><tbody>'
+    html += t.cams.length ? '<div class="achats-defile"><table class="tbl-fiches tbl-dense"><thead><tr><th>Date</th><th>Connaissement</th><th>Coopérative</th><th>Nature</th><th>Statut</th><th class="num">Poids (kg)</th><th class="num">Tarif (F/kg)</th><th class="num">Frais (FCFA)</th><th>Facture</th></tr></thead><tbody>'
       + t.cams.map(x=>{ const co = coopById(x.a.cooperative_id), fac = usiFacturesDuCamion(t, x.a.id).map(f=>f.numero||'sans n°');
           const st = x.statut==='usine' ? '<span class="badge ok">Usiné</span>' : x.statut==='refoule' ? '<span class="badge danger" title="'+esc(((x.a.pesee_detail||{})['Motif Refoulement']||[''])[0]||'')+'">Refoulé</span>' : '<span class="badge neutral">À peser</span>';
-          return '<tr><td>'+esc(dateFr(x.a.date))+'</td><td><b>'+esc(x.a.connaissement||'—')+'</b></td><td>'+esc(co?co.nom:'—')+'</td><td>'+st+'</td><td class="num">'+(x.kg>0?fmtNum(x.kg):'—')+(x.statut==='attente'?' <span class="hint" style="margin:0">(déclaré)</span>':'')+(x.refac>0?' <span class="hint" style="margin:0" title="Réfaction : perte théorique retirée du poids payé à la coopérative, mais comptée pour l\'usinage">(réfaction '+fmtNum(x.refac)+')</span>':'')+'</td><td class="num">'+(x.tarif>0?String(x.tarif).replace('.', ','):'—')+'</td>'
+          return '<tr><td>'+esc(dateFr(x.a.date))+'</td><td><b>'+esc(x.a.connaissement||'—')+'</b></td><td>'+esc(co?co.nom:'—')+'</td><td>'+esc(usiNatureLabel(x.nature))+'</td><td>'+st+'</td><td class="num">'+(x.kg>0?fmtNum(x.kg):'—')+(x.statut==='attente'?' <span class="hint" style="margin:0">(déclaré)</span>':'')+(x.refac>0?' <span class="hint" style="margin:0" title="Réfaction : perte théorique retirée du poids payé à la coopérative, mais comptée pour l\'usinage">(réfaction '+fmtNum(x.refac)+')</span>':'')+'</td><td class="num">'+(x.tarif>0?String(x.tarif).replace('.', ','):'—')+'</td>'
             + '<td class="num">'+(x.statut==='attente' ? '<span class="hint" style="margin:0">prév. '+fmtNum(x.prevision)+'</span>' : '<b>'+fmtNum(x.montant)+'</b>')+'</td><td>'+(fac.length?esc(fac.join(', ')):'<span class="hint" style="margin:0">—</span>')+'</td></tr>'; }).join('')
       + '</tbody></table></div>' : '<div class="hint">Aucun camion déchargé dans cette usine pour la campagne.</div>';
     html += '<div style="font-weight:600;margin:12px 0 4px">Factures reçues</div>';
-    html += t.fs.length ? '<table class="tbl-fiches tbl-dense"><thead><tr><th>N°</th><th>Date</th><th class="num">Montant facturé</th><th class="num">Camions couverts</th><th class="num">Attendu d\'après les camions</th><th class="num">Écart</th><th>Notes</th><th></th></tr></thead><tbody>'
+    html += t.fs.length ? '<table class="tbl-fiches tbl-dense"><thead><tr><th>N°</th><th>Nature</th><th>Date</th><th class="num">Montant facturé</th><th class="num">Camions couverts</th><th class="num">Attendu d\'après les camions</th><th class="num">Écart</th><th>Notes</th><th></th></tr></thead><tbody>'
       + t.fs.map(f=>{ const n = Array.isArray(f.achat_ids)?f.achat_ids.length:0, att = usiAttenduFacture(t, f), ec = (Number(f.montant_fcfa)||0)-att;
-          return '<tr><td><b>'+esc(f.numero||'—')+'</b></td><td>'+esc(dateFr(f.date_facture))+'</td><td class="num">'+fmtNum(f.montant_fcfa)+'</td><td class="num">'+(n||'—')+'</td><td class="num">'+(n?fmtNum(att):'—')+'</td><td class="num">'+(n ? (ec===0 ? '<span class="badge ok">0</span>' : '<b class="txt-danger">'+(ec>0?'+':'')+fmtNum(ec)+'</b>') : '—')+'</td><td>'+esc(f.notes||'')+'</td>'
+          return '<tr><td><b>'+esc(f.numero||'—')+'</b></td><td>'+esc(t.natFact(f) ? usiNatureLabel(t.natFact(f)) : '—')+'</td><td>'+esc(dateFr(f.date_facture))+'</td><td class="num">'+fmtNum(f.montant_fcfa)+'</td><td class="num">'+(n||'—')+'</td><td class="num">'+(n?fmtNum(att):'—')+'</td><td class="num">'+(n ? (ec===0 ? '<span class="badge ok">0</span>' : '<b class="txt-danger">'+(ec>0?'+':'')+fmtNum(ec)+'</b>') : '—')+'</td><td>'+esc(f.notes||'')+'</td>'
             + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="usiFactureOuvrir(\''+cd+'\',\''+esc(f.id)+'\')">Modifier</button> <button class="btn-danger-text btn-compact" onclick="usiFactureSupprimer(\''+esc(f.id)+'\')">Retirer</button></td></tr>'; }).join('')
       + '</tbody></table>' : '<div class="hint">Aucune facture enregistrée. Quand l\'usinier en envoie une, ajoute-la et coche les camions qu\'elle couvre : l\'écart avec le calcul apparaît.</div>';
     html += '<div style="font-weight:600;margin:12px 0 4px">Paiements</div>';
@@ -8152,7 +8172,7 @@ function renderUsiFactureModal(m){
   const s = lotsSiteParCode(m.payload.code); if (!s) return '';
   const t = usiSituation(s), sel = new Set(m.payload.achat_ids||[]);
   const lignes = t.cams.filter(x=>x.statut!=='attente').map(x=>{ const co = coopById(x.a.cooperative_id), deja = usiFacturesDuCamion(t, x.a.id).filter(f=>f.id!==m.payload.id).map(f=>f.numero||'sans n°');
-    return '<label style="display:flex;gap:8px;align-items:center;margin:3px 0"><input type="checkbox" name="uf_c_'+esc(x.a.id)+'"'+(sel.has(x.a.id)?' checked':'')+' onchange="usiFactureRecalc()"> <span>'+esc(dateFr(x.a.date))+' · <b>'+esc(co?co.nom:(x.a.connaissement||'—'))+'</b> · '+(x.statut==='refoule'?'refoulé ':'usiné ')+fmtNum(x.kg)+' kg · '+fmtNum(x.montant)+' F'+(deja.length?' <span class="badge warn">déjà sur '+esc(deja.join(', '))+'</span>':'')+'</span></label>'; }).join('');
+    return '<label style="display:flex;gap:8px;align-items:center;margin:3px 0"><input type="checkbox" name="uf_c_'+esc(x.a.id)+'"'+(sel.has(x.a.id)?' checked':'')+' onchange="usiFactureRecalc()"> <span>'+esc(dateFr(x.a.date))+' · <b>'+esc(co?co.nom:(x.a.connaissement||'—'))+'</b> · <span class="badge neutral">'+esc(usiNatureLabel(x.nature))+'</span> '+(x.statut==='refoule'?'refoulé ':'usiné ')+fmtNum(x.kg)+' kg · '+fmtNum(x.montant)+' F'+(deja.length?' <span class="badge warn">déjà sur '+esc(deja.join(', '))+'</span>':'')+'</span></label>'; }).join('');
   return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>Facture reçue — '+esc(s.nom)+'</h3><div id="modal-fields">'
     + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 12px"><label class="field">N° de facture<input type="text" name="uf_num" value="'+esc(m.payload.numero||'')+'"></label><label class="field">Date<input type="date" name="uf_date" value="'+esc(m.payload.date_facture||'')+'"></label><label class="field">Montant facturé (FCFA)<input type="number" name="uf_montant" min="0" step="1" value="'+esc(m.payload.montant_fcfa===''?'':m.payload.montant_fcfa)+'" oninput="usiFactureRecalc()"></label></div>'
     + '<div style="font-weight:600;margin:6px 0 4px">Camions couverts par cette facture</div><div style="max-height:34vh;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:6px 10px">'+(lignes||'<div class="hint">Aucun camion pesé.</div>')+'</div>'
