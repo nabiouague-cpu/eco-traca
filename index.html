@@ -23767,11 +23767,23 @@ async function defoDiscEnvoyer(id, texte){
     ddPense(false);
     const ma = { role:'assistant', contenu:data.reponse }; d.msgs.push(ma); ddAjouter(id, ma);
     // Décision donnée dans la conversation = ordre d'appliquer : le nettoyage se lance (sur une copie).
-    if (Array.isArray(data.actions) && data.actions.length){
-      const ok = await defoLancerNettoyage(id, data.actions);
-      const ms = { role:'systeme', contenu: ok ? '⚙️ Stratégie appliquée, nettoyage lancé : '+data.actions.join(', ')+'. Le résultat s\'affiche ici dans environ 3 minutes.' : "⚠ Le nettoyage n'a pas pu être lancé : le rapprochement polygones ↔ registre n'est pas validé, ou un nettoyage est déjà en cours." };
+    const acts = Array.isArray(data.actions) ? data.actions : [];
+    if (acts.length || (data.extras && Object.keys(data.extras).length)){
+      const ok = await defoLancerNettoyage(id, acts, null, null, data.extras || null);
+      const ms = { role:'systeme', contenu: ok ? '⚙️ Stratégie appliquée, nettoyage lancé : '+(acts.join(', ')||'options demandées')+(data.extras?' (exceptions / retraits ciblés / découpe inclus)':'')+'. Le résultat s\'affiche ici dans environ 3 minutes.' : "⚠ Le nettoyage n'a pas pu être lancé : le rapprochement polygones ↔ registre n'est pas validé, ou un nettoyage est déjà en cours." };
       d.msgs.push(ms); ddAjouter(id, ms);
       if (ok && state.defo && state.defo[0] && state.defo[0].etape==='nettoyage') ddSuivreNettoyage(id, state.defo[0].id);
+    }
+    if (data.base_retrait){
+      const rr = await ddLancerRetrait(id, data.base_retrait);
+      const mr = { role:'systeme', contenu: rr.ok ? (data.base_retrait.simulation ? '🔎 Simulation du retrait dans la base ECORIGINE lancée : la base n\'est pas modifiée. Le résultat s\'affiche ici dans quelques minutes.' : '🗺️ Retrait dans la base ECORIGINE lancé ('+((data.base_retrait.coops||[]).join(', '))+'). Une nouvelle version de la base sera publiée ; les anciennes restent disponibles.') : '⚠ Retrait non lancé : '+rr.msg };
+      d.msgs.push(mr); ddAjouter(id, mr);
+      if (rr.ok) ddSuivreRetrait(id, rr.rid);
+    }
+    if (data.demande_libre){
+      const ok2 = await ddDemandeSpeciale(id, data.demande_libre);
+      const m2 = { role:'systeme', contenu: ok2 ? '📝 Demande spéciale mise en file (visible dans « Proposer une autre action » du dossier) : '+data.demande_libre.slice(0,160) : '⚠ La demande spéciale n\'a pas pu être enregistrée.' };
+      d.msgs.push(m2); ddAjouter(id, m2);
     }
     if (data.rapprochement_valide){
       const okv = await defoValiderRapprochement(id);
@@ -23826,6 +23838,59 @@ async function ddLancerFinale(aid, bf){
   state.defo = [ins.data].concat(state.defo||[]); carteLancerRobot();
   return { ok:true, finId:ins.data.id };
 }
+async function ddLancerRetrait(aid, br){
+  const a = (state.defo||[]).find(z=>z.id===aid); if (!a) return { ok:false, msg:'analyse introuvable.' };
+  if (!br.simulation && !(br.coops && br.coops.length)) return { ok:false, msg:'nom des coopératives à retirer manquant.' };
+  const dejà = (state.defo||[]).find(z=>z.etape==='base_retrait' && z.entrees && z.entrees.analyse_id===aid && (z.statut==='demandee'||z.statut==='en_cours'));
+  if (dejà) return { ok:false, msg:'un retrait est déjà en cours : attends sa fin.' };
+  const et = defoEtat(a);
+  const email = (state.session&&state.session.user&&state.session.user.email)||null;
+  const entrees = { analyse_id:aid, source_id:et.dernier?et.dernier.id:null, simulation:!!br.simulation, coops:br.coops||null, par:email };
+  if (br.seuil) entrees.seuil = br.seuil;
+  if (br.motif) entrees.motif = br.motif;
+  const ins = await supabaseClient.from('analyses_defo').insert({ id:genId('ad'), cooperative_id:a.cooperative_id||null, cooperative_nom:a.cooperative_nom, etape:'base_retrait', statut:'demandee', entrees, demande_par:email }).select().single();
+  if (ins.error) return { ok:false, msg:ins.error.message };
+  state.defo = [ins.data].concat(state.defo||[]); carteLancerRobot();
+  return { ok:true, rid:ins.data.id };
+}
+async function ddDemandeSpeciale(aid, texte){
+  const a = (state.defo||[]).find(z=>z.id===aid); if (!a) return false;
+  const ins = await supabaseClient.from('analyses_defo').insert({ id:genId('ad'), cooperative_id:a.cooperative_id||null, cooperative_nom:a.cooperative_nom, etape:'demande_libre', statut:'a_traiter', entrees:{ analyse_id:aid, texte:texte },
+    demande_par:(state.session&&state.session.user&&state.session.user.email)||null }).select().single();
+  if (ins.error) return false;
+  state.defo = [ins.data].concat(state.defo||[]); return true;
+}
+function ddSuivreRetrait(aid, rid){
+  state._ddSuiviR = state._ddSuiviR || {};
+  if (state._ddSuiviR[rid]) return; state._ddSuiviR[rid] = true;
+  const tour = async ()=>{
+    if (!document.getElementById('defo-disc-page')){ delete state._ddSuiviR[rid]; return; }
+    const r = await supabaseClient.from('analyses_defo').select('*').eq('id', rid).maybeSingle();
+    const z = r.data;
+    if (z){
+      const i = (state.defo||[]).findIndex(q=>q.id===rid); if (i>=0) state.defo[i] = z; else state.defo = [z].concat(state.defo||[]);
+      if (z.statut==='terminee' || z.statut==='erreur' || z.statut==='annulee'){
+        delete state._ddSuiviR[rid];
+        const fil = document.getElementById('defo-disc-fil'); if (!fil) return;
+        const old = document.getElementById('dd-retrait-'+rid); if (old) old.remove();
+        fil.insertAdjacentHTML('beforeend', ddRetraitBulle(aid, z)); fil.scrollTop = fil.scrollHeight;
+        return;
+      }
+    }
+    setTimeout(tour, 8000);
+  };
+  setTimeout(tour, 8000);
+}
+function ddRetraitBulle(aid, z){
+  const enc = 'id="dd-retrait-'+escJs(z.id)+'" style="align-self:flex-start;max-width:96%;border:1px solid #b9d9c0;background:#eef6ef;border-radius:12px;padding:10px 13px;font-size:13.5px;line-height:1.5"';
+  if (z.statut==='erreur') return '<div '+enc+'><b>Le retrait a échoué.</b> '+esc(z.erreur||'erreur inconnue')+'<div class="hint" style="margin:4px 0 0">La base n\'a pas été modifiée. Dis-le à Ryomen pour le relancer.</div></div>';
+  if (z.statut==='annulee') return '<div '+enc+'>Retrait annulé.</div>';
+  const r = z.resume||{}, dl = defoUtiles(z.fichiers).map(defoChip).join('');
+  const pc = Object.keys(r.par_coop||{}).map(k=>esc(k)+' : '+r.par_coop[k]).join(' · ');
+  const be = r.base_ecorigine && r.base_ecorigine.version ? '<div style="color:#2c5fae;font-weight:600">✔ Nouvelle version de la base ECORIGINE : v'+r.base_ecorigine.version+' (v'+r.base_ecorigine.version_precedente+' conservée)</div>' : '';
+  return '<div '+enc+'><b>'+(r.simulation?'🔎 Simulation du retrait (base non modifiée)':'🗺️ Retrait appliqué à la base')+'</b> — '+fmtNum(r.retirees||0)+' parcelle(s) · '+fmtNum(r.surface_ha||0)+' ha'
+    + (pc ? '<div>'+pc+'</div>' : '') + be + '<div style="margin-top:6px">'+dl+'</div></div>';
+}
 async function ddCloturer(aid){
   const a = (state.defo||[]).find(z=>z.id===aid); if (!a) return false;
   const entrees = Object.assign({}, a.entrees||{}, { cloturee:true, cloturee_le:new Date().toISOString() });
@@ -23858,7 +23923,7 @@ function ddSuivreFinale(aid, finId){
 // Recharge depuis la base les nettoyages et productions de cette analyse (l'écran peut dater de plusieurs heures).
 async function ddRafraichir(aid){
   try{
-    const r = await supabaseClient.from('analyses_defo').select('*').eq('entrees->>analyse_id', aid).in('etape', ['nettoyage','base_finale']);
+    const r = await supabaseClient.from('analyses_defo').select('*').eq('entrees->>analyse_id', aid).in('etape', ['nettoyage','base_finale','base_retrait']);
     (r.data||[]).forEach(z=>{ const i = (state.defo||[]).findIndex(q=>q.id===z.id); if (i>=0) state.defo[i] = z; else state.defo = [z].concat(state.defo||[]); });
   }catch(e){}
 }
@@ -23989,13 +24054,14 @@ function defoAppliquerTout(aid){
   const txt = codes.map(c=>{ const p = pb.find(z=>z.code===c); return '• '+p.titre+' ('+fmtNum(p.nb)+')'; }).join('\n');
   askConfirm('Appliquer dans l\'ordre standard :\n'+txt+'\n\nLe travail se fait sur une copie ; rien n\'est modifié dans tes fichiers ni dans la base ECORIGINE.', ()=>defoLancerNettoyage(aid, codes));
 }
-async function defoLancerNettoyage(aid, actions, retouches, decisions){
+async function defoLancerNettoyage(aid, actions, retouches, decisions, extras){
   const a = (state.defo||[]).find(z=>z.id===aid); if (!a) return false;
   const et = defoEtat(a); if (et.enCours){ showToast('Un nettoyage est déjà en cours.'); return false; }
   if (!defoRapprochementOk(a)){ showToast('Valide d\'abord le rapprochement polygones ↔ registre (bouton « Je valide ce rapprochement » dans le dossier de l\'analyse).'); return false; }
   const entrees = { analyse_id:aid, source_id:et.dernier?et.dernier.id:null, actions };
   if (retouches && ((retouches.supprimes||[]).length || Object.keys(retouches.modifies||{}).length)) entrees.retouches = retouches;
   if (decisions) entrees.decisions = decisions;
+  if (extras && Object.keys(extras).length) entrees.extras = extras;
   const ins = await supabaseClient.from('analyses_defo').insert({ id:genId('ad'), cooperative_id:a.cooperative_id||null, cooperative_nom:a.cooperative_nom, etape:'nettoyage', statut:'demandee',
     entrees:entrees, demande_par:(state.session&&state.session.user&&state.session.user.email)||null }).select().single();
   if (ins.error){ showToast('Lancement impossible : '+ins.error.message); return false; }
