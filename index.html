@@ -4740,7 +4740,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-06-470';
+const APP_VERSION = '2026-11-06-471';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -22756,12 +22756,23 @@ function renderDefoVue(){
 }
 // ---- Dossiers : une liste à gauche (une ligne par coopérative), UN SEUL dossier ouvert à droite, avec le nom de la coopérative toujours visible ----
 function defoEtapeLabel(p){
-  const S = defoEtapes6(p).s, N = [1,2,3,4,5,6], nf = N.filter(n=>S[n]==='fait').length;
-  const err = N.find(n=>S[n]==='erreur'), trav = N.find(n=>S[n]==='travail'), af = N.find(n=>S[n]==='a_faire');
+  const E = defoEtapes6(p), S = E.s, N = [1,2,3,4,5,6], nf = N.filter(n=>S[n]==='fait').length;
+  const err = N.find(n=>S[n]==='erreur'), trav = N.find(n=>S[n]==='travail');
+  const vert = '#2e7d32', orange = '#c77a12';
   if (err) return { txt:'Erreur · '+DEFO_NOMS6[err-1], col:'#c0392b', n:nf, rang:0 };
   if (trav) return { txt:'En cours · '+DEFO_NOMS6[trav-1], col:'#1f5fa8', n:nf, rang:1 };
-  if (nf===6){ const a6 = defoEtapes6(p).a; return (a6 && a6.entrees && a6.entrees.cloturee) ? { txt:'Terminé', col:'#2e7d32', n:nf, rang:3 } : { txt:'Base finale faite · à clôturer', col:'#c77a12', n:nf, rang:2 }; }
-  if (af) return { txt:'À faire · '+DEFO_NOMS6[af-1], col:'#c77a12', n:nf, rang:2 };
+  // base finale produite : c'est fait, en vert
+  if (S[6]==='fait') return { txt:'Base finale prête', col:vert, n:nf, rang:3 };
+  // sinon : l'étape où Nabi s'est arrêté, en orange
+  const d = defoDerniereAction(p.id), act = d ? d.action : '';
+  if (S[3]==='fait'){
+    if (S[5]==='fait') return { txt:'Nettoyage fait · base finale à produire', col:orange, n:nf, rang:2 };
+    if (act==='envoye_coop') return { txt:'Rapport envoyé à la coopérative', col:orange, n:nf, rang:2 };
+    if (act==='rapport_excel' || act==='rapport_discussion') return { txt:'Rapport téléchargé · à envoyer à la coopérative', col:orange, n:nf, rang:2 };
+    return { txt:'Analyse faite · rapport à télécharger', col:orange, n:nf, rang:2 };
+  }
+  const af = N.find(n=>S[n]==='a_faire');
+  if (af) return { txt:'À faire · '+DEFO_NOMS6[af-1], col:orange, n:nf, rang:2 };
   return { txt:'En attente', col:'#7a8683', n:nf, rang:2 };
 }
 function defoDossierChoisir(id){
@@ -22797,7 +22808,7 @@ function defoActionHtml(x, claire){
   if (!d && !clot) return '';
   const col = claire ? '#ffe9b0' : '#8a5a00';
   return (d ? '<span style="color:'+col+'">'+esc(DEFO_ACTIONS[d.action]||d.action)+' · '+esc(defoActionDate(d.created_at))+'</span>' : '')
-    + (clot ? ' <b style="color:'+(claire?'#bfe8cf':'#14633a')+'">✔ Clôturée</b>' : ' <span style="color:'+(claire?'#d6e5e0':'#7a8683')+'">· pas encore clôturée</span>');
+    + (clot ? (d ? ' · ' : '')+'<b style="color:'+(claire?'#bfe8cf':'#14633a')+'">✔ Clôturée</b>' : '');
 }
 function defoLignesHtml(tri, sel){
   return tri.map(({x,L})=>{
