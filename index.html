@@ -4716,7 +4716,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-06-463';
+const APP_VERSION = '2026-11-06-464';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -23093,10 +23093,12 @@ function defoRecoupement(a){
   const parCode = /code exact|sans suffixe/i.test(rp.strategie||'');
   const raisons = [];
   if (taux < 0.5) raisons.push('moins de 50 % des polygones se relient au registre');
-  if (trouves && p5 > 0.2) raisons.push(Math.round(100*p5)+' % des unités reliées ont des coordonnées du registre à plus de 5 km de leur polygone');
-  else if (trouves && p300 > 0.5) raisons.push(Math.round(100*p300)+' % des unités reliées ont des coordonnées du registre à plus de 300 m de leur polygone');
+  // Règle de Nabi (06/11/2026) : les coordonnées et surfaces du registre ne bloquent jamais. Le registre peut se tromper ; le registre final reprend la surface mesurée et le centroïde du polygone.
+  const infos = [];
+  if (trouves && p5 > 0.2) infos.push(Math.round(100*p5)+' % des unités reliées ont des coordonnées du registre à plus de 5 km de leur polygone');
+  else if (trouves && p300 > 0.5) infos.push(Math.round(100*p300)+' % des unités reliées ont des coordonnées du registre à plus de 300 m de leur polygone');
   const niveau = raisons.length ? 'bloquant' : (parCode ? 'ok' : 'verifier');
-  return { niveau, raisons, taux, trouves, c300, c5, p300, p5, parCode, strategie:rp.strategie||'—', s25:r.reg_ecarts_surface_25||0, sansPoly:r.reg_producteurs_sans_polygone||0, horsReg:r.reg_polygones_hors_registre||0 };
+  return { niveau, raisons, infos, taux, trouves, c300, c5, p300, p5, parCode, strategie:rp.strategie||'—', s25:r.reg_ecarts_surface_25||0, sansPoly:r.reg_producteurs_sans_polygone||0, horsReg:r.reg_polygones_hors_registre||0 };
 }
 function defoRapprochementOk(a){
   const r = a.resume||{}; if (!r.rapprochement) return true;                 // pas de registre : rien à rapprocher
@@ -23127,6 +23129,7 @@ function defoRapprochementHtml(a){
       + '<div>Coordonnées du registre à plus de 300 m du polygone : <b>'+fmtNum(rc.c300)+'</b> sur '+fmtNum(rc.trouves)+' reliées · à plus de 5 km : <b>'+fmtNum(rc.c5)+'</b></div>'
       + '<div>Surface du registre à plus de 25 % de la surface mesurée : <b>'+fmtNum(rc.s25)+'</b> · producteurs du registre sans polygone : <b>'+fmtNum(rc.sansPoly)+'</b> · polygones hors registre : <b>'+fmtNum(rc.horsReg)+'</b></div>'
       + (rc.raisons.length ? '<div style="margin-top:3px;color:#a8281c"><b>Les données ne se recoupent pas :</b> '+esc(rc.raisons.join(' ; '))+'. Demande au fournisseur les vraies données (table de correspondance polygone ↔ producteur) ou propose une autre coopérative.</div>' : '')
+      + ((rc.infos||[]).length ? '<div style="margin-top:3px;color:#5b6b63"><b>Information, pas un blocage :</b> '+esc(rc.infos.join(' ; '))+'. Le registre final reprend les coordonnées et la surface mesurées sur le polygone.</div>' : '')
       + '</div>';
   }
   if (rc && rc.niveau==='bloquant' && !ok) h += '<div style="margin-top:6px;color:#a8281c"><b>Le nettoyage reste bloqué :</b> le lien polygones ↔ registre n\'est pas fiable.</div>';
