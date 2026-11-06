@@ -7574,6 +7574,75 @@ function shipSeriesHtml(ville){
       + (x.coops.length ? '<div class="shipc-serie-l">'+x.coops.map(c=>'<div><span>'+esc(c.nom)+'</span><span>'+fmtKg(c.kg)+'</span><i style="color:'+ET[c.etat][1]+'">'+ET[c.etat][0]+(c.etat==='atracer'?' · '+fmtKg(c.atracer):'')+'</i></div>').join('')+'<div class="hint" style="margin:6px 0 0">Coopératives qui ont livré ; la composition exacte de chaque lot viendra du rapport d\'usinage.</div></div>' : '')
       + '</details>'; }).join('') + '</div>';
 }
+// ==================== Shipping par CV : la chaîne SIGEC 4 (CV → contrat client → OT / FO1 → lots → embarquement) ====================
+// Le CV (n° de déblocage) est l'entrée : chaque ligne montre son contrat client, les OT qui le couvrent (OT.cv_numero), les lots rattachés à ces OT,
+// ce qui est embarqué et ce qu'il reste à servir. Un OT peut couvrir plusieurs CV (n° séparés par une virgule) : son tonnage est alors partagé à égalité.
+function shipCvListe(txt){ return String(txt||'').split(/[\s,;]+/).map(x=>x.trim()).filter(Boolean); }
+function shipCvLignes(){
+  const campagneId = (state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : null;
+  const cvs = (state.cvVentes||[]).filter(c=>!campagneId || c.campagne_id===campagneId).slice().sort((a,b)=>String(a.numero_cv).localeCompare(String(b.numero_cv),'fr',{numeric:true}));
+  const ots = state.lotsExport||[];
+  return cvs.map(cv=>{
+    const volume = Number(cv.volume_sigec_kg)>0 ? Number(cv.volume_sigec_kg) : (Number(cv.volume_kg)||0)*1000;
+    const otsCv = ots.filter(o=>shipCvListe(o.cv_numero).indexOf(cv.numero_cv)>=0);
+    let kg = 0, kgEmb = 0, nbLots = 0, partage = false;
+    otsCv.forEach(o=>{
+      const n = Math.max(1, shipCvListe(o.cv_numero).length); if (n>1) partage = true;
+      const lots = lotsExportCompo(o.id);
+      const emb = (o.statut==='embarque' || !!o.bl_numero);
+      lots.forEach(x=>{ const v = (Number(x.poids_kg)||0)/n; kg += v; if (emb) kgEmb += v; });
+      nbLots += lots.length;
+    });
+    const contrat = cv.contrat_client_id ? contratClientParId(cv.contrat_client_id) : null;
+    const reste = volume - kg;
+    const etat = !otsCv.length ? 'sans_ot' : (kgEmb>0 && reste<=volume*0.005 && kgEmb>=kg-1 ? 'embarque' : 'en_cours');
+    const type = /^\s*OD/i.test(cv.periode_embarquement||'') ? 'OD' : (/^\s*JM/i.test(cv.periode_embarquement||'') ? 'JM' : '');
+    return { cv, volume, otsCv, kg, kgEmb, nbLots, partage, contrat, reste, etat, type };
+  });
+}
+function shipCvFiltre(k){ state.shipCvF = k; render(); }
+function shipCvOt(otId){ state.shipOtSel = otId; state.shipLotSolo = ''; state.shipSous = 'suivi'; render(); }
+function shipCvNouvelOt(numero){ state.shipSous = 'ot'; lotExportOuvrir(); if (state.modal && state.modal.payload) state.modal.payload.cv_numero = numero; render(); }
+function renderShipCv(){
+  if (!state.lotsCharges) return '<div class="hint" style="padding:18px">Chargement…</div>';
+  const L = shipCvLignes();
+  if (!L.length) return '<div class="hint" style="padding:18px">Aucun CV pour cette campagne. Ils se gèrent dans Ventes › CV.</div>';
+  const f = state.shipCvF || 'tous', ft = state.shipCvType || '', fc = state.shipCvClient || '';
+  const nb = { tous:L.length, sans_ot:L.filter(x=>x.etat==='sans_ot').length, sans_contrat:L.filter(x=>!x.contrat).length, en_cours:L.filter(x=>x.etat==='en_cours').length, embarque:L.filter(x=>x.etat==='embarque').length };
+  const clients = Array.from(new Set(L.map(x=>x.cv.client||'—'))).sort();
+  const vus = L.filter(x=>(f==='tous' || (f==='sans_contrat' ? !x.contrat : x.etat===f)) && (!ft || x.type===ft) && (!fc || (x.cv.client||'—')===fc));
+  const tot = vus.reduce((t,x)=>({ vol:t.vol+x.volume, kg:t.kg+x.kg, emb:t.emb+x.kgEmb }), { vol:0, kg:0, emb:0 });
+  const CH = [['tous','Tous'],['sans_ot','Sans OT'],['sans_contrat','Sans contrat'],['en_cours','En cours'],['embarque','Embarqués']];
+  const etatBadge = x=> x.etat==='embarque' ? '<span class="badge ok">Embarqué</span>' : x.etat==='en_cours' ? '<span class="badge warn">En cours</span>' : '<span class="badge neutral">Sans OT</span>';
+  let h = '<div class="panel"><div class="panel-head"><h2>CV & expéditions ('+fmtNum(L.length)+' CV)</h2>'
+    + '<p class="hint" style="margin:4px 0 0">Chaîne SIGEC 4 : CV (n° de déblocage) → contrat client → OT (FO1) → lots → embarquement. Un OT est rattaché à son CV dans la fiche de l\'OT (champ « CV couverts »).</p></div>'
+    + '<div class="achats-barre" style="padding:0 18px 8px"><div class="achats-filtres">'
+    + CH.map(([k,l])=>'<button type="button" class="chip-coop'+(f===k?' actif':'')+'" onclick="shipCvFiltre(\''+k+'\')">'+esc(l)+' <small>('+nb[k]+')</small></button>').join('')
+    + '</div></div>'
+    + '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:0 18px 10px;font-size:13px">'
+    + '<label>Type <select onchange="state.shipCvType=this.value;render()"><option value="">Tous</option><option value="OD"'+(ft==='OD'?' selected':'')+'>OD</option><option value="JM"'+(ft==='JM'?' selected':'')+'>JM</option></select></label>'
+    + '<label>Client <select onchange="state.shipCvClient=this.value;render()"><option value="">Tous</option>'+clients.map(c=>'<option value="'+esc(c)+'"'+(fc===c?' selected':'')+'>'+esc(c)+'</option>').join('')+'</select></label>'
+    + '<span class="hint" style="margin:0"><b>'+fmtNum(vus.length)+'</b> CV · vendu <b>'+fmtKg(tot.vol)+'</b> · couvert par des OT <b>'+fmtKg(tot.kg)+'</b> · embarqué <b>'+fmtKg(tot.emb)+'</b> · reste à servir <b>'+fmtKg(Math.max(0, tot.vol-tot.kg))+'</b></span></div>';
+  if (!vus.length) return h + '<div class="empty">Aucun CV ne correspond à ces filtres.</div></div>';
+  h += '<div style="padding:0 12px 14px;overflow-x:auto"><table class="sobc-table"><thead><tr><th>N° CV (déblocage)</th><th>Type</th><th>Client</th><th>Contrat</th><th>Période</th><th class="num">Vendu (kg)</th><th>OT</th><th class="num">Lots</th><th class="num">Couvert (kg)</th><th class="num">Embarqué (kg)</th><th class="num">Reste à servir (kg)</th><th>État</th><th></th></tr></thead><tbody>';
+  vus.forEach(x=>{
+    const cv = x.cv, rouge = x.reste < -1;
+    h += '<tr><td><b>'+esc(cv.numero_cv)+'</b>'+(cv.numero_cv_sigec ? '<div class="vide" style="font-size:10px" title="N° CV affiché dans la liste SIGEC 4">CV '+esc(cv.numero_cv_sigec)+'</div>' : '')+'</td>'
+      + '<td>'+esc(x.type||'—')+'</td><td>'+esc(cv.client||'—')+'</td>'
+      + '<td>'+(x.contrat ? esc(x.contrat.reference||x.contrat.client) : '<span class="badge danger" title="Aucun contrat client rattaché à ce CV">Sans contrat</span>')+'</td>'
+      + '<td>'+esc(cv.periode_embarquement||'—')+'</td><td class="num">'+fmtNum(x.volume)+'</td>'
+      + '<td>'+(x.otsCv.length ? x.otsCv.map(o=>'<a href="#" onclick="shipCvOt(\''+esc(o.id)+'\');return false">'+esc(o.numero)+'</a>').join(', ')+(x.partage?' <span class="vide" title="OT partagé entre plusieurs CV : tonnage réparti à égalité">(partagé)</span>':'') : '<span class="vide">—</span>')+'</td>'
+      + '<td class="num">'+(x.nbLots||'<span class="vide">—</span>')+'</td>'
+      + '<td class="num">'+(x.kg>0 ? fmtNum(Math.round(x.kg)) : '<span class="vide">—</span>')+'</td>'
+      + '<td class="num">'+(x.kgEmb>0 ? fmtNum(Math.round(x.kgEmb)) : '<span class="vide">—</span>')+'</td>'
+      + '<td class="num" style="'+(rouge?'color:#B3261E;font-weight:700':'')+'" title="'+(rouge?'Les lots rattachés dépassent le tonnage du CV':'')+'">'+fmtNum(Math.round(x.reste))+'</td>'
+      + '<td>'+etatBadge(x)+'</td>'
+      + '<td class="sobc-act">'+(x.otsCv.length ? '' : '<button type="button" class="btn-ghost btn-compact" onclick="shipCvNouvelOt(\''+esc(cv.numero_cv)+'\')" title="Crée l\'OT de ce CV (le n° de CV est pré-rempli)">Créer l\'OT</button>')+'</td></tr>';
+  });
+  h += '</tbody><tfoot><tr><td><b>Total ('+fmtNum(vus.length)+')</b></td><td></td><td></td><td></td><td></td><td class="num"><b>'+fmtNum(tot.vol)+'</b></td><td></td><td></td><td class="num"><b>'+fmtNum(Math.round(tot.kg))+'</b></td><td class="num"><b>'+fmtNum(Math.round(tot.emb))+'</b></td><td class="num"><b>'+fmtNum(Math.round(Math.max(0, tot.vol-tot.kg)))+'</b></td><td></td><td></td></tr></tfoot></table></div></div>';
+  return h;
+}
+
 function renderShippingTab(){
   if (!state.lotsCharges) chargerLots().then(()=>render());
   if (!state.shipCharge){ shipChargerSuivi().then(()=>render()); }
@@ -7586,10 +7655,11 @@ function renderShippingTab(){
   const filtre = state.shipFiltre || '';
   const _kgP = lotsP.reduce((t,l)=>t+(lotsUsinagePese(l)||lotsUsinageSortie(l)||0), 0);
   const kg = lots.reduce((s,l)=>s+(lotsUsinagePese(l)||lotsUsinageSortie(l)||0), 0);
-  const sous = state.shipSous || 'suivi';
-  const SOUS = [['sacherie','Sacherie'],['contrats','Contrats clients'],['series','Séries de numérotation'],['achats_clients','Suivi achats clients'],['usinage','Lots d\'usinage'],['suivi','Suivi des lots'],['saigic','Déclaration SAIGIC'],['ot','OT & embarquement'],['chaine','Chaîne de traçabilité']];
+  const sous = state.shipSous || 'cv';
+  const SOUS = [['cv','CV & expéditions'],['sacherie','Sacherie'],['contrats','Contrats clients'],['series','Séries de numérotation'],['achats_clients','Suivi achats clients'],['usinage','Lots d\'usinage'],['suivi','Suivi des lots'],['saigic','Déclaration SAIGIC'],['ot','OT & embarquement'],['chaine','Chaîne de traçabilité']];
   const barre = '<div class="oc-subtabs">'+SOUS.map(([k,l])=>'<button class="'+(sous===k?'active':'')+'" onclick="state.shipSous=\''+k+'\';state.lotsSousOnglet=\''+k+'\';render()">'+l+'</button>').join('')+'</div>';
   if (sous==='sacherie') return '<div class="panel" style="padding:0 18px 4px">'+barre+'</div>' + renderSacherieTab();
+  if (sous==='cv') return '<div class="panel" style="padding:0 18px 4px">'+barre+'</div>' + renderShipCv();
   const _ent = lots.filter(l=>shipEtape(l)!=='embarque').reduce((t,l)=>t+(lotsUsinagePese(l)||0),0), _emb = lots.filter(l=>shipEtape(l)==='embarque').reduce((t,l)=>t+(lotsUsinagePese(l)||0),0);
   const _sousOt = lots.filter(l=>shipOtDuLot(l.id)).length, _bloc = new Set(shipAlertes(lots).filter(x=>x[0]!=='info').map(x=>x[1])).size;
   const _t = v=>fmtNum(Math.round(v/1000));
@@ -12364,7 +12434,7 @@ function lotExportOuvrir(id){
 async function lotExportEnregistrer(){
   const pl = state.modal && state.modal.type==='lotExport' ? state.modal.payload : null; if (!pl) return;
   const numero = fv('le_numero').trim(); if (!numero){ showToast('Indique le numéro de l\'OT (attribué par le service shipping).'); return; }
-  const ligne = { numero, si_reference: fv('le_si_ref').trim()||null, si_date: fv('le_si_date')||null, agreage_date: fv('le_agreage')||null, campagne_id: fv('le_campagne')||null, client: fv('le_client').trim()||null, navire: fv('le_navire').trim()||null, port_embarquement: fv('le_port_emb').trim()||null, port_destination: fv('le_port_dest').trim()||null, date_embarquement: fv('le_date_emb')||null, bl_numero: fv('le_bl').trim()||null, bl_date: fv('le_bl_date')||null, ref_vendeur: fv('le_ref_vendeur').trim()||null, niveau_tracabilite: fv('le_niveau')||null, statut: fv('le_statut')||'preparation', notes: fv('le_notes').trim()||null, updated_at: new Date().toISOString() };
+  const ligne = { numero, si_reference: fv('le_si_ref').trim()||null, si_date: fv('le_si_date')||null, agreage_date: fv('le_agreage')||null, campagne_id: fv('le_campagne')||null, client: fv('le_client').trim()||null, navire: fv('le_navire').trim()||null, port_embarquement: fv('le_port_emb').trim()||null, port_destination: fv('le_port_dest').trim()||null, date_embarquement: fv('le_date_emb')||null, bl_numero: fv('le_bl').trim()||null, bl_date: fv('le_bl_date')||null, ref_vendeur: fv('le_ref_vendeur').trim()||null, cv_numero: fv('le_cv_numero').trim()||null, niveau_tracabilite: fv('le_niveau')||null, statut: fv('le_statut')||'preparation', notes: fv('le_notes').trim()||null, updated_at: new Date().toISOString() };
   { const base = Object.assign({}, pl.ot_infos||{}, pl.ot_nouveau_infos||{}), mod = {}; document.querySelectorAll('#modal-fields [name^="oti_"]').forEach(el=>{ const k = el.name.slice(4), v = String(el.value||'').trim(); mod[k] = (k==='contrat_refs') ? (v ? v.split(',').map(x=>x.trim()).filter(Boolean) : null) : ((el.type==='number' && v!=='') ? Number(v) : (v||null)); });
     const infos = Object.assign(base, mod); if (Object.values(infos).some(v=>v!=null && v!=='' && !(Array.isArray(v)&&!v.length))){ ligne.ot_infos = infos; if (!pl.ot_nouveau_infos && !pl.ot_lu_le) ligne.ot_lu_le = null; } }
   if (pl.ot_nouveau_path){ ligne.ot_document_path = pl.ot_nouveau_path; if (pl.ot_nouveau_infos) ligne.ot_lu_le = new Date().toISOString(); }
@@ -12662,6 +12732,7 @@ function lotsModalsHtml(){
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Client / acheteur<input type="text" name="le_client" value="'+esc(pl.client||'')+'" placeholder="ex : CARGILL"></label><label class="field">Navire<input type="text" name="le_navire" value="'+esc(pl.navire||'')+'"></label></div>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Port d\'embarquement<input type="text" name="le_port_emb" value="'+esc(pl.port_embarquement||'')+'"></label><label class="field">Port de destination<input type="text" name="le_port_dest" value="'+esc(pl.port_destination||'')+'"></label></div>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 12px"><label class="field">N° connaissement maritime (B/L)<input type="text" name="le_bl" value="'+esc(pl.bl_numero||'')+'"></label><label class="field">Date du B/L<input type="date" name="le_bl_date" value="'+esc(pl.bl_date||'')+'"></label><label class="field">Date d\'embarquement<input type="date" name="le_date_emb" value="'+esc(pl.date_embarquement||'')+'"></label></div>'
+      + '<label class="field" title="Numéros de déblocage (comme dans SIGEC 4, ex. 009-2145) des CV couverts par cet OT ; sépare-les par une virgule s\'il y en a plusieurs">CV couverts (n° de déblocage)<input type="text" name="le_cv_numero" value="'+esc(pl.cv_numero||'')+'" placeholder="ex : 009-2145"></label>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px"><label class="field">Réf. vendeur<input type="text" name="le_ref_vendeur" value="'+esc(pl.ref_vendeur||'')+'" placeholder="ex : SP-0015A/25-26/000648"></label><label class="field">Niveau de traçabilité<select name="le_niveau"><option value="">—</option>'+OC_NIVEAUX_TRACABILITE.map(n=>'<option value="'+esc(n)+'"'+(n===(pl.niveau_tracabilite||'')?' selected':'')+'>'+esc(n)+'</option>').join('')+'</select></label></div>'
       + '<label class="field">Statut<select name="le_statut">'+Object.entries(LOTS_STATUTS_EXPORT).map(([k,v])=>'<option value="'+k+'"'+(k===(pl.statut||'preparation')?' selected':'')+'>'+v[1]+'</option>').join('')+'</select></label>'
       + (()=>{ const I = pl.ot_infos||{}, v = k=>esc(Array.isArray(I[k]) ? I[k].filter(Boolean).join(', ') : (I[k]==null?'':I[k]));
