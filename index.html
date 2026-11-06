@@ -706,6 +706,7 @@
   .defo-ms-ligne .pastille{display:inline-block;width:8px;height:8px;border-radius:50%}
   .defo-ms-ligne .rang,.defo-ms-ligne .dt{color:#7a8683}
   .defo-ms-ligne .dt{margin-left:auto}
+  .defo-ms-ligne .act{font-size:11.5px;margin-top:3px;line-height:1.35}
   .defo-ms-det{min-width:0}
   .defo-det-tete{position:sticky;top:0;z-index:6;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 16px;background:#0E3B36;color:#fff;border-radius:12px 12px 0 0}
   .defo-det-tete .hint{color:#d6e5e0 !important}
@@ -4739,7 +4740,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-06-468';
+const APP_VERSION = '2026-11-06-469';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -22690,6 +22691,7 @@ async function chargerDefo(){
     if (error) throw error;
     const avant = {}; (state.defo||[]).forEach(x=>{ avant[x.id] = x.statut; });
     state.defo = data || []; state.defoIndispo = false;
+    try { const ra = await supabaseClient.from('defo_actions_nabi').select('*').order('created_at',{ ascending:false }).limit(3000); if (!ra.error) state.defoActions = ra.data||[]; } catch(e){}
     try { defoChaineAuto(); } catch(e){}
     state.defo.forEach(x=>{ const a = avant[x.id]; if (!a || a===x.statut) return;
       const lib = x.etape==='analyse' ? ['✅ Analyse terminée : ','L\'analyse de '] : x.etape==='nettoyage' ? ['✅ Nettoyage terminé : ','Le nettoyage de '] : x.etape==='base_finale' ? ['✅ Base finale prête : ','La base finale de '] : ['✅ GeoJSON prêt : ','La préparation de '];
@@ -22773,22 +22775,60 @@ function defoDossierFiltre(v){
 function defoDossierDetailHtml(x){
   const L = defoEtapeLabel(x), idj = escJs(x.id), geo = x.statut==='terminee' && (x.fichiers||[]).some(f=>f.type==='geojson');
   return '<div class="defo-det-tete"><div style="min-width:0"><div class="defo-det-nom">'+esc(x.cooperative_nom||'—')+'</div>'
-      + '<div class="hint" style="margin:2px 0 0">Dossier du '+esc(dateFr(String(x.created_at).slice(0,10)))+' · '+((x.entrees||[]).length)+' fichier(s) · <i class="pastille" style="background:'+L.col+'"></i><b>'+esc(L.txt)+' ('+L.n+'/6)</b></div></div>'
+      + '<div class="hint" style="margin:2px 0 0">Dossier du '+esc(dateFr(String(x.created_at).slice(0,10)))+' · '+((x.entrees||[]).length)+' fichier(s) · <i class="pastille" style="background:'+L.col+'"></i><b>'+esc(L.txt)+' ('+L.n+'/6)</b></div><div id="defo-det-action" style="font-size:13px;margin-top:3px">'+defoActionHtml(x, true)+'</div></div>'
       + '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'+(x.statut==='erreur'&&x.erreur?'<span class="hint" style="color:#c0392b;margin:0">'+esc(x.erreur)+'</span>':'')
       + (x.statut==='demandee' ? '<button class="btn-ghost btn-compact" onclick="defoAnnuler(\''+idj+'\')">Annuler</button>' : '')
       + (['annulee','terminee','erreur'].includes(x.statut) ? '<button class="btn-ghost btn-compact" style="color:#c0392b" onclick="defoSupprimer(\''+idj+'\')">🗑 Supprimer ce dossier</button>' : '')+'</div></div>'
       + '<div class="defo-det-corps">' + defoChaineBandeau(x, geo) + defoFilHtml(x) + '</div>';
 }
+const DEFO_ACTIONS = { rapport_excel:'📊 Rapport Excel téléchargé', rapport_discussion:'📄 Rapport de Ryomen téléchargé', base_finale:'📦 Base finale téléchargée', envoye_coop:'✉ Envoyé à la coopérative' };
+function defoPrepIdDe(a){ if (!a) return null; return a.etape==='preparation' ? a.id : ((a.entrees && a.entrees.prep_id) || null); }
+function defoPrepIdDeAnalyseId(id, prof){
+  const a = (state.defo||[]).find(z=>z.id===id); if (!a) return null;
+  if (a.etape==='preparation' || a.etape==='analyse') return defoPrepIdDe(a);
+  if ((prof||0) < 3 && a.entrees && a.entrees.analyse_id) return defoPrepIdDeAnalyseId(a.entrees.analyse_id, (prof||0)+1);
+  return defoPrepIdDe(a);
+}
+function defoActionDate(iso){ const d = new Date(iso); if (isNaN(d)) return ''; return dateFr(String(iso).slice(0,10)).slice(0,5)+' à '+d.toLocaleTimeString('fr-FR',{ hour:'2-digit', minute:'2-digit' }); }
+function defoDerniereAction(prepId){ return (state.defoActions||[]).find(x=>x.prep_id===prepId) || null; }
+// Ce que Nabi a fait en dernier pour cette coopérative (rapport téléchargé, envoyé…) et si le dossier est clôturé : affiché dans la liste et en haut du dossier.
+function defoActionHtml(x, claire){
+  const a = defoEtapes6(x).a, clot = !!(a && a.entrees && a.entrees.cloturee), d = defoDerniereAction(x.id);
+  if (!d && !clot) return '';
+  const col = claire ? '#ffe9b0' : '#8a5a00';
+  return (d ? '<span style="color:'+col+'">'+esc(DEFO_ACTIONS[d.action]||d.action)+' · '+esc(defoActionDate(d.created_at))+'</span>' : '')
+    + (clot ? ' <b style="color:'+(claire?'#bfe8cf':'#14633a')+'">✔ Clôturée</b>' : ' <span style="color:'+(claire?'#d6e5e0':'#7a8683')+'">· pas encore clôturée</span>');
+}
+function defoLignesHtml(tri, sel){
+  return tri.map(({x,L})=>{
+    const on = sel && sel.id===x.id, act = defoActionHtml(x, false);
+    return '<div class="defo-ms-ligne'+(on?' sel':'')+'" data-nom="'+esc(String(x.cooperative_nom||'').toLowerCase())+'" onclick="defoDossierChoisir(\''+escJs(x.id)+'\')" title="Ouvrir le dossier de '+esc(x.cooperative_nom||'')+'">'
+      + '<div class="nom">'+esc(x.cooperative_nom||'—')+'</div>'
+      + '<div class="sous"><i class="pastille" style="background:'+L.col+'"></i><span style="color:'+L.col+'">'+esc(L.txt)+'</span><span class="rang">'+L.n+'/6</span><span class="dt">'+esc(dateFr(String(x.created_at).slice(0,10)).slice(0,5))+'</span></div>'
+      + (act ? '<div class="act">'+act+'</div>' : '') + '</div>';
+  }).join('');
+}
+function defoMajListe(){
+  const el = document.getElementById('defo-ms-liste'); if (!el) return;
+  const liste = (state.defo||[]).filter(x=>(x.etape||'preparation')==='preparation');
+  const tri = liste.map(x=>({ x, L:defoEtapeLabel(x) })).sort((p,q)=>(p.L.rang-q.L.rang) || String(q.x.created_at).localeCompare(String(p.x.created_at)));
+  el.innerHTML = defoLignesHtml(tri, liste.find(x=>x.id===state.defoSel) || null);
+  const f = document.querySelector('.defo-ms-cherche'); if (f && f.value) defoDossierFiltre(f.value);
+  const t = document.getElementById('defo-det-action'), sel = liste.find(x=>x.id===state.defoSel); if (t && sel) t.innerHTML = defoActionHtml(sel, true);
+}
+async function defoNoter(prepId, analyseId, action, nom){
+  if (!prepId) return;
+  const ligne = { prep_id:prepId, analyse_id:analyseId||null, cooperative_nom:nom||null, action, par:(state.session&&state.session.user&&state.session.user.email)||null, created_at:new Date().toISOString() };
+  state.defoActions = [ligne].concat(state.defoActions||[]);
+  try { defoMajListe(); } catch(e){}
+  try { const r = await supabaseClient.from('defo_actions_nabi').insert(ligne); if (r.error) throw r.error; } catch(e){ /* noté seulement à l'écran si la base refuse */ }
+}
+function defoClicRapport(aid, path){ carteTelecharger(path); defoNoter(defoPrepIdDeAnalyseId(aid), aid, 'rapport_excel'); }
 function defoDossiersHtml(liste){
   const tri = liste.map(x=>({ x, L:defoEtapeLabel(x) })).sort((p,q)=>(p.L.rang-q.L.rang) || String(q.x.created_at).localeCompare(String(p.x.created_at)));
   if (state.defoSel && !liste.some(x=>x.id===state.defoSel)) state.defoSel = null;
   const sel = liste.find(x=>x.id===state.defoSel) || null;
-  const lignes = tri.map(({x,L})=>{
-    const on = sel && sel.id===x.id;
-    return '<div class="defo-ms-ligne'+(on?' sel':'')+'" data-nom="'+esc(String(x.cooperative_nom||'').toLowerCase())+'" onclick="defoDossierChoisir(\''+escJs(x.id)+'\')" title="Ouvrir le dossier de '+esc(x.cooperative_nom||'')+'">'
-      + '<div class="nom">'+esc(x.cooperative_nom||'—')+'</div>'
-      + '<div class="sous"><i class="pastille" style="background:'+L.col+'"></i><span style="color:'+L.col+'">'+esc(L.txt)+'</span><span class="rang">'+L.n+'/6</span><span class="dt">'+esc(dateFr(String(x.created_at).slice(0,10)).slice(0,5))+'</span></div></div>';
-  }).join('');
+  const lignes = defoLignesHtml(tri, sel);
   return '<div id="defo-ms" class="defo-ms"><div class="defo-ms-col"><div class="defo-ms-titre">'+liste.length+' coopérative'+(liste.length>1?'s':'')+'</div>'
     + '<input type="search" class="defo-ms-cherche" placeholder="Chercher une coopérative…" oninput="defoDossierFiltre(this.value)">'
     + '<div id="defo-ms-liste" class="defo-ms-liste">'+lignes+'</div></div>'
@@ -23312,6 +23352,7 @@ async function defoToutTelecharger(finId){
     const nom = 'Base_finale_'+String(z.cooperative_nom||'coop').toUpperCase().replace(/[^A-Z0-9]+/g,'_').replace(/^_|_$/g,'')+'.zip';
     defoEnregistrer(await zip.generateAsync({ type:'blob', compression:'DEFLATE' }), nom);
     showToast(fl.length+' fichiers dans '+nom, 'success');
+    defoNoter(defoPrepIdDeAnalyseId(finId), z.entrees && z.entrees.analyse_id, 'base_finale', z.cooperative_nom);
   } catch(e){ showToast('Échec du zip : '+(e.message||e)); }
   if (btn){ btn.disabled = false; btn.textContent = '⬇ Tout télécharger en un clic (.zip)'; }
 }
@@ -23613,6 +23654,7 @@ async function defoEnvoiIndividuel(){
       if (rep.error) throw new Error(rep.error.message || 'e-mail non parti');
       if (rep.data && rep.data.error) throw new Error(rep.data.error);
       faits.push(r.nom);
+      if (r.analyse) defoNoter(defoPrepIdDeAnalyseId(r.analyse.id), r.analyse.id, 'envoye_coop', r.nom);
     } catch(e){ echecs.push(r.nom+' ('+(e.message||e)+')'); }
     await new Promise(res=>setTimeout(res, 700));
   }
@@ -24037,6 +24079,7 @@ function ddRapportTelecharger(id, i){
   const nom = (a ? a.cooperative_nom : 'cooperative');
   const h = '<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Rapport '+esc(nom)+'</title><style>body{font:15px/1.6 Arial,sans-serif;max-width:820px;margin:30px auto;padding:0 16px;color:#14231F}table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:4px 8px}h1,h2,h3{color:#0E3B36}</style></head><body><h1>Rapport — '+esc(nom)+'</h1><p>'+esc(new Date().toLocaleDateString('fr-FR'))+' · établi avec Ryomen (ORIGEN)</p>'+mdHtml(m.contenu)+'</body></html>';
   defoEnregistrer(new Blob([h], { type:'text/html;charset=utf-8' }), 'Rapport_'+String(nom).replace(/[^A-Za-z0-9]+/g,'_')+'_'+new Date().toISOString().slice(0,10)+'.html');
+  defoNoter(defoPrepIdDeAnalyseId(id), id, 'rapport_discussion', nom);
 }
 async function defoDiscRetenir(id, i){
   const d = defoDiscEtat(id), m = d.msgs[i]; if (!m || m.retenu) return;
@@ -24394,7 +24437,7 @@ async function defoApercuFermerErreur(id){
 function defoRapportXlsHtml(a){
   const f = a && a.statut==='terminee' ? (a.fichiers||[]).find(x=>x.type==='rapport' && x.path) : null;
   if (!f) return '';
-  return '<button type="button" class="btn-ghost" style="border:1px solid var(--border)" onclick="carteTelecharger(\''+escJs(f.path)+'\')">📊 Télécharger le rapport (Excel)</button>';
+  return '<button type="button" class="btn-ghost" style="border:1px solid var(--border)" onclick="defoClicRapport(\''+escJs(a.id)+'\',\''+escJs(f.path)+'\')">📊 Télécharger le rapport (Excel)</button>';
 }
 function defoApercuHtml(a){
   const r = defoApercuFichier(a), aid = escJs(a.id), et = defoEtat(a);
