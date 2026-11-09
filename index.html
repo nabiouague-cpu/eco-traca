@@ -4740,7 +4740,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-09-481';
+const APP_VERSION = '2026-11-09-482';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -22753,7 +22753,7 @@ function renderDefoVue(){
     h += '<div class="panel" style="border-left:4px solid #1f5fa8"><div style="padding:12px 18px"><b>⏳ '+nEnCours+' tâche'+(nEnCours>1?'s':'')+' en cours</b> <span class="hint" style="margin:0 0 0 6px">'+esc(nomsEc.slice(0,8).join(', ')+(nomsEc.length>8?'…':''))+' — la liste se met à jour toute seule.</span></div></div>'; }
   h += '<div class="panel"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 18px 16px">'
     + '<div><b>Dossiers des coopératives</b><div class="hint" style="margin:2px 0 0">Une coopérative = un dossier = un seul parcours : <b>Préparation → Whisp → Analyse → Aperçu → Nettoyage → Base finale</b>. Dépose ses fichiers (KML, KMZ, GPX, GeoJSON, shapefile .zip), puis passe d\'un onglet à l\'autre : l\'onglet à faire s\'ouvre tout seul, les suivants attendent que le précédent soit terminé.</div></div>'
-    + '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary" onclick="ouvrirDefoRapports()" title="Choisir des coopératives, par période, et télécharger leurs rapports dans un seul zip">📥 Télécharger les rapports</button><button class="btn" onclick="ouvrirDefoCombine()" title="Un seul rapport Excel pour plusieurs coopératives">📊 Rapport combiné</button><button class="btn" onclick="ouvrirDefoRG()" title="Retraits par motif, décision fournisseur et volumes livrables pour plusieurs coopératives">📑 Rapport général des suppressions</button><button class="btn" onclick="ouvrirDefoCompare()" title="Comparer la version initiale et la version actualisée des données d\'une coopérative">⚖ Comparer deux versions</button><button class="btn" onclick="ouvrirDefoEnvoi()" title="Mails individuels aux coopératives ou mail groupé à un partenaire">✉ Envoyer par e-mail</button><button class="btn" onclick="ouvrirDefoGroupe()" title="Un ZIP pour plusieurs coopératives : reconnaissance par le nom des fichiers, registre retrouvé, une analyse par coopérative">📦 Dépôt groupé</button><button class="btn btn-primary" onclick="ouvrirDefoPrep()">🌳 Nouvelle préparation</button></div></div>';
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary" onclick="ouvrirDefoRapports()" title="Choisir des coopératives, par période, et télécharger leurs rapports dans un seul zip">📥 Télécharger les rapports</button><button class="btn" onclick="defoTelechargerBase()" title="Télécharge la base consolidée ECORIGINE la plus récente (GeoJSON dans un zip)">🗺️ Base consolidée ECORIGINE</button><button class="btn" onclick="ouvrirDefoCombine()" title="Un seul rapport Excel pour plusieurs coopératives">📊 Rapport combiné</button><button class="btn" onclick="ouvrirDefoRG()" title="Retraits par motif, décision fournisseur et volumes livrables pour plusieurs coopératives">📑 Rapport général des suppressions</button><button class="btn" onclick="ouvrirDefoCompare()" title="Comparer la version initiale et la version actualisée des données d\'une coopérative">⚖ Comparer deux versions</button><button class="btn" onclick="ouvrirDefoEnvoi()" title="Mails individuels aux coopératives ou mail groupé à un partenaire">✉ Envoyer par e-mail</button><button class="btn" onclick="ouvrirDefoGroupe()" title="Un ZIP pour plusieurs coopératives : reconnaissance par le nom des fichiers, registre retrouvé, une analyse par coopérative">📦 Dépôt groupé</button><button class="btn btn-primary" onclick="ouvrirDefoPrep()">🌳 Nouvelle préparation</button></div></div>';
   if (state.defoIndispo) h += '<div class="hint" style="padding:0 18px 14px;color:var(--warn)">Le suivi des analyses n\'est pas encore disponible sur cette base.</div>';
   else if (!state.defoCharge) h += '<div class="hint" style="padding:0 18px 14px">Chargement…</div>';
   else if (!liste.length) h += '<div class="hint" style="padding:0 18px 14px">Aucune préparation pour le moment.</div>';
@@ -25537,6 +25537,20 @@ async function defoAnalyseDossierEnvoyer(pid){
     if (btn){ btn.disabled = false; btn.textContent = 'Lancer l\'analyse'; }
     defoErreurForm('Envoi impossible : '+((e&&e.message)||e));
   }
+}
+async function defoTelechargerBase(){
+  try{
+    showToast('Recherche de la base consolidée…');
+    const pt = await supabaseClient.storage.from('documents-coop').download('reference/base_ecorigine_courante.json');
+    if (pt.error || !pt.data) throw new Error('pointeur introuvable');
+    const ptr = JSON.parse(await pt.data.text());
+    const path = ptr.path; if (!path) throw new Error('version courante inconnue');
+    const nom = path.split('/').pop();
+    const { data, error } = await supabaseClient.storage.from('documents-coop').createSignedUrl(path, 3600, { download: nom });
+    if (error || !data) throw new Error('fichier introuvable');
+    const a = document.createElement('a'); a.href = data.signedUrl; a.download = nom; document.body.appendChild(a); a.click(); a.remove();
+    showToast('Base consolidée ECORIGINE v'+(ptr.version||'?')+' : téléchargement lancé.', 'success');
+  }catch(e){ showToast('Base consolidée : '+((e&&e.message)||e)); }
 }
 async function defoOuvrirWhisp(path, nom){
   const w = window.open('https://whisp.openforis.org', '_blank');
