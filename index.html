@@ -4740,7 +4740,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-09-478';
+const APP_VERSION = '2026-11-09-479';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -22973,7 +22973,29 @@ function dgRegistreOrigen(coop){
     .sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)));
   return L[0] ? { nom:L[0].entrees.gmr.nom, path:L[0].entrees.gmr.path, date:String(L[0].created_at).slice(0,10) } : null;
 }
-function ouvrirDefoGroupe(){ window._dg = { groupes:[], inconnus:[], ignores:[] }; openModal('defoGroupe', {}); }
+async function ouvrirDefoGroupe(){
+  try { if (!state.defoCharge || state.defoChargeEnCours) await chargerDefo(); } catch(e){}
+  window._dg = { groupes:[], inconnus:[], ignores:[] }; openModal('defoGroupe', {});
+}
+// Analyse déjà présente pour cette coopérative (la plus récente) : un nouveau dépôt la REMPLACE (fichiers, registre, résultats), puis relance l'analyse.
+function dgExistant(coop){
+  if (!coop) return null;
+  return (state.defo||[]).filter(z=>(z.etape||'preparation')==='preparation' && z.cooperative_id===coop.id).sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)))[0] || null;
+}
+async function dgSupprimerDossier(prep, verifierSeulement){
+  const tout = state.defo||[], lie = z=>z.entrees && !Array.isArray(z.entrees);
+  const analyses = tout.filter(z=>z.etape==='analyse' && lie(z) && z.entrees.prep_id===prep.id);
+  const enfants = tout.filter(z=>lie(z) && z.id!==prep.id && analyses.some(a=>a.id===z.entrees.analyse_id));
+  const whisp = tout.filter(z=>z.etape==='whisp' && lie(z) && z.entrees.prep_id===prep.id);
+  const plan = tout.filter(z=>z.etape==='plan' && lie(z) && z.entrees.prep_id===prep.id);
+  const tous = [prep].concat(analyses, enfants, whisp, plan);
+  if (tous.some(z=>z.statut==='demandee' || z.statut==='en_cours')) throw new Error('une étape est en cours sur l\'analyse existante : attends sa fin, ou décoche « remplacer »');
+  if (verifierSeulement) return;
+  const ids = tous.map(z=>z.id), r = await supabaseClient.from('analyses_defo').delete().in('id', ids); if (r.error) throw r.error;
+  const chemins = tous.reduce((acc,z)=>acc.concat(defoChemins(z)), []);
+  if (chemins.length){ try { await supabaseClient.storage.from('documents-coop').remove(chemins); } catch(e){} }
+  state.defo = (state.defo||[]).filter(z=>!ids.includes(z.id));
+}
 async function dgLire(input){
   const fl = Array.from((input||{}).files||[]), ent = [], ign = [];
   const zone = document.getElementById('dg-liste'); if (zone) zone.innerHTML = '<p class="hint">Lecture des fichiers…</p>';
@@ -23032,16 +23054,18 @@ function dgRendre(){
   if (!D.groupes.length && !D.inconnus.length){ zone.innerHTML = coops+'<p class="hint">Choisis un ZIP (ou plusieurs fichiers) : ORIGEN reconnaît chaque coopérative au nom des fichiers.</p>'; return; }
   D.groupes.forEach((g,i)=>{
     const polys = g.files.filter(f=>f.type==='poly'), regs = g.files.filter(f=>f.type==='registre').sort((a,b)=>b.taille-a.taille);
-    const reg = regs.length ? '✅ registre du dépôt : '+esc(regs[0].nom)+(regs.length>1 ? ' <span style="color:#9a6700">('+regs.length+' registres : le plus gros est utilisé)</span>' : '')
+    const reg = regs.length ? '✅ registre du dépôt (fait foi) : '+esc(regs[0].nom)+(g.gmrOrigen ? ' <span class="hint" style="margin:0">— remplace celui d\'ORIGEN déposé le '+dateFr(g.gmrOrigen.date)+'</span>' : '')+(regs.length>1 ? ' <span style="color:#9a6700">('+regs.length+' registres : le plus gros est utilisé)</span>' : '')
       : g.gmrOrigen ? '✅ registre retrouvé dans ORIGEN : '+esc(g.gmrOrigen.nom)+' <span class="hint" style="margin:0">(déposé le '+dateFr(g.gmrOrigen.date)+')</span>'
       : '⚠ aucun registre : seule la préparation des polygones sera faite';
-    const dj = g.coop ? deja(g.coop) : null;
+    const ex = g.coop ? dgExistant(g.coop) : null; if (ex && g.remplacer===undefined) g.remplacer = true;
+    const nbAchats = g.coop ? (state.achats||[]).filter(a=>a.cooperative_id===g.coop.id).length : 0;
     h += '<div style="border:1px solid var(--line,#d9d9d9);border-radius:8px;padding:8px 10px;margin:0 0 8px">'
       + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><input type="checkbox" '+(g.inclure&&polys.length?'checked':'')+(polys.length?'':' disabled')+' onchange="window._dg.groupes['+i+'].inclure=this.checked">'
       + '<input type="text" list="dg-coops" value="'+esc(g.nom)+'" style="flex:1 1 200px;font-weight:700" onchange="dgNom('+i+',this.value)">'
       + '<label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" '+(g.hc?'checked':'')+' onchange="window._dg.groupes['+i+'].hc=this.checked"> hors chaîne</label></div>'
       + (g.coop ? '' : '<div class="hint" style="margin:2px 0;color:#9a6700">Coopérative inconnue d\'ORIGEN : l\'analyse sera créée sous ce nom.</div>')
-      + (dj ? '<div class="hint" style="margin:2px 0">Déjà analysée le '+esc(dj)+' : une nouvelle analyse sera ajoutée.</div>' : '')
+      + (g.coop ? '<div class="hint" style="margin:2px 0">Reconnue dans ORIGEN'+(nbAchats ? ' · '+fmtNum(nbAchats)+' camion'+(nbAchats>1?'s':'')+' déchargé'+(nbAchats>1?'s':'') : '')+'.</div>' : '')
+      + (ex ? '<label style="display:flex;gap:6px;align-items:flex-start;font-size:13px;margin:3px 0"><input type="checkbox" '+(g.remplacer?'checked':'')+' onchange="window._dg.groupes['+i+'].remplacer=this.checked" style="margin-top:3px"><span><b>Remplace l\'analyse du '+esc(dateFr(String(ex.created_at).slice(0,10)))+'</b> (fichiers, registre et résultats), puis relance l\'analyse. <span class="hint" style="margin:0">Décoche pour la garder et en ajouter une nouvelle.</span></span></label>' : '')
       + (polys.length ? '' : '<div class="hint" style="margin:2px 0;color:#c0392b">Aucun fichier de polygones : rien à analyser.</div>')
       + '<div style="font-size:13px;margin:4px 0">'+reg+'</div>'
       + '<div style="font-size:12px;color:#555">'+g.files.map((f,j)=>esc(f.nom)+' — '+dgIcone(f.type)+' <a href="#" onclick="dgRetirer('+i+','+j+');return false" title="Retirer de cette coopérative">✕</a>').join('<br>')+'</div></div>';
@@ -23079,6 +23103,7 @@ async function dgLancerGroupe(g){
   const coop = g.coop || carteCoopParNom(g.nom), nomCoop = coop ? coop.nom : g.nom, mail = (state.session&&state.session.user&&state.session.user.email)||null;
   const polys = g.files.filter(f=>f.type==='poly' && f.taille>=300);
   if (!polys.length) throw new Error('aucun fichier de polygones exploitable');
+  const ex = (g.coop && g.remplacer) ? dgExistant(g.coop) : null; if (ex) await dgSupprimerDossier(ex, true);      // vérifie d'abord que rien n'est en cours ; l'ancienne analyse n'est retirée qu'après l'envoi des nouveaux fichiers
   const entrees = [];
   for (let k=0; k<polys.length; k++){
     const path = 'defo/'+id+'/entrees/'+String(k).padStart(2,'0')+'_'+nets(polys[k].nom);
@@ -23103,8 +23128,9 @@ async function dgLancerGroupe(g){
     if (pi.error) throw pi.error;
     state.defo = [pi.data].concat(state.defo||[]);
   }
+  if (ex) await dgSupprimerDossier(ex);
   state.defoOuverts = state.defoOuverts || {}; state.defoOuverts[id] = true;
-  return { nom:nomCoop, source };
+  return { nom:nomCoop, source, remplace:!!ex };
 }
 async function dgLancer(){
   const D = window._dg; if (!D) return;
@@ -23116,8 +23142,8 @@ async function dgLancer(){
     try { ok.push(await dgLancerGroupe(L[i])); } catch(e){ ko.push(L[i].nom+' : '+((e&&e.message)||e)); }
   }
   closeModal(); if (ok.length) carteLancerRobot(); render();
-  const sansReg = ok.filter(x=>!x.source).map(x=>x.nom);
-  showToast(ok.length+' analyse'+(ok.length>1?'s':'')+' lancée'+(ok.length>1?'s':'')+(sansReg.length?' ('+sansReg.length+' sans registre : '+sansReg.join(', ')+')':'')+(ko.length?' · '+ko.length+' en échec : '+ko.join(' ; '):'')+'. Laisse ORIGEN ouvert : tout s\'enchaîne jusqu\'au résultat.', ko.length?'error':'success');
+  const sansReg = ok.filter(x=>!x.source).map(x=>x.nom), nbRempl = ok.filter(x=>x.remplace).length;
+  showToast(ok.length+' analyse'+(ok.length>1?'s':'')+' lancée'+(ok.length>1?'s':'')+(nbRempl?' ('+nbRempl+' ancienne'+(nbRempl>1?'s':'')+' remplacée'+(nbRempl>1?'s':'')+')':'')+(sansReg.length?' ('+sansReg.length+' sans registre : '+sansReg.join(', ')+')':'')+(ko.length?' · '+ko.length+' en échec : '+ko.join(' ; '):'')+'. Laisse ORIGEN ouvert : tout s\'enchaîne jusqu\'au résultat.', ko.length?'error':'success');
 }
 function defoModalGroupeHtml(){
   return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:760px"><h3>Dépôt groupé de coopératives</h3><div id="modal-fields">'
