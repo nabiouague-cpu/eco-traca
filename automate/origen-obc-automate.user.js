@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.21
+// @version      0.4.22
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.21';
+  const VERSION = '0.4.22';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -282,6 +282,7 @@
     if (!zoneEtat) return;
     const e = lireEtat();
     if (!e) { const rs = lireFile().resultat; zoneEtat.innerHTML = rs ? '<div style="padding:8px 10px;border-radius:8px;font-weight:700;background:' + (rs.ok ? '#e3f4ea;color:#1f7a4d' : '#fdecea;color:#B3261E') + '">' + croix('resultat') + (rs.ok ? '✓ TERMINÉ — ' : '✗ ') + rs.texte + '<div style="font-weight:400;font-size:11px">à ' + rs.quand + ' · Noah ne fait plus rien</div></div>' : '<span style="color:#5b6b68">Aucun lot. Colle un lot ORIGEN puis « Démarrer ».</span>'; return; }
+    { const bp = document.getElementById('oo-pause'); if (bp) { bp.textContent = e.pause ? '▶ Reprendre' : 'Pause'; bp.style.background = e.pause ? '#ffe9c2' : '#fff'; bp.style.borderColor = e.pause ? '#e0a030' : '#cfd8d4'; bp.style.fontWeight = e.pause ? '700' : '400'; } }
     const lignes = ETAPES.map((n, i) => {
       const k = i + 1; let s = '○';
       if (k < e.etape) s = '✓'; else if (k === e.etape) s = e.statut === 'attente_enregistrement' ? '✎' : '▶';
@@ -291,7 +292,7 @@
     let message = '';
     if (!e.erreur && e.erreurVue) { e.erreurVue = null; ecrireEtat(e); }
     if (e.erreur && e.erreur !== e.erreurVue) message = '<div style="color:#B3261E;margin-top:8px;">' + croix('erreur') + '⚠ ' + e.erreur + '</div>';
-    else if (e.pause) message = '<div style="color:#8a6d00;margin-top:8px;">⏸ En pause.</div>';
+    else if (e.pause) message = '<div style="color:#8a4b00;margin-top:8px;background:#ffe9c2;border:1px solid #e0a030;padding:8px 10px;border-radius:8px;font-weight:700;">⏸ NOAH EST EN PAUSE : il n\'avance pas. Clique « ▶ Reprendre » (ou « Continuer »).</div>';
     else if (e.statut === 'attente_enregistrement') message = '<div style="color:#0E3B36;margin-top:8px;background:#fff6d6;padding:6px 8px;border-radius:8px;">✎ Formulaire rempli : <b>vérifie, puis clique « Enregistrer » dans OBC</b>. Le robot vérifie l\'enregistrement et enchaîne tout seul. ' + (e.note || '') + '</div>';
     else if (e.statut === 'termine') message = '<div style="color:#1f7a4d;margin-top:8px;font-weight:700;">✓ Les 10 étapes sont faites. ' + (e.note || '') + '</div>' + (e.lot && e.lot.achat_id ? '<div style="margin-top:6px;"><a href="' + ORIGEN_URL + '#bordereau=' + encodeURIComponent(e.lot.achat_id) + '" target="_blank" style="color:#0E3B36;font-weight:700;">🖨 Imprimer le bordereau (ORIGEN)</a></div>' : '');
     else if (e.note) message = '<div style="color:#5b6b68;margin-top:8px;">' + e.note + '</div>';
