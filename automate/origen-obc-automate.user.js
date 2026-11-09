@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.22
+// @version      0.4.23
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.22';
+  const VERSION = '0.4.23';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -369,6 +369,8 @@
 
   // Ouvre le formulaire de création de l'étape k sur la page courante (ou navigue d'abord vers la bonne page).
   // NB : la page /Create ouverte seule est un formulaire brut (sans les scripts d'OBC : listes en cascade absentes) : on passe toujours par le bouton « Nouveau » de la page Historique.
+  // Les pages « Historique » d'OBC mettent plus de 2 minutes à s'afficher quand elles listent tout : on ouvre la page avec un filtre sans résultat, elle charge en quelques secondes et le bouton « Nouveau » y est aussi.
+  const pageLegere = (k) => (k >= 5 ? '?filter=ZZ-ORIGEN-AUCUN&pageSize=10' : '');
   async function ouvrirFormulaire(k) {
     if (q(FORMS[k - 1])) return q(FORMS[k - 1]);
     const surPage = location.pathname.toLowerCase().startsWith(PAGES[k - 1].toLowerCase());
@@ -381,7 +383,7 @@
       if (n > 3) { nav(-1); throw new Error('OBC ne reste pas sur ' + PAGES[k - 1] + ' (page atteinte : ' + location.pathname + location.search + ') : ouvre cette page à la main dans OBC, puis « Continuer ».'); }
       // comme une personne : on clique l'entrée du menu si elle existe (OBC y met son contexte de menu), sinon adresse directe
       const lien = document.querySelector('a[href^="' + PAGES[k - 1] + '"]');
-      if (lien && n > 1) lien.click(); else location.href = PAGES[k - 1];
+      if (lien && n > 1) lien.click(); else location.href = PAGES[k - 1] + pageLegere(k);
       return null;
     } else nav(-1);
     const enErreur = () => /Une erreur est survenue/.test((document.body && document.body.innerText) || '');
