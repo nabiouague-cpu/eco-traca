@@ -4740,7 +4740,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-06-472';
+const APP_VERSION = '2026-11-09-473';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -22927,6 +22927,7 @@ function defoModalsHtml(){
   if (m && m.type==='defoRG') return defoModalRGHtml();
   if (m && m.type==='defoEnvoi') return defoModalEnvoiHtml();
   if (m && m.type==='defoRapports') return defoModalRapportsHtml();
+  if (m && m.type==='obcSuv') return obcModalSuvHtml();
   if (m && m.type==='defoCompare') return defoModalCompareHtml();
   if (!m || m.type!=='defoPrep') return '';
   const opts = [...state.cooperatives].sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr')).map(c=>'<option value="'+esc(c.nom)+'"></option>').join('');
@@ -27529,7 +27530,41 @@ function obcFileCandidats(){
   return (state.achats||[]).filter(a=>!a.producteur_id && a.connaissement && !a.refoulee && saisieObcStatut(a).cle==='pret' && (!f[a.id] || f[a.id].statut==='echec'))
     .sort((x,y)=> String(x.connaissement).localeCompare(String(y.connaissement), 'fr', { numeric:true }));
 }
+// Envoi à l'automate : s'il y a des camions déchargés à SUV dans le lot, un formulaire demande d'abord, camion par camion, ECORIGINE ou SUCDEN.
 async function obcFileEnvoyer(){
+  await obcFileCharger();
+  const max = Math.floor(Number(state.obcFileMax)) || 0, cand = obcFileCandidats(), pris = max ? cand.slice(0, max) : cand, suv = pris.filter(obcEstSuv);
+  if (suv.length){ const choix = {}; suv.forEach(a=>{ choix[a.id] = /^(ECORIGINE|SUCDEN)$/.test(String(a.obc_responsable_suv||'').toUpperCase()) ? String(a.obc_responsable_suv).toUpperCase() : ''; }); openModal('obcSuv', { ids: suv.map(a=>a.id), choix }); return; }
+  return obcFileEnvoyerSuite();
+}
+function obcModalSuvHtml(){
+  const m = state.modal.payload, lignes = m.ids.map(id=>{
+    const a = (state.achats||[]).find(x=>x.id===id); if (!a) return '';
+    const c = coopById(a.cooperative_id) || {}, v = m.choix[id] || '';
+    const opt = (val)=>'<label style="display:inline-flex;gap:4px;align-items:center;margin-right:10px;cursor:pointer"><input type="radio" name="suv_'+esc(id)+'" value="'+val+'"'+(v===val ? ' checked' : '')+' onchange="obcSuvChoisir(\''+escJs(id)+'\', \''+val+'\')"> '+val+'</label>';
+    return '<div id="suvrow_'+esc(id)+'" style="display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;padding:7px 8px;border-bottom:1px solid var(--border);border-left:3px solid '+(v ? 'transparent' : '#B3261E')+'"><span style="min-width:0"><b>'+esc(a.connaissement||'')+'</b> · '+esc(c.nom||a.fournisseur_saigic||'—')+'<br><span class="hint" style="margin:0">'+(Number(a.poids_net_produit)>0 ? esc(fmtNum(a.poids_net_produit))+' kg pesés' : '')+'</span></span><span>'+opt('ECORIGINE')+opt('SUCDEN')+'</span></div>';
+  }).join('');
+  const nb = m.ids.length, fait = m.ids.filter(i=>m.choix[i]).length;
+  return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:640px;max-height:92vh;overflow:auto"><h3>Cacao déchargé à SUV : qui est responsable ?</h3>'
+    + '<div class="hint" style="margin:0 0 8px">'+nb+' camion'+(nb>1 ? 's' : '')+' à SUV dans l\'envoi. <b>ECORIGINE</b> = coopérative en propre (pas de gros traitant). <b>SUCDEN</b> = coopérative rattachée au gros traitant SUCDEN dans OBC. Choisis pour chaque camion.</div>'
+    + '<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px"><span class="hint" style="margin:0">Tous :</span><button type="button" class="btn-ghost btn-compact" onclick="obcSuvTous(\'ECORIGINE\')">ECORIGINE</button><button type="button" class="btn-ghost btn-compact" onclick="obcSuvTous(\'SUCDEN\')">SUCDEN</button></div>'
+    + '<div id="modal-fields">'+lignes+'<div id="defo-erreur" style="display:none;color:#c0392b;font-size:13px;margin:6px 0"></div></div>'
+    + '<div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="obcSuvValider()">🤖 Envoyer à l\'automate</button></div></div></div>';
+}
+function obcSuvChoisir(id, v){ const m = state.modal.payload; m.choix[id] = v; const r = document.getElementById('suvrow_'+id); if (r) r.style.borderLeftColor = 'transparent'; }
+function obcSuvTous(v){ const m = state.modal.payload; m.ids.forEach(i=>{ m.choix[i] = v; }); render(); }
+async function obcSuvValider(){
+  const m = state.modal.payload, sans = m.ids.filter(i=>!m.choix[i]);
+  if (sans.length){ const e = document.getElementById('defo-erreur'); if (e){ e.style.display = ''; e.textContent = sans.length+' camion'+(sans.length>1 ? 's' : '')+' sans choix (ligne rouge) : choisis ECORIGINE ou SUCDEN.'; } m.ids.forEach(i=>{ const r = document.getElementById('suvrow_'+i); if (r) r.style.borderLeftColor = m.choix[i] ? 'transparent' : '#B3261E'; }); return; }
+  for (const val of ['ECORIGINE','SUCDEN']){
+    const ids = m.ids.filter(i=>m.choix[i]===val && ((state.achats||[]).find(x=>x.id===i)||{}).obc_responsable_suv!==val); if (!ids.length) continue;
+    const { error } = await supabaseClient.from('achats').update({ obc_responsable_suv: val }).in('id', ids);
+    if (error){ const e = document.getElementById('defo-erreur'); if (e){ e.style.display = ''; e.textContent = 'Échec : '+error.message; } return; }
+    (state.achats||[]).forEach(a=>{ if (ids.indexOf(a.id)>=0) a.obc_responsable_suv = val; });
+  }
+  closeModal(); await obcFileEnvoyerSuite();
+}
+async function obcFileEnvoyerSuite(){
   if (!state.prefCharge) await chargerPrefinancements(); // les avances revolving entrent dans le bordereau
   await obcFileCharger();
   const max = Math.floor(Number(state.obcFileMax)) || 0, lignes = [], ignores = [];
