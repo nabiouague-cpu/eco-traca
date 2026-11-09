@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.17
+// @version      0.4.18
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.17';
+  const VERSION = '0.4.18';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -256,18 +256,30 @@
       z.style.display = 'block'; z.innerHTML = '⚠ Version ' + m[1] + ' disponible (tu as ' + VERSION + ') : <a href="https://nabiouague-cpu.github.io/eco-traca/automate/origen-obc-automate.user.js" target="_blank" style="color:#B3261E;font-weight:700">cliquer ici pour mettre à jour</a>, puis recharger cette page.';
     } catch (er) { /* hors ligne : pas de bannière */ }
   }
+  // Croix « fermer » : masque un message d'erreur / d'information du panneau (n'efface ni les lots à reprendre ni la file).
+  const croix = (cle) => '<span data-oo-x="' + cle + '" title="Fermer ce message" style="float:right;cursor:pointer;font-weight:700;font-size:14px;line-height:1;padding:0 4px;margin-left:6px">✕</span>';
+  const signatureEchecs = (f) => Object.values(f.echecsLots || {}).map((x) => x.num + '|' + x.texte).join(';');
+  document.addEventListener('click', (ev) => {
+    const x = ev.target && ev.target.closest && ev.target.closest('[data-oo-x]'); if (!x) return;
+    ev.preventDefault(); ev.stopPropagation(); const cle = x.getAttribute('data-oo-x');
+    if (cle === 'erreur') { const e = lireEtat(); if (e) { e.erreurVue = e.erreur; ecrireEtat(e); } }
+    else { const f = lireFile();
+      if (cle === 'api') f.erreurApi = null; else if (cle === 'dernier') f.dernier = ''; else if (cle === 'rattr') f.rattrapes = []; else if (cle === 'echecs') f.echecsVus = signatureEchecs(f); else if (cle === 'resultat') delete f.resultat;
+      ecrireFile(f); }
+    afficherEtat(); afficherFile();
+  }, true);
   function afficherFile() {
     const z = document.getElementById('oo-file-etat'); if (!z) return; const f = lireFile();
     const tok = document.getElementById('oo-token'); if (tok) tok.style.display = f.token ? 'none' : '';
     const auto = document.getElementById('oo-auto'); if (auto && f.auto === false) auto.checked = false;
-    z.innerHTML = (f.actif ? '<b style="color:#1f7a4d">en marche</b> — ' + (f.saisis || 0) + ' saisi(s), ' + nbEchecs(f) + ' échec(s) à reprendre' + ((f.rattrapes || []).length ? ', ' + f.rattrapes.length + ' rattrapé(s)' : '') : 'arrêtée' + (f.token ? ' — liaison ✓' : '')) + (f.erreurApi ? '<div style="color:#B3261E">⚠ ' + f.erreurApi + '</div>' : '') + (f.dernier ? '<div style="color:#0E3B36;font-weight:700">' + f.dernier + '</div>' : '')
-      + ((f.rattrapes || []).length ? '<div style="margin-top:4px;padding:6px 8px;border-radius:8px;background:#fff6e0;color:#8f5209;font-size:11.5px"><b>✓ Échecs rattrapés (validés après reprise)</b>' + f.rattrapes.map((x) => '<div>' + x.num + ' — ' + x.texte + ' <i>(rattrapé à ' + x.quand + ')</i></div>').join('') + '</div>' : '')
-      + (nbEchecs(f) ? '<div style="margin-top:4px;padding:6px 8px;border-radius:8px;background:#fdecea;color:#B3261E;font-size:11.5px"><b>✗ À reprendre</b>' + Object.values(f.echecsLots).map((x) => '<div>' + x.num + ' — ' + x.texte + '</div>').join('') + '</div>' : '');
+    z.innerHTML = (f.actif ? '<b style="color:#1f7a4d">en marche</b> — ' + (f.saisis || 0) + ' saisi(s), ' + nbEchecs(f) + ' échec(s) à reprendre' + ((f.rattrapes || []).length ? ', ' + f.rattrapes.length + ' rattrapé(s)' : '') : 'arrêtée' + (f.token ? ' — liaison ✓' : '')) + (f.erreurApi ? '<div style="color:#B3261E">' + croix('api') + '⚠ ' + f.erreurApi + '</div>' : '') + (f.dernier ? '<div style="color:#0E3B36;font-weight:700">' + croix('dernier') + f.dernier + '</div>' : '')
+      + ((f.rattrapes || []).length ? '<div style="margin-top:4px;padding:6px 8px;border-radius:8px;background:#fff6e0;color:#8f5209;font-size:11.5px">'+ croix('rattr') + '<b>✓ Échecs rattrapés (validés après reprise)</b>' + f.rattrapes.map((x) => '<div>' + x.num + ' — ' + x.texte + ' <i>(rattrapé à ' + x.quand + ')</i></div>').join('') + '</div>' : '')
+      + (nbEchecs(f) && f.echecsVus !== signatureEchecs(f) ? '<div style="margin-top:4px;padding:6px 8px;border-radius:8px;background:#fdecea;color:#B3261E;font-size:11.5px">' + croix('echecs') + '<b>✗ À reprendre</b>' + Object.values(f.echecsLots).map((x) => '<div>' + x.num + ' — ' + x.texte + '</div>').join('') + '</div>' : '');
   }
   function afficherEtat() {
     if (!zoneEtat) return;
     const e = lireEtat();
-    if (!e) { const rs = lireFile().resultat; zoneEtat.innerHTML = rs ? '<div style="padding:8px 10px;border-radius:8px;font-weight:700;background:' + (rs.ok ? '#e3f4ea;color:#1f7a4d' : '#fdecea;color:#B3261E') + '">' + (rs.ok ? '✓ TERMINÉ — ' : '✗ ') + rs.texte + '<div style="font-weight:400;font-size:11px">à ' + rs.quand + ' · Noah ne fait plus rien</div></div>' : '<span style="color:#5b6b68">Aucun lot. Colle un lot ORIGEN puis « Démarrer ».</span>'; return; }
+    if (!e) { const rs = lireFile().resultat; zoneEtat.innerHTML = rs ? '<div style="padding:8px 10px;border-radius:8px;font-weight:700;background:' + (rs.ok ? '#e3f4ea;color:#1f7a4d' : '#fdecea;color:#B3261E') + '">' + croix('resultat') + (rs.ok ? '✓ TERMINÉ — ' : '✗ ') + rs.texte + '<div style="font-weight:400;font-size:11px">à ' + rs.quand + ' · Noah ne fait plus rien</div></div>' : '<span style="color:#5b6b68">Aucun lot. Colle un lot ORIGEN puis « Démarrer ».</span>'; return; }
     const lignes = ETAPES.map((n, i) => {
       const k = i + 1; let s = '○';
       if (k < e.etape) s = '✓'; else if (k === e.etape) s = e.statut === 'attente_enregistrement' ? '✎' : '▶';
@@ -275,7 +287,8 @@
     });
     const tete = '<div style="font-weight:700;margin-bottom:4px;">' + (e.lot.connaissement.numero || '') + ' — ' + (e.lot.cooperative.sigle || '') + '</div>';
     let message = '';
-    if (e.erreur) message = '<div style="color:#B3261E;margin-top:8px;">⚠ ' + e.erreur + '</div>';
+    if (!e.erreur && e.erreurVue) { e.erreurVue = null; ecrireEtat(e); }
+    if (e.erreur && e.erreur !== e.erreurVue) message = '<div style="color:#B3261E;margin-top:8px;">' + croix('erreur') + '⚠ ' + e.erreur + '</div>';
     else if (e.pause) message = '<div style="color:#8a6d00;margin-top:8px;">⏸ En pause.</div>';
     else if (e.statut === 'attente_enregistrement') message = '<div style="color:#0E3B36;margin-top:8px;background:#fff6d6;padding:6px 8px;border-radius:8px;">✎ Formulaire rempli : <b>vérifie, puis clique « Enregistrer » dans OBC</b>. Le robot vérifie l\'enregistrement et enchaîne tout seul. ' + (e.note || '') + '</div>';
     else if (e.statut === 'termine') message = '<div style="color:#1f7a4d;margin-top:8px;font-weight:700;">✓ Les 10 étapes sont faites. ' + (e.note || '') + '</div>' + (e.lot && e.lot.achat_id ? '<div style="margin-top:6px;"><a href="' + ORIGEN_URL + '#bordereau=' + encodeURIComponent(e.lot.achat_id) + '" target="_blank" style="color:#0E3B36;font-weight:700;">🖨 Imprimer le bordereau (ORIGEN)</a></div>' : '');
