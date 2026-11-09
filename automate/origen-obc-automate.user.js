@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.24
+// @version      0.4.25
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.24';
+  const VERSION = '0.4.25';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -370,7 +370,8 @@
   // Ouvre le formulaire de création de l'étape k sur la page courante (ou navigue d'abord vers la bonne page).
   // NB : la page /Create ouverte seule est un formulaire brut (sans les scripts d'OBC : listes en cascade absentes) : on passe toujours par le bouton « Nouveau » de la page Historique.
   // Les pages « Historique » d'OBC mettent plus de 2 minutes à s'afficher quand elles listent tout : on ouvre la page avec un filtre sans résultat, elle charge en quelques secondes et le bouton « Nouveau » y est aussi.
-  const pageLegere = (k) => (k >= 5 ? '?filter=ZZ-ORIGEN-AUCUN&pageSize=10' : '');
+  const pageLegere = (k) => (k >= 5 ? '?filter=ZZ-ORIGEN-AUCUN&pageSize=10' : (k === 2 || k === 4) ? '?isProjetProv=0&filterEntite=' + ENTITE + '&filtrePosteComptable=&filter=ZZ-ORIGEN-AUCUN&pageSize=10' : '');
+  const surPageLegere = () => /ZZ-ORIGEN-AUCUN/.test(location.search);
   async function ouvrirFormulaire(k) {
     if (q(FORMS[k - 1])) return q(FORMS[k - 1]);
     const surPage = location.pathname.toLowerCase().startsWith(PAGES[k - 1].toLowerCase());
@@ -392,7 +393,11 @@
     let clicsRe = 0, dernierRe = 0;
     const btn = await attendre(() => { const b = q(BTN_NOUVEAU[k - 1]); if (b) return b;
       if (overlayOBC() && clicsRe < 4 && Date.now() - dernierRe > 8000) { const r = [...document.querySelectorAll('button, a')].find((x) => visible(x) && !x.closest('#origen-obc') && /R[ée]essayer/i.test(x.textContent || '')); if (r) { clicsRe++; dernierRe = Date.now(); { const ee = lireEtat(); if (ee) journal(ee, ETAPES[k - 1] + ' : OBC « Impossible d\'afficher la page », clic sur Réessayer (' + clicsRe + '/4)'); } r.click(); } }
-      return enErreur() ? 'erreur' : null; }, 60000);
+      return enErreur() ? 'erreur' : null; }, surPageLegere() ? 15000 : 60000);
+    // Contrôle : si le bouton « Nouveau » manque sur la page allégée, on rouvre une fois la page complète (comportement d'avant) au lieu d'échouer.
+    { const cleP = 'origen_obc_plein' + k;
+      if (!btn && surPageLegere()) { let deja = false; try { deja = sessionStorage.getItem(cleP) === '1'; sessionStorage.setItem(cleP, '1'); } catch (er) { deja = true; } if (!deja) { const ee = lireEtat(); if (ee) journal(ee, ETAPES[k - 1] + ' : bouton « Nouveau » absent de la page allégée, ouverture de la page complète'); location.href = PAGES[k - 1]; return null; } }
+      if (btn && btn !== 'erreur') { try { sessionStorage.removeItem(cleP); } catch (er) { /* ignoré */ } } }
     if (btn === 'erreur') throw new Error('La page « ' + ETAPES[k - 1] + ' » d\'OBC est en erreur : OBC plante à l\'affichage de sa liste (un enregistrement a une donnée vide, souvent une parcelle sans code). Corrige cet enregistrement dans OBC, puis « Continuer ».');
     if (!btn && overlayOBC()) throw new Error('OBC ne répond pas : la page « ' + ETAPES[k - 1] + ' » n\'a pas pu s\'afficher (message OBC « Impossible d\'afficher la page »)');
     if (!btn) throw new Error('Bouton « Nouveau » introuvable sur ' + PAGES[k - 1]);
@@ -410,6 +415,7 @@
     const mot = N(lot.cooperative.sigle).split(' ').find((m) => m.length >= 3) || N(lot.cooperative.sigle).split(' ')[0] || '';
     let rows = parse(await getHtml('/Fournisseur/Index?isProjetProv=0&filterEntite=' + ENTITE + '&filtrePosteComptable=&filter=' + encodeURIComponent(mot) + '&pageSize=100'));
     let r = rows.find((x) => ccc && x.poste.toUpperCase().includes(ccc)) || rows.find((x) => N(x.code) === N(lot.cooperative.sigle) || N(x.nom) === N(lot.cooperative.nom_complet));
+    if (!r && ccc) { rows = parse(await getHtml('/Fournisseur/Index?isProjetProv=0&filterEntite=' + ENTITE + '&filtrePosteComptable=&filter=' + encodeURIComponent(ccc) + '&pageSize=100')); r = rows.find((x) => x.poste.toUpperCase().includes(ccc)); }
     if (!r && ccc) { rows = parse(await getHtml('/Fournisseur/Index?isProjetProv=0&filterEntite=' + ENTITE + '&filtrePosteComptable=&filter=&pageSize=5000')); r = rows.find((x) => x.poste.toUpperCase().includes(ccc)); }
     return r || null;
   }
