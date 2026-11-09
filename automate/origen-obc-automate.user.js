@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.23
+// @version      0.4.24
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.23';
+  const VERSION = '0.4.24';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -387,8 +387,14 @@
       return null;
     } else nav(-1);
     const enErreur = () => /Une erreur est survenue/.test((document.body && document.body.innerText) || '');
-    const btn = await attendre(() => q(BTN_NOUVEAU[k - 1]) || (enErreur() ? 'erreur' : null), 10000);
+    // OBC affiche parfois « Impossible d'afficher la page » (chargement échoué, bouton « Réessayer ») : Noah clique lui-même « Réessayer » (4 fois au plus, toutes les 8 s).
+    const overlayOBC = () => /Impossible d.afficher la page/i.test((document.body && document.body.innerText) || '');
+    let clicsRe = 0, dernierRe = 0;
+    const btn = await attendre(() => { const b = q(BTN_NOUVEAU[k - 1]); if (b) return b;
+      if (overlayOBC() && clicsRe < 4 && Date.now() - dernierRe > 8000) { const r = [...document.querySelectorAll('button, a')].find((x) => visible(x) && !x.closest('#origen-obc') && /R[ée]essayer/i.test(x.textContent || '')); if (r) { clicsRe++; dernierRe = Date.now(); { const ee = lireEtat(); if (ee) journal(ee, ETAPES[k - 1] + ' : OBC « Impossible d\'afficher la page », clic sur Réessayer (' + clicsRe + '/4)'); } r.click(); } }
+      return enErreur() ? 'erreur' : null; }, 60000);
     if (btn === 'erreur') throw new Error('La page « ' + ETAPES[k - 1] + ' » d\'OBC est en erreur : OBC plante à l\'affichage de sa liste (un enregistrement a une donnée vide, souvent une parcelle sans code). Corrige cet enregistrement dans OBC, puis « Continuer ».');
+    if (!btn && overlayOBC()) throw new Error('OBC ne répond pas : la page « ' + ETAPES[k - 1] + ' » n\'a pas pu s\'afficher (message OBC « Impossible d\'afficher la page »)');
     if (!btn) throw new Error('Bouton « Nouveau » introuvable sur ' + PAGES[k - 1]);
     btn.click();
     const f = await attendre(() => q(FORMS[k - 1]), ATTENTE_MAX);
