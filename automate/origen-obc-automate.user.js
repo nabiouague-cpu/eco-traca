@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.20
+// @version      0.4.21
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.20';
+  const VERSION = '0.4.21';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -579,12 +579,15 @@
     // Le filtre d'OBC ne prend qu'un mot : on cherche sur le premier mot du nom (puis sur le n° CCC), et on vérifie la colonne Coopérative.
     const nomCoop = e.ids.fournisseur_nom || lot.cooperative.sigle;
     const motsCle = [...new Set([N(nomCoop).split(' ').find((m) => m.length >= 3) || N(nomCoop).split(' ')[0], String(lot.cooperative.ccc || '').toUpperCase()].filter(Boolean))];
+    // 1) la liste légère d'OBC (producteurs de cette coopérative, quelques ko) ; 2) en secours seulement, la grosse page Historique (200 lignes, lente)
+    if (e.ids.fournisseur_id) {
+      let liste = []; try { liste = await getJson('/AppMethods1/LoadAgroProducteursByFournisseurId2?FournisseurId=' + e.ids.fournisseur_id); } catch (err) { liste = []; }
+      const prods = liste.filter((p) => jsonVal(p) !== '' && jsonTxt(p) !== '');
+      if (prods.length) { const nomL = N((lot.producteur.nom || '') + ' ' + (lot.producteur.prenoms || '')); const choisi = prods.find((p) => N(jsonTxt(p)).startsWith(nomL)) || prods[0]; e.ids.producteur_id = jsonVal(choisi); e.fait[6] = 'déjà dans OBC : ' + jsonTxt(choisi); journal(e, 'Producteur trouvé : ' + jsonTxt(choisi)); return 'suivant'; }
+    }
     let lignesP = [];
     for (const mot of motsCle) { const docP = await getHtml('/AgroAchatProducteur/Index?filter=' + encodeURIComponent(mot) + '&pageSize=200'); lignesP = lignesTable(docP).filter((l) => N(l.c[2]) === N(nomCoop)); if (lignesP.length) break; }
     if (lignesP.length) { const nomP = lignesP[0].c.slice(3, 5).join(' ').trim(); e.fait[6] = 'déjà dans OBC : ' + nomP; journal(e, 'Producteur trouvé : ' + nomP); return 'suivant'; }
-    const liste = await getJson('/AppMethods1/LoadAgroProducteursByFournisseurId2?FournisseurId=' + e.ids.fournisseur_id);
-    const prods = liste.filter((p) => jsonVal(p) !== '' && jsonTxt(p) !== '');
-    if (prods.length) { const nomL = N((lot.producteur.nom || '') + ' ' + (lot.producteur.prenoms || '')); const choisi = prods.find((p) => N(jsonTxt(p)).startsWith(nomL)) || prods[0]; e.ids.producteur_id = jsonVal(choisi); e.fait[6] = 'déjà dans OBC : ' + jsonTxt(choisi); journal(e, 'Producteur trouvé : ' + jsonTxt(choisi)); return 'suivant'; }
     if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
     const f = await ouvrirFormulaire(6); if (!f) return 'navigation';
     const p = lot.producteur;
