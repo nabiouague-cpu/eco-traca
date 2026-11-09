@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.18
+// @version      0.4.19
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.18';
+  const VERSION = '0.4.19';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -83,6 +83,8 @@
   }
   function ecrireEtat(e) { localStorage.setItem(CLE, JSON.stringify(e)); }
   function effacerEtat() { localStorage.removeItem(CLE); }
+  // Garde-fou : une étape qui ne rend pas la main en 150 s est interrompue avec un message clair (au lieu de rester muette).
+  function avecDelai(promesse, ms, lib) { let t; return Promise.race([promesse, new Promise((_, rej) => { t = setTimeout(() => rej(new Error('Délai dépassé (' + Math.round(ms / 1000) + ' s) : « ' + lib + ' » ne répond plus. Page : ' + location.pathname + location.search)), ms); })]).finally(() => clearTimeout(t)); }
   function journal(e, texte) { e.journal = (e.journal || []).concat([new Date().toLocaleTimeString('fr-FR') + ' ' + texte]).slice(-60); ecrireEtat(e); afficherEtat(); }
 
   // ---------- file d'attente ORIGEN ----------
@@ -235,7 +237,7 @@
     panneau.querySelector('#oo-auto').onchange = (ev) => { const f = lireFile(); f.auto = ev.target.checked; ecrireFile(f); };
     panneau.querySelector('#oo-continuer').onclick = () => { const e = lireEtat(); if (!e) return; e.pause = false; e.erreur = null; if (e.statut === 'attente_enregistrement') e.statut = 'verifier'; ecrireEtat(e); boucle(); };
     panneau.querySelector('#oo-pause').onclick = () => { const e = lireEtat(); if (!e) return; e.pause = !e.pause; ecrireEtat(e); afficherEtat(); if (!e.pause) boucle(); };
-    panneau.querySelector('#oo-journal').onclick = () => { const e = lireEtat(); navigator.clipboard.writeText(JSON.stringify({ origen_obc_journal: true, etape: e && e.etape, statut: e && e.statut, ids: e && e.ids, journal: e && e.journal }, null, 1)); };
+    panneau.querySelector('#oo-journal').onclick = () => { const e = lireEtat(); navigator.clipboard.writeText(JSON.stringify({ origen_obc_journal: true, etape: e && e.etape, statut: e && e.statut, ids: e && e.ids, journal: e && e.journal, pause: !!(e && e.pause), erreur: e && e.erreur, note: e && e.note, enFile: !!(e && e.enFile), retries: e && e.retries, page: location.pathname + location.search, heure: new Date().toLocaleTimeString('fr-FR'), version: VERSION }, null, 1)); };
     panneau.querySelector('#oo-refaire').onclick = refaireDepuisPesee;
     panneau.querySelector('#oo-recolte').onclick = (ev) => controleRecoltePesees(ev.currentTarget);
     panneau.querySelector('#oo-controle').onclick = (ev) => controlerLesSaisis(ev.currentTarget);
@@ -628,9 +630,11 @@
         const vv = (id) => { const el = ed.getElementById(id); return el ? Number(String(el.value || '').replace(',', '.')) : 1; };
         if (!(vv('txtlivraison_montantEdit0') > 0) || !(vv('txtconnaissement_brousse_montantEdit') > 0) || !(vv('txtconnaissement_brousse_nb_sacsEdit') > 0) || !(vv('txtconnaissement_brousse_poids_netEdit') > 0)) throw new Error('Le connaissement ' + e.lot.connaissement.numero + ' est enregistré avec un montant ou des totaux vides/à 0 : OBC va planter sur sa liste. Ouvre-le (Modifier), retape le prix unitaire de la ligne pour qu\'OBC recalcule, enregistre, puis « Continuer ».');
         const sp = ed.getElementById('txtproducteur_parcelle_idEdit0'); const o = sp && (sp.querySelector('option[selected]') || sp.options[sp.selectedIndex]); if (!o || !o.value) throw new Error('Le connaissement ' + e.lot.connaissement.numero + ' est enregistré SANS parcelle : OBC va planter sur sa liste. Ouvre-le (Modifier), choisis la parcelle de la ligne, enregistre, puis « Continuer ».'); } }
+      journal(e, 'Connaissement brousse : contrôle d\'existence fait (usine ' + (u ? 'oui' : 'non') + ', pesée ' + (p ? 'oui' : 'non') + ', brousse ' + (b ? 'oui' : 'non') + ')');
       if (u || p || b) { e.fait[7] = 'déjà dans OBC'; journal(e, 'Connaissement brousse déjà saisi'); return 'suivant'; } }
     if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
-    const f = await ouvrirFormulaire(7); if (!f) return 'navigation';
+    journal(e, 'Connaissement brousse : ouverture du formulaire (page ' + location.pathname + ')');
+    const f = await ouvrirFormulaire(7); if (!f) { journal(e, 'Connaissement brousse : changement de page demandé'); return 'navigation'; }
     const c = lot.connaissement;
     fixerCampagne(e);
     await listeStable(q('#txtid_fournisseurAdd')); await listeStable(q('#txttype_commodite_idAdd'));
@@ -1117,7 +1121,7 @@
         if (e.statut === 'attente_enregistrement') {
           // le formulaire est rempli et enregistré (par le robot ou par l'utilisateur) : on vérifie toutes les 4 s
           let res;
-          try { res = await EXEC[e.etape - 1](e); }
+          try { res = await avecDelai(EXEC[e.etape - 1](e), 150000, ETAPES[e.etape - 1]); }
           catch (err) {
             const msg = err && err.message ? err.message : String(err);
             e.verifErr = (e.verifErr || 0) + 1;
@@ -1154,7 +1158,8 @@
         }
         e.erreur = null; ecrireEtat(e); afficherEtat();
         let res;
-        try { res = await EXEC[e.etape - 1](e); }
+        if (e.dernierDebut !== e.etape + '@' + location.pathname) { e.dernierDebut = e.etape + '@' + location.pathname; journal(e, 'Étape ' + e.etape + ' (' + ETAPES[e.etape - 1] + ') : début sur ' + location.pathname); }
+        try { res = await avecDelai(EXEC[e.etape - 1](e), 150000, ETAPES[e.etape - 1]); }
         catch (err) {
           const msg = err && err.message ? err.message : String(err);
           if (e.enFile) {
