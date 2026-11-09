@@ -4740,7 +4740,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-09-475';
+const APP_VERSION = '2026-11-09-476';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -22684,13 +22684,27 @@ function carteNomSaisi(valeur){
   }
 }
 // ===== Analyse déforestation — étape 1 : préparer les polygones (KML / KMZ / GPX / GeoJSON / shapefile -> un seul GeoJSON pour Whisp) =====
+// Le rapprochement polygones ↔ registre par vrai code (taux >= 50 %) fait foi. L'ancien test « lien_registre » comparait le champ Name des polygones
+// (nom de couche ajouté à la préparation) et affichait à tort « Aucun lien » : on le remet en cohérence à l'affichage (l'ancien résultat est ignoré).
+function defoLienCoherent(x){
+  try{
+    const r = x && x.resume; if (!r || typeof r!=='object') return x;
+    const L = r.lien_registre, rp = r.rapprochement;
+    if (!L || !rp || !L.aucun_lien || !/code exact|sans suffixe/i.test(rp.strategie||'') || !(Number(rp.taux)>=0.5)) return x;
+    const rapp = rp.polygones_rapproches!=null ? rp.polygones_rapproches : r.reg_polygones_trouves;
+    const L2 = Object.assign({}, L, { aucun_lien:false, taux:rp.taux, avec_code_au_registre:rapp, corrige_par_rapprochement:true,
+      verdict:'Lien établi : '+(rapp!=null?rapp:'?')+' polygones sur '+(r.polygones!=null?r.polygones:'?')+' reliés au registre par le code ('+(rp.strategie||'code')+', propriété '+(rp.propriete||'?')+' ↔ colonne '+(rp.colonne||'?')+').' });
+    delete L2.message_fournisseur; delete L2.conclusion;
+    return Object.assign({}, x, { resume:Object.assign({}, r, { lien_registre:L2 }) });
+  }catch(e){ return x; }
+}
 async function chargerDefo(){
   state.defoCharge = true;
   try {
     const { data, error } = await supabaseClient.from('analyses_defo').select('*').order('created_at', { ascending:false });
     if (error) throw error;
     const avant = {}; (state.defo||[]).forEach(x=>{ avant[x.id] = x.statut; });
-    state.defo = data || []; state.defoIndispo = false;
+    state.defo = (data || []).map(defoLienCoherent); state.defoIndispo = false;
     try { const ra = await supabaseClient.from('defo_actions_nabi').select('*').order('created_at',{ ascending:false }).limit(3000); if (!ra.error) state.defoActions = ra.data||[]; } catch(e){}
     try { const rd = await supabaseClient.from('defo_discussion').select('analyse_id').eq('role','assistant').limit(8000); if (!rd.error) state.defoDiscAn = new Set((rd.data||[]).map(x=>x.analyse_id)); } catch(e){}
     try { defoChaineAuto(); } catch(e){}
@@ -22946,7 +22960,7 @@ function defoModalsHtml(){
 }
 async function defoEnvoyer(){
   let nomCoop = (fv('defo_coop')||'').trim(); if (!nomCoop){ defoErreurForm('Indique le nom de la coopérative.'); return; }
-  const rn = defoNomResoudre(nomCoop, defoEnvoyer); if (!rn) return; nomCoop = rn.nom;
+  const rn = defoNomResoudre(nomCoop, defoEnvoyer); if (!rn) return; nomCoop = rn.nom; const coop0 = carteCoopParNom(nomCoop);
   const fl = Array.from((document.getElementById('defo-fichiers')||{}).files||[]); if (!fl.length){ defoErreurForm('Ajoute au moins un fichier.'); return; }
   const mauv = fl.filter(f=>!/\.(kml|kmz|gpx|geojson|json|zip)$/i.test(f.name)); if (mauv.length){ defoErreurForm('Format non pris en charge : '+mauv.map(f=>f.name).join(', ')); return; }
   const vide = fl.filter(f=>f.size<300); if (vide.length){ defoErreurForm('Fichier presque vide : '+vide.map(f=>f.name+' ('+f.size+' octets)').join(', ')+'. S\'il est sur OneDrive ou Google Drive, télécharge-le d\'abord sur l\'ordinateur, puis ajoute-le de nouveau.'); return; }
@@ -22954,6 +22968,13 @@ async function defoEnvoyer(){
   if (fgmr && !/\.(xlsx|xlsm)$/i.test(fgmr.name)){ defoErreurForm('Registre : fichier .xlsx attendu.'); return; }
   const fold = (document.getElementById('defo-gmr-old')||{}).files && document.getElementById('defo-gmr-old').files[0];
   if (fold && !/\.(xlsx|xlsm)$/i.test(fold.name)){ defoErreurForm('Ancien registre : fichier .xlsx attendu.'); return; }
+  { const bruit = /^(COOP|COOPCA|CA|SCOOPS|SCOOP|COOPERATIVE|DE|DU|LA|GMR|RA|POLYGONES|TR|RMG|REGISTRE|BASE|FINALE|GEOLOCALISATION|CAMPAGNE|EUDR|DJOUROUTOU)$/;
+    const tok = t=>String(t||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().split(/[^A-Z0-9]+/).filter(w=>w.length>=3 && !bruit.test(w) && !/^\d+$/.test(w));
+    const miens = new Set(tok(nomCoop).concat(coop0 ? tok(coop0.code_court) : []));
+    const noms = fl.map(f=>f.name).concat(fgmr?[fgmr.name]:[]);
+    const autres = new Set(); (state.cooperatives||[]).forEach(c=>{ if (coop0 && c.id===coop0.id) return; tok(c.nom).concat(tok(c.code_court)).forEach(w=>{ if (!miens.has(w)) autres.add(w); }); });
+    const suspects = noms.filter(n=>{ const t = tok(n); return t.length && !t.some(w=>miens.has(w)) && t.some(w=>autres.has(w)); });
+    if (suspects.length && !confirm('Ces fichiers ressemblent à une AUTRE coopérative que « '+nomCoop+' » :\n\n'+suspects.join('\n')+'\n\nContinuer quand même ?')){ defoErreurForm('Lancement annulé : vérifie les fichiers de « '+nomCoop+' ».'); return; } }
   const btn = document.getElementById('defo-envoyer'); if (btn){ btn.disabled = true; btn.textContent = 'Envoi…'; }
   const id = genId('ad'), nets = s=>String(s).normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^A-Za-z0-9._-]+/g,'_');
   const coop = carteCoopParNom(nomCoop);
