@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.25
+// @version      0.4.26
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.25';
+  const VERSION = '0.4.26';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -370,7 +370,7 @@
   // Ouvre le formulaire de création de l'étape k sur la page courante (ou navigue d'abord vers la bonne page).
   // NB : la page /Create ouverte seule est un formulaire brut (sans les scripts d'OBC : listes en cascade absentes) : on passe toujours par le bouton « Nouveau » de la page Historique.
   // Les pages « Historique » d'OBC mettent plus de 2 minutes à s'afficher quand elles listent tout : on ouvre la page avec un filtre sans résultat, elle charge en quelques secondes et le bouton « Nouveau » y est aussi.
-  const pageLegere = (k) => (k >= 5 ? '?filter=ZZ-ORIGEN-AUCUN&pageSize=10' : (k === 2 || k === 4) ? '?isProjetProv=0&filterEntite=' + ENTITE + '&filtrePosteComptable=&filter=ZZ-ORIGEN-AUCUN&pageSize=10' : '');
+  const pageLegere = (k) => (k >= 5 || k === 1 || k === 3 ? '?filter=ZZ-ORIGEN-AUCUN&pageSize=10' : (k === 2 || k === 4) ? '?isProjetProv=0&filterEntite=' + ENTITE + '&filtrePosteComptable=&filter=ZZ-ORIGEN-AUCUN&pageSize=10' : '');
   const surPageLegere = () => /ZZ-ORIGEN-AUCUN/.test(location.search);
   async function ouvrirFormulaire(k) {
     if (q(FORMS[k - 1])) return q(FORMS[k - 1]);
@@ -1216,4 +1216,15 @@
   }
   creerPanneau();
   dormir(1200).then(boucle);
+  // Relance de sécurité : si la boucle s'est arrêtée sans raison (changement de page d'OBC, relance perdue), elle repart toute seule.
+  // Elle ne relance jamais un lot en pause, terminé ou en erreur affichée (là, c'est toi qui décides avec « Continuer »).
+  setInterval(() => {
+    try {
+      if (enCours) return;
+      const e = lireEtat(); if (!e) return;
+      if (e.pause || e.erreur || e.statut === 'termine') return;
+      if (document.hidden && !e.enFile) return;
+      boucle();
+    } catch (er) { /* ignoré */ }
+  }, 12000);
 })();
