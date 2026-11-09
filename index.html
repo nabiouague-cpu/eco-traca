@@ -4740,7 +4740,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-09-480';
+const APP_VERSION = '2026-11-09-481';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -24236,6 +24236,12 @@ async function defoDiscEnvoyer(id, texte){
       d.msgs.push(mr); ddAjouter(id, mr);
       if (rr.ok) ddSuivreRetrait(id, rr.rid);
     }
+    if (data.relancer_analyse){
+      const rl = await ddRelancerAnalyse(id);
+      const ml = { role:'systeme', contenu: rl.ok ? '🔄 Analyse relancée par Ryomen avec les règles les plus récentes. Résultat dans 3 à 5 minutes : il te répond ici tout seul, ne ferme pas cette page.' : '⚠ Analyse non relancée : '+rl.msg };
+      d.msgs.push(ml); ddAjouter(id, ml);
+      if (rl.ok) ddSuivreRelance(id, q);
+    }
     if (data.demande_libre){
       const ok2 = await ddDemandeSpeciale(id, data.demande_libre);
       const m2 = { role:'systeme', contenu: ok2 ? '📝 Demande spéciale mise en file (visible dans « Proposer une autre action » du dossier) : '+data.demande_libre.slice(0,160) : '⚠ La demande spéciale n\'a pas pu être enregistrée.' };
@@ -24325,12 +24331,52 @@ function ddSuivreRetrait(aid, rid){
         const fil = document.getElementById('defo-disc-fil'); if (!fil) return;
         const old = document.getElementById('dd-retrait-'+rid); if (old) old.remove();
         fil.insertAdjacentHTML('beforeend', ddRetraitBulle(aid, z)); fil.scrollTop = fil.scrollHeight;
+        if (z.statut==='terminee') ddSuiteAuto(aid, 'Le résultat de la simulation / du retrait que tu viens de lancer est arrivé (voir ci-dessus). Commente-le : nomme chaque coopérative concernée avec son code et son nombre de parcelles, puis dis ce que tu recommandes.');
         return;
       }
     }
     setTimeout(tour, 4000);
   };
   setTimeout(tour, 4000);
+}
+// Ryomen relance l'analyse lui-même (même ligne, mêmes fichiers, règles du robot les plus récentes) puis répond tout seul à la demande en cours.
+async function ddRelancerAnalyse(aid){
+  const a = (state.defo||[]).find(z=>z.id===aid); if (!a) return { ok:false, msg:'analyse introuvable.' };
+  if (a.etape!=='analyse') return { ok:false, msg:'ce n\'est pas une analyse.' };
+  if (a.statut==='demandee' || a.statut==='en_cours') return { ok:true };
+  const r = await supabaseClient.from('analyses_defo').update({ statut:'demandee', erreur:null, updated_at:new Date().toISOString() }).eq('id', aid).select().single();
+  if (r.error) return { ok:false, msg:r.error.message };
+  const i = (state.defo||[]).findIndex(q=>q.id===aid); if (i>=0) state.defo[i] = r.data;
+  carteLancerRobot();
+  return { ok:true };
+}
+function ddSuivreRelance(aid, demande){
+  state._ddSuiviL = state._ddSuiviL || {};
+  if (state._ddSuiviL[aid]) return; state._ddSuiviL[aid] = true;
+  const tour = async ()=>{
+    if (!document.getElementById('defo-disc-page')){ delete state._ddSuiviL[aid]; return; }
+    const r = await supabaseClient.from('analyses_defo').select('*').eq('id', aid).maybeSingle();
+    const z = r.data;
+    if (z){
+      const i = (state.defo||[]).findIndex(q=>q.id===aid); if (i>=0) state.defo[i] = z;
+      if (z.statut==='terminee' || z.statut==='erreur' || z.statut==='annulee'){
+        delete state._ddSuiviL[aid];
+        const ms = { role:'systeme', contenu: z.statut==='terminee' ? '✔ Analyse relancée terminée.' : '⚠ La relance de l\'analyse a échoué : '+(z.erreur||'erreur inconnue') };
+        const d = defoDiscEtat(aid); d.msgs.push(ms); ddAjouter(aid, ms);
+        if (z.statut==='terminee') ddSuiteAuto(aid, 'L\'analyse que tu viens de relancer est terminée, le résumé est à jour. Reprends ma demande : '+String(demande||'').slice(0,600));
+        return;
+      }
+    }
+    setTimeout(tour, 6000);
+  };
+  setTimeout(tour, 8000);
+}
+// Message automatique envoyé à Ryomen quand un travail qu'il a lancé est fini : Nabi n'a rien à redemander.
+async function ddSuiteAuto(aid, texte){
+  const d = defoDiscEtat(aid);
+  for (let k=0; k<30 && d.chargement; k++) await new Promise(r=>setTimeout(r,1000));
+  if (!document.getElementById('defo-disc-page')) return;
+  defoDiscEnvoyer(aid, '[Suite automatique] '+texte);
 }
 function ddRetraitBulle(aid, z){
   const enc = 'id="dd-retrait-'+escJs(z.id)+'" style="align-self:flex-start;max-width:96%;border:1px solid #b9d9c0;background:#eef6ef;border-radius:12px;padding:10px 13px;font-size:13.5px;line-height:1.5"';
