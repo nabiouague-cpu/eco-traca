@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.16
+// @version      0.4.17
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.16';
+  const VERSION = '0.4.17';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -697,9 +697,16 @@
     };
     if (await existeRecherche()) return 'existe';
     if (!modalOuverte()) {
-      const cands = [...document.querySelectorAll('a, button')].filter((b) => visible(b) && !b.closest('#origen-obc') && !b.closest('.modal'));
-      const btn = cands.find((b) => new RegExp(usine ? 'Usine/(Create|Add)' : 'Origine/(Create|Add)', 'i').test(b.getAttribute('href') || '')) || cands.find((b) => /^(NOUVEAU|NOUVELLE|AJOUTER|CREER)\b/.test(N(b.textContent))) || cands.find((b) => /nouv|create|add/i.test(b.id));
-      if (!btn) throw new Error('Bouton « Nouveau » introuvable sur la page « ' + LABEL + ' ». Boutons vus : ' + cands.map((b) => (b.textContent || '').trim().slice(0, 20)).filter(Boolean).slice(0, 15).join(' | '));
+      const lesBoutons = () => [...document.querySelectorAll('a, button')].filter((b) => visible(b) && !b.closest('#origen-obc') && !b.closest('.modal'));
+      const trouve = () => { const cands = lesBoutons(); return cands.find((b) => new RegExp(usine ? 'Usine/(Create|Add)' : 'Origine/(Create|Add)', 'i').test(b.getAttribute('href') || '')) || cands.find((b) => /^(NOUVEAU|NOUVELLE|AJOUTER|CREER)\b/.test(N(b.textContent))) || cands.find((b) => /nouv|create|add/i.test(b.id)) || null; };
+      // OBC affiche parfois l'écran en retard (seul le bandeau du haut est là) : on attend le bouton, puis on clique l'entrée du menu une fois.
+      let btn = await attendre(trouve, 20000, 500);
+      if (!btn) {
+        const re = new RegExp('^' + N(LABEL) + 'S?$');
+        const lien = [...document.querySelectorAll('a[href]')].find((x) => !x.closest('#origen-obc') && re.test(N(x.textContent)) && x.getAttribute('href') !== '#' && !/^javascript/i.test(x.getAttribute('href')) && !/Connaissement|Achat|Pesee/i.test(x.getAttribute('href')));
+        if (lien) { journal(e, LABEL + ' : bouton absent, clic sur l\'entrée du menu « ' + (lien.textContent || '').trim().slice(0, 20) + ' »'); lien.click(); btn = await attendre(trouve, 20000, 500); }
+      }
+      if (!btn) throw new Error('Bouton « Nouveau » introuvable sur la page « ' + LABEL + ' » (adresse : ' + location.pathname + location.search + '). Boutons vus : ' + lesBoutons().map((b) => (b.textContent || '').trim().slice(0, 20)).filter(Boolean).slice(0, 15).join(' | '));
       journal(e, LABEL + ' : clic sur « ' + (btn.textContent || btn.id || '').trim().slice(0, 30) + ' »'); btn.click();
     }
     const modal = await attendre(() => modalOuverte(), 25000, 300);
