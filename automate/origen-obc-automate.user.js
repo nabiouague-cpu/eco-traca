@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.19
+// @version      0.4.20
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.19';
+  const VERSION = '0.4.20';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -113,7 +113,7 @@
     for (const r of l) await rapporter(r.achat_id, r.statut, r.message, r.bordereau_numero);
   }
   const fileActive = () => !!lireFile().actif;
-  const transitoire = (m) => /session OBC expirée|ne répond pas|Failed to fetch|NetworkError|HTTP 5\d\d|Connecte-toi|OBC ne reste pas sur/i.test(m || '');
+  const transitoire = (m) => /session OBC expirée|ne répond pas|Délai dépassé|Failed to fetch|NetworkError|HTTP 5\d\d|Connecte-toi|OBC ne reste pas sur/i.test(m || '');
   const maxEssais = (m) => (/OBC ne reste pas sur/.test(m || '') ? 4 : 30);   // redirection d'OBC vers le menu : quelques nouveaux essais suffisent, pas 10 minutes
   async function suivantFile() {
     const f = lireFile(); if (!f.actif || f.pause) return false;
@@ -316,9 +316,11 @@
     }
     throw new Error('OBC ne répond pas (' + (derniere && derniere.message ? derniere.message : 'réseau') + ') sur ' + url.split('?')[0] + ' : patiente un instant puis « Continuer »');
   }
-  async function getJson(url) { const r = await obcFetch(url); if (!r.ok) throw new Error('HTTP ' + r.status + ' sur ' + url.split('?')[0] + (r.status === 403 || r.status === 401 ? ' — session OBC expirée : reconnecte-toi puis « Continuer »' : '')); const j = await r.json(); if (Array.isArray(j)) return j; if (j && typeof j === 'object') { const arr = Object.values(j).find(Array.isArray); if (arr) return arr; } return []; }
+  // Lecture du corps d'une réponse OBC avec délai : une page qui s'arrête au milieu du chargement bloquait Noah sans un mot.
+  const lireCorps = (r, mode, url) => { let t; return Promise.race([r[mode](), new Promise((_, rej) => { t = setTimeout(() => rej(new Error('OBC ne répond pas (page trop longue à charger) sur ' + url.split('?')[0])), 40000); })]).finally(() => clearTimeout(t)); };
+  async function getJson(url) { const r = await obcFetch(url); if (!r.ok) throw new Error('HTTP ' + r.status + ' sur ' + url.split('?')[0] + (r.status === 403 || r.status === 401 ? ' — session OBC expirée : reconnecte-toi puis « Continuer »' : '')); const j = await lireCorps(r, 'json', url); if (Array.isArray(j)) return j; if (j && typeof j === 'object') { const arr = Object.values(j).find(Array.isArray); if (arr) return arr; } return []; }
   const jsonVal = (x) => x == null ? '' : String(x.Value ?? x.value ?? x.producteur_id ?? x.Id ?? x.id ?? ''); const jsonTxt = (x) => x == null ? '' : String(x.Text ?? x.text ?? x.producteur_nom_long ?? x.Nom ?? x.nom ?? x.Name ?? x.name ?? '');
-  async function getHtml(url) { const r = await obcFetch(url); if (!r.ok) throw new Error('HTTP ' + r.status + ' sur ' + url.split('?')[0]); return new DOMParser().parseFromString(await r.text(), 'text/html'); }
+  async function getHtml(url) { const r = await obcFetch(url); if (!r.ok) throw new Error('HTTP ' + r.status + ' sur ' + url.split('?')[0]); return new DOMParser().parseFromString(await lireCorps(r, 'text', url), 'text/html'); }
   const lignesTable = (doc) => [...doc.querySelectorAll('table tbody tr')].map((tr) => ({ tr, c: [...tr.querySelectorAll('td')].map((td) => td.innerText.trim()) })).filter((l) => l.c.length > 3);
   function connecte() { return !/\/Account\/Login/i.test(location.pathname) && !!document.querySelector('#logoutForm'); }
 
