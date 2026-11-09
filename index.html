@@ -4740,7 +4740,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-09-479';
+const APP_VERSION = '2026-11-09-480';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -23237,8 +23237,10 @@ async function defoAnnulerOk(id){
 }
 function defoSupprimer(id){
   const x = (state.defo||[]).find(z=>z.id===id);
-  if (x && (x.etape||'preparation')==='preparation' && (state.defo||[]).some(z=>z.etape==='analyse' && z.entrees && z.entrees.prep_id===id)){ showToast('Supprime d\'abord l\'analyse de ce dossier.'); return; }
-  askConfirm(x&&x.etape==='analyse' ? 'Supprimer définitivement cette analyse, ses nettoyages et tous leurs fichiers ? Cette action est irréversible.' : 'Supprimer définitivement cette préparation (GeoJSON et fichiers envoyés) ? Cette action est irréversible.', ()=>defoSupprimerOk(id));
+  const liees = (x && (x.etape||'preparation')==='preparation') ? (state.defo||[]).filter(z=>z.etape==='analyse' && z.entrees && z.entrees.prep_id===id) : [];
+  if (liees.some(z=>z.statut==='demandee'||z.statut==='en_cours')){ showToast('Une analyse est en cours sur ce dossier : attends qu\'elle se termine.'); return; }
+  askConfirm(x&&x.etape==='analyse' ? 'Supprimer définitivement cette analyse, ses nettoyages et tous leurs fichiers ? Cette action est irréversible.'
+    : (liees.length ? 'Supprimer définitivement ce dossier ET son analyse ('+liees.length+'), avec leurs nettoyages, résultats et fichiers ? Cette action est irréversible.' : 'Supprimer définitivement cette préparation (GeoJSON et fichiers envoyés) ? Cette action est irréversible.'), ()=>defoSupprimerOk(id));
 }
 function defoChemins(x){
   const e = x.entrees, c = [];
@@ -23257,10 +23259,15 @@ async function defoSupprimerOk(id){
   const whispLies = (x.etape||'preparation')==='preparation' ? (state.defo||[]).filter(z=>z.etape==='whisp' && z.entrees && z.entrees.prep_id===id) : [];
   if (whispLies.some(z=>z.statut==='demandee'||z.statut==='en_cours')){ showToast('Whisp est en cours sur ce dossier : attends qu\'il se termine.'); return; }
   const planLies = (x.etape||'preparation')==='preparation' ? (state.defo||[]).filter(z=>z.etape==='plan' && z.entrees && z.entrees.prep_id===id) : [];
-  const ids = [id].concat(enfants.map(z=>z.id)).concat(whispLies.map(z=>z.id)).concat(planLies.map(z=>z.id));
+  const analysesLiees = (x.etape||'preparation')==='preparation' ? (state.defo||[]).filter(z=>z.etape==='analyse' && z.entrees && z.entrees.prep_id===id) : [];
+  if (analysesLiees.some(z=>z.statut==='demandee'||z.statut==='en_cours')){ showToast('Une analyse est en cours sur ce dossier : attends qu\'elle se termine.'); return; }
+  const idsA = analysesLiees.map(z=>z.id);
+  const enfantsA = (state.defo||[]).filter(z=>z.entrees && !Array.isArray(z.entrees) && idsA.includes(z.entrees.analyse_id));
+  if (enfantsA.some(z=>z.statut==='demandee'||z.statut==='en_cours')){ showToast('Un nettoyage est en cours sur ce dossier : attends qu\'il se termine.'); return; }
+  const ids = [id].concat(enfants.map(z=>z.id)).concat(whispLies.map(z=>z.id)).concat(planLies.map(z=>z.id)).concat(idsA).concat(enfantsA.map(z=>z.id));
   const { error } = await supabaseClient.from('analyses_defo').delete().in('id', ids);
   if (error){ showToast('Suppression impossible : '+error.message); return; }
-  const chemins = [x].concat(enfants).concat(planLies).reduce((acc,z)=>acc.concat(defoChemins(z)), []);
+  const chemins = [x].concat(enfants).concat(planLies).concat(analysesLiees).concat(enfantsA).reduce((acc,z)=>acc.concat(defoChemins(z)), []);
   if (chemins.length){ try { await supabaseClient.storage.from('documents-coop').remove(chemins); } catch(e){} }
   state.defo = state.defo.filter(z=>!ids.includes(z.id)); showToast('Supprimé.', 'success'); render();
 }
