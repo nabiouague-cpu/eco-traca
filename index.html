@@ -4740,7 +4740,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-09-482';
+const APP_VERSION = '2026-11-09-483';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -24134,7 +24134,8 @@ async function defoDiscOuvrir(id){
   if (prepId && state.defoSel !== prepId){ state.defoSel = prepId; state._defoSelChange = true; }
   pg.innerHTML = '<div style="display:flex;align-items:center;gap:14px;padding:10px 16px;background:#0E3B36;color:#fff;border-bottom:1px solid var(--border)">'
     + '<button type="button" class="btn-ghost" style="background:transparent;color:#fff;border:1px solid rgba(255,255,255,.55);padding:7px 12px;border-radius:8px;cursor:pointer;font-weight:600" onclick="defoDiscFermer()">← Retour au dossier</button>'
-    + '<div style="flex:1;min-width:0"><div style="font-size:12px;color:#cfe0db">Discussion avec Ryomen · coopérative</div><div style="font-size:21px;font-weight:700;line-height:1.2;overflow-wrap:anywhere">'+esc(a.cooperative_nom||'—')+'</div><div style="font-size:12px;color:#cfe0db">Analyse du '+esc(dateFr(String(a.created_at).slice(0,10)))+' · On discute, on compare les options, puis tu demandes d\'appliquer la stratégie. Rien n\'est appliqué sans ton ordre ; le nettoyage se fait sur une copie.</div></div></div>'
+    + '<div style="flex:1;min-width:0"><div style="font-size:12px;color:#cfe0db">Discussion avec Ryomen · coopérative</div><div style="font-size:21px;font-weight:700;line-height:1.2;overflow-wrap:anywhere">'+esc(a.cooperative_nom||'—')+'</div><div style="font-size:12px;color:#cfe0db">Analyse du '+esc(dateFr(String(a.created_at).slice(0,10)))+' · On discute, on compare les options, puis tu demandes d\'appliquer la stratégie. Rien n\'est appliqué sans ton ordre ; le nettoyage se fait sur une copie.</div></div>'
+    + '<button type="button" class="btn-ghost" style="background:#fff;color:#0E3B36;border:1px solid #fff;padding:8px 14px;border-radius:8px;cursor:pointer;font-weight:700;white-space:nowrap" title="Ouvre la carte de la coopérative par-dessus la conversation" onclick="ddApercu(\''+escJs(id)+'\')">🗺 Aperçu</button></div>'
     + '<div id="defo-disc-fil" style="flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:10px;width:100%;max-width:900px;margin:0 auto;box-sizing:border-box"></div>'
     + '<div style="background:#fff;border-top:1px solid var(--border);padding:10px 16px"><div style="display:flex;gap:8px;max-width:900px;margin:0 auto">'
     + '<textarea id="defo-disc-q" rows="2" style="flex:1;min-width:0;font-size:14px" placeholder="Écris ici : une question, une objection, une stratégie… (Entrée pour envoyer, Maj+Entrée pour une nouvelle ligne)" onkeydown="if(event.key===\'Enter\'&&!event.shiftKey){event.preventDefault();defoDiscEnvoyer(\''+escJs(id)+'\')}"></textarea>'
@@ -24170,6 +24171,37 @@ async function defoDiscOuvrir(id){
     fil.scrollTop = fil.scrollHeight;
   }
   if (d.chargement) ddPense(true);
+}
+// Aperçu cartographique ouvert depuis la conversation : la carte passe par-dessus, la conversation reste derrière et réapparaît à la fermeture.
+async function ddApercu(aid){
+  const a = (state.defo||[]).find(z=>z.id===aid); if (!a) return;
+  if (defoApercuFichier(a)) return defoApercuOuvrir(aid);
+  const src = defoEtat(a).dernier || a, lig = defoApercuLignes(a, src), enc = lig.find(z=>z.statut==='demandee'||z.statut==='en_cours');
+  if (enc){ showToast('Aperçu en préparation : une à deux minutes. Reclique ensuite sur « Aperçu ».'); return; }
+  await defoApercuGenerer(aid);   // première fois : le robot prépare la carte
+  const ms = { role:'systeme', contenu:'🗺 Aperçu en préparation (une à deux minutes). Reclique sur « 🗺 Aperçu » en haut à droite quand il est prêt.' };
+  const d = defoDiscEtat(aid); d.msgs.push(ms); ddAjouter(aid, ms);
+  ddSuivreApercu(aid);
+}
+function ddSuivreApercu(aid){
+  state._ddSuiviA = state._ddSuiviA || {};
+  if (state._ddSuiviA[aid]) return; state._ddSuiviA[aid] = true;
+  const tour = async ()=>{
+    if (!document.getElementById('defo-disc-page')){ delete state._ddSuiviA[aid]; return; }
+    const rr = await supabaseClient.from('analyses_defo').select('*').eq('etape','apercu').order('created_at', { ascending:false }).limit(20);
+    const z = (rr.data||[]).find(q=>q.entrees && q.entrees.analyse_id===aid);
+    if (z){
+      const i = (state.defo||[]).findIndex(q=>q.id===z.id); if (i>=0) state.defo[i] = z; else state.defo = [z].concat(state.defo||[]);
+      if (z.statut==='terminee' || z.statut==='erreur'){
+        delete state._ddSuiviA[aid];
+        const ms = { role:'systeme', contenu: z.statut==='terminee' ? '✔ Aperçu prêt : clique sur « 🗺 Aperçu » en haut à droite.' : '⚠ L\'aperçu n\'a pas pu être préparé : '+(z.erreur||'erreur inconnue') };
+        const d = defoDiscEtat(aid); d.msgs.push(ms); ddAjouter(aid, ms);
+        return;
+      }
+    }
+    setTimeout(tour, 6000);
+  };
+  setTimeout(tour, 8000);
 }
 // ----- Dictée vocale (navigateur) : la voix devient du texte dans le champ de saisie ; tu relis puis tu envoies. -----
 let _voix = null;
