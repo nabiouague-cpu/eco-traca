@@ -4740,7 +4740,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-09-474';
+const APP_VERSION = '2026-11-09-475';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -27504,6 +27504,30 @@ function obcVoirLigne(id){
   state.saisieObcFiltre = 'tous'; render();
   setTimeout(()=>{ const r = document.getElementById('sobc-'+id); if (!r){ showToast('Ligne introuvable dans la liste.'); return; } r.scrollIntoView({ block:'center', behavior:'smooth' }); r.style.outline = '3px solid #B3261E'; setTimeout(()=>{ r.style.outline = ''; }, 4000); }, 80);
 }
+// Renvoie à Noah un ou tous les connaissements « mis à jour dans le SAIGIC » : il supprime dans OBC le bordereau puis la pesée (seulement si la pesée ne correspond plus), puis les refait avec les valeurs actuelles d'ORIGEN.
+async function obcMajRedemander(id){
+  const liste = id ? (state.achats||[]).filter(a=>a.id===id) : obcMajListe();
+  if (!liste.length) return;
+  askConfirm('Faire corriger par Noah '+liste.length+' connaissement'+(liste.length>1?'s':'')+' ('+liste.slice(0,4).map(a=>a.connaissement).join(', ')+(liste.length>4?'…':'')+') ?\n\nDans OBC, Noah va SUPPRIMER le bordereau puis la pesée de chaque connaissement, puis les REFAIRE avec les valeurs actuelles d\'ORIGEN. Rien d\'autre n\'est touché, et seulement si la pesée d\'OBC ne correspond plus à ORIGEN.\n\nÀ ne pas faire si le bordereau est déjà payé ou validé. Ensuite : OBC ouvert dans Chrome, clique « Lancer la file » dans Noah.', async ()=>{
+    if (!state.prefCharge) await chargerPrefinancements();
+    const lignes = [], ignores = [], ids = [];
+    liste.forEach(a=>{
+      try{ const lot = obcLot(a), manques = obcManques(lot);
+        if (manques.length){ ignores.push(a.connaissement+' ('+manques.join(', ')+')'); return; }
+        lot.reprise_maj = true;
+        lignes.push({ achat_id:a.id, connaissement:a.connaissement, lot, statut:'attente', message:null, bordereau_numero:null, controle:null, controle_le:null, refaire_depuis:9, envoye_le:new Date().toISOString(), maj_le:new Date().toISOString() }); ids.push(a.id);
+      }catch(e){ ignores.push(a.connaissement+' (lot illisible)'); }
+    });
+    if (!lignes.length){ showToast('Rien à envoyer : '+ignores.slice(0,3).join(' ; ')); return; }
+    const r1 = await supabaseClient.from('obc_file').upsert(lignes, { onConflict:'achat_id' });
+    if (r1.error){ showToast('Échec de l\'envoi : '+r1.error.message); return; }
+    const r2 = await supabaseClient.from('achats').update({ obc_saisi_le:null }).in('id', ids);
+    if (r2.error) showToast('Envoyé, mais statut non mis à jour : '+r2.error.message);
+    (state.achats||[]).forEach(a=>{ if (ids.indexOf(a.id)>=0) a.obc_saisi_le = null; });
+    await obcFileCharger();
+    showToast(lignes.length+' connaissement(s) envoyé(s) à Noah pour correction'+(ignores.length?' · '+ignores.length+' ignoré(s)':'')+'. Ouvre OBC (Chrome) et clique « Lancer la file ».', 'success'); render();
+  });
+}
 function obcMajListe(){ return (state.achats||[]).filter(a=>obcMaj(a).length); }
 async function obcMajAcquitter(id){
   const a = (state.achats||[]).find(x=>x.id===id); if (!a) return;
@@ -28290,7 +28314,7 @@ function renderSaisieObcTab(){
           + '<button type="button" class="btn-ghost btn-compact" onclick="obcFileCharger().then(render)">↻ Actualiser</button>'
           + '<button type="button" class="btn-ghost btn-compact" onclick="obcFileVider()">Vider la file</button>'
           + '<button type="button" class="btn-ghost btn-compact" onclick="obcCodeLiaison()" title="À coller une seule fois dans l\'automate OBC">🔑 Code de liaison</button>'
-          + (function(){ const M = obcMajListe(); if (!M.length) return ''; return '<div style="flex:1 1 100%;background:#fdecea;color:#B3261E;border:1px solid #B3261E;border-radius:8px;padding:6px 10px;font-weight:700">🔔 '+M.length+' connaissement'+(M.length>1?'s':'')+' mis à jour dans le SAIGIC depuis la saisie OBC — à corriger dans OBC :'+M.map(x=>'<div style="font-weight:400;margin-top:4px"><a href="#" onclick="obcVoirLigne(\''+esc(x.id)+'\');return false" style="color:#B3261E;font-weight:700;text-decoration:underline" title="Aller à la ligne de ce connaissement">'+esc(x.connaissement)+'</a> · '+esc(((coopById(x.cooperative_id)||{}).nom)||x.fournisseur_saigic||'')+' : '+obcMaj(x).map(m=>esc(m.champ)+' '+esc(m.avant)+' → '+esc(m.apres)).join(' ; ')+' · <a href="#" onclick="obcMajAcquitter(\''+esc(x.id)+'\');return false" style="color:#0E3B36;font-weight:700">marquer « corrigé dans OBC »</a></div>').join('')+'</div>'; })()
+          + (function(){ const M = obcMajListe(); if (!M.length) return ''; return '<div style="flex:1 1 100%;background:#fdecea;color:#B3261E;border:1px solid #B3261E;border-radius:8px;padding:6px 10px;font-weight:700">🔔 '+M.length+' connaissement'+(M.length>1?'s':'')+' mis à jour dans le SAIGIC depuis la saisie OBC — à corriger dans OBC :<div style="margin-top:6px"><button class="btn btn-primary" style="font-size:12px" onclick="obcMajRedemander()" title="Noah supprime puis refait la pesée et le bordereau avec les valeurs d\'ORIGEN">🤖 Faire corriger par Noah ('+M.length+')</button></div>'+M.map(x=>'<div style="font-weight:400;margin-top:4px"><a href="#" onclick="obcVoirLigne(\''+esc(x.id)+'\');return false" style="color:#B3261E;font-weight:700;text-decoration:underline" title="Aller à la ligne de ce connaissement">'+esc(x.connaissement)+'</a> · '+esc(((coopById(x.cooperative_id)||{}).nom)||x.fournisseur_saigic||'')+' : '+obcMaj(x).map(m=>esc(m.champ)+' '+esc(m.avant)+' → '+esc(m.apres)).join(' ; ')+' · <a href="#" onclick="obcMajRedemander(\''+esc(x.id)+'\');return false" style="color:#0E3B36;font-weight:700">🤖 faire corriger par Noah</a> · <a href="#" onclick="obcMajAcquitter(\''+esc(x.id)+'\');return false" style="color:#0E3B36;font-weight:700">déjà corrigé à la main</a></div>').join('')+'</div>'; })()
           + (function(){
               const L = Object.values(state.obcFile||{}), ok = L.filter(x=>x.statut==='saisi' && x.controle && x.controle.ok).length,
                     inc = L.filter(x=>x.controle && x.controle.anomalies && x.controle.anomalies.length && x.statut!=='saisi'), non = L.filter(x=>x.statut==='saisi' && !x.controle_le).length,
