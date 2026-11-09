@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.27
+// @version      0.4.28
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.27';
+  const VERSION = '0.4.28';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -1119,19 +1119,20 @@
     an.mineurs = [];
     return an;
   }
-  async function controlerLesSaisis(btn) {
-    const lib = btn.textContent; let n = 0, bad = 0;
+  async function controlerLesSaisis(btn, auto) {
+    const lib = btn.textContent; let n = 0, bad = 0, ignores = 0;
     try {
       for (let tour = 0; tour < 25; tour++) {
         const r = await api('a_controler', { max: 10 }); const lots = r.lots || []; if (!lots.length) break;
         for (const x of lots) {
           btn.textContent = '🔎 Contrôle ' + x.connaissement + ' (' + (n + 1) + ')…';
-          let an; try { an = await controleLot(x.lot); } catch (er) { an = [{ maillon: 'Lecture OBC', etape: 1, champ: 'erreur', attendu: '', trouve: String(er && er.message || er).slice(0, 120) }]; }
+          let an; try { an = await controleLot(x.lot); } catch (er) { if (auto) { ignores++; continue; } /* relève automatique : une lecture ratée d'OBC n'est jamais enregistrée comme anomalie */ an = [{ maillon: 'Lecture OBC', etape: 1, champ: 'erreur', attendu: '', trouve: String(er && er.message || er).slice(0, 120) }]; }
           await api('controle', { achat_id: x.achat_id, anomalies: an, mineurs: an.mineurs || [] }); n++; if (an.length) bad++;
         }
       }
-      alert('Contrôle terminé : ' + n + ' connaissement(s) relu(s) dans OBC, ' + bad + ' avec anomalie(s). Résultat dans ORIGEN › Saisie OBC.');
-    } catch (err) { alert('Contrôle : ' + (err && err.message || err)); } finally { btn.textContent = lib; }
+      if (auto) journalGeneral('Relève automatique de ' + new Date().toLocaleTimeString('fr-FR') + ' : ' + n + ' relu(s), ' + bad + ' anomalie(s), ' + ignores + ' lecture(s) ratée(s) ignorée(s)');
+      else alert('Contrôle terminé : ' + n + ' connaissement(s) relu(s) dans OBC, ' + bad + ' avec anomalie(s). Résultat dans ORIGEN › Saisie OBC.');
+    } catch (err) { if (auto) journalGeneral('Relève automatique : ' + (err && err.message || err)); else alert('Contrôle : ' + (err && err.message || err)); } finally { btn.textContent = lib; }
   }
 
   // ---------- boucle ----------
@@ -1238,4 +1239,21 @@
       boucle();
     } catch (er) { /* ignoré */ }
   }, 12000);
+
+  // ---------- relève quotidienne d'OBC (16 h) : relit les connaissements saisis et renvoie le résultat à ORIGEN ----------
+  function journalGeneral(t) { try { console.log('[Noah] ' + t); localStorage.setItem('origen_obc_releve_note', t); } catch (er) { /* ignoré */ } }
+  let releveEnCours = false;
+  async function releveQuotidienne() {
+    if (releveEnCours) return;
+    try {
+      const d = new Date(); const jour = d.toISOString().slice(0, 10);
+      if (d.getHours() < 16 || d.getHours() >= 22) return;
+      if (localStorage.getItem('origen_obc_releve_jour') === jour) return;
+      if (!lireFile().token) return;
+      if (enCours) return; const e = lireEtat(); if (e && e.lot && e.statut !== 'termine') return; // un lot est en cours : on attend
+      releveEnCours = true; localStorage.setItem('origen_obc_releve_jour', jour);
+      await controlerLesSaisis({ textContent: '' }, true);
+    } catch (er) { /* ignoré */ } finally { releveEnCours = false; }
+  }
+  setInterval(releveQuotidienne, 60000);
 })();
