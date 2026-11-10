@@ -4740,7 +4740,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-09-483';
+const APP_VERSION = '2026-11-10-484';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -24258,7 +24258,7 @@ async function defoDiscEnvoyer(id, texte){
     const acts = Array.isArray(data.actions) ? data.actions : [];
     if (acts.length || (data.extras && Object.keys(data.extras).length)){
       const ok = await defoLancerNettoyage(id, acts, null, null, data.extras || null);
-      const ms = { role:'systeme', contenu: ok ? '⚙️ Stratégie appliquée, nettoyage lancé : '+(acts.join(', ')||'options demandées')+(data.extras?' (exceptions / retraits ciblés / découpe inclus)':'')+'. Le résultat s\'affiche ici dans environ 1 à 2 minutes.' : "⚠ Le nettoyage n'a pas pu être lancé : le rapprochement polygones ↔ registre n'est pas validé, ou un nettoyage est déjà en cours." };
+      const ms = { role:'systeme', contenu: ok ? (data.extras&&data.extras.depuis_original ? '↩️ Retour en arrière : nettoyage refait depuis l\'original avec : ' : '⚙️ Stratégie appliquée, nettoyage lancé : ')+(acts.join(', ')||'options demandées')+(data.extras?' (exceptions / retraits ciblés / découpe inclus)':'')+'. Le résultat s\'affiche ici dans environ 1 à 2 minutes.' : "⚠ Le nettoyage n'a pas pu être lancé : le rapprochement polygones ↔ registre n'est pas validé, ou un nettoyage est déjà en cours." };
       d.msgs.push(ms); ddAjouter(id, ms);
       if (ok && state.defo && state.defo[0] && state.defo[0].etape==='nettoyage') ddSuivreNettoyage(id, state.defo[0].id);
     }
@@ -24590,7 +24590,9 @@ async function defoLancerNettoyage(aid, actions, retouches, decisions, extras){
   const a = (state.defo||[]).find(z=>z.id===aid); if (!a) return false;
   const et = defoEtat(a); if (et.enCours){ showToast('Un nettoyage est déjà en cours.'); return false; }
   if (!defoRapprochementOk(a)){ showToast('Valide d\'abord le rapprochement polygones ↔ registre (bouton « Je valide ce rapprochement » dans le dossier de l\'analyse).'); return false; }
-  const entrees = { analyse_id:aid, source_id:et.dernier?et.dernier.id:null, actions };
+  const depuisOrig = !!(extras && extras.depuis_original);      // « revenir en arrière » : on repart de l'original, pas de la dernière copie
+  if (depuisOrig){ extras = Object.assign({}, extras); delete extras.depuis_original; }
+  const entrees = { analyse_id:aid, source_id:(et.dernier && !depuisOrig)?et.dernier.id:null, actions, depuis_original:depuisOrig||undefined };
   if (retouches && ((retouches.supprimes||[]).length || Object.keys(retouches.modifies||{}).length)) entrees.retouches = retouches;
   if (decisions) entrees.decisions = decisions;
   if (extras && Object.keys(extras).length) entrees.extras = extras;
