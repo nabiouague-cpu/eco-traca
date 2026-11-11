@@ -4740,7 +4740,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-11-490';
+const APP_VERSION = '2026-11-11-491';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8285,14 +8285,13 @@ async function finEtatTraitantExporter(t){
   ws.getCell('B1').value = 'ÉTAT DE PAIEMENT DU TRAITANT — '+String(traitant).toUpperCase(); ws.getCell('B1').font = F({ size:13, bold:true, color:{ argb:ENTETE } });
   ws.getCell('B2').value = 'Campagne '+campNom+' · Établi le '+dateFr(aujourdhuiIso())+' · Base : éléments du prix du contrat × poids sorti usine de chaque lot'; ws.getCell('B2').font = F({ italic:true, color:{ argb:'FF595959' } });
   // Bloc A : éléments du prix (cellules bleues = paramètres)
-  ent(4, ['ÉLÉMENT DU PRIX','FCFA / kg','PAYABLE À']);
+  ent(4, ['ÉLÉMENT DU PRIX','FCFA / kg']);
   ws.mergeCells('B4:C4');
-  const payes = { prix_entree_usine_fcfa_kg:'Coopératives (via '+traitant+')', prime_ra_fcfa_kg:'Coopératives (via '+traitant+')', commission_traitant_fcfa_kg:traitant, frais_usinage_fcfa_kg: f.prestataire_usinage || 'Prestataire d\'usinage' };
   let r = 5; const P = {};
-  CTR_PRIX_CHAMPS.forEach(([k,lib])=>{ ws.mergeCells('B'+r+':C'+r); ws.getCell('B'+r).value = lib; ws.getCell('D'+r).value = prix[k]; ws.getCell('D'+r).numFmt = NB3; ws.getCell('D'+r).font = F({ color:BLEU }); ws.getCell('E'+r).value = payes[k]; ['B','C','D','E'].forEach(l=>{ ws.getCell(l+r).border = cadre; if (l!=='D') ws.getCell(l+r).font = F(); }); P[k] = r; r++; });
-  ws.mergeCells('B'+r+':C'+r); ws.getCell('B'+r).value = 'Payable au traitant'; ws.getCell('D'+r).value = { formula:'D'+P.prix_entree_usine_fcfa_kg+'+D'+P.prime_ra_fcfa_kg+'+D'+P.commission_traitant_fcfa_kg }; ws.getCell('E'+r).value = traitant; const rT = r; r++;
+  CTR_PRIX_CHAMPS.forEach(([k,lib])=>{ ws.mergeCells('B'+r+':C'+r); ws.getCell('B'+r).value = lib; ws.getCell('D'+r).value = prix[k]; ws.getCell('D'+r).numFmt = NB3; ws.getCell('D'+r).font = F({ color:BLEU }); ['B','C','D'].forEach(l=>{ ws.getCell(l+r).border = cadre; if (l!=='D') ws.getCell(l+r).font = F(); }); P[k] = r; r++; });
+  ws.mergeCells('B'+r+':C'+r); ws.getCell('B'+r).value = 'Payable au traitant'; ws.getCell('D'+r).value = { formula:'D'+P.prix_entree_usine_fcfa_kg+'+D'+P.prime_ra_fcfa_kg+'+D'+P.commission_traitant_fcfa_kg }; const rT = r; r++;
   ws.mergeCells('B'+r+':C'+r); ws.getCell('B'+r).value = 'Prix total'; ws.getCell('D'+r).value = { formula:'D'+rT+'+D'+P.frais_usinage_fcfa_kg }; const rTot = r; r++;
-  [rT, rTot].forEach(x=>['B','C','D','E'].forEach(l=>{ const q = ws.getCell(l+x); q.border = cadre; q.font = F({ bold:true }); q.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:JAUNE } }; if (l==='D') q.numFmt = NB3; }));
+  [rT, rTot].forEach(x=>['B','C','D'].forEach(l=>{ const q = ws.getCell(l+x); q.border = cadre; q.font = F({ bold:true }); q.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:JAUNE } }; if (l==='D') q.numFmt = NB3; }));
   // Bloc B : lots
   r += 1;
   const H = ['N°','N° LOT','TYPE','CLIENT','POIDS SORTI USINE (kg)','ENTRÉE USINE (FCFA)','PRIME RA (FCFA)','COMMISSION TRAITANT (FCFA)','PAYABLE AU TRAITANT (FCFA)','USINAGE (FCFA)','TOTAL LOT (FCFA)','DATE TRANSFERT','ÉCHÉANCE (J+7 ouvrés)'];
@@ -8315,6 +8314,37 @@ async function finEtatTraitantExporter(t){
   syn.forEach(([lib,val],i)=>{ ws.mergeCells('B'+r+':D'+r); ws.getCell('B'+r).value = lib; ws.getCell('E'+r).value = val; ws.getCell('E'+r).numFmt = NB; ['B','C','D','E'].forEach(l=>{ const q = ws.getCell(l+r); q.border = cadre; q.font = F({ bold: i===2 || i===4 }); if (i===2 || i===4) q.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:JAUNE } }; }); r++; });
   ws.views = [{ state:'frozen', ySplit:hdr }];
   ws.pageSetup = { orientation:'landscape', fitToPage:true, fitToWidth:1, fitToHeight:0 };
+  // Feuille 2 : rapprochement déchargé (coopératives) ↔ produit (lots)
+  const w2 = wb.addWorksheet('Rapprochement');
+  w2.columns = [{ width:2 },{ width:5 },{ width:30 },{ width:16 },{ width:16 },{ width:16 },{ width:12 },{ width:44 }];
+  const ent2 = (row, libs)=>{ const h = w2.getRow(row); h.height = 30; libs.forEach((x,i)=>{ const q = h.getCell(i+2); q.value = x; q.font = F({ bold:true, color:{ argb:'FFFFFFFF' } }); q.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:ENTETE } }; q.alignment = { horizontal:'center', vertical:'middle', wrapText:true }; q.border = cadre; }); };
+  const achatsT = finAchatsCampagne().filter(a=>{ const u = String(a.usine_dechargement||'').trim().toUpperCase(); return Array.from(codes).some(k=>k && u.indexOf(String(k).toUpperCase())===0); });
+  const liens = (state.lotsUsinageAchats||[]).filter(x=>lots.some(l=>l.id===x.lot_id));
+  const kgDecharge = achatsT.reduce((s,a)=>s+(Number(a.poids_net_produit)||0),0), kgLots = lots.reduce((s,l)=>s+finLotPoidsSortie(l),0);
+  w2.getCell('B1').value = 'RAPPROCHEMENT — CACAO DÉCHARGÉ PAR LES COOPÉRATIVES ↔ LOTS PRODUITS CHEZ '+String(traitant).toUpperCase(); w2.getCell('B1').font = F({ size:13, bold:true, color:{ argb:ENTETE } });
+  w2.getCell('B2').value = 'Campagne '+campNom+' · Poids déchargé = poids net payé à l\'usine (pesée) · Poids produit = poids sorti usine des lots'; w2.getCell('B2').font = F({ italic:true, color:{ argb:'FF595959' } });
+  let q = 4;
+  const bloc = [['Poids net déchargé par les coopératives (kg)', kgDecharge], ['Poids sorti usine en lots (kg)', { formula:'\'Paiement traitant\'!F'+rTl }], ['Écart : en cours d\'usinage + freinte (kg)', { formula:'D4-D5' }], ['Écart (%)', { formula:'IF(D4>0,D6/D4,"")' }], ['Nombre de connaissements déchargés', achatsT.length], ['Nombre de lots produits', lots.length], ['Lots rattachés à leurs connaissements', liens.length ? new Set(liens.map(x=>x.lot_id)).size : 0]];
+  bloc.forEach(([lib,val],i)=>{ w2.mergeCells('B'+q+':C'+q); w2.getCell('B'+q).value = lib; w2.getCell('D'+q).value = val; w2.getCell('D'+q).numFmt = i===3 ? '0.0%' : NB; ['B','C','D'].forEach(l=>{ const x = w2.getCell(l+q); x.border = cadre; x.font = F({ bold: i===2 }); if (i===2) x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:JAUNE } }; }); q++; });
+  q += 1;
+  ent2(q, ['N°','COOPÉRATIVE','CONNAISSEMENTS','POIDS DÉCHARGÉ (kg)','POIDS EN LOTS (kg)','ÉCART (kg)','LOTS RATTACHÉS']); q++;
+  const parCoop = {}; achatsT.forEach(a=>{ const k = a.cooperative_id; (parCoop[k] = parCoop[k] || { n:0, kg:0, kgLots:0, lots:new Set() }); parCoop[k].n++; parCoop[k].kg += Number(a.poids_net_produit)||0; liens.filter(x=>x.achat_id===a.id).forEach(x=>{ parCoop[k].kgLots += Number(x.poids_kg)||0; const l = lots.find(y=>y.id===x.lot_id); if (l) parCoop[k].lots.add(String(l.numero)); }); });
+  const q1 = q;
+  Object.keys(parCoop).map(k=>({ k, co:coopById(k), d:parCoop[k] })).sort((x,y)=>String(x.co?x.co.nom:'').localeCompare(String(y.co?y.co.nom:''),'fr')).forEach((o,i)=>{
+    const row = w2.getRow(q), v = [i+1, o.co ? o.co.nom : o.k, o.d.n, o.d.kg, o.d.kgLots||null, { formula:'E'+q+'-F'+q }, Array.from(o.d.lots).sort().join(', ')];
+    v.forEach((x,k)=>{ const c = row.getCell(k+2); c.value = x; c.border = cadre; c.font = F(); c.alignment = { horizontal: k===1 || k===6 ? 'left' : 'right' }; if (k>=2 && k<=5) c.numFmt = NB; }); q++;
+  });
+  const t2 = w2.getRow(q); t2.getCell(3).value = 'TOTAL'; ['D','E','F','G'].forEach(l=>{ t2.getCell(l).value = { formula:'SUM('+l+q1+':'+l+(q-1)+')' }; t2.getCell(l).numFmt = NB; });
+  for (let k=2;k<=8;k++){ const c = t2.getCell(k); c.border = cadre; c.font = F({ bold:true }); c.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:JAUNE } }; }
+  q += 2;
+  ent2(q, ['N°','N° LOT','POIDS SORTI USINE (kg)','POIDS DÉCHARGÉ RATTACHÉ (kg)','FREINTE (kg)','FREINTE (%)','CONNAISSEMENTS RATTACHÉS']); q++;
+  lots.forEach((l,i)=>{
+    const li = liens.filter(x=>x.lot_id===l.id), kgIn = li.reduce((s,x)=>s+(Number(x.poids_kg)||0),0);
+    const conn = li.map(x=>{ const a = (state.achats||[]).find(y=>y.id===x.achat_id); return a ? (a.connaissement||'') : ''; }).filter(Boolean).join(', ');
+    const row = w2.getRow(q), v = [i+1, String(l.numero||''), finLotPoidsSortie(l)||null, kgIn||null, { formula:'IF(E'+q+'>0,E'+q+'-D'+q+',"")' }, { formula:'IF(E'+q+'>0,(E'+q+'-D'+q+')/E'+q+',"")' }, conn || '—'];
+    v.forEach((x,k)=>{ const c = row.getCell(k+2); c.value = x; c.border = cadre; c.font = F(); c.alignment = { horizontal: k===1 || k===6 ? 'left' : 'right' }; if (k>=2 && k<=4) c.numFmt = NB; if (k===5) c.numFmt = '0.0%'; }); q++;
+  });
+  w2.pageSetup = { orientation:'landscape', fitToPage:true, fitToWidth:1, fitToHeight:0 };
   await qcTelechargerClasseur(wb, 'Etat_paiement_traitant_'+String(traitant).replace(/[^A-Za-z0-9]+/g,'_')+'_'+String(campNom).replace(/[^A-Za-z0-9]+/g,'_')+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
   showToast('État de paiement de '+traitant+' téléchargé ('+lots.length+' lots).', 'success');
 }
