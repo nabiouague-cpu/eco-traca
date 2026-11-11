@@ -4740,7 +4740,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-10-484';
+const APP_VERSION = '2026-11-11-485';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -21242,6 +21242,70 @@ function exportCsv(){
   XLSX.writeFile(wb, 'suivi_achats_potentiel_' + (state.campagneFilter==='all'?'toutes_campagnes':state.campagneFilter) + '.xlsx');
 }
 
+// ---- Demande de connaissements aux traitants (modèle Excel pour la simulation de traçabilité) ----
+// Un traitant = le client effectif d'une livraison (ACT, ACT-CARGILL, TOUTON...). Les coopératives d'un traitant = celles dont au moins
+// un camion de la sélection (campagne / période) a été déchargé chez lui par nous.
+function demandeConnaissementsTraitants(){
+  const par = {};
+  achatsFiltered().filter(a=>!a.producteur_id).forEach(a=>{
+    const cl = achatClientEffectif(a); if (!cl) return;
+    const t = par[cl] || (par[cl] = { client:cl, coops:[], camions:0, usines:[] });
+    t.camions++;
+    if (a.cooperative_id && !t.coops.includes(a.cooperative_id)) t.coops.push(a.cooperative_id);
+    if (a.usine_dechargement && !t.usines.includes(a.usine_dechargement)) t.usines.push(a.usine_dechargement);
+  });
+  return Object.values(par).sort((x,y)=>y.camions-x.camions);
+}
+function telechargerDemandeConnaissements(client){
+  const t = demandeConnaissementsTraitants().find(x=>x.client===client); if (!t) return;
+  const campSel = state.campagnes.find(x=>x.id===state.campagneFilter);
+  const campLabel = state.campagneFilter==='all' ? 'toutes campagnes' : (campSel?campSel.nom:state.campagneFilter);
+  const auj = new Date().toISOString().slice(0,10);
+  const wb = XLSX.utils.book_new();
+  const coops = t.coops.map(id=>coopById(id)).filter(Boolean).sort((a,b)=>String(a.nom).localeCompare(String(b.nom)));
+  const lis = [
+    ['DEMANDE DE CONNAISSEMENTS — ' + client],
+    ['Émetteur', 'ECORIGINE SA — Durabilité et conformité RDUE'],
+    ['Date de la demande', auj],
+    ['Campagne', campLabel],
+    ['Objet', 'Liste des connaissements des coopératives ci-dessous déchargés chez ' + client + ' (hors ceux déchargés chez ECORIGINE), pour la traçabilité RDUE des volumes.'],
+    [],
+    ['Mode d\'emploi'],
+    ['1', 'Un onglet par coopérative : remplir une ligne par connaissement déchargé chez vous.'],
+    ['2', 'Champs indispensables : type de cacao, n° de connaissement, nombre de sacs, poids du connaissement (kg). La date aide mais n\'est pas obligatoire.'],
+    ['3', 'Les connaissements déjà déchargés chez ECORIGINE sont rappelés en bas de chaque onglet : ne pas les ressaisir.'],
+    ['4', 'Renvoyer le fichier tel quel (sans changer les onglets ni l\'ordre des colonnes).'],
+    [],
+    ['Coopératives concernées', 'Camions déjà déchargés chez ECORIGINE (' + campLabel + ')'],
+  ];
+  const ach = achatsFiltered().filter(a=>!a.producteur_id && achatClientEffectif(a)===client);
+  coops.forEach(c=>{ lis.push([c.nom, ach.filter(a=>a.cooperative_id===c.id).length]); });
+  const ws0 = XLSX.utils.aoa_to_sheet(lis); ws0['!cols'] = [{wch:34},{wch:110}];
+  XLSX.utils.book_append_sheet(wb, ws0, 'Lisez-moi');
+  const vus = {};
+  coops.forEach(c=>{
+    let nomF = String(c.nom).replace(/[\\\/\?\*\[\]:]/g,' ').trim().slice(0,28) || 'COOP';
+    if (vus[nomF]) nomF = nomF.slice(0,25) + ' ' + (++vus[nomF]); else vus[nomF] = 1;
+    const rows = [
+      ['Coopérative', c.nom], ['Traitant', client], ['Campagne', campLabel],
+      ['Connaissements déchargés chez ' + client + ' (à remplir par le traitant)'],
+      [],
+      ['N°', 'Coopérative', 'Type de cacao', 'Date de déchargement', 'N° de connaissement', 'Nombre de sacs', 'Poids connaissement (kg)', 'Usine de déchargement', 'Observations'],
+    ];
+    for (let i=1;i<=40;i++) rows.push([i, c.nom, '', '', '', '', '', '', '']);
+    rows.push([]);
+    rows.push(['Pour information : connaissements de ' + c.nom + ' DÉJÀ déchargés chez ECORIGINE (ne pas ressaisir)']);
+    rows.push(['N°', 'Date', 'N° de connaissement', 'Type de cacao', 'Nombre de sacs', 'Poids connaissement (kg)', 'Usine de déchargement']);
+    ach.filter(a=>a.cooperative_id===c.id).sort((x,y)=>String(x.date||'').localeCompare(String(y.date||''))).forEach((a,k)=>{
+      rows.push([k+1, a.date||'', a.connaissement||'', a.type_cacao||'', a.nombre_sacs!=null?Number(a.nombre_sacs):'', a.quantite_kg!=null?Number(a.quantite_kg):'', a.usine_dechargement||'']);
+    });
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [{wch:6},{wch:28},{wch:14},{wch:20},{wch:24},{wch:16},{wch:24},{wch:22},{wch:30}];
+    XLSX.utils.book_append_sheet(wb, ws, nomF);
+  });
+  XLSX.writeFile(wb, 'Demande_connaissements_' + String(client).replace(/[^A-Za-z0-9_-]+/g,'_') + '_' + (state.campagneFilter==='all'?'toutes_campagnes':campLabel.replace(/[^A-Za-z0-9_-]+/g,'_')) + '.xlsx');
+}
+
 // Exporte la fiche complete de TOUTES les cooperatives (tous les champs de la
 // table cooperatives) en un seul classeur Excel -- une ligne par cooperative,
 // pour un usage administratif/archive plutot que le detail carte-par-carte
@@ -29197,6 +29261,7 @@ function renderDashboardTab(){
     + '<button class="btn" type="button" onclick="saveSeuil()">OK</button>'
     + '</div>'
     + '<button class="btn" onclick="exportCsv()">Exporter (Excel)</button>'
+    + '<button class="btn" onclick="openModal(\'demandeConnaissements\')" title="Modèle Excel à envoyer à un traitant : un onglet par coopérative, pour qu\'il liste les connaissements déchargés chez lui (pas chez nous), utilisés ensuite dans la simulation de traçabilité">Demande de connaissements (traitants)</button>'
     + '<button class="btn btn-primary" '+(state.cooperatives.length===0?'disabled title="Crée une coopérative d\'abord"':'onclick="openModal(\'importRapportCCC\')"')+'>Importer un rapport CCC</button>'
     + (nQueueCoops>0 ? '<button class="btn" style="border-color:var(--warn);color:var(--warn);" onclick="openAlertQueue()">Traiter toutes les alertes (' + nQueueCoops + ' coopérative' + (nQueueCoops>1?'s':'') + ')</button>' : '')
     + '</div>';
@@ -29686,6 +29751,21 @@ function _renderBrut(){
       + '<label class="field">Fin (optionnel)<input type="date" name="fin"></label>'
       + '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Fermer</button><button type="button" class="btn btn-primary" onclick="submitCampagne()">Ajouter la campagne</button></div>'
       + '</div></div></div>';
+  }
+
+  if (state.modal && state.modal.type==='demandeConnaissements'){
+    const T = demandeConnaissementsTraitants();
+    html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal wide">'
+      + '<h3>Demande de connaissements aux traitants</h3>'
+      + '<p class="hint" style="margin-bottom:12px;">Pour la simulation de traçabilité : un fichier Excel par traitant, avec un onglet par coopérative qui décharge chez lui. Le traitant y liste les connaissements de ces coopératives déchargés chez lui (pas chez nous) : type de cacao, date, n° de connaissement, nombre de sacs, poids. Les connaissements déjà déchargés chez nous sont rappelés en bas de chaque onglet pour ne pas être ressaisis.'
+      + (state.campagneFilter==='all' ? ' <b>Sélectionne une campagne dans le tableau de bord pour limiter le fichier à cette campagne.</b>' : '') + '</p>'
+      + '<div class="achat-list" style="margin-bottom:12px;">'
+      + (T.length===0 ? '<div class="achat-item"><span class="hint">Aucun traitant trouvé sur les livraisons de la sélection.</span></div>' :
+         T.map(t=>'<div class="achat-item"><span><b>'+esc(t.client)+'</b> <span class="hint">'+t.coops.length+' coopérative'+(t.coops.length>1?'s':'')+' · '+t.camions+' camion'+(t.camions>1?'s':'')+' déchargés chez nous · '+(t.usines.length?('usine '+esc(t.usines.join(', '))):'')+'</span></span>'
+           + '<button class="btn btn-primary btn-compact" onclick="telechargerDemandeConnaissements(\''+escJs(t.client)+'\')">Télécharger le modèle</button></div>').join(''))
+      + '</div>'
+      + '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Fermer</button></div>'
+      + '</div></div>';
   }
 
   if (state.modal && state.modal.type==='importRapportCCC'){
