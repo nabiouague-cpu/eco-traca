@@ -4740,7 +4740,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-11-486';
+const APP_VERSION = '2026-11-11-487';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -12700,7 +12700,7 @@ function lotsModalsHtml(){
         + (manque>0 ? '<div style="color:#c0392b;margin:0 0 8px">⚠ '+fmtKg(manque)+' ne peuvent pas être attribués : les producteurs de cette coopérative n\'ont plus de marge (règle des '+OC_LIVRAISONS_MIN+' livraisons) : <b>limite du potentiel atteinte</b>. Il faut tracer ces volumes sur une autre coopérative (ou ils ont une autre origine).</div>' : '')
         + '<div class="achats-defile" style="max-height:34vh;overflow:auto"><table class="tbl-fiches"><thead><tr><th>N°</th><th>Origine</th><th>Connaissement</th><th>Date</th><th class="num">Poids</th><th class="num">Producteurs</th><th class="num">Potentiel utilisé (cumul)</th><th></th></tr></thead><tbody>'
         + R.camions.map(x=>{ cum += x.kg-x.manque; const ouv = !!pl.ouvert[x.seq];
-            return '<tr style="'+(x.reel?'background:#F2F8F4':'opacity:.8')+'"><td>'+x.seq+'</td><td>'+(x.reel?'<b>Chez nous</b>':'Ailleurs (simulé)')+'</td><td>'+esc(x.code)+'</td><td>'+esc(dateFr(x.iso))+'</td><td class="num">'+fmtKg(x.kg)+(x.manque?' <span class="badge warn">−'+fmtNum(x.manque)+'</span>':'')+'</td><td class="num">'+x.alloc.length+'</td><td class="num">'+(R.plafond>0 ? Math.round(cum/R.plafond*1000)/10+' %' : '—')+'</td><td><button class="btn-ghost btn-compact" onclick="ocSimToggle('+x.seq+')">'+(ouv?'Masquer':'Voir')+'</button></td></tr>'
+            return '<tr style="'+(x.reel?'background:#F2F8F4':'opacity:.8')+'"><td>'+x.seq+'</td><td>'+(x.reel?'<b>Chez nous</b>':(x.externe?'Chez le traitant (poids réel)':'Ailleurs (simulé)'))+'</td><td>'+esc(x.code)+'</td><td>'+esc(dateFr(x.iso))+'</td><td class="num">'+fmtKg(x.kg)+(x.manque?' <span class="badge warn">−'+fmtNum(x.manque)+'</span>':'')+'</td><td class="num">'+x.alloc.length+'</td><td class="num">'+(R.plafond>0 ? Math.round(cum/R.plafond*1000)/10+' %' : '—')+'</td><td><button class="btn-ghost btn-compact" onclick="ocSimToggle('+x.seq+')">'+(ouv?'Masquer':'Voir')+'</button></td></tr>'
               + (ouv ? '<tr><td colspan="8"><div class="lots-compo">'+(x.alloc.length ? x.alloc.map(a=>'<span class="lots-puce">'+esc(a.nom||a.farm)+' <span class="hint" style="margin:0">'+esc(a.farm)+'</span> — <b>'+fmtKg(a.kg)+'</b></span>').join('') : '<span class="hint">Aucun producteur disponible.</span>')+'</div></td></tr>' : ''); }).join('')
         + '</tbody></table></div>'
         + '<div style="font-weight:600;margin:12px 0 4px">Producteurs (cumul simulé)</div><div class="achats-defile" style="max-height:24vh;overflow:auto"><table class="tbl-fiches"><thead><tr><th>Producteur</th><th>Farm ID</th><th class="num">Potentiel</th><th class="num">Simulé</th><th class="num">% du potentiel</th><th class="num">Livraisons</th></tr></thead><tbody>'
@@ -14529,6 +14529,7 @@ async function loadAll(silencieux){
     { const { data: av, error: avErr } = await supabaseClient.from('saigic_connaissements_vus').select('*').eq('a_tracer', true).is('trace_le', null).order('premiere_vue_le', { ascending:false });
       state.saigicATracer = avErr ? (state.saigicATracer||[]) : (av || []); }
     { const ts = await supabaseClient.from('tracabilite_simulee').select('*'); state.tracaSim = ts.error ? (state.tracaSim||[]) : (ts.data||[]); }
+    { const ce = await supabaseClient.from('connaissements_externes').select('*'); state.connExt = ce.error ? (state.connExt||[]) : (ce.data||[]); }
     await connChargerNouveaux(); await connChargerAchats(); connVeille();
     { const { data: pp, error: ppErr } = await supabaseClient.from('parametres_paiement').select('*'); state.parametresPaiement = ppErr ? (state.parametresPaiement||[]) : (pp || []); }
 
@@ -15033,6 +15034,13 @@ function ocSimGroupes(coopId){
     if (g.camions.some(x=>x.seq===c.seq)) return;
     g.camions.push({ seq:c.seq, code:String(a.connaissement).trim(), kg, iso:String(a.date||'').slice(0,10), camp:a.campagne_id||'', usine:a.usine_dechargement||'' }); g.max = Math.max(g.max, c.seq);
   });
+  // Connaissements déchargés chez un traitant (fichier renvoyé par le traitant) : ils prennent la place des numéros manquants, avec leur vrai poids
+  (state.connExt||[]).filter(x=>x.cooperative_id===coopId && x.code).forEach(x=>{
+    const c = ocSimAnalyseCode(x.code); if (!c) return;
+    if (!m.has(c.cle)) m.set(c.cle, { cle:c.cle, camions:[], max:0 });
+    const g = m.get(c.cle); if (g.camions.some(y=>y.seq===c.seq)) return;
+    g.camions.push({ seq:c.seq, code:String(x.code).trim(), kg:Number(x.kg)||0, iso:String(x.date||'').slice(0,10), camp:x.campagne_id||'', usine:x.traitant||'', externe:true }); g.max = Math.max(g.max, c.seq);
+  });
   return Array.from(m.values()).sort((a,b)=>b.cle.localeCompare(a.cle));
 }
 function ocSimCoops(){
@@ -15092,7 +15100,7 @@ function ocSimuler(pl){
   for (let seq=1; seq<=g.max; seq++){
     const r = reels.get(seq), kg = r ? Math.max(0, Math.round(r.kg)) || pmin : pmin;
     const code = r ? r.code : g.cle+'-'+seq;
-    const ligne = { seq, reel:!!r, code, kg, iso:dateDe(seq), alloc:[], manque:0 };
+    const ligne = { seq, reel:!!r && !r.externe, externe:!!(r && r.externe), code, kg, iso:dateDe(seq), alloc:[], manque:0 };
     if (traces.has(code)){ ligne.trace = true; camions.push(ligne); continue; }   // déjà tracé pour de bon : il pèse déjà dans le cumul
     const a = ocSimAllouer(prods, cumul, pl.campagneId, kg); ligne.alloc = a.alloc; ligne.manque = a.manque;
     camions.push(ligne);
@@ -15100,6 +15108,79 @@ function ocSimuler(pl){
   const plafond = prods.reduce((t,p)=>t+effectiveCeiling(p, pl.campagneId, 'principale'),0);
   return { camions, produits:ocSimProduits(prods, camions, pl.campagneId), nProd:prods.length, plafond, pmin };
 }
+// ---- Import du fichier « Demande de connaissements » renvoyé par un traitant ----
+// Un onglet par coopérative (en-tête en ligne 4 : COOPERATIVES, PRODUITS, DATE LIVRAISON, N° CONNAISSEMENT, N° SACS, POIDS CONNAISSEMENT).
+// Chaque ligne = un connaissement déchargé chez le traitant ; il remplace, dans la simulation, le numéro manquant simulé à 35 t.
+function connExtCoopDe(nom){
+  const n = String(nom||'').trim().toLowerCase(); if (!n) return null;
+  const cs = state.cooperatives||[];
+  return cs.find(c=>String(c.nom||'').trim().toLowerCase()===n) || cs.find(c=>String(c.nom_complet||'').trim().toLowerCase()===n)
+    || cs.find(c=>n.startsWith(String(c.nom||'').trim().toLowerCase().slice(0,28)) && String(c.nom||'').length>=6) || null;
+}
+function connExtDate(v){
+  if (v instanceof Date && !isNaN(v)) return v.toISOString().slice(0,10);
+  if (typeof v==='number' && v>20000){ const d = new Date(Math.round((v-25569)*86400000)); return d.toISOString().slice(0,10); }
+  const t = String(v||'').trim(); let m;
+  if ((m = /^(\d{4})-(\d{2})-(\d{2})/.exec(t))) return m[1]+'-'+m[2]+'-'+m[3];
+  if ((m = /^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})$/.exec(t))){ const y = m[3].length===2 ? '20'+m[3] : m[3]; return y+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0'); }
+  return null;
+}
+async function connExtImporter(input){
+  const f = input.files && input.files[0]; input.value = ''; if (!f) return;
+  const campagneId = (state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : '';
+  if (!campagneId){ showToast('Choisis d\'abord la campagne (tableau de bord) : les connaissements importés lui sont rattachés.', 'error'); return; }
+  let wb; try{ wb = XLSX.read(await f.arrayBuffer(), { type:'array', cellDates:true }); }catch(e){ showToast('Fichier illisible : '+e.message, 'error'); return; }
+  const lignes = [], inconnues = [], ignorees = [], traitant = (/Demande_connaissements_([^_]+)/.exec(f.name)||[])[1] || '';
+  const mail = (state.session&&state.session.user&&state.session.user.email)||null;
+  wb.SheetNames.forEach(sn=>{
+    const aoa = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header:1, defval:'', raw:true });
+    const iH = aoa.findIndex(r=>r.some(v=>/connaissement/i.test(String(v)))); if (iH<0) return;
+    const H = aoa[iH].map(v=>String(v).toLowerCase());
+    const col = re=>H.findIndex(h=>re.test(h));
+    const cCoop = col(/coop/), cProd = col(/produit/), cDate = col(/date/), cCode = col(/connaissement/), cSacs = col(/sac/), cKg = col(/poids/);
+    let coop = null;
+    for (let i=iH+1;i<aoa.length;i++){
+      const r = aoa[i]; const code = String(r[cCode]||'').trim(); if (!code) continue;
+      const nomCoop = cCoop>=0 ? String(r[cCoop]||'').trim() : '';
+      const c = connExtCoopDe(nomCoop) || connExtCoopDe(sn); if (!c){ if (!inconnues.includes(nomCoop||sn)) inconnues.push(nomCoop||sn); continue; }
+      coop = c;
+      const kg = Number(String(r[cKg]||'').replace(/\s/g,'').replace(',','.'))||0;
+      if (!ocSimAnalyseCode(code) || kg<=0){ ignorees.push(code); continue; }
+      const an = ocSimAnalyseCode(code);
+      lignes.push({ id:'ce_'+c.id+'_'+code.replace(/[^A-Za-z0-9]+/g,'_'), cooperative_id:c.id, campagne_id:campagneId, code, serie:an.cle, seq:an.seq, kg:Math.round(kg),
+        nombre_sacs: cSacs>=0 && Number(r[cSacs]) ? Math.round(Number(r[cSacs])) : null, date: cDate>=0 ? connExtDate(r[cDate]) : null,
+        produit: cProd>=0 ? String(r[cProd]||'').trim() || null : null, traitant: traitant || null, fichier:f.name, importe_par:mail });
+    }
+  });
+  if (!lignes.length){ showToast('Aucun connaissement exploitable dans ce fichier'+(inconnues.length ? ' (coopératives non reconnues : '+inconnues.join(', ')+')' : '')+'.', 'error'); return; }
+  // déjà déchargés chez nous : on ne les prend pas (le traitant a pu les recopier)
+  const chezNous = new Set((state.achats||[]).filter(a=>!a.producteur_id && a.connaissement).map(a=>String(a.connaissement).trim()));
+  const neufs = lignes.filter(l=>!chezNous.has(l.code)), doublons = lignes.length - neufs.length;
+  try{
+    const { error } = await supabaseClient.from('connaissements_externes').upsert(neufs, { onConflict:'cooperative_id,code' }); if (error) throw error;
+    const ce = await supabaseClient.from('connaissements_externes').select('*'); if (!ce.error) state.connExt = ce.data||[];
+  }catch(e){ showToast('Enregistrement impossible : '+(e && e.message ? e.message : e), 'error'); return; }
+  // Simulation automatique : chaque coopérative / série touchée est resimulée et enregistrée
+  const coops = Array.from(new Set(neufs.map(l=>l.cooperative_id))); let nSim = 0, sansProd = [];
+  for (const coopId of coops){
+    const prods = (state.producteurs||[]).filter(p=>p.cooperative_id===coopId && p.farm_id);
+    if (!prods.length){ sansProd.push((coopById(coopId)||{}).nom||coopId); continue; }
+    for (const cle of Array.from(new Set(neufs.filter(l=>l.cooperative_id===coopId).map(l=>l.serie)))){
+      try{
+        const pl = { coopId, groupeCle:cle, campagneId, pminT:35, tenir:true };
+        const res = ocSimuler(pl); if (!res) continue;
+        const L = res.camions.filter(x=>!x.trace).map(x=>ocSimLigneBase(coopId, campagneId, cle, x));
+        await ocSimSupprimer(coopId, campagneId, cle, null);
+        if (L.length){ const { error } = await supabaseClient.from('tracabilite_simulee').insert(L); if (error) throw error; state.tracaSim = (state.tracaSim||[]).concat(L.map(l=>Object.assign({}, l))); }
+        nSim++;
+      }catch(e){ console.warn('resimulation', coopId, cle, e); }
+    }
+  }
+  showToast('Connaissements du traitant importés : '+neufs.length+' nouveau(x)'+(doublons ? ', '+doublons+' déjà chez nous ignoré(s)' : '')+(ignorees.length ? ', '+ignorees.length+' ligne(s) sans n° CCC valide ou sans poids' : '')
+    + (inconnues.length ? ' · coopératives non reconnues : '+inconnues.join(', ') : '') + ' · '+nSim+' simulation(s) refaite(s) et enregistrée(s)'+(sansProd.length ? ' · sans producteurs (pas de simulation) : '+sansProd.join(', ') : '')+'.', 'success');
+  render();
+}
+
 // Simulation enregistrée (table tracabilite_simulee) : elle sert à régler la traçabilité des camions suivants.
 function ocSimLignesSauvees(coopId, campagneId, serie){
   return (state.tracaSim||[]).filter(r=>r.cooperative_id===coopId && (r.campagne_id||'')===(campagneId||'') && r.serie===serie).sort((a,b)=>a.seq-b.seq);
@@ -15151,7 +15232,7 @@ async function ocSimCombler(coopId, campagneId, code, courant, pminT){
     if (deja.has(seq) || traces.has(code_s)) continue;
     const kg = r ? (Math.max(0, Math.round(r.kg)) || pmin) : pmin;
     const a = ocSimAllouer(prods, cumul, campagneId, kg);
-    lignes.push(ocSimLigneBase(coopId, campagneId, c.cle, { seq, code:code_s, kg, iso:dateDe(seq), reel:!!r, alloc:a.alloc, manque:a.manque }));
+    lignes.push(ocSimLigneBase(coopId, campagneId, c.cle, { seq, code:code_s, kg, iso:dateDe(seq), reel:!!r && !r.externe, alloc:a.alloc, manque:a.manque }));
   }
   if (lignes.length){
     const { error } = await supabaseClient.from('tracabilite_simulee').insert(lignes); if (error) throw error;
@@ -15308,7 +15389,9 @@ function renderDossiersTab(){
   const puce = (n, lib, couleur)=>'<div class="doss-puce"><div style="font-size:22px;font-weight:700;line-height:1.1;color:'+couleur+'">'+fmtNum(n)+'</div><div class="hint" style="margin:0">'+lib+'</div></div>';
   let html = '<div class="panel"><div class="panel-head"><div><h2>📁 Dossiers de traçabilité</h2>'
     + '<p style="margin:2px 0 0;color:var(--ink-soft);font-size:13px;max-width:800px">Un dossier par coopérative : tous les n° de sa série (1 à N), ce qui est tracé, simulé (livré ailleurs ou pas encore tracé) ou à tracer. « Tracer avec la simulation » simule d\'abord les numéros précédents pour adapter le tracé à ce qu\'il reste. Ce qui s\'applique à une coopérative vaut pour toutes : une coopérative qui livre chez nous peut aussi livrer ailleurs puis revenir.</p></div>'
-    + '<div class="trc-actions"><button class="btn" title="Simule, camion par camion, la traçabilité d\'une coopérative en tenant compte des connaissements livrés ailleurs (numéros manquants)" onclick="ocSimOuvrir()">🧮 Simulation libre</button>'
+    + '<div class="trc-actions"><label class="btn" style="cursor:pointer" title="Fichier « Demande de connaissements » renvoyé par un traitant (un onglet par coopérative) : les connaissements déchargés chez lui entrent dans la simulation avec leur vrai poids, et la simulation de chaque coopérative concernée est refaite et enregistrée">📥 Importer les connaissements d\'un traitant<input type="file" accept=".xlsx,.xls" style="display:none" onchange="connExtImporter(this)"></label>'
+    + (state.connExt && state.connExt.length ? '<span class="hint" style="align-self:center">'+state.connExt.length+' connaissement(s) de traitants importé(s)</span>' : '')
+    + '<button class="btn" title="Simule, camion par camion, la traçabilité d\'une coopérative en tenant compte des connaissements livrés ailleurs (numéros manquants)" onclick="ocSimOuvrir()">🧮 Simulation libre</button>'
     + (A.some(x=>x.awahusSeul && x.nTrace>0) ? '<button class="btn" style="color:#a33;border-color:#e3b3b3" title="Retire les anciens traçages des connaissements déchargés chez Awahus (après sauvegarde) pour tout retracer avec la simulation" onclick="ocRefaireToutAwahus()">♻ Tout refaire de zéro (Awahus)</button>' : '')
     + '</div></div><div class="doss-corps">' + ocPartenairesHtml()
     + '<div style="margin:2px 0 8px;font-weight:700;font-size:14px;color:#14402a">🟢 À tracer par nous</div>'
