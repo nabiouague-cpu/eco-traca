@@ -4740,7 +4740,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-11-489';
+const APP_VERSION = '2026-11-11-490';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8223,7 +8223,7 @@ function renderFinPartenaires(){
     const note = (p.sansPrix ? '<span class="badge warn" title="Prix loco-magasin non renseigné sur l\'usine">'+p.sansPrix+' sans prix</span> ' : '')+(p.sansPoids ? '<span class="badge neutral" title="Poids de base pas encore saisi">'+p.sansPoids+' sans poids</span>' : '');
     html += '<tr><td><b>'+esc(p.traitant)+'</b>'+(note?'<div style="margin-top:3px">'+note+'</div>':'')+'</td><td>'+esc(p.sites.map(s=>s.code).join(', '))+'</td><td class="num">'+p.achats.length+'</td><td class="num">'+fmtNum(p.kgUsine)+'</td><td class="num">'+(p.kgAgl?fmtNum(p.kgAgl):'—')+'</td><td>'+esc(p.base)+'</td>'
       + '<td class="num">'+fmtNum(p.du)+'</td><td class="num">'+fmtNum(p.paye)+'</td><td class="num"><b class="'+(p.reste>0?'txt-danger':'')+'">'+fmtNum(p.reste)+'</b></td>'
-      + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="finPartenaireDetail(\''+esc(encodeURIComponent(p.traitant))+'\')">Détail</button> <button class="btn-ghost btn-compact" onclick="finPartPaiementOuvrir(\''+esc(encodeURIComponent(p.traitant))+'\')">Paiement</button> <button class="btn-ghost btn-compact" onclick="ctrOuvrir(\''+esc(encodeURIComponent(p.traitant))+'\')">Contrat</button></td></tr>';
+      + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="finPartenaireDetail(\''+esc(encodeURIComponent(p.traitant))+'\')">Détail</button> <button class="btn-ghost btn-compact" onclick="finPartPaiementOuvrir(\''+esc(encodeURIComponent(p.traitant))+'\')">Paiement</button> <button class="btn-ghost btn-compact" onclick="ctrOuvrir(\''+esc(encodeURIComponent(p.traitant))+'\')">Contrat</button> <button class="btn-ghost btn-compact" onclick="finEtatTraitantExporter(\''+esc(encodeURIComponent(p.traitant))+'\')" title="Classeur Excel : éléments du prix du contrat × poids sorti usine de chaque lot produit chez ce traitant">⬇ État de paiement</button></td></tr>';
   });
   return html + '</tbody></table></div><div class="hint" style="margin-top:8px">Montants en FCFA.</div></div></div>';
 }
@@ -8259,6 +8259,64 @@ async function finPartPaiementSupprimer(id){
   if (!confirm('Retirer ce paiement ?')) return;
   const { error } = await supabaseClient.from('paiements_partenaires').delete().eq('id', id); if (error){ showToast('Échec : '+error.message); return; }
   await finChargerPaiementsAnnexes(); render();
+}
+
+// ---- État de paiement d'un traitant (Excel) : tableau purement calcul, bâti sur les éléments du prix de son contrat (fiche du traitant)
+// et sur le poids sorti usine de chaque lot produit chez lui pour la campagne. Rien d'autre : pas de commentaire, pas de rappel d'articles.
+function finLotPoidsSortie(l){ const n = x=>Number(x)||0; return n(l.poids_entrepot_kg) || n(l.poids_sortie_kg) || n(l.saigic_poids_reel_kg) || n(l.poids_theorique_kg); }
+async function finEtatTraitantExporter(t){
+  const traitant = decodeURIComponent(t);
+  if (!state.lotsCharges) await chargerLots();
+  if (!state.finPaCharge) await finChargerPaiementsAnnexes();
+  const f = ctrFiche(traitant), prix = {}; CTR_PRIX_CHAMPS.forEach(([k])=>{ prix[k] = Number(f[k])||0; });
+  if (!Object.values(prix).some(v=>v>0)){ showToast('Renseigne d\'abord les éléments du prix du contrat dans la fiche de '+traitant+' (bouton Contrat).', 'error'); return; }
+  const c = finCampagneId(), camp = (state.campagnes||[]).find(x=>x.id===c), campNom = camp ? lotsCampagneNom(camp) : 'toutes campagnes';
+  const codes = new Set(ctrSitesDe(traitant).map(s=>s.code));
+  const lots = (state.lotsUsinage||[]).filter(l=>codes.has(l.site_code||l.site) && (!c || l.campagne_id===c)).sort((x,y)=>String(x.numero).localeCompare(String(y.numero),'fr',{ numeric:true }));
+  if (!lots.length){ showToast('Aucun lot produit chez '+traitant+' pour cette campagne.'); return; }
+  let ExcelJS; try{ ExcelJS = await qcChargerExcelJS(); }catch(e){ showToast('Impossible de préparer le classeur : '+e.message, 'error'); return; }
+  const ENTETE = 'FFC55A11', JAUNE = 'FFFFF2CC', BLEU = { argb:'FF0000FF' }, NOIR = { argb:'FF000000' };
+  const bord = { style:'thin', color:NOIR }, cadre = { top:bord, bottom:bord, left:bord, right:bord };
+  const NB = '#,##0', NB3 = '#,##0.000', F = o=>Object.assign({ name:'Calibri', size:10 }, o||{});
+  const wb = new ExcelJS.Workbook(); wb.creator = 'ORIGEN · ECORIGINE'; wb.created = new Date();
+  const ws = wb.addWorksheet('Paiement traitant');
+  ws.columns = [{ width:2 },{ width:5 },{ width:12 },{ width:9 },{ width:11 },{ width:16 },{ width:17 },{ width:14 },{ width:17 },{ width:19 },{ width:16 },{ width:18 },{ width:12 },{ width:14 }];
+  const ent = (row, libs)=>{ const h = ws.getRow(row); h.height = 30; libs.forEach((x,i)=>{ const q = h.getCell(i+2); q.value = x; q.font = F({ bold:true, color:{ argb:'FFFFFFFF' } }); q.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:ENTETE } }; q.alignment = { horizontal:'center', vertical:'middle', wrapText:true }; q.border = cadre; }); };
+  ws.getCell('B1').value = 'ÉTAT DE PAIEMENT DU TRAITANT — '+String(traitant).toUpperCase(); ws.getCell('B1').font = F({ size:13, bold:true, color:{ argb:ENTETE } });
+  ws.getCell('B2').value = 'Campagne '+campNom+' · Établi le '+dateFr(aujourdhuiIso())+' · Base : éléments du prix du contrat × poids sorti usine de chaque lot'; ws.getCell('B2').font = F({ italic:true, color:{ argb:'FF595959' } });
+  // Bloc A : éléments du prix (cellules bleues = paramètres)
+  ent(4, ['ÉLÉMENT DU PRIX','FCFA / kg','PAYABLE À']);
+  ws.mergeCells('B4:C4');
+  const payes = { prix_entree_usine_fcfa_kg:'Coopératives (via '+traitant+')', prime_ra_fcfa_kg:'Coopératives (via '+traitant+')', commission_traitant_fcfa_kg:traitant, frais_usinage_fcfa_kg: f.prestataire_usinage || 'Prestataire d\'usinage' };
+  let r = 5; const P = {};
+  CTR_PRIX_CHAMPS.forEach(([k,lib])=>{ ws.mergeCells('B'+r+':C'+r); ws.getCell('B'+r).value = lib; ws.getCell('D'+r).value = prix[k]; ws.getCell('D'+r).numFmt = NB3; ws.getCell('D'+r).font = F({ color:BLEU }); ws.getCell('E'+r).value = payes[k]; ['B','C','D','E'].forEach(l=>{ ws.getCell(l+r).border = cadre; if (l!=='D') ws.getCell(l+r).font = F(); }); P[k] = r; r++; });
+  ws.mergeCells('B'+r+':C'+r); ws.getCell('B'+r).value = 'Payable au traitant'; ws.getCell('D'+r).value = { formula:'D'+P.prix_entree_usine_fcfa_kg+'+D'+P.prime_ra_fcfa_kg+'+D'+P.commission_traitant_fcfa_kg }; ws.getCell('E'+r).value = traitant; const rT = r; r++;
+  ws.mergeCells('B'+r+':C'+r); ws.getCell('B'+r).value = 'Prix total'; ws.getCell('D'+r).value = { formula:'D'+rT+'+D'+P.frais_usinage_fcfa_kg }; const rTot = r; r++;
+  [rT, rTot].forEach(x=>['B','C','D','E'].forEach(l=>{ const q = ws.getCell(l+x); q.border = cadre; q.font = F({ bold:true }); q.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:JAUNE } }; if (l==='D') q.numFmt = NB3; }));
+  // Bloc B : lots
+  r += 1;
+  const H = ['N°','N° LOT','TYPE','CLIENT','POIDS SORTI USINE (kg)','ENTRÉE USINE (FCFA)','PRIME RA (FCFA)','COMMISSION TRAITANT (FCFA)','PAYABLE AU TRAITANT (FCFA)','USINAGE (FCFA)','TOTAL LOT (FCFA)','DATE TRANSFERT','ÉCHÉANCE (J+7 ouvrés)'];
+  ent(r, H); const hdr = r; r++; const r1 = r;
+  const pe = '$D$'+P.prix_entree_usine_fcfa_kg, pr = '$D$'+P.prime_ra_fcfa_kg, pc = '$D$'+P.commission_traitant_fcfa_kg, pu = '$D$'+P.frais_usinage_fcfa_kg;
+  lots.forEach((l,i)=>{
+    const row = ws.getRow(r);
+    const v = [i+1, String(l.numero||''), l.type_cacao||'', l.client||'', finLotPoidsSortie(l)||null, { formula:'ROUND(F'+r+'*'+pe+',0)' }, { formula:'ROUND(F'+r+'*'+pr+',0)' }, { formula:'ROUND(F'+r+'*'+pc+',0)' }, { formula:'G'+r+'+H'+r+'+I'+r }, { formula:'ROUND(F'+r+'*'+pu+',0)' }, { formula:'J'+r+'+K'+r }, l.date_pesee_entrepot ? new Date(l.date_pesee_entrepot) : null, { formula:'IF(M'+r+'="","",WORKDAY(M'+r+',7))' }];
+    v.forEach((x,k)=>{ const q = row.getCell(k+2); q.value = x; q.border = cadre; q.font = F(k===4 || k===11 ? { color:BLEU } : {}); q.alignment = { horizontal: k<=3 ? 'left' : 'right' }; if (k>=4 && k<=10) q.numFmt = NB; if (k>=11) q.numFmt = 'dd/mm/yyyy'; });
+    r++;
+  });
+  const rl = r-1, tot = ws.getRow(r);
+  tot.getCell(3).value = 'TOTAL';
+  ['F','G','H','I','J','K','L'].forEach(l=>{ tot.getCell(l).value = { formula:'SUM('+l+r1+':'+l+rl+')' }; tot.getCell(l).numFmt = NB; });
+  for (let k=2;k<=14;k++){ const q = tot.getCell(k); q.border = cadre; q.font = F({ bold:true }); q.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:JAUNE } }; }
+  const rTl = r; r += 2;
+  // Bloc C : synthèse
+  const c2 = finCampagneId(), paye = (state.paiementsPartenaires||[]).filter(x=>x.traitant===traitant && (!c2 || (x.campagne_id||'')===c2)).reduce((s,x)=>s+(Number(x.montant_fcfa)||0),0);
+  const syn = [['Payable au traitant '+traitant, { formula:'J'+rTl }], ['Payable au prestataire d\'usinage'+(f.prestataire_usinage ? ' '+f.prestataire_usinage : ''), { formula:'K'+rTl }], ['Total', { formula:'L'+rTl }], ['Déjà payé au traitant (ORIGEN)', paye], ['Reste à payer au traitant', { formula:'E'+(r)+'-E'+(r+3) }]];
+  syn.forEach(([lib,val],i)=>{ ws.mergeCells('B'+r+':D'+r); ws.getCell('B'+r).value = lib; ws.getCell('E'+r).value = val; ws.getCell('E'+r).numFmt = NB; ['B','C','D','E'].forEach(l=>{ const q = ws.getCell(l+r); q.border = cadre; q.font = F({ bold: i===2 || i===4 }); if (i===2 || i===4) q.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:JAUNE } }; }); r++; });
+  ws.views = [{ state:'frozen', ySplit:hdr }];
+  ws.pageSetup = { orientation:'landscape', fitToPage:true, fitToWidth:1, fitToHeight:0 };
+  await qcTelechargerClasseur(wb, 'Etat_paiement_traitant_'+String(traitant).replace(/[^A-Za-z0-9]+/g,'_')+'_'+String(campNom).replace(/[^A-Za-z0-9]+/g,'_')+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
+  showToast('État de paiement de '+traitant+' téléchargé ('+lots.length+' lots).', 'success');
 }
 
 // ---- Financement › Frais d'usinage : ce qu'on doit à chaque usinier (SUV…) pour l'usinage et le refoulement du cacao déchargé chez lui ----
@@ -8454,7 +8512,9 @@ async function usiPaiementSupprimer(id){
 // =====================================================================================================================
 const CTR_MODELE = 'modeles/contrat_loco-mag_traitant_26-27.docx';
 const CTR_MOIS = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
-const CTR_FICHE_CHAMPS = ['type_partie','denomination','forme_juridique','capital','rccm','compte_contribuable','siege_social','adresse_postale','telephone','email','representant_nom','representant_fonction','representant_cni','notes'];
+const CTR_FICHE_CHAMPS = ['type_partie','denomination','forme_juridique','capital','rccm','compte_contribuable','siege_social','adresse_postale','telephone','email','representant_nom','representant_fonction','representant_cni','notes','prestataire_usinage'];
+// Éléments du prix du contrat de commercialisation (FCFA/kg) : prix entrée usine (coopératives, via le traitant), prime RA, commission traitant, frais d'usinage (prestataire).
+const CTR_PRIX_CHAMPS = [['prix_entree_usine_fcfa_kg','Prix entrée usine'],['prime_ra_fcfa_kg','Prime Rainforest Alliance'],['commission_traitant_fcfa_kg','Commission traitant'],['frais_usinage_fcfa_kg','Frais d\'usinage, manutention et services']];
 function ctrFiche(nom){ return (state.traitantsFiches||[]).find(t=>t.nom===nom) || { nom, type_partie:'societe' }; }
 function ctrSitesDe(nom){ return (state.sitesUsinage||[]).filter(s=>String(s.traitant||'').trim()===nom && s.actif!==false); }
 function ctrNb3(n){ const v = Number(n); if (!(v>0)) return ''; const [e, d] = v.toFixed(3).split('.'); return e.replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0')+','+d; }
@@ -8526,6 +8586,7 @@ function ctrOuvrir(t){
 }
 function ctrLire(nom){
   const f = { nom }; CTR_FICHE_CHAMPS.forEach(k=>{ f[k] = String(fv('ct_'+k)||'').trim() || null; });
+  CTR_PRIX_CHAMPS.forEach(([k])=>{ const v = Number(String(fv('ct_'+k)||'').replace(/\s/g,'').replace(',', '.')); f[k] = v>0 ? v : null; });
   f.type_partie = fvRadio('ct_type_partie') || 'societe';
   const sites = ctrSitesDe(nom).filter(s=>{ const el = document.querySelector('#modal-fields [name="ct_site_'+s.code+'"]'); return el && el.checked; });
   return { f, o:{ nom, sites, qte:fv('ct_qte'), loco:String(fv('ct_loco')).replace(',', '.'), sac:String(fv('ct_sac')).replace(',', '.'), dateLimite:fv('ct_limite'), dateSign:fv('ct_sign') } };
@@ -8602,6 +8663,12 @@ function renderCtrModal(m){
     + '<label class="field">Prix loco-magasin (F/kg)<input type="text" name="ct_loco" value="'+esc(avecPrix.prix_loco_fcfa_kg||'')+'"></label>'
     + '<label class="field">Sacherie (F/kg)<input type="text" name="ct_sac" value="'+esc(avecPrix.cout_sacherie_fcfa_kg||'')+'"></label>'
     + '<div class="hint" style="align-self:end;padding-bottom:10px">Total = prix loco − sacherie</div>'
+    + '</div>'
+    + '<div style="font-weight:600;margin:14px 0 6px">Éléments du prix du contrat (FCFA/kg) — base de l\'état de paiement du traitant</div>'
+    + '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:0 12px">'
+    + CTR_PRIX_CHAMPS.map(([k,lib])=>'<label class="field">'+lib+'<input type="text" name="ct_'+k+'" value="'+esc(f[k]!==null && f[k]!==undefined ? String(f[k]).replace('.', ',') : '')+'" placeholder="0,000"></label>').join('')
+    + '<label class="field">Prestataire d\'usinage (payé à part)<input type="text" name="ct_prestataire_usinage" value="'+esc(f.prestataire_usinage||'')+'" placeholder="ex. IPSC"></label>'
+    + '<div class="hint" style="align-self:end;padding-bottom:10px">Payable au traitant = entrée usine + prime RA + commission · Total = + frais d\'usinage. Poids de base : poids sorti usine de chaque lot.</div>'
     + '</div>'
     + '</div><div class="actions"><button class="btn" onclick="closeModal()">Fermer</button><button class="btn" onclick="ctrEnregistrerFiche(\''+esc(nom).replace(/'/g,"\\'")+'\')">Enregistrer la fiche</button><button class="btn btn-primary" onclick="ctrTelecharger(\''+esc(nom).replace(/'/g,"\\'")+'\', this)">Générer le contrat (Word)</button></div></div></div>';
 }
