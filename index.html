@@ -4740,7 +4740,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-11-491';
+const APP_VERSION = '2026-11-11-492';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8124,6 +8124,9 @@ async function finEtatPaiementExporter(){
    '2. « Dont non pesés » : connaissements dont le poids net payé par l\'usine n\'est pas encore connu — le montant dû sera complété après pesée.',
    '3. Prix d\'entrée usine '+fmtNum(prix0)+' FCFA/kg, retenue BIC '+String(bic0).replace('.',',')+' FCFA/kg (paramètres de paiement ORIGEN de la campagne). TKM et commission : ceux de chaque connaissement.',
    '4. Les connaissements refoulés figurent sur la feuille 1 pour mémoire (en rouge) et ne sont pas payés.'].forEach((t,k)=>{ w2.getCell('C'+r2).value=t; w2.getCell('C'+r2).font=F({bold:k===0,italic:k>0}); r2++; });
+  // Si l'usine choisie est celle d'un traitant (loco-magasin) : on ajoute ses feuilles « Paiement traitant » et « Rapprochement ».
+  { const st = usine ? lotsSiteParCode(usine) : null, tr = st && st.traitant && !/^coops?\s/i.test(String(st.traitant).trim()) ? String(st.traitant).trim() : null;
+    if (tr){ const d = await finEtatTraitantDonnees(tr, true); if (d) finEtatTraitantFeuilles(wb, d); } }
   await qcTelechargerClasseur(wb, 'Etat_paiement_cooperatives'+(usine ? '_'+usine : '')+'_'+String(campNom).replace(/[^A-Za-z0-9]+/g,'_')+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
   showToast('État de paiement téléchargé : '+A.length+' connaissement(s), '+coops.length+' coopérative(s).', 'success');
 }
@@ -8264,21 +8267,24 @@ async function finPartPaiementSupprimer(id){
 // ---- État de paiement d'un traitant (Excel) : tableau purement calcul, bâti sur les éléments du prix de son contrat (fiche du traitant)
 // et sur le poids sorti usine de chaque lot produit chez lui pour la campagne. Rien d'autre : pas de commentaire, pas de rappel d'articles.
 function finLotPoidsSortie(l){ const n = x=>Number(x)||0; return n(l.poids_entrepot_kg) || n(l.poids_sortie_kg) || n(l.saigic_poids_reel_kg) || n(l.poids_theorique_kg); }
-async function finEtatTraitantExporter(t){
-  const traitant = decodeURIComponent(t);
+// Prépare les données de l'état de paiement d'un traitant ; null (avec message) si rien à produire.
+async function finEtatTraitantDonnees(traitant, silencieux){
   if (!state.lotsCharges) await chargerLots();
   if (!state.finPaCharge) await finChargerPaiementsAnnexes();
   const f = ctrFiche(traitant), prix = {}; CTR_PRIX_CHAMPS.forEach(([k])=>{ prix[k] = Number(f[k])||0; });
-  if (!Object.values(prix).some(v=>v>0)){ showToast('Renseigne d\'abord les éléments du prix du contrat dans la fiche de '+traitant+' (bouton Contrat).', 'error'); return; }
+  if (!Object.values(prix).some(v=>v>0)){ if (!silencieux) showToast('Renseigne d\'abord les éléments du prix du contrat dans la fiche de '+traitant+' (bouton Contrat).', 'error'); return null; }
   const c = finCampagneId(), camp = (state.campagnes||[]).find(x=>x.id===c), campNom = camp ? lotsCampagneNom(camp) : 'toutes campagnes';
   const codes = new Set(ctrSitesDe(traitant).map(s=>s.code));
   const lots = (state.lotsUsinage||[]).filter(l=>codes.has(l.site_code||l.site) && (!c || l.campagne_id===c)).sort((x,y)=>String(x.numero).localeCompare(String(y.numero),'fr',{ numeric:true }));
-  if (!lots.length){ showToast('Aucun lot produit chez '+traitant+' pour cette campagne.'); return; }
-  let ExcelJS; try{ ExcelJS = await qcChargerExcelJS(); }catch(e){ showToast('Impossible de préparer le classeur : '+e.message, 'error'); return; }
+  if (!lots.length){ if (!silencieux) showToast('Aucun lot produit chez '+traitant+' pour cette campagne.'); return null; }
+  return { traitant, f, prix, campNom, codes, lots };
+}
+// Ajoute au classeur les feuilles « Paiement traitant » et « Rapprochement » (purement calcul : éléments du prix × poids sorti usine des lots).
+function finEtatTraitantFeuilles(wb, d){
+  const { traitant, f, prix, campNom, codes, lots } = d;
   const ENTETE = 'FFC55A11', JAUNE = 'FFFFF2CC', BLEU = { argb:'FF0000FF' }, NOIR = { argb:'FF000000' };
   const bord = { style:'thin', color:NOIR }, cadre = { top:bord, bottom:bord, left:bord, right:bord };
   const NB = '#,##0', NB3 = '#,##0.000', F = o=>Object.assign({ name:'Calibri', size:10 }, o||{});
-  const wb = new ExcelJS.Workbook(); wb.creator = 'ORIGEN · ECORIGINE'; wb.created = new Date();
   const ws = wb.addWorksheet('Paiement traitant');
   ws.columns = [{ width:2 },{ width:5 },{ width:12 },{ width:9 },{ width:11 },{ width:16 },{ width:17 },{ width:14 },{ width:17 },{ width:19 },{ width:16 },{ width:18 },{ width:12 },{ width:14 }];
   const ent = (row, libs)=>{ const h = ws.getRow(row); h.height = 30; libs.forEach((x,i)=>{ const q = h.getCell(i+2); q.value = x; q.font = F({ bold:true, color:{ argb:'FFFFFFFF' } }); q.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:ENTETE } }; q.alignment = { horizontal:'center', vertical:'middle', wrapText:true }; q.border = cadre; }); };
@@ -8345,6 +8351,14 @@ async function finEtatTraitantExporter(t){
     v.forEach((x,k)=>{ const c = row.getCell(k+2); c.value = x; c.border = cadre; c.font = F(); c.alignment = { horizontal: k===1 || k===6 ? 'left' : 'right' }; if (k>=2 && k<=4) c.numFmt = NB; if (k===5) c.numFmt = '0.0%'; }); q++;
   });
   w2.pageSetup = { orientation:'landscape', fitToPage:true, fitToWidth:1, fitToHeight:0 };
+}
+async function finEtatTraitantExporter(t){
+  const traitant = decodeURIComponent(t);
+  const d = await finEtatTraitantDonnees(traitant); if (!d) return;
+  let ExcelJS; try{ ExcelJS = await qcChargerExcelJS(); }catch(e){ showToast('Impossible de préparer le classeur : '+e.message, 'error'); return; }
+  const wb = new ExcelJS.Workbook(); wb.creator = 'ORIGEN · ECORIGINE'; wb.created = new Date();
+  finEtatTraitantFeuilles(wb, d);
+  const { campNom, lots } = d;
   await qcTelechargerClasseur(wb, 'Etat_paiement_traitant_'+String(traitant).replace(/[^A-Za-z0-9]+/g,'_')+'_'+String(campNom).replace(/[^A-Za-z0-9]+/g,'_')+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
   showToast('État de paiement de '+traitant+' téléchargé ('+lots.length+' lots).', 'success');
 }
