@@ -4740,7 +4740,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-11-488';
+const APP_VERSION = '2026-11-11-489';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -14680,6 +14680,8 @@ async function loadAll(silencieux){
   render();
   if (!state.error && state.session) setTimeout(()=>{ rattraperFichesRecues().catch(()=>{}); }, 0);
   if (!state.error && state.session) setTimeout(()=>{ try { certAuto(); } catch(e){} }, 2500);
+  // avances revolving : toute pesée arrivée depuis la dernière ouverture est imputée sur l'avance de la coopérative
+  if (!state.error && state.session) setTimeout(()=>{ imputerRevolvingAuto(false).catch(()=>{}); }, 1500);
 }
 
 async function actualiserDonnees(silencieux){
@@ -21692,6 +21694,7 @@ async function confirmImportRapportCCC(){
   closeModal();
   if (ok){
     showToast(created+' nouveau(x) achat(s), '+updated+' mis à jour, '+unchanged+' déjà à jour.'+(verrouilles>0 ? ' '+verrouilles+' ignoré(s) : volume déjà déclaré (pesée verrouillée).' : ''), 'success');
+    setTimeout(()=>{ imputerRevolvingAuto(false).catch(()=>{}); }, 800);
   } else {
     showToast("Les données ont été mises à jour à l'écran, mais l'enregistrement a échoué : "+(state.storageErrorMsg||'erreur inconnue'));
   }
@@ -27208,7 +27211,8 @@ async function enregistrerPaiementConnaissement(){
     if (!libelle) return refuse('Indique le libellé du chèque.', 'pa_libelle');
     if (!cheque) return refuse('Indique le numéro du chèque.', 'pa_cheque');
   }
-  const ligne = { id: edit ? edit.id : 'pai_'+a.id+'_'+Date.now().toString(36), achat_id:a.id, date_paiement:date, montant_paye:paye, montant_a_payer:aPayer, banque: sansCheque?'—':banque, libelle_cheque: sansCheque?'Remboursement préfinancement':libelle, numero_cheque: sansCheque?'—':cheque };
+  const motif = fv('pa_motif').trim();
+  const ligne = { id: edit ? edit.id : 'pai_'+a.id+'_'+Date.now().toString(36), achat_id:a.id, date_paiement:date, montant_paye:paye, montant_a_payer:aPayer, banque: sansCheque?'—':banque, libelle_cheque: sansCheque?'Remboursement préfinancement':libelle, numero_cheque: sansCheque?'—':cheque, motif: motif||null };
   const r1 = await supabaseClient.from('paiements').upsert(ligne);
   if (r1.error){ showToast('Échec de l\'enregistrement du paiement : '+r1.error.message); return; }
   const apres = autres.concat([ligne]).sort((x,y)=> String(x.date_paiement||'').localeCompare(String(y.date_paiement||'')) || String(x.id).localeCompare(String(y.id)));
@@ -27477,6 +27481,7 @@ async function enregistrerReceptionUsine(){
   closeModal();
   showToast('Réception enregistrée : '+(a.connaissement||'connaissement')+' — poids net payé '+fmtNum(poidsNet)+' kg.', 'success');
   signalerVolumeADeclarer(a);
+  setTimeout(()=>{ imputerRevolvingAuto(false).catch(()=>{}); }, 800);
 }
 // Des que le poids net paye est connu, la cooperative doit declarer ce volume sur Multitrace (cacao RA).
 // Le rappel quotidien (cron 06h30) s'en charge le lendemain ; ici on previent la cooperative TOUT DE SUITE,
@@ -27575,6 +27580,47 @@ function nrmAchat(t){ return String(t==null?'':t).normalize('NFD').replace(/[\u0
 // (chèque, attestation) pour leurs connaissements. Le montant du cacao et la prime restent calculés et affichés,
 // et la déclaration sur le portail RA / FT reste possible.
 const CLIENTS_PAYANT_DIRECT = ['sucden','touton'];
+// ---- Imputation AUTOMATIQUE des avances revolving (règle Nabi, 11/11/2026) ----
+// Dès qu'un connaissement a son poids net de pesée et que la coopérative a une avance revolving « valeur totale du poids net livré »
+// encore due (faite AVANT la livraison), la valeur du camion est retenue sur l'avance, dans la limite du reste dû : aucun chèque à émettre.
+// Seul l'éventuel surplus (camion > reste dû) reste à payer par chèque. La retenue n'est pas figée : en cas de doléance de la coopérative,
+// on ouvre le paiement, on passe en « partiel », on modifie le montant retenu et le chèque se recalcule (le motif se note sur le paiement).
+let _revolvingAutoEnCours = false;
+async function imputerRevolvingAuto(silencieux){
+  if (!supabaseClient || !state.session || _revolvingAutoEnCours) return [];
+  _revolvingAutoEnCours = true;
+  const faits = [];
+  try{
+    if (!state.prefCharge) await chargerPrefinancements();
+    if (!(state.prefinancements||[]).length) return faits;
+    const coopsAvecRevolving = new Set((state.prefinancements||[]).filter(p=>p.type_avance==='revolving' && /total/i.test(p.mode_remboursement||'total')).map(p=>p.cooperative_id));
+    const cand = (state.achats||[]).filter(a=>coopsAvecRevolving.has(a.cooperative_id) && !a.refoulee && Number(a.poids_net_produit)>0 && !a.pref_remb_mode && !paiementsDeAchat(a.id).length && !clientPayeCoop(a))
+      .sort((x,y)=>String(x.date||'').localeCompare(String(y.date||'')) || String(x.connaissement||'').localeCompare(String(y.connaissement||'')));
+    for (const a of cand){
+      const m = calcMontantPaiement(a); if (!m || !(m.montant>0)) continue;
+      if (!prefRembParDefaut(a)) continue;
+      const ctx = prefRembContexte(a); if (!ctx) continue;
+      let libre = Math.round(m.montant); const detail = [];
+      ctx.avances.filter(x=>x.avant && x.reste>0).forEach(x=>{ const v = Math.min(x.reste, libre); if (v>0){ detail.push({ id:x.id, montant:v }); libre -= v; } });
+      const r = detail.reduce((s,d)=>s+d.montant, 0); if (!(r>0)) continue;
+      const ligne = { id:'pai_'+a.id+'_auto', achat_id:a.id, date_paiement:aujourdhuiIso(), montant_paye:0, montant_a_payer:Math.round(m.montant), banque:'—', libelle_cheque:'Remboursement préfinancement (automatique)', numero_cheque:'—' };
+      const r1 = await supabaseClient.from('paiements').upsert(ligne); if (r1.error){ console.warn('revolving auto', r1.error.message); continue; }
+      const patch = { pref_remb_mode:'total', pref_remb_montant:r, pref_remb_detail:detail, banque:'—', libelle_cheque:ligne.libelle_cheque, numero_cheque:'—' };
+      const r2 = await supabaseClient.from('achats').update(patch).eq('id', a.id);
+      if (r2.error){ await supabaseClient.from('paiements').delete().eq('id', ligne.id); console.warn('revolving auto', r2.error.message); continue; }
+      Object.assign(a, patch);
+      state.paiements = (state.paiements||[]).filter(p=>p.id!==ligne.id).concat([ligne]);
+      faits.push({ achat:a, retenu:r, surplus:libre, resteAvance:Math.max(0, ctx.reste-r) });
+    }
+  }catch(e){ console.warn('imputerRevolvingAuto', e); }
+  finally{ _revolvingAutoEnCours = false; }
+  if (faits.length){
+    const txt = faits.map(f=>{ const co = coopById(f.achat.cooperative_id); return (co ? (co.nom_complet||co.nom) : '')+' · '+(f.achat.connaissement||'')+' : '+fmtNum(f.retenu)+' FCFA retenus sur l\'avance'+(f.surplus>0 ? ', '+fmtNum(f.surplus)+' FCFA restent à payer par chèque' : ', aucun chèque')+' — reste dû sur l\'avance : '+fmtNum(f.resteAvance)+' FCFA'; }).join(' · ');
+    showToast('Avance revolving imputée automatiquement : '+txt, 'success');
+    if (!silencieux) render();
+  }
+  return faits;
+}
 function clientPayeCoop(a){
   if (!a) return false;
   const c = a.client ? String(a.client).trim() : (function(){ const co = coopById(a.cooperative_id); return co && co.client ? String(co.client).trim() : ''; })();
@@ -28772,6 +28818,7 @@ async function genererTicketPeseeStandalone(){
     }
     closeModal();
     showToast('Ticket de pesée généré'+(reportee ? ' — réception à l\'usine reportée sur l\'achat du connaissement.' : '.'), 'success');
+    if (reportee) setTimeout(()=>{ imputerRevolvingAuto(false).catch(()=>{}); }, 800);
   }catch(e){ showToast('Échec de la génération du ticket de pesée : '+e.message); }
   finally{ state.ticketEnCours = false; }
 }
@@ -30046,6 +30093,7 @@ function _renderBrut(){
         + '<label class="field">Libellé du chèque (bénéficiaire)<input type="text" name="pa_libelle" list="pa-libelles" value="'+esc(edit ? edit.libelle_cheque||'' : '')+'" placeholder="ex : Allou Anet Denis"></label>'
         + '<datalist id="pa-libelles">'+uniques('libelle_cheque').map(b=>'<option value="'+esc(b)+'">').join('')+'</datalist>'
         + '<label class="field">Numéro du chèque<input type="text" name="pa_cheque" value="'+esc(edit ? edit.numero_cheque||'' : '')+'"></label>'
+        + '<label class="field">Motif (si on s\'écarte de la règle : doléance de la coopérative, accord commercial…)<input type="text" name="pa_motif" value="'+esc(edit ? edit.motif||'' : '')+'" placeholder="ex : doléance coop du 11/11 — retenir 30 M, payer 15 M pour les achats terrain"></label>'
         + '</fieldset></div>'
         + '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Annuler</button><button type="button" class="btn btn-primary" onclick="enregistrerPaiementConnaissement()">Enregistrer le paiement</button></div>'
         + '</div></div>';
