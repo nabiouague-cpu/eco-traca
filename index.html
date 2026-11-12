@@ -4740,7 +4740,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-11-492';
+const APP_VERSION = '2026-11-12-493';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -14917,11 +14917,27 @@ function ocProducteursEligibles(coopId, campagneId, periode){
 // Repartit volumeTotalKg (kg entiers) entre ~nbDemande producteurs eligibles, sans jamais
 // depasser la marge d'un producteur. Si le tirage ne peut pas absorber le volume, on remplace
 // les producteurs les plus "etroits" par des producteurs en reserve (puis on en ajoute si besoin).
+function ocNiveauConformite(p){ const v = Number(p && p.conformite_niveau); return v>=1 && v<=3 ? v : 1; }
+// Applique aux producteurs d'une coopérative les niveaux calculés par le robot (résumé de sa dernière base finale : niveaux_plot = PlotID -> 2|3 ; le reste = 1).
+async function conformiteAppliquerDepuisRobot(coopId){
+  if (!supabaseClient || !coopId) return 0;
+  try{
+    const { data } = await supabaseClient.from('analyses_defo').select('resume').eq('cooperative_id', coopId).eq('etape','base_finale').eq('statut','terminee').order('created_at', { ascending:false }).limit(1);
+    const np = data && data[0] && data[0].resume && data[0].resume.niveaux_plot; if (!np) return 0;
+    const prods = (state.producteurs||[]).filter(p=>p.cooperative_id===coopId && p.farm_id);
+    const maj = [];
+    prods.forEach(p=>{ const v = Number(np[p.farm_id]) || 1; if (Number(p.conformite_niveau)!==v){ p.conformite_niveau = v; maj.push(p); } });
+    for (const niv of [1,2,3]){ const ids = maj.filter(p=>p.conformite_niveau===niv).map(p=>p.id); for (let i=0;i<ids.length;i+=200){ await supabaseClient.from('producteurs').update({ conformite_niveau:niv }).in('id', ids.slice(i,i+200)); } }
+    return maj.length;
+  }catch(e){ console.warn('conformiteAppliquerDepuisRobot', e); return 0; }
+}
 function ocAllouerVolume(eligibles, volumeTotalKg, nbDemande){
   const V = Math.round(Number(volumeTotalKg)||0);
   if (!(V>0)) return { error: 'Le volume doit être supérieur à 0 kg.' };
   // Règle des 6 livraisons : un producteur ne reçoit au plus que 1/6 de sa marge sous le plafond de 70 %, pour pouvoir livrer au moins 6 fois avant de l'atteindre.
-  const pool = ocMelanger((eligibles||[]).map(e=>({ p: e.p, cap: ocCapProd(e.remaining) }))).filter(e=>e.cap>=1);
+  // Règle de Nabi (12/11/2026) : à la traçabilité, les parcelles au plus haut niveau de conformité passent d'abord (niveau 1, puis 2, puis 3) ;
+  // à niveau égal, tirage aléatoire comme avant. Les niveaux faibles ne sont pas écartés : ils servent quand les meilleurs sont pleins.
+  const pool = ocMelanger((eligibles||[]).map(e=>({ p: e.p, cap: ocCapProd(e.remaining), niv: ocNiveauConformite(e.p) }))).filter(e=>e.cap>=1).sort((a,b)=>a.niv-b.niv);
   if (pool.length===0) return { error: "Aucun producteur de cette coopérative n'a de marge disponible sous le plafond." };
   const capTotal = pool.reduce((s,e)=>s+e.cap, 0);
   if (V>capTotal) return { error: 'Limite du potentiel atteinte : avec la règle des '+OC_LIVRAISONS_MIN+' livraisons (1/'+OC_LIVRAISONS_MIN+' de la marge de chaque producteur), la capacité restante est de '+fmtNum(capTotal)+' kg ('+pool.length+' producteur(s) éligible(s)).' };
@@ -22048,6 +22064,8 @@ async function confirmImport(){
     const { error } = await supabaseClient.from('producteurs').upsert(aEnregistrerUnique);
     if (error){ showToast('Échec de l\'enregistrement : '+error.message); }
   }
+  // niveaux de conformité du robot (dernière base finale de la coopérative) appliqués aux producteurs importés
+  try{ const nN = await conformiteAppliquerDepuisRobot(pi.cooperative_id); if (nN) console.log('niveaux de conformité appliqués :', nN); }catch(e){}
 
   // Remplacement complet (optionnel, decoche par defaut) : supprime les producteurs
   // de cette cooperative absents de ce fichier -- jamais silencieux, seulement si
