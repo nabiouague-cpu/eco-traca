@@ -4740,7 +4740,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-12-493';
+const APP_VERSION = '2026-11-12-494';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -14935,9 +14935,12 @@ function ocAllouerVolume(eligibles, volumeTotalKg, nbDemande){
   const V = Math.round(Number(volumeTotalKg)||0);
   if (!(V>0)) return { error: 'Le volume doit être supérieur à 0 kg.' };
   // Règle des 6 livraisons : un producteur ne reçoit au plus que 1/6 de sa marge sous le plafond de 70 %, pour pouvoir livrer au moins 6 fois avant de l'atteindre.
-  // Règle de Nabi (12/11/2026) : à la traçabilité, les parcelles au plus haut niveau de conformité passent d'abord (niveau 1, puis 2, puis 3) ;
-  // à niveau égal, tirage aléatoire comme avant. Les niveaux faibles ne sont pas écartés : ils servent quand les meilleurs sont pleins.
-  const pool = ocMelanger((eligibles||[]).map(e=>({ p: e.p, cap: ocCapProd(e.remaining), niv: ocNiveauConformite(e.p) }))).filter(e=>e.cap>=1).sort((a,b)=>a.niv-b.niv);
+  // Règle de Nabi (12/11/2026) : à la traçabilité, préférence aux parcelles au plus haut niveau de conformité, mais répartition homogène :
+  // tirage aléatoire PONDÉRÉ (niveau 1 = poids 3, niveau 2 = poids 2, niveau 3 = poids 1). Les meilleurs reviennent plus souvent sans être
+  // plafonnés d'abord, et les mêmes producteurs ne se retrouvent pas sur des camions qui se suivent.
+  const POIDS_NIV = { 1:3, 2:2, 3:1 };
+  const pool = (eligibles||[]).map(e=>{ const niv = ocNiveauConformite(e.p); return { p: e.p, cap: ocCapProd(e.remaining), niv, k: Math.pow(Math.random(), 1/(POIDS_NIV[niv]||1)) }; })
+    .filter(e=>e.cap>=1).sort((a,b)=>b.k-a.k);
   if (pool.length===0) return { error: "Aucun producteur de cette coopérative n'a de marge disponible sous le plafond." };
   const capTotal = pool.reduce((s,e)=>s+e.cap, 0);
   if (V>capTotal) return { error: 'Limite du potentiel atteinte : avec la règle des '+OC_LIVRAISONS_MIN+' livraisons (1/'+OC_LIVRAISONS_MIN+' de la marge de chaque producteur), la capacité restante est de '+fmtNum(capTotal)+' kg ('+pool.length+' producteur(s) éligible(s)).' };
