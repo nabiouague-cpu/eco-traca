@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.29
+// @version      0.4.30
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.29';
+  const VERSION = '0.4.30';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -348,13 +348,22 @@
   }
   // Réapplique les valeurs voulues sur les listes du formulaire après un délai (si OBC les a réinitialisées) ; renvoie ce qui manque encore.
   async function reappliquer(form, ms) {
+    // OBC recharge ses listes dépendantes (producteur → parcelle, coopérative → poste comptable…) et EFFACE alors la valeur choisie en aval.
+    // On réapplique donc dans l'ordre du formulaire, en attendant que chaque liste soit rechargée, puis on recommence tant que quelque chose a bougé.
     let manques = [];
     rafraichirListes(form);
-    for (let passe = 0; passe < 2; passe++) {
-      await dormir(ms || 800); manques = [];
-      [...form.querySelectorAll('select[data-origen-val]')].forEach((el) => { const v = el.dataset.origenVal; if (el.value !== v) { if (!setSelect(el, v)) manques.push(el.id); } });
+    for (let passe = 0; passe < 4; passe++) {
+      await dormir(passe === 0 ? (ms || 800) : 600); manques = []; let modifie = false;
+      for (const el of [...form.querySelectorAll('select[data-origen-val]')]) {
+        const v = el.dataset.origenVal; if (el.value === v) continue;
+        let ok = setSelect(el, v);
+        if (!ok) { await attendre(() => [...el.options].some((o) => o.value === v), 5000, 300); ok = setSelect(el, v); }
+        modifie = true; await dormir(1200); // laisse OBC recharger les listes qui dépendent de celle-ci
+        if (!ok) manques.push(el.id);
+      }
+      if (!modifie) break; // tout est en place et stable
     }
-    await dormir(300);
+    await dormir(400);
     [...form.querySelectorAll('select[data-origen-val]')].forEach((el) => { if (el.value !== el.dataset.origenVal && !manques.includes(el.id)) manques.push(el.id); });
     rafraichirListes(form);
     return manques;
