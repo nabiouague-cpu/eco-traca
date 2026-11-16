@@ -4741,7 +4741,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-16-500';
+const APP_VERSION = '2026-11-16-501';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -29343,9 +29343,18 @@ function renderSaisieObcTab(){
   st.forEach(x=>{ nb[x.cle]++; });
   const f = ['pret','prix','attente','saisi'].indexOf(state.saisieObcFiltre)>=0 ? state.saisieObcFiltre : 'tous';
   const liste = aSaisir.filter(a=> f==='tous' || st.get(a.id).cle===f);
+  // Classement : par coopérative (les coopératives rangées selon leur plus ancien connaissement, puis chaque camion par date), par date seule, ou par numéro
+  const tri = ['coop','date','num'].indexOf(state.saisieObcTri)>=0 ? state.saisieObcTri : 'coop';
+  const dKey = a=>String(a.date||'').slice(0,10) || '9999-99-99', nCoop = a=>{ const c = coopById(a.cooperative_id); return String((c && c.nom) || a.fournisseur_saigic || '—'); };
+  const parDate = (x,y)=>dKey(x).localeCompare(dKey(y)) || String(x.connaissement).localeCompare(String(y.connaissement), 'fr', { numeric:true });
+  if (tri==='date') liste.sort(parDate);
+  else if (tri==='coop'){
+    const premier = new Map(); liste.forEach(a=>{ const k = nCoop(a), d = dKey(a); if (!premier.has(k) || d<premier.get(k)) premier.set(k, d); });
+    liste.sort((x,y)=>{ const kx = nCoop(x), ky = nCoop(y); return kx===ky ? parDate(x,y) : premier.get(kx).localeCompare(premier.get(ky)) || kx.localeCompare(ky,'fr'); });
+  }
   const sacs = liste.reduce((t,a)=>t+(Number(a.nombre_sacs_accepte)||0),0), vol = liste.reduce((t,a)=>t+(Number(a.poids_net_produit)||0),0);
   let html = '<div class="panel"><div class="panel-head"><h2>Saisie OBC — connaissements ('+fmtNum(aSaisir.length)+' · '+fmtNum(nb.tous-nb.saisi)+' à saisir)</h2>'
-    + '<p class="hint" style="margin:4px 0 0">Tous les connaissements, par ordre de numéro, avec leur statut de saisie dans OBC. Une fois la saisie terminée, clique « déjà saisi » : la ligne passe en « Saisi dans OBC ».</p></div>'
+    + '<p class="hint" style="margin:4px 0 0">Tous les connaissements, classés par coopérative puis par date de connaissement (changeable ci-dessous), avec leur statut de saisie dans OBC. Une fois la saisie terminée, clique « déjà saisi » : la ligne passe en « Saisi dans OBC ».</p></div>'
     + '<div class="sobc-groupe" style="display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;padding:0 18px 10px;font-size:13px">'
     + '<b>🧾 Bordereaux groupés</b> du <input type="date" value="'+esc(state.sobcDu||'')+'" onchange="setSobcPeriode(\'sobcDu\', this.value)"> au <input type="date" value="'+esc(state.sobcAu||'')+'" onchange="setSobcPeriode(\'sobcAu\', this.value)">'
     + '<label style="display:flex;gap:4px;align-items:center"><input type="checkbox"'+(state.sobcInclureNonSaisis?' checked':'')+' onchange="state.sobcInclureNonSaisis=this.checked;render()"> inclure ceux pas encore saisis</label>'
@@ -29387,6 +29396,8 @@ function renderSaisieObcTab(){
           + '</div>'; })()
     + '<div class="achats-barre" style="padding:0 18px 10px"><div class="achats-filtres">'
     + [['tous','Tous'],['pret','Prêts à saisir'],['prix','Prix à renseigner'],['attente','En attente de pesée'],['saisi','Saisis dans OBC']].map(([k,l])=>'<button type="button" class="chip-coop'+(f===k?' actif':'')+'" onclick="setSaisieObcFiltre(\''+k+'\')">'+esc(l)+' <small>('+nb[k]+')</small></button>').join('')
+    + '</div><div class="achats-filtres" style="margin-top:6px;align-items:center"><span class="hint" style="margin:0 4px 0 0">Classer :</span>'
+    + [['coop','Par coopérative (date de connaissement)'],['date','Par date de connaissement'],['num','Par numéro']].map(([k,l])=>'<button type="button" class="chip-coop'+(tri===k?' actif':'')+'" onclick="state.saisieObcTri=\''+k+'\';render()">'+esc(l)+'</button>').join('')
     + '</div></div>';
   if (!liste.length){
     return html + '<div class="empty">'+'Aucun connaissement ne correspond à ce filtre.'+'</div></div>';
