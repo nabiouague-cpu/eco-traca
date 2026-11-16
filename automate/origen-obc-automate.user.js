@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.38
+// @version      0.4.39
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.38';
+  const VERSION = '0.4.39';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -169,7 +169,21 @@
   }
   function erreurVisible() { return [...document.querySelectorAll('.toast-error .toast-message, .toast-error, .alert-danger, .swal2-html-container, .field-validation-error, .validation-summary-errors, .text-danger, .has-error .help-block, .invalid-feedback, .toast-warning, .toast-info')].filter((x) => x.offsetParent !== null).map((x) => x.textContent.trim()).filter(Boolean).slice(0, 2).join(' | ').slice(0, 220); }
   // Si OBC demande une confirmation après « Enregistrer » (boîte SweetAlert / Bootbox), on l'accepte.
-  function confirmerBoite() { let n = 0; const t = setInterval(() => { const b = [...document.querySelectorAll('.swal2-confirm, .swal-button--confirm, .bootbox-accept, .sweet-alert .confirm')].find((x) => x.offsetParent !== null); if (b) { clearInterval(t); try { b.click(); } catch (er) { /* ignoré */ } } if (++n > 12) clearInterval(t); }, 400); }
+  function confirmerBoite() {
+    let n = 0;
+    const t = setInterval(() => {
+      // Fenêtre OBC visible (SweetAlert, Bootbox, modale) : si c'est un message de REFUS, on le lit, on le garde et on NE le ferme PAS (avant, Noah la fermait avant qu'on puisse la lire) ; sinon c'est une demande de confirmation : on l'accepte.
+      const boite = [...document.querySelectorAll('.swal2-popup, .sweet-alert, .bootbox, .modal.show, .modal.in')].find((x) => x.offsetParent !== null);
+      const txt = boite ? String(boite.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 300) : '';
+      if (txt && /introuvable|erreur|impossible|invalide|refus|échec|echec|n'existe|obligatoire|interdit|doit /i.test(txt)) {
+        clearInterval(t); const ee = lireEtat(); if (ee) { ee.erreurBoite = txt; journal(ee, 'Fenêtre OBC : ' + txt); ecrireEtat(ee); }
+        return;
+      }
+      const b = [...document.querySelectorAll('.swal2-confirm, .swal-button--confirm, .bootbox-accept, .sweet-alert .confirm')].find((x) => x.offsetParent !== null);
+      if (b) { clearInterval(t); try { b.click(); } catch (er) { /* ignoré */ } }
+      if (++n > 12) clearInterval(t);
+    }, 400);
+  }
   async function enregistrerAuto(e) {
     if (/⚠/.test(e.note || '')) { await echecLot(e, 'contrôle non concordant, rien n\'a été enregistré. ' + e.note); return false; }
     const b = await attendre(() => boutonEnregistrer(e.etape), 8000, 300);
@@ -1239,6 +1253,7 @@
           }
           if (e.erreur) { e.erreur = null; }
           if (res === 'suivant') { e.statut = 'a_faire'; e.note = ''; e.etape++; delete e.t_save; delete e.cliques; delete e.verifErr; ecrireEtat(e); afficherEtat(); continue; }
+          { const ee = lireEtat(); if (ee && ee.erreurBoite) { await echecLot(ee, 'OBC a refusé l\'enregistrement : « ' + ee.erreurBoite + ' »'); return; } }
           if (e.enFile && e.t_save && lireFile().auto !== false) {
             const ecoule = Date.now() - e.t_save;
             if (ecoule > 90000) { await echecLot(e, 'enregistrement automatique sans effet après 90 s. ' + erreurVisible()); return; }
