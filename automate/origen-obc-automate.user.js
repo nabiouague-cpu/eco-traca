@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.28
+// @version      0.4.29
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.28';
+  const VERSION = '0.4.29';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -625,7 +625,8 @@
   const existeUsine = (e) => existeDans('/AgroAchatConnaissementUsine/Index', e.lot.connaissement.numero, 4, e.lot.connaissement.numero);
   const existePesee = (e) => existeDans('/AgroAchatPeseeBrousse/Index', e.lot.pesee.code, 4, e.lot.pesee.code);
   // Le filtre du bordereau ne porte que sur son propre numéro : on filtre sur le n° CCC (préfixe) et on vérifie la colonne du connaissement.
-  const existeBordereau = (e) => existeDans('/AgroAchatBordereauReception/Index', String(e.lot.connaissement.numero || '').split('-')[0], 8, e.lot.connaissement.numero);
+  // Depuis nov. 2026 la liste des bordereaux n'affiche plus le connaissement (« -- ») : on cherche d'abord par le N°BR (colonne 4), puis, à défaut, par le connaissement (colonne 8).
+  const existeBordereau = async (e) => { const num = e.lot.bordereau && e.lot.bordereau.numero; if (num) { const r = await existeDans('/AgroAchatBordereauReception/Index', num, 4, num); if (r) return r; } return existeDans('/AgroAchatBordereauReception/Index', String(e.lot.connaissement.numero || '').split('-')[0], 8, e.lot.connaissement.numero); };
 
   // Ligne modèle : si la coopérative a déjà un connaissement brousse dans OBC, on regarde sa ligne de détail la plus récente
   // pour reprendre le même producteur et la même parcelle (le reste de la ligne est propre à la livraison en cours).
@@ -1095,7 +1096,7 @@
     // Données livraison (connaissement usine)
     const us = await existeUsine(e);
     if (!us || us.illisible) ajout('Données livraison', 8, 'enregistrement', 'présent', 'absent');
-    else { const r = await recolteDe(us); if (!r || !new RegExp('^' + rec, 'i').test(r.texte)) ajout('Données livraison', 8, 'récolte', rec, r && r.texte || 'vide'); }
+    /* récolte des données livraison : le formulaire de modification d'OBC n'affiche aucune valeur de liste (campagne, récolte, fournisseur… tous vides à l'écran même quand ils sont enregistrés) — contrôle impossible par lecture, retiré le 16/11/2026 (66 fausses anomalies le 12/11) */
     // Pesée
     const p = lot.pesee || {}; const pe = await existePesee(e);
     if (!pe || pe.illisible) ajout('Pesée', 9, 'enregistrement', 'présent', 'absent');
