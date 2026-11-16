@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.36
+// @version      0.4.37
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.36';
+  const VERSION = '0.4.37';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -1212,6 +1212,23 @@
 
   // ---------- boucle ----------
   let enCours = false;
+  // Quand Noah reprend à une étape tardive (« Refaire à partir de… », reprise de la file), les étapes 1 à 7 ne sont pas rejouées : le fournisseur et le transporteur trouvés par elles manquaient, et les données livraison étaient enregistrées SANS fournisseur ni transporteur (« -- » dans « Détails pesée »). On les retrouve ici avant toute étape à partir de la livraison.
+  async function retablirIds(e) {
+    if (e.etape < 8) return;
+    if (!e.ids) e.ids = {};
+    if (!e.ids.fournisseur_id) {
+      const r = await trouverFournisseur(e.lot);
+      if (!r) throw new Error('Coopérative ' + (e.lot.cooperative && e.lot.cooperative.sigle) + ' introuvable dans OBC : reprends depuis le début (étapes 1 à 7)');
+      e.ids.fournisseur_id = r.id; e.ids.fournisseur_nom = r.code; journal(e, 'Reprise : coopérative retrouvée dans OBC : ' + r.code + ' (id ' + r.id + ')');
+    }
+    if (!e.ids.transporteur_nom && !e.ids.transporteur_nouveau && e.lot.transporteur && e.lot.transporteur.nom) {
+      const ch = choisirTransporteur(e.lot, await listerTransporteurs(e.lot.transporteur.nom.split(' ')[0]));
+      if (!ch.existant) throw new Error('Transporteur « ' + e.lot.transporteur.nom + ' » introuvable dans OBC : reprends depuis le début (étapes 1 à 7)');
+      e.ids.transporteur_nom = ch.existant.nom; journal(e, 'Reprise : transporteur retrouvé dans OBC : ' + ch.existant.nom);
+    }
+    ecrireEtat(e);
+  }
+  const lancerEtape = async (e) => { await retablirIds(e); return EXEC[e.etape - 1](e); };
   async function boucle() {
     if (enCours) return; enCours = true;
     try {
@@ -1228,7 +1245,7 @@
         if (e.statut === 'attente_enregistrement') {
           // le formulaire est rempli et enregistré (par le robot ou par l'utilisateur) : on vérifie toutes les 4 s
           let res;
-          try { res = await avecDelai(EXEC[e.etape - 1](e), 150000, ETAPES[e.etape - 1]); }
+          try { res = await avecDelai(lancerEtape(e), 150000, ETAPES[e.etape - 1]); }
           catch (err) {
             const msg = err && err.message ? err.message : String(err);
             e.verifErr = (e.verifErr || 0) + 1;
@@ -1266,7 +1283,7 @@
         e.erreur = null; ecrireEtat(e); afficherEtat();
         let res;
         if (e.dernierDebut !== e.etape + '@' + location.pathname) { e.dernierDebut = e.etape + '@' + location.pathname; journal(e, 'Étape ' + e.etape + ' (' + ETAPES[e.etape - 1] + ') : début sur ' + location.pathname); }
-        try { res = await avecDelai(EXEC[e.etape - 1](e), 150000, ETAPES[e.etape - 1]); }
+        try { res = await avecDelai(lancerEtape(e), 150000, ETAPES[e.etape - 1]); }
         catch (err) {
           const msg = err && err.message ? err.message : String(err);
           if (e.enFile) {
