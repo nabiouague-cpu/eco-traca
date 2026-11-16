@@ -4593,6 +4593,7 @@ function ocVerrouillerFond(){
   }catch(e){}
 }
 function render(){
+  _idxStamp++;
   const s = capturerSaisies();
   _renderBrut();
   const app = document.getElementById('app');
@@ -4740,7 +4741,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-16-496';
+const APP_VERSION = '2026-11-16-497';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -10052,11 +10053,24 @@ function clientMetaDe(client){
     return motsMeta.some(mot=>mot.length>=3 && motsClient.includes(mot));
   }) || null;
 }
+// Le logo (base64, ~60 ko) etait recopie dans chaque ligne d'achat : 87 lignes = 5 Mo de HTML et 7 s de rendu a chaque clic.
+// On le convertit une seule fois en adresse blob (quelques octets par ligne) ; le cache est invalide si le logo change.
+const _ccLogoUrls = {};
+function ccLogoUrl(meta){
+  const b64 = meta.logo_b64||'', cle = meta.client+'|'+b64.length+'|'+b64.slice(-24);
+  if (_ccLogoUrls[cle]) return _ccLogoUrls[cle];
+  try {
+    const bin = atob(b64), u8 = new Uint8Array(bin.length);
+    for (let i=0;i<bin.length;i++) u8[i] = bin.charCodeAt(i);
+    _ccLogoUrls[cle] = URL.createObjectURL(new Blob([u8], { type: meta.logo_type||'image/png' }));
+  } catch(e){ _ccLogoUrls[cle] = 'data:'+(meta.logo_type||'image/png')+';base64,'+b64; }
+  return _ccLogoUrls[cle];
+}
 function ccAvatarHtml(client, taille){
   taille = taille||40;
   const meta = clientMetaDe(client);
   const contenu = (meta && meta.logo_b64)
-    ? '<img src="data:'+(meta.logo_type||'image/png')+';base64,'+meta.logo_b64+'" alt="" style="width:100%;height:100%;object-fit:contain;border-radius:8px;">'
+    ? '<img src="'+ccLogoUrl(meta)+'" alt="" style="width:100%;height:100%;object-fit:contain;border-radius:8px;">'
     : '<span style="color:#fff;font-weight:700;font-size:'+Math.round(taille*0.4)+'px;">'+esc(ccInitiales(client))+'</span>';
   return '<div class="cc-avatar" title="Cliquer pour déposer le logo de ce client" onclick="event.stopPropagation();ccLogoChoisir(\''+escJs(client)+'\')" style="width:'+taille+'px;height:'+taille+'px;background:'+(meta&&meta.logo_b64?'var(--surface-2)':ccAvatarCouleur(client))+'">'+contenu+'</div>';
 }
@@ -14934,10 +14948,22 @@ function potentiel(p){
 // Un Farm ID n'est unique QUE dans sa cooperative (le meme code, ex. « E-032-P1 », existe chez plusieurs cooperatives) : le cumul
 // d'un producteur ne compte donc que les achats de SA cooperative. Sans ce filtre, les livraisons d'une cooperative etaient
 // attribuees aux producteurs d'une autre portant le meme Farm ID (fausses alertes de plafond).
+// ---- Index producteurs / achats (perf) ----
+// 19 869 producteurs x 2 584 achats : chaque « find » ou « filter » croise coute ~1 s. Les index sont reconstruits au plus une fois par rendu
+// (render() incremente _idxStamp), donc toujours a jour, et les recherches deviennent immediates.
+let _idxStamp = 0;
+const _idx = { stamp:-1, prod:null, achProd:null, rows:null };
+function _idxMaj(){
+  if (_idx.stamp===_idxStamp && _idx.prod && _idx.nP===(state.producteurs||[]).length && _idx.nA===(state.achats||[]).length) return;
+  const prod = new Map(), achProd = new Map();
+  (state.producteurs||[]).forEach(p=>{ prod.set(p.cooperative_id+'|'+p.farm_id, p); });
+  (state.achats||[]).forEach(a=>{ if (!a.producteur_id) return; const k = a.cooperative_id+'|'+a.producteur_id; const l = achProd.get(k); if (l) l.push(a); else achProd.set(k, [a]); });
+  _idx.stamp = _idxStamp; _idx.prod = prod; _idx.achProd = achProd; _idx.rows = new Map(); _idx.nP = (state.producteurs||[]).length; _idx.nA = (state.achats||[]).length;
+}
+function producteurDe(coopId, farmId){ _idxMaj(); return _idx.prod.get(coopId+'|'+farmId) || null; }
 function achatsProducteur(producteurId, campagneId, periode, coopId){
-  return state.achats.filter(a=>{
-    if (a.producteur_id !== producteurId) return false;
-    if (a.cooperative_id !== coopId) return false;
+  _idxMaj();
+  return (_idx.achProd.get(coopId+'|'+producteurId) || []).filter(a=>{
     if (campagneId==='all') return true; // toutes campagnes : la notion de periode ne s'applique pas
     if ((a.campagne_id||'')!==campagneId) return false;
     if (periode==='principale') return a.periode==='principale';
@@ -16122,9 +16148,12 @@ async function submitTracerVolumeDirecte(){
 }
 
 function computeRows(coopImposee){
+  _idxMaj();
+  const cle = [coopImposee||'', state.coopFilter, state.campagneFilter, state.periodeFilter, state.settings.seuil].join('|');
+  if (_idx.rows.has(cle)) return _idx.rows.get(cle);
   const seuil = Number(state.settings.seuil)||90;
   const periode = state.periodeFilter;
-  return state.producteurs
+  const _res = state.producteurs
     .filter(p => coopImposee ? p.cooperative_id===coopImposee : (state.coopFilter==='all' || p.cooperative_id===state.coopFilter))
     .map(p=>{
       const pot = potentiel(p);
@@ -16138,6 +16167,8 @@ function computeRows(coopImposee){
       const pb = b.st.pct==null ? -1 : b.st.pct;
       return pb-pa;
     });
+  _idx.rows.set(cle, _res);
+  return _res;
 }
 
 function setTab(t){ state.tab = t; state.panneau = null; state.animEntree = true; render(); }
@@ -27784,7 +27815,7 @@ function achatsFiltered(){
       if (periode==='principale' && a.periode!=='principale') return false;
       if (periode==='intermediaire' && !(a.periode==='principale' || a.periode==='intermediaire')) return false;
     }
-    const prod = a.producteur_id ? state.producteurs.find(p=>p.farm_id===a.producteur_id && p.cooperative_id===a.cooperative_id) : null;
+    const prod = a.producteur_id ? producteurDe(a.cooperative_id, a.producteur_id) : null;
     const acoopId = prod ? prod.cooperative_id : a.cooperative_id;
     if (coopId!=='all' && acoopId!==coopId) return false;
     return true;
