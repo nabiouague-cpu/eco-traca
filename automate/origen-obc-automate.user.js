@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.37
+// @version      0.4.38
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.37';
+  const VERSION = '0.4.38';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -1005,19 +1005,6 @@
     }
     e.note = 'Pesée ' + p.code + ' : entrée ' + p.poids_entree + ' / sortie ' + p.poids_sortie + ', ' + paires.length + ' rubriques qualité, ' + p.classement + '. Poids net payé attendu : ' + p.poids_net_paye_attendu + '.'; return 'rempli';
   }
-  // Dans le formulaire bordereau, le bloc « Détails pesée » montre le fournisseur et l'origine de la pesée choisie. « -- » = la fiche Données livraison ou la pesée est incomplète dans OBC.
-  function detailsPeseeVides() {
-    const vides = [];
-    for (const nom of ['FOURNISSEUR', 'ORIGINE']) {
-      const re = new RegExp('^\\s*' + nom + '\\s*:?\\s*$', 'i');
-      const el = [...document.querySelectorAll('label,span,div,td,th,b,strong,small,p,dt')].find((x) => x.children.length === 0 && x.offsetParent !== null && re.test(x.textContent || ''));
-      if (!el) continue;
-      const sib = el.nextElementSibling; if (sib && sib.querySelector('input,select,textarea')) continue;
-      let v = sib ? sib.textContent : (el.parentElement ? el.parentElement.textContent.replace(el.textContent, '') : '');
-      v = String(v).trim(); if (v === '' || /^-{1,}$/.test(v)) vides.push(nom.toLowerCase());
-    }
-    return vides;
-  }
   async function etapeBordereau(e) {
     const lot = e.lot, b = lot.bordereau;
     if (await existeBordereau(e)) { e.fait[10] = 'déjà dans OBC'; journal(e, 'Bordereau déjà saisi'); return 'suivant'; }
@@ -1027,8 +1014,6 @@
     await listeStable(q('#txtpesee_brousse_idAdd'));
     await setSelectTexte(q('#txtpesee_brousse_idAdd'), lot.pesee.code, 'Pesée brousse');
     await dormir(1500);
-    { let vide = detailsPeseeVides(); if (vide.length) { await dormir(2500); vide = detailsPeseeVides(); }
-      if (vide.length) throw new Error('Bordereau : le bloc « Détails pesée » d\'OBC montre ' + vide.join(' et ') + ' vide (--) : la fiche Données livraison (ou la pesée) est incomplète dans OBC, rien n\'est enregistré. Clique « ↩ 1 · Données livraison » : Noah les refait (il crée au besoin l\'origine manquante).'); }
     setInput(q('#txtbordereau_reception_dateAdd'), isoDate(b.date)); setInput(q('#txtbordereau_reception_numeroAdd'), b.numero);
     setInput(q('#txtbordereau_reception_pu_commoditeAdd'), num(b.pu_commodite)); setInput(q('#txtbordereau_reception_retenue_pu_bicAdd'), num(b.pu_bic));
     setInput(q('#txtbordereau_reception_retenue_pu_mandatAdd'), '0'); setInput(q('#txtbordereau_reception_retenue_pu_miseencompteAdd'), '0');
