@@ -4740,7 +4740,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-12-494';
+const APP_VERSION = '2026-11-16-495';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7680,9 +7680,10 @@ function renderShippingTab(){
   const _kgP = lotsP.reduce((t,l)=>t+(lotsUsinagePese(l)||lotsUsinageSortie(l)||0), 0);
   const kg = lots.reduce((s,l)=>s+(lotsUsinagePese(l)||lotsUsinageSortie(l)||0), 0);
   const sous = state.shipSous || 'cv';
-  const SOUS = [['cv','CV & expéditions'],['sacherie','Sacherie'],['contrats','Contrats clients'],['series','Séries de numérotation'],['achats_clients','Suivi achats clients'],['usinage','Lots d\'usinage'],['suivi','Suivi des lots'],['saigic','Déclaration SAIGIC'],['ot','OT & embarquement'],['chaine','Chaîne de traçabilité']];
+  const SOUS = [['cv','CV & expéditions'],['sacherie','Sacherie'],['contrats','Contrats clients'],['series','Séries de numérotation'],['achats_clients','Suivi achats clients'],['usinage','Lots d\'usinage'],['suivi','Suivi des lots'],['saigic','Déclaration SAIGIC'],['ot','OT & embarquement'],['chaine','Chaîne de traçabilité'],['liasses','Liasses documentaires']];
   const barre = '<div class="oc-subtabs">'+SOUS.map(([k,l])=>'<button class="'+(sous===k?'active':'')+'" onclick="state.shipSous=\''+k+'\';state.lotsSousOnglet=\''+k+'\';render()">'+l+'</button>').join('')+'</div>';
   if (sous==='sacherie') return '<div class="panel" style="padding:0 18px 4px">'+barre+'</div>' + renderSacherieTab();
+  if (sous==='liasses') return '<div class="panel" style="padding:0 18px 4px">'+barre+'</div><div class="panel" style="padding:14px 18px">' + renderLiassesTab() + '</div>';
   if (sous==='cv') return '<div class="panel" style="padding:0 18px 4px">'+barre+'</div>' + renderShipCv();
   const _ent = lots.filter(l=>shipEtape(l)!=='embarque').reduce((t,l)=>t+(lotsUsinagePese(l)||0),0), _emb = lots.filter(l=>shipEtape(l)==='embarque').reduce((t,l)=>t+(lotsUsinagePese(l)||0),0);
   const _sousOt = lots.filter(l=>shipOtDuLot(l.id)).length, _bloc = new Set(shipAlertes(lots).filter(x=>x[0]!=='info').map(x=>x[1])).size;
@@ -7797,6 +7798,96 @@ async function shipSuiviEnregistrer(){
   }catch(e){ showToast('Échec : '+e.message); }
 }
 
+// ---- Liasses documentaires : état des PDF rangés dans « LIASSE DOCUMENTAIRE 26-27 » (OneDrive), comparé aux
+// connaissements déchargés dans nos usines, présenté par client puis par traitant et coopérative.
+// L'inventaire des fichiers (table liasse_fichiers) est tenu à jour par le robot de rangement à chaque passage.
+async function chargerLiasses(){
+  if (!supabaseClient) return;
+  const r = await supabaseClient.from('liasse_fichiers').select('*');
+  if (r.error) showToast('Impossible de charger l\'inventaire des liasses : '+r.error.message);
+  state.liasseFichiers = r.error ? (state.liasseFichiers||[]) : (r.data||[]);
+  state.liasseCharge = true;
+}
+function liasseCnNorm(s){ const m = String(s||'').toUpperCase().match(/(SC\d{6})-(\d{4})-(?:(\d)-)?0*(\d+)[A-Z]?/); return m ? m[1]+'-'+m[2]+'-'+(m[3]||'2')+'-'+m[4] : ''; }
+function liasseTraitantLib(t){ const u = String(t||'').toLowerCase(); if (!u) return '—'; if (u.indexOf('awahus')>=0) return 'AWAHUS'; if (u.indexOf('sitapa')>=0) return 'SITAPA'; if (u.indexOf('bobby')>=0) return 'BOBBY VO'; if (u.indexOf('ecorigine')>=0) return 'ECORIGINE'; if (u.indexOf('touton')>=0) return 'TOUTON'; if (u.indexOf('sucden')>=0) return 'SUCDEN'; return String(t).toUpperCase(); }
+function liasseEtat(){
+  const camp = campagneCourante(), cid = camp ? camp.id : null;
+  const achats = (state.achats||[]).filter(a=>!a.producteur_id && a.connaissement && a.usine_dechargement && (!cid || a.campagne_id===cid));
+  const parCn = {}; (state.liasseFichiers||[]).forEach(f=>{ const k = liasseCnNorm(f.connaissement||f.nom); if (!k) return; (parCn[k] = parCn[k]||[]).push(f); });
+  const clients = {}; const vus = new Set();
+  achats.forEach(a=>{
+    const client = achatClientEffectif(a) || '—', ex = livrExecutantDe(a), traitant = liasseTraitantLib(ex && ex.traitant), coop = coopById(a.cooperative_id);
+    const k = liasseCnNorm(a.connaissement); vus.add(k);
+    const fs = parCn[k]||[], nabi = fs.filter(f=>f.source!=='serge'), serge = fs.filter(f=>f.source==='serge');
+    const statut = nabi.length ? 'present' : serge.length ? 'serge' : 'manquant';
+    const C = clients[client] = clients[client] || { client, traitants:{}, n:0, present:0, serge:0, manquant:0 };
+    const T = C.traitants[traitant] = C.traitants[traitant] || { traitant, coops:{}, n:0, present:0, serge:0, manquant:0 };
+    const nomCoop = coop ? coop.nom : (a.cooperative_id||'?');
+    const K = T.coops[nomCoop] = T.coops[nomCoop] || { coop:nomCoop, usine: ex ? ex.usine : a.usine_dechargement, lignes:[] };
+    K.lignes.push({ cn:a.connaissement, date:a.date, kg:Number(a.poids_net_produit)||0, refoulee:!!a.refoulee, statut, fichiers:fs });
+    [C,T].forEach(o=>{ o.n++; o[statut]++; });
+  });
+  const orphelins = (state.liasseFichiers||[]).filter(f=>f.source!=='serge' && (!liasseCnNorm(f.connaissement||f.nom) || !vus.has(liasseCnNorm(f.connaissement||f.nom))));
+  const inventaire = (state.liasseFichiers||[]).reduce((m,f)=>f.vu_le>m?f.vu_le:m, '');
+  return { clients, orphelins, inventaire, total:{ n:achats.length, present:Object.values(clients).reduce((t,c)=>t+c.present,0), serge:Object.values(clients).reduce((t,c)=>t+c.serge,0), manquant:Object.values(clients).reduce((t,c)=>t+c.manquant,0) } };
+}
+function liassePastille(statut){
+  return statut==='present' ? '<span style="display:inline-block;padding:2px 9px;border-radius:12px;background:#E6F4EA;color:#1F6E5C;font-size:11.5px;font-weight:600">Présent</span>'
+    : statut==='serge' ? '<span style="display:inline-block;padding:2px 9px;border-radius:12px;background:#FFF4D6;color:#8A6400;font-size:11.5px;font-weight:600" title="Le PDF est dans le OneDrive de Serge Amouzoun, pas dans la liasse de référence">Chez Serge seulement</span>'
+    : '<span style="display:inline-block;padding:2px 9px;border-radius:12px;background:#FDE8E8;color:#B42318;font-size:11.5px;font-weight:600">Manquant</span>';
+}
+function liasseBasculer(cle){ state.liasseOuverts = state.liasseOuverts || {}; state.liasseOuverts[cle] = !state.liasseOuverts[cle]; render(); }
+function renderLiassesTab(){
+  if (!state.liasseCharge){ chargerLiasses().then(()=>render()); return '<div class="hint" style="padding:18px">Chargement de l\'inventaire des liasses…</div>'; }
+  const E = liasseEtat(), T = E.total, filtre = state.liasseClient || '';
+  const noms = Object.keys(E.clients).sort();
+  const compte = (o)=>'<span style="color:#1F6E5C;font-weight:600">'+o.present+'</span> / <span style="color:#B42318;font-weight:600">'+o.manquant+'</span>'+(o.serge?' / <span style="color:#8A6400;font-weight:600">'+o.serge+'</span>':'')+' <span class="hint">sur '+o.n+'</span>';
+  let html = '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:12px">'
+    + '<div><h3 style="margin:0 0 4px">Liasses documentaires — ce qui est rangé et ce qui manque</h3><div class="hint">Un PDF par connaissement, rangé dans LIASSE DOCUMENTAIRE 26-27 (port › traitant ou client › coopérative). Comparaison avec les camions déchargés dans nos usines.'+(E.inventaire?' Inventaire du '+dateFr(E.inventaire)+' '+String(E.inventaire).slice(11,16)+'.':'')+'</div></div>'
+    + '<div style="display:flex;gap:8px"><button class="btn" onclick="state.liasseCharge=false;render()">Actualiser</button><button class="btn" onclick="liasseExporter()">⬇ Excel</button></div></div>'
+    + '<div class="gros" style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:14px">'
+    + '<div><div class="v">'+T.n+'</div><div class="l">camions déchargés</div></div>'
+    + '<div><div class="v" style="color:#1F6E5C">'+T.present+'</div><div class="l">liasses présentes</div></div>'
+    + '<div><div class="v" style="color:#B42318">'+T.manquant+'</div><div class="l">manquantes</div></div>'
+    + (T.serge?'<div><div class="v" style="color:#8A6400">'+T.serge+'</div><div class="l">chez Serge seulement</div></div>':'')
+    + '<div><div class="v">'+E.orphelins.length+'</div><div class="l">fichiers sans camion</div></div></div>'
+    + '<div class="oc-subtabs" style="margin-top:0"><button class="'+(filtre?'':'active')+'" onclick="state.liasseClient=\'\';render()">Tous les clients</button>'+noms.map(n=>'<button class="'+(filtre===n?'active':'')+'" onclick="state.liasseClient=\''+esc(n)+'\';render()">'+esc(n)+'</button>').join('')+'</div>';
+  noms.filter(n=>!filtre || n===filtre).forEach(n=>{
+    const C = E.clients[n];
+    html += '<div class="panel" style="margin:0 0 14px;padding:14px 18px"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><h3 style="margin:0">'+esc(n)+'</h3><div>'+compte(C)+'</div></div>';
+    Object.keys(C.traitants).sort().forEach(t=>{
+      const Tr = C.traitants[t];
+      html += '<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap"><strong>'+esc(t)+'</strong><span>'+compte(Tr)+'</span></div>';
+      Object.keys(Tr.coops).sort().forEach(cn=>{
+        const K = Tr.coops[cn], cle = n+'|'+t+'|'+cn, ouvert = (state.liasseOuverts||{})[cle];
+        const pres = K.lignes.filter(l=>l.statut==='present').length, manq = K.lignes.filter(l=>l.statut==='manquant').length, sg = K.lignes.filter(l=>l.statut==='serge').length;
+        html += '<div style="margin:8px 0 0 12px"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;cursor:pointer" onclick="liasseBasculer(\''+esc(cle).replace(/'/g,"\\'")+'\')"><span>'+(ouvert?'▾':'▸')+' '+esc(cn)+' <span class="hint">'+esc(K.usine||'')+'</span></span><span>'+compte({present:pres,manquant:manq,serge:sg,n:K.lignes.length})+'</span></div>';
+        if (ouvert){
+          html += '<table class="data-table" style="margin:6px 0 4px 18px;width:auto;min-width:560px"><thead><tr><th>Connaissement</th><th>Déchargé le</th><th class="num">Poids net (kg)</th><th>Liasse</th><th>Fichier</th></tr></thead><tbody>'
+            + K.lignes.slice().sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))).map(l=>'<tr><td>'+esc(l.cn)+(l.refoulee?' <span class="hint">(refoulé)</span>':'')+'</td><td>'+esc(dateFr(l.date))+'</td><td class="num">'+fmtNum(l.kg)+'</td><td>'+liassePastille(l.statut)+'</td><td class="hint">'+esc(l.fichiers.map(f=>f.nom+(f.source==='serge'?' (Serge)':'')).join(' ; '))+'</td></tr>').join('')
+            + '</tbody></table>';
+        }
+        html += '</div>';
+      });
+      html += '</div>';
+    });
+    html += '</div>';
+  });
+  if (!filtre && E.orphelins.length){
+    html += '<div class="panel" style="margin:0 0 14px;padding:14px 18px"><h3 style="margin:0 0 6px">Fichiers rangés sans camion correspondant</h3><div class="hint" style="margin-bottom:8px">Le nom ne contient pas de numéro de connaissement reconnu, ou ce numéro n\'est pas dans les déchargements de la campagne.</div>'
+      + '<table class="data-table" style="width:auto;min-width:560px"><thead><tr><th>Dossier</th><th>Fichier</th><th>Modifié le</th></tr></thead><tbody>'
+      + E.orphelins.map(f=>'<tr><td>'+esc([f.port,f.dossier_client,f.dossier_coop].filter(Boolean).join(' › '))+'</td><td>'+esc(f.nom)+'</td><td>'+esc(dateFr(f.modifie_le))+'</td></tr>').join('')+'</tbody></table></div>';
+  }
+  return html;
+}
+function liasseExporter(){
+  const E = liasseEtat(); const lignes = [['Client','Traitant / client','Coopérative','Usine','Connaissement','Déchargé le','Poids net (kg)','Liasse','Fichier']];
+  Object.keys(E.clients).sort().forEach(n=>{ const C = E.clients[n]; Object.keys(C.traitants).sort().forEach(t=>{ const Tr = C.traitants[t]; Object.keys(Tr.coops).sort().forEach(cn=>{ Tr.coops[cn].lignes.forEach(l=>lignes.push([n,t,cn,Tr.coops[cn].usine||'',l.cn,dateFr(l.date),l.kg,l.statut==='present'?'Présent':l.statut==='serge'?'Chez Serge seulement':'Manquant',l.fichiers.map(f=>f.nom).join(' ; ')])); }); }); });
+  const wb = XLSX.utils.book_new(); const ws = XLSX.utils.aoa_to_sheet(lignes); ws['!cols'] = [12,16,28,22,22,12,14,20,40].map(w=>({wch:w}));
+  XLSX.utils.book_append_sheet(wb, ws, 'Liasses');
+  if (E.orphelins.length){ const ws2 = XLSX.utils.aoa_to_sheet([['Dossier','Fichier','Modifié le']].concat(E.orphelins.map(f=>[[f.port,f.dossier_client,f.dossier_coop].filter(Boolean).join(' › '), f.nom, dateFr(f.modifie_le)]))); ws2['!cols']=[{wch:40},{wch:48},{wch:12}]; XLSX.utils.book_append_sheet(wb, ws2, 'Sans camion'); }
+  XLSX.writeFile(wb, 'Etat_liasses_documentaires_'+new Date().toISOString().slice(0,10)+'.xlsx');
+}
 function renderSacherieTab(){
   if (!state.sachCharge){ chargerSacherie().then(()=>render()); return '<div class="panel"><div class="hint" style="padding:18px">Chargement de la sacherie…</div></div>'; }
   const P = state.sachParam || { sacs_par_lot:385, tonnes_par_lot:25, sacs_par_palette:40 };
