@@ -4741,7 +4741,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-16-497';
+const APP_VERSION = '2026-11-16-498';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -29525,12 +29525,17 @@ function legendeTableauProducteurs(){
 }
 // Au-dela de ce nombre de lignes (ex. « Toutes cooperatives » = plusieurs milliers de producteurs), seules les premieres sont affichees :
 // la liste est deja classee du plus proche de la limite au plus eloigne, donc toutes les alertes y figurent.
-const LIMITE_LIGNES_PRODUCTEURS = 2000;
+const LIMITE_LIGNES_PRODUCTEURS = 300; // lignes affichées d'emblée (le tableau défile dans un cadre : en afficher 2000 d'un coup coûtait ~2 s) ; « Afficher plus » en ajoute par paquets
+function voirPlusProducteurs(){ state.limiteProd = (state.limiteProd||LIMITE_LIGNES_PRODUCTEURS) + 500; render(); }
+function toutAfficherProducteurs(){ state.limiteProd = 1e9; render(); }
 function renderTableauProducteurs(rows, opts){
   opts = opts || {};
   const totalLignes = rows.length;
-  const tronque = totalLignes > LIMITE_LIGNES_PRODUCTEURS;
-  if (tronque) rows = rows.slice(0, LIMITE_LIGNES_PRODUCTEURS);
+  // Toutes les lignes en alerte restent affichées, même au-delà de la limite courante.
+  const nbAlertes = rows.reduce((n,r)=> n + ((r.st.key==='warn'||r.st.key==='danger')?1:0), 0);
+  const limiteCourante = Math.max(state.limiteProd||LIMITE_LIGNES_PRODUCTEURS, nbAlertes);
+  const tronque = totalLignes > limiteCourante;
+  if (tronque) rows = rows.slice(0, limiteCourante);
   const montrerCoop = !!opts.montrerCoop;
   const principale = state.campagneFilter!=='all' && state.periodeFilter==='principale';
   const limitePct = principale ? 70 : 100;
@@ -29538,7 +29543,7 @@ function renderTableauProducteurs(rows, opts){
   const nbCol = 8 + (montrerCoop?1:0);
   const largeurs = montrerCoop ? [15,8,14,8,9,14,9,10,13] : [17,9,9,10,17,11,11,16];
   let html = legendeTableauProducteurs()
-    + (tronque ? '<div class="legende-prod" style="background:var(--warn-bg);color:var(--warn);border-bottom:1px solid var(--warn-line);"><b>Affichage des '+fmtNum(LIMITE_LIGNES_PRODUCTEURS)+' premiers producteurs sur '+fmtNum(totalLignes)+'</b>, classés du plus proche de la limite au plus éloigné (toutes les alertes y figurent). Choisis une coopérative pour voir tous ses producteurs.</div>' : '')
+    + (tronque ? '<div class="legende-prod" style="background:var(--warn-bg);color:var(--warn);border-bottom:1px solid var(--warn-line);"><b>Affichage de '+fmtNum(limiteCourante)+' producteurs sur '+fmtNum(totalLignes)+'</b>, classés du plus proche de la limite au plus éloigné (toutes les alertes y figurent). <button class="btn-ghost" onclick="voirPlusProducteurs()">Afficher 500 de plus</button> <button class="btn-ghost" onclick="toutAfficherProducteurs()">Tout afficher ('+fmtNum(totalLignes)+')</button> — ou choisis une coopérative pour voir tous ses producteurs.</div>' : '')
     + '<div class="tbl-prod-wrap"><table class="tbl-prod"><colgroup>'+largeurs.map(w=>'<col style="width:'+w+'%">').join('')+'</colgroup><thead><tr>'
     + '<th class="g">Producteur</th>'
     + '<th>Parcelle</th>'
