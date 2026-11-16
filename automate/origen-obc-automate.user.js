@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.41
+// @version      0.4.42
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.41';
+  const VERSION = '0.4.42';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -227,6 +227,7 @@
       + '<div style="margin-top:10px;border:1px solid #f0c9c6;border-radius:10px;background:#fff8f7;padding:8px;">'
       + '<div style="font-weight:700;color:#B3261E;margin-bottom:6px;">↩ Refaire à partir de…</div>'
       + '<div style="display:flex;gap:6px;flex-wrap:wrap;">'
+      + '<button id="oo-refaire7" title="Supprime dans OBC, pour CE camion, le bordereau, la pesée, les données livraison et le connaissement brousse, puis refait toute la saisie depuis l\'étape 1 avec ORIGEN" style="background:#B3261E;border:1px solid #B3261E;border-radius:8px;padding:7px 10px;cursor:pointer;color:#fff;font-weight:700;">↻ Tout depuis le début</button>'
       + '<button id="oo-refaire8" title="Supprime dans OBC le bordereau, la pesée puis les données livraison de ce camion, et les refait avec ORIGEN" style="background:#fff;border:1px solid #B3261E;border-radius:8px;padding:7px 10px;cursor:pointer;color:#B3261E;">1 · Données livraison</button>'
       + '<button id="oo-refaire9" title="Supprime dans OBC le bordereau puis la pesée de ce camion, et les refait avec ORIGEN" style="background:#fff;border:1px solid #B3261E;border-radius:8px;padding:7px 10px;cursor:pointer;color:#B3261E;">2 · Pesée</button>'
       + '<button id="oo-refaire10" title="Supprime dans OBC le bordereau de ce camion et le refait avec ORIGEN" style="background:#fff;border:1px solid #B3261E;border-radius:8px;padding:7px 10px;cursor:pointer;color:#B3261E;">3 · Bordereau</button>'
@@ -261,6 +262,7 @@
     panneau.querySelector('#oo-continuer').onclick = () => { const e = lireEtat(); if (!e) return; e.pause = false; e.erreur = null; if (e.statut === 'attente_enregistrement') e.statut = 'verifier'; ecrireEtat(e); boucle(); };
     panneau.querySelector('#oo-pause').onclick = () => { const e = lireEtat(); if (!e) return; e.pause = !e.pause; ecrireEtat(e); afficherEtat(); if (!e.pause) boucle(); };
     panneau.querySelector('#oo-journal').onclick = () => { const e = lireEtat(); navigator.clipboard.writeText(JSON.stringify({ origen_obc_journal: true, etape: e && e.etape, statut: e && e.statut, ids: e && e.ids, journal: e && e.journal, pause: !!(e && e.pause), erreur: e && e.erreur, note: e && e.note, enFile: !!(e && e.enFile), retries: e && e.retries, page: location.pathname + location.search, heure: new Date().toLocaleTimeString('fr-FR'), version: VERSION }, null, 1)); };
+    panneau.querySelector('#oo-refaire7').onclick = () => refaireDepuis(7);
     panneau.querySelector('#oo-refaire8').onclick = () => refaireDepuis(8);
     panneau.querySelector('#oo-refaire9').onclick = () => refaireDepuis(9);
     panneau.querySelector('#oo-refaire10').onclick = () => refaireDepuis(10);
@@ -991,7 +993,8 @@
       const ce = q('#txtcertification_idAdd'); if (ce && !ce.value && c.certification) { await dormir(400); await setSelectTexte(ce, new RegExp('^' + c.certification, 'i'), 'Certification'); }
       const fo = q('#txtid_fournisseurAdd'); if (fo && e.ids.fournisseur_id) { if (fo.value && fo.value !== String(e.ids.fournisseur_id)) journal(e, 'Pesée : OBC avait choisi le fournisseur « ' + ((fo.selectedOptions[0] || {}).text || fo.value) + ' » (valeur ' + fo.value + ') : remplacé par la coopérative (id ' + e.ids.fournisseur_id + ')'); if (fo.value !== String(e.ids.fournisseur_id)) { await attendre(() => [...fo.options].some((o) => o.value === String(e.ids.fournisseur_id)), 6000, 300); if (!setSelect(fo, e.ids.fournisseur_id)) throw new Error('Coopérative (id ' + e.ids.fournisseur_id + ') absente de la liste Fournisseur de la pesée (' + fo.options.length + ' choix)'); } }
       const og = q('#txtorigine_idAdd'); if (og && !og.value) { await listeStable(og); const oo = await attendre(() => optionParTexte(og, exact(c.origine)), 4000, 300); if (oo) setSelect(og, oo.value); else journal(e, 'Pesée : origine « ' + c.origine + ' » absente de la liste, laissée vide'); }
-      await dormir(800); }
+      await dormir(800);
+      { const vu = (id) => { const el = q(id); return el ? (((el.selectedOptions[0] || {}).text || el.value || 'vide') + (el.disabled ? ' [verrouillé]' : '') + ' (' + el.options.length + ' choix)') : 'absent'; }; e.diagPesee = 'commodité=' + vu('#txtcommodite_idAdd') + ' ; type=' + vu('#txttype_commodite_idAdd') + ' ; certification=' + vu('#txtcertification_idAdd') + ' ; fournisseur=' + vu('#txtid_fournisseurAdd') + ' ; origine=' + vu('#txtorigine_idAdd'); journal(e, 'Pesée, après réglage : ' + e.diagPesee); } }
     setInput(q('#txtpesee_brousse_dateAdd'), isoDate(p.date || c.date)); setInput(q('#txtpesee_brousse_numeroAdd'), p.code);
     setInput(q('#txtpesee_brousse_poids_entreeAdd'), num(p.poids_entree)); setInput(q('#txtpesee_brousse_poids_sortieAdd'), num(p.poids_sortie));
     if (p.date_entree) setInput(q('#txtpesee_brousse_date_entreeAdd'), p.date_entree); if (p.date_sortie) setInput(q('#txtpesee_brousse_date_sortieAdd'), p.date_sortie);
@@ -1011,7 +1014,7 @@
     if (p.classement) await setSelectTexte(q('#txtqualite_idAdd'), exact(p.classement), 'Classement', p.classement);
     ['poids_entree', 'poids_sortie', 'sacs_decharges', 'sacs_acceptes', 'tare_sacs_acceptes', 'tare_palettes', 'poids_refaction'].forEach((k) => { const el = q('#txtpesee_brousse_' + k + 'Add'); if (el) el.dispatchEvent(new Event('focusout', { bubbles: true })); });
     { const m = await reappliquer(f); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
-    { const fo = q('#txtid_fournisseurAdd'), ce = q('#txtcertification_idAdd'), manq = []; if (fo && e.ids.fournisseur_id && fo.value !== String(e.ids.fournisseur_id)) manq.push('fournisseur'); if (ce && c.certification && !ce.value) manq.push('certification'); if (manq.length) { await dormir(1500); if (fo && e.ids.fournisseur_id && fo.value !== String(e.ids.fournisseur_id)) setSelect(fo, e.ids.fournisseur_id); if (ce && c.certification && !ce.value) await setSelectTexte(ce, new RegExp('^' + c.certification, 'i'), 'Certification'); await dormir(800); const manq2 = []; if (fo && e.ids.fournisseur_id && fo.value !== String(e.ids.fournisseur_id)) manq2.push('fournisseur (vu : « ' + ((fo.selectedOptions[0] || {}).text || fo.value || 'vide') + ' », attendu id ' + e.ids.fournisseur_id + ')'); if (ce && c.certification && !ce.value) manq2.push('certification'); if (manq2.length) throw new Error('Pesée : OBC n\'a pas retenu ' + manq2.join(' ni ') + ' (rien n\'est enregistré).'); } }
+    { const fo = q('#txtid_fournisseurAdd'), ce = q('#txtcertification_idAdd'), manq = []; if (fo && e.ids.fournisseur_id && fo.value !== String(e.ids.fournisseur_id)) manq.push('fournisseur'); if (ce && c.certification && !ce.value) manq.push('certification'); if (manq.length) { await dormir(1500); if (fo && e.ids.fournisseur_id && fo.value !== String(e.ids.fournisseur_id)) setSelect(fo, e.ids.fournisseur_id); if (ce && c.certification && !ce.value) await setSelectTexte(ce, new RegExp('^' + c.certification, 'i'), 'Certification'); await dormir(800); const manq2 = []; if (fo && e.ids.fournisseur_id && fo.value !== String(e.ids.fournisseur_id)) manq2.push('fournisseur (vu : « ' + ((fo.selectedOptions[0] || {}).text || fo.value || 'vide') + ' », attendu id ' + e.ids.fournisseur_id + ')'); if (ce && c.certification && !ce.value) manq2.push('certification'); if (manq2.length) throw new Error('Pesée : OBC n\'a pas retenu ' + manq2.join(' ni ') + ' (rien n\'est enregistré). Vu à l\'écran : ' + (e.diagPesee || '?')); } }
     { const rs = q('#txtcampagne_recolte_idAdd'); if (rs && !rs.value) throw new Error('Pesée : la récolte (' + lot.campagne.recolte + ') n\'est pas renseignée : rien n\'est enregistré'); }
     // Cases CALCULÉES par OBC (poids brut, net livré, net payé) : OBC les laisse parfois à 0. On les contrôle et, au besoin, on y écrit la valeur d'ORIGEN.
     {
@@ -1091,7 +1094,7 @@
     const r = await fetch(form.getAttribute('action'), { method: 'POST', credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest', 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' }, body: corps.toString() });
     if (!r.ok) throw new Error('OBC a refusé la suppression (HTTP ' + r.status + ')');
   }
-  const NOMS_REPRISE = { 8: 'les données livraison', 9: 'la pesée', 10: 'le bordereau' };
+  const NOMS_REPRISE = { 7: 'la saisie depuis le début', 8: 'les données livraison', 9: 'la pesée', 10: 'le bordereau' };
   // k = 8 (données livraison), 9 (pesée) ou 10 (bordereau) : supprime dans OBC ce qui est après ce point (bordereau, puis pesée, puis livraison), seulement après confirmation, puis Noah refait avec ORIGEN.
   async function refaireDepuis(k) {
     let e = lireEtat(); let reprisDepuisFile = false;
@@ -1102,23 +1105,24 @@
         if (!cand.length) { alert('Aucun connaissement en échec à refaire dans ORIGEN.'); return; }
         let ch = cand[0];
         if (cand.length > 1) { const rep = prompt('Plusieurs connaissements en échec. Tape le numéro à refaire :\n' + cand.map((x) => x.connaissement).join('\n'), cand[0].connaissement); if (!rep) return; ch = cand.find((x) => String(x.connaissement).trim() === rep.trim()); if (!ch) { alert('Numéro non reconnu.'); return; } }
-        e = { v10: true, lot: ch.lot, etape: k, statut: 'a_faire', ids: {}, fait: {}, journal: [], pause: false, erreur: null, note: '', enFile: true }; reprisDepuisFile = ch.achat_id;
+        e = { v10: true, lot: ch.lot, etape: k === 7 ? 1 : k, statut: 'a_faire', ids: {}, fait: {}, journal: [], pause: false, erreur: null, note: '', enFile: true }; reprisDepuisFile = ch.achat_id;
       } catch (er) { alert('Noah ne retrouve pas le lot dans ORIGEN : ' + (er && er.message || er)); return; }
     }
     try {
-      const liv = k <= 8 ? await existeUsine(e) : null, pes = k <= 9 ? await existePesee(e) : null, bor = await existeBordereau(e);
-      [['données livraison', liv], ['pesée', pes], ['bordereau', bor]].forEach(([n, x]) => { if (x && x.illisible) throw new Error('OBC plante en affichant la liste « ' + n + ' » : rien n\'a été supprimé. Corrige à la main ou dis-le-moi.'); });
+      const brs = k <= 7 ? await existeBrousse(e) : null, liv = k <= 8 ? await existeUsine(e) : null, pes = k <= 9 ? await existePesee(e) : null, bor = await existeBordereau(e);
+      [['connaissement brousse', brs], ['données livraison', liv], ['pesée', pes], ['bordereau', bor]].forEach(([n, x]) => { if (x && x.illisible) throw new Error('OBC plante en affichant la liste « ' + n + ' » : rien n\'a été supprimé. Corrige à la main ou dis-le-moi.'); });
       const nv = (i) => Number(String(pes && pes.c[i] || '').replace(/[\s  ]/g, '').replace(',', '.'));
       const attP = Number(e.lot.pesee.poids_net_paye_attendu) || NaN;
       // Depuis la pesée seulement : une pesée identique à ORIGEN est protégée. Depuis les données livraison ou le bordereau, c'est ton choix explicite (confirmation ci-dessous).
       if (k === 9 && pes && nv(5) > 0 && nv(8) > 0 && nv(10) > 0 && isFinite(attP) && Math.abs(nv(10) - attP) < 0.5 && !confirm('La pesée ' + e.lot.pesee.code + ' a les bons poids dans OBC (net payé ' + pes.c[10] + ').\n\nLa supprimer quand même pour la refaire (par exemple parce qu\'elle a été enregistrée sans fournisseur ni certification) ?')) return;
-      const lignes = []; if (bor) lignes.push('le bordereau ' + (e.lot.bordereau && e.lot.bordereau.numero || '')); if (pes) lignes.push('la pesée ' + e.lot.pesee.code + ' (brut ' + pes.c[5] + ', net payé ' + pes.c[10] + ')'); if (liv) lignes.push('les données livraison ' + e.lot.connaissement.numero);
+      const lignes = []; if (bor) lignes.push('le bordereau ' + (e.lot.bordereau && e.lot.bordereau.numero || '')); if (pes) lignes.push('la pesée ' + e.lot.pesee.code + ' (brut ' + pes.c[5] + ', net payé ' + pes.c[10] + ')'); if (liv) lignes.push('les données livraison ' + e.lot.connaissement.numero); if (brs) lignes.push('le connaissement brousse ' + e.lot.connaissement.numero);
       if (lignes.length && !confirm('SUPPRIMER dans OBC, dans cet ordre (camion ' + e.lot.connaissement.numero + ' uniquement) :\n' + lignes.map((x, i) => (i + 1) + ') ' + x).join('\n') + '\n\nLa suppression est définitive. Rien d\'autre ne sera touché. Noah refera ensuite ' + NOMS_REPRISE[k] + (k < 10 ? ' et la suite' : '') + ' avec les valeurs d\'ORIGEN. Continuer ?')) return;
       if (bor) { await supprimerLigne('AgroAchatBordereauReception', bor); journal(e, 'Bordereau supprimé dans OBC (reprise à partir de ' + NOMS_REPRISE[k] + ')'); if (await existeBordereau(e)) throw new Error('Le bordereau est toujours dans OBC après suppression : arrêt, rien d\'autre n\'est touché'); }
       if (pes) { await supprimerLigne('AgroAchatPeseeBrousse', pes); journal(e, 'Pesée supprimée dans OBC (reprise à partir de ' + NOMS_REPRISE[k] + ')'); if (await existePesee(e)) throw new Error('La pesée est toujours dans OBC après suppression : arrêt'); }
       if (liv) { await supprimerLigne('AgroAchatConnaissementUsine', liv); journal(e, 'Données livraison supprimées dans OBC (reprise à partir de ' + NOMS_REPRISE[k] + ')'); if (await existeUsine(e)) throw new Error('Les données livraison sont toujours dans OBC après suppression : arrêt'); }
+      if (brs) { await supprimerLigne('AgroAchatConnaissementBrousse', brs); journal(e, 'Connaissement brousse supprimé dans OBC (reprise depuis le début)'); if (await existeBrousse(e)) throw new Error('Le connaissement brousse est toujours dans OBC après suppression : arrêt'); }
       if (reprisDepuisFile) { try { await api('reprendre', { achat_id: e.lot.achat_id }); } catch (er) { /* la file sera resynchronisée à la fin du lot */ } ecrireEtat(e); }
-      const e2 = lireEtat(); e2.etape = k; e2.statut = 'a_faire'; e2.erreur = null; e2.pause = false; e2.note = 'Reprise à partir de ' + NOMS_REPRISE[k] + ' après suppression dans OBC.'; if (e2.fait) { for (let j = k; j <= 10; j++) delete e2.fait[j]; } delete e2.t_save; delete e2.cliques; delete e2.verifErr; delete e2.sous; delete e2.origineEssayee; delete e2.usineEssayee; ecrireEtat(e2); afficherEtat(); boucle();
+      const e2 = lireEtat(); e2.etape = k === 7 ? 1 : k; if (k === 7) e2.ids = {}; e2.statut = 'a_faire'; e2.erreur = null; e2.pause = false; e2.note = 'Reprise à partir de ' + NOMS_REPRISE[k] + ' après suppression dans OBC.'; if (e2.fait) { for (let j = (k === 7 ? 1 : k); j <= 10; j++) delete e2.fait[j]; } delete e2.t_save; delete e2.cliques; delete e2.verifErr; delete e2.sous; delete e2.origineEssayee; delete e2.usineEssayee; ecrireEtat(e2); afficherEtat(); boucle();
     } catch (err) { const e3 = lireEtat() || e; e3.erreur = 'Reprise : ' + (err && err.message || err); ecrireEtat(e3); afficherEtat(); }
   }
   const refaireDepuisPesee = () => refaireDepuis(9);
