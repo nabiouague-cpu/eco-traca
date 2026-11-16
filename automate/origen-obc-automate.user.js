@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.31
+// @version      0.4.32
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.31';
+  const VERSION = '0.4.32';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -690,7 +690,7 @@
         const cid = (q('#txtcommodite_idAdd') || {}).value || '2';
         journal(e, 'Parcelles du producteur ' + v + ' : liste restée vide (commodité ' + cid + ', ' + selParc.options.length + ' option) → interrogation directe d\'OBC');
         let rep = null; try { rep = await getJson('/AppMethods1/LoadAgroParcellesByCommoditeEtProducteurId?CommoditeId=' + encodeURIComponent(cid) + '&ProducteurId=' + encodeURIComponent(v)); } catch (er) { journal(e, 'Interrogation des parcelles impossible : ' + (er && er.message)); }
-        const lst = ((rep && rep.parcellesProducteurData) || []).filter((x) => x && x.Value !== '' && x.Value != null && x.Text && !/^\s*-/.test(x.Text));
+        const lst = (Array.isArray(rep) ? rep : ((rep && rep.parcellesProducteurData) || [])).filter((x) => x && x.Value !== '' && x.Value != null && x.Text && !/^\s*-/.test(x.Text));
         journal(e, 'OBC renvoie ' + lst.length + ' parcelle(s) pour ce producteur' + (lst.length ? ' : ' + lst.map((x) => x.Text).join(', ') : ''));
         if (lst.length) {
           selParc.innerHTML = ''; const o0 = document.createElement('option'); o0.value = ''; o0.textContent = '-Code parcelle-'; selParc.appendChild(o0);
