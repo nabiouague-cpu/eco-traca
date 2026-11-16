@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.39
+// @version      0.4.40
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.39';
+  const VERSION = '0.4.40';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -985,6 +985,13 @@
     await dormir(1500);
     // OBC remplit la récolte tout seul depuis le connaissement usine choisi ; on vérifie, et on la renseigne nous-mêmes si elle est restée vide.
     { const rs = q('#txtcampagne_recolte_idAdd'); if (rs && !rs.value) { await attendre(() => rs.options.length > 1, 4000, 300); if (!rs.value) await setSelectTexte(rs, new RegExp('^' + lot.campagne.recolte, 'i'), 'Récolte'); } }
+    // Le formulaire pesée porte aussi commodité, type, certification, fournisseur et origine : OBC ne les remplit « pas toujours » à partir du connaissement usine (comme pour les données livraison). Laissés vides, la pesée est enregistrée SANS fournisseur ni certification et le bordereau répond « Le fournisseur du bordereau est introuvable ». On les renseigne nous-mêmes.
+    { const cm = q('#txtcommodite_idAdd'); if (cm && !cm.value) await setSelectTexte(cm, /^CACAO/i, 'Commodité');
+      const tc = q('#txttype_commodite_idAdd'); if (tc && !tc.value) { await dormir(600); await listeStable(tc); await setSelectTexte(tc, new RegExp('^' + c.type_commodite, 'i'), 'Type commodité'); }
+      const ce = q('#txtcertification_idAdd'); if (ce && !ce.value && c.certification) { await dormir(400); await setSelectTexte(ce, new RegExp('^' + c.certification, 'i'), 'Certification'); }
+      const fo = q('#txtid_fournisseurAdd'); if (fo && !fo.value && e.ids.fournisseur_id && !setSelect(fo, e.ids.fournisseur_id)) throw new Error('Coopérative (id ' + e.ids.fournisseur_id + ') absente de la liste Fournisseur de la pesée');
+      const og = q('#txtorigine_idAdd'); if (og && !og.value) { await listeStable(og); const oo = await attendre(() => optionParTexte(og, exact(c.origine)), 4000, 300); if (oo) setSelect(og, oo.value); else journal(e, 'Pesée : origine « ' + c.origine + ' » absente de la liste, laissée vide'); }
+      await dormir(800); }
     setInput(q('#txtpesee_brousse_dateAdd'), isoDate(p.date || c.date)); setInput(q('#txtpesee_brousse_numeroAdd'), p.code);
     setInput(q('#txtpesee_brousse_poids_entreeAdd'), num(p.poids_entree)); setInput(q('#txtpesee_brousse_poids_sortieAdd'), num(p.poids_sortie));
     if (p.date_entree) setInput(q('#txtpesee_brousse_date_entreeAdd'), p.date_entree); if (p.date_sortie) setInput(q('#txtpesee_brousse_date_sortieAdd'), p.date_sortie);
@@ -1004,6 +1011,7 @@
     if (p.classement) await setSelectTexte(q('#txtqualite_idAdd'), exact(p.classement), 'Classement', p.classement);
     ['poids_entree', 'poids_sortie', 'sacs_decharges', 'sacs_acceptes', 'tare_sacs_acceptes', 'tare_palettes', 'poids_refaction'].forEach((k) => { const el = q('#txtpesee_brousse_' + k + 'Add'); if (el) el.dispatchEvent(new Event('focusout', { bubbles: true })); });
     { const m = await reappliquer(f); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
+    { const fo = q('#txtid_fournisseurAdd'), ce = q('#txtcertification_idAdd'), manq = []; if (fo && e.ids.fournisseur_id && fo.value !== String(e.ids.fournisseur_id)) manq.push('fournisseur'); if (ce && c.certification && !ce.value) manq.push('certification'); if (manq.length) throw new Error('Pesée : OBC n\'a pas retenu ' + manq.join(' ni ') + ' (rien n\'est enregistré). Clique « Continuer » pour réessayer.'); }
     { const rs = q('#txtcampagne_recolte_idAdd'); if (rs && !rs.value) throw new Error('Pesée : la récolte (' + lot.campagne.recolte + ') n\'est pas renseignée : rien n\'est enregistré'); }
     // Cases CALCULÉES par OBC (poids brut, net livré, net payé) : OBC les laisse parfois à 0. On les contrôle et, au besoin, on y écrit la valeur d'ORIGEN.
     {
@@ -1103,7 +1111,7 @@
       const nv = (i) => Number(String(pes && pes.c[i] || '').replace(/[\s  ]/g, '').replace(',', '.'));
       const attP = Number(e.lot.pesee.poids_net_paye_attendu) || NaN;
       // Depuis la pesée seulement : une pesée identique à ORIGEN est protégée. Depuis les données livraison ou le bordereau, c'est ton choix explicite (confirmation ci-dessous).
-      if (k === 9 && pes && nv(5) > 0 && nv(8) > 0 && nv(10) > 0 && isFinite(attP) && Math.abs(nv(10) - attP) < 0.5) { alert('La pesée ' + e.lot.pesee.code + ' est conforme à ORIGEN dans OBC (net payé ' + pes.c[10] + ') : Noah ne la supprime pas. Si le défaut vient des données livraison, utilise « 1 · Données livraison ».'); return; }
+      if (k === 9 && pes && nv(5) > 0 && nv(8) > 0 && nv(10) > 0 && isFinite(attP) && Math.abs(nv(10) - attP) < 0.5 && !confirm('La pesée ' + e.lot.pesee.code + ' a les bons poids dans OBC (net payé ' + pes.c[10] + ').\n\nLa supprimer quand même pour la refaire (par exemple parce qu\'elle a été enregistrée sans fournisseur ni certification) ?')) return;
       const lignes = []; if (bor) lignes.push('le bordereau ' + (e.lot.bordereau && e.lot.bordereau.numero || '')); if (pes) lignes.push('la pesée ' + e.lot.pesee.code + ' (brut ' + pes.c[5] + ', net payé ' + pes.c[10] + ')'); if (liv) lignes.push('les données livraison ' + e.lot.connaissement.numero);
       if (lignes.length && !confirm('SUPPRIMER dans OBC, dans cet ordre (camion ' + e.lot.connaissement.numero + ' uniquement) :\n' + lignes.map((x, i) => (i + 1) + ') ' + x).join('\n') + '\n\nLa suppression est définitive. Rien d\'autre ne sera touché. Noah refera ensuite ' + NOMS_REPRISE[k] + (k < 10 ? ' et la suite' : '') + ' avec les valeurs d\'ORIGEN. Continuer ?')) return;
       if (bor) { await supprimerLigne('AgroAchatBordereauReception', bor); journal(e, 'Bordereau supprimé dans OBC (reprise à partir de ' + NOMS_REPRISE[k] + ')'); if (await existeBordereau(e)) throw new Error('Le bordereau est toujours dans OBC après suppression : arrêt, rien d\'autre n\'est touché'); }
