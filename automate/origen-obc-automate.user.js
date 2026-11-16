@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.32
+// @version      0.4.33
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.32';
+  const VERSION = '0.4.33';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -659,7 +659,7 @@
       if (b && b.tr) { const a = b.tr.querySelector('a[href*="/Edit/"]'); if (a) { const ed = await getHtml(a.getAttribute('href'));
         const vv = (id) => { const el = ed.getElementById(id); return el ? Number(String(el.value || '').replace(',', '.')) : 1; };
         if (!(vv('txtlivraison_montantEdit0') > 0) || !(vv('txtconnaissement_brousse_montantEdit') > 0) || !(vv('txtconnaissement_brousse_nb_sacsEdit') > 0) || !(vv('txtconnaissement_brousse_poids_netEdit') > 0)) throw new Error('Le connaissement ' + e.lot.connaissement.numero + ' est enregistré avec un montant ou des totaux vides/à 0 : OBC va planter sur sa liste. Ouvre-le (Modifier), retape le prix unitaire de la ligne pour qu\'OBC recalcule, enregistre, puis « Continuer ».');
-        const sp = ed.getElementById('txtproducteur_parcelle_idEdit0'); const o = sp && (sp.querySelector('option[selected]') || sp.options[sp.selectedIndex]); if (!o || !o.value) throw new Error('Le connaissement ' + e.lot.connaissement.numero + ' est enregistré SANS parcelle : OBC va planter sur sa liste. Ouvre-le (Modifier), choisis la parcelle de la ligne, enregistre, puis « Continuer ».'); } }
+        /* OBC n'affiche plus la parcelle choisie sur la page de modification (liste réduite à « -Code parcelle- ») : on ne conclut « sans parcelle » que si la liste est lisible ; sinon le test fiable est « la liste d'OBC s'affiche » (b.illisible ci-dessus) */ const sp = ed.getElementById('txtproducteur_parcelle_idEdit0'); const o = sp && (sp.querySelector('option[selected]') || sp.options[sp.selectedIndex]); if (sp && sp.options.length > 1 && (!o || !o.value)) throw new Error('Le connaissement ' + e.lot.connaissement.numero + ' est enregistré SANS parcelle : OBC va planter sur sa liste. Ouvre-le (Modifier), choisis la parcelle de la ligne, enregistre, puis « Continuer ».'); } }
       journal(e, 'Connaissement brousse : contrôle d\'existence fait (usine ' + (u ? 'oui' : 'non') + ', pesée ' + (p ? 'oui' : 'non') + ', brousse ' + (b ? 'oui' : 'non') + ')');
       if (u || p || b) { e.fait[7] = 'déjà dans OBC'; journal(e, 'Connaissement brousse déjà saisi'); return 'suivant'; } }
     if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
