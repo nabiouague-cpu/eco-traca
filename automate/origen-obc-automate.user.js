@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.40
+// @version      0.4.41
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.40';
+  const VERSION = '0.4.41';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -989,7 +989,7 @@
     { const cm = q('#txtcommodite_idAdd'); if (cm && !cm.value) await setSelectTexte(cm, /^CACAO/i, 'Commodité');
       const tc = q('#txttype_commodite_idAdd'); if (tc && !tc.value) { await dormir(600); await listeStable(tc); await setSelectTexte(tc, new RegExp('^' + c.type_commodite, 'i'), 'Type commodité'); }
       const ce = q('#txtcertification_idAdd'); if (ce && !ce.value && c.certification) { await dormir(400); await setSelectTexte(ce, new RegExp('^' + c.certification, 'i'), 'Certification'); }
-      const fo = q('#txtid_fournisseurAdd'); if (fo && !fo.value && e.ids.fournisseur_id && !setSelect(fo, e.ids.fournisseur_id)) throw new Error('Coopérative (id ' + e.ids.fournisseur_id + ') absente de la liste Fournisseur de la pesée');
+      const fo = q('#txtid_fournisseurAdd'); if (fo && e.ids.fournisseur_id) { if (fo.value && fo.value !== String(e.ids.fournisseur_id)) journal(e, 'Pesée : OBC avait choisi le fournisseur « ' + ((fo.selectedOptions[0] || {}).text || fo.value) + ' » (valeur ' + fo.value + ') : remplacé par la coopérative (id ' + e.ids.fournisseur_id + ')'); if (fo.value !== String(e.ids.fournisseur_id)) { await attendre(() => [...fo.options].some((o) => o.value === String(e.ids.fournisseur_id)), 6000, 300); if (!setSelect(fo, e.ids.fournisseur_id)) throw new Error('Coopérative (id ' + e.ids.fournisseur_id + ') absente de la liste Fournisseur de la pesée (' + fo.options.length + ' choix)'); } }
       const og = q('#txtorigine_idAdd'); if (og && !og.value) { await listeStable(og); const oo = await attendre(() => optionParTexte(og, exact(c.origine)), 4000, 300); if (oo) setSelect(og, oo.value); else journal(e, 'Pesée : origine « ' + c.origine + ' » absente de la liste, laissée vide'); }
       await dormir(800); }
     setInput(q('#txtpesee_brousse_dateAdd'), isoDate(p.date || c.date)); setInput(q('#txtpesee_brousse_numeroAdd'), p.code);
@@ -1011,7 +1011,7 @@
     if (p.classement) await setSelectTexte(q('#txtqualite_idAdd'), exact(p.classement), 'Classement', p.classement);
     ['poids_entree', 'poids_sortie', 'sacs_decharges', 'sacs_acceptes', 'tare_sacs_acceptes', 'tare_palettes', 'poids_refaction'].forEach((k) => { const el = q('#txtpesee_brousse_' + k + 'Add'); if (el) el.dispatchEvent(new Event('focusout', { bubbles: true })); });
     { const m = await reappliquer(f); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
-    { const fo = q('#txtid_fournisseurAdd'), ce = q('#txtcertification_idAdd'), manq = []; if (fo && e.ids.fournisseur_id && fo.value !== String(e.ids.fournisseur_id)) manq.push('fournisseur'); if (ce && c.certification && !ce.value) manq.push('certification'); if (manq.length) throw new Error('Pesée : OBC n\'a pas retenu ' + manq.join(' ni ') + ' (rien n\'est enregistré). Clique « Continuer » pour réessayer.'); }
+    { const fo = q('#txtid_fournisseurAdd'), ce = q('#txtcertification_idAdd'), manq = []; if (fo && e.ids.fournisseur_id && fo.value !== String(e.ids.fournisseur_id)) manq.push('fournisseur'); if (ce && c.certification && !ce.value) manq.push('certification'); if (manq.length) { await dormir(1500); if (fo && e.ids.fournisseur_id && fo.value !== String(e.ids.fournisseur_id)) setSelect(fo, e.ids.fournisseur_id); if (ce && c.certification && !ce.value) await setSelectTexte(ce, new RegExp('^' + c.certification, 'i'), 'Certification'); await dormir(800); const manq2 = []; if (fo && e.ids.fournisseur_id && fo.value !== String(e.ids.fournisseur_id)) manq2.push('fournisseur (vu : « ' + ((fo.selectedOptions[0] || {}).text || fo.value || 'vide') + ' », attendu id ' + e.ids.fournisseur_id + ')'); if (ce && c.certification && !ce.value) manq2.push('certification'); if (manq2.length) throw new Error('Pesée : OBC n\'a pas retenu ' + manq2.join(' ni ') + ' (rien n\'est enregistré).'); } }
     { const rs = q('#txtcampagne_recolte_idAdd'); if (rs && !rs.value) throw new Error('Pesée : la récolte (' + lot.campagne.recolte + ') n\'est pas renseignée : rien n\'est enregistré'); }
     // Cases CALCULÉES par OBC (poids brut, net livré, net payé) : OBC les laisse parfois à 0. On les contrôle et, au besoin, on y écrit la valeur d'ORIGEN.
     {
