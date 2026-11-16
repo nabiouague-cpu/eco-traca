@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.33
+// @version      0.4.35
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.33';
+  const VERSION = '0.4.35';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -380,7 +380,13 @@
   // NB : la page /Create ouverte seule est un formulaire brut (sans les scripts d'OBC : listes en cascade absentes) : on passe toujours par le bouton « Nouveau » de la page Historique.
   // Les pages « Historique » d'OBC mettent plus de 2 minutes à s'afficher quand elles listent tout : on ouvre la page avec un filtre sans résultat, elle charge en quelques secondes et le bouton « Nouveau » y est aussi.
   const pageLegere = (k) => (k >= 5 || k === 1 || k === 3 ? '?filter=ZZ-ORIGEN-AUCUN&pageSize=10' : (k === 2 || k === 4) ? '?isProjetProv=0&filterEntite=' + ENTITE + '&filtrePosteComptable=&filter=ZZ-ORIGEN-AUCUN&pageSize=10' : '');
-  const surPageLegere = () => /ZZ-ORIGEN-AUCUN/.test(location.search);
+  const surPageLegere = () => /ZZ-ORIGEN-AUCUN|origenlight=1/.test(location.search);
+  // La liste des bordereaux répond « HTTP 500 » quand le filtre ne renvoie rien (OBC, nov. 2026) : pour ouvrir le formulaire « Nouveau » on la filtre donc sur un n° qui existe (CCC d'un bordereau déjà saisi), sinon on prend la page complète.
+  async function pageLegereBordereau() {
+    const ee = lireEtat(); const ccc = ee && ee.lot && ee.lot.cooperative && ee.lot.cooperative.ccc;
+    for (const f of [ccc, 'SC020284', 'SC111273'].filter(Boolean)) { try { const d = await getHtml('/AgroAchatBordereauReception/Index?filter=' + encodeURIComponent(f) + '&pageSize=10'); if (lignesTable(d).length) return '?filter=' + encodeURIComponent(f) + '&pageSize=10&origenlight=1'; } catch (er) { /* filtre sans résultat : on essaie le suivant */ } }
+    return '';
+  }
   async function ouvrirFormulaire(k) {
     if (q(FORMS[k - 1])) return q(FORMS[k - 1]);
     const surPage = location.pathname.toLowerCase().startsWith(PAGES[k - 1].toLowerCase());
@@ -393,7 +399,7 @@
       if (n > 3) { nav(-1); throw new Error('OBC ne reste pas sur ' + PAGES[k - 1] + ' (page atteinte : ' + location.pathname + location.search + ') : ouvre cette page à la main dans OBC, puis « Continuer ».'); }
       // comme une personne : on clique l'entrée du menu si elle existe (OBC y met son contexte de menu), sinon adresse directe
       const lien = document.querySelector('a[href^="' + PAGES[k - 1] + '"]');
-      if (lien && n > 1) lien.click(); else location.href = PAGES[k - 1] + pageLegere(k);
+      if (lien && n > 1) lien.click(); else location.href = PAGES[k - 1] + (k === 10 ? await pageLegereBordereau() : pageLegere(k));
       return null;
     } else nav(-1);
     const enErreur = () => /Une erreur est survenue/.test((document.body && document.body.innerText) || '');
@@ -629,7 +635,15 @@
     e.note = 'Producteur ' + p.nom + ' ' + p.prenoms + (p.pca ? ' (PCA de la coopérative).' : p.chauffeur ? ' (PCA non renseigné : nom du chauffeur).' : p.fictif ? ' (nom neutre : ni PCA ni producteur dans ORIGEN).' : '.'); return 'rempli';
   }
   // Existence : les pages « Historique » d'OBC acceptent un filtre exact dans l'adresse ; la colonne 4 porte le numéro.
-  async function existeDans(page, filtre, colonne, valeur) { if (!filtre) return null; let doc; try { doc = await getHtml(page + '?filter=' + encodeURIComponent(filtre) + '&pageSize=30'); } catch (err) { if (/HTTP 500/.test(String(err && err.message))) return { c: [], illisible: true }; throw err; /* OBC plante à l'affichage d'une ligne : elle est donc bien enregistrée */ } return lignesTable(doc).find((l) => N(l.c[colonne]) === N(valeur)) || null; }
+  // Depuis nov. 2026, la liste des bordereaux d'OBC répond « HTTP 500 » quand AUCUNE ligne ne correspond au filtre (au lieu d'une liste vide). On ne peut donc plus lire « 500 = la ligne existe mais fait planter la liste » :
+  // on sonde la page avec un filtre qui ne renvoie rien ; si elle répond 500 aussi, un 500 veut dire « aucun résultat ».
+  const _sonde500 = {};
+  async function pageRepond500SurVide(page) {
+    if (page in _sonde500) return _sonde500[page];
+    let r = false; try { await getHtml(page + '?filter=ZZ-ORIGEN-AUCUN&pageSize=10'); } catch (err) { r = /HTTP 500/.test(String(err && err.message)); }
+    _sonde500[page] = r; return r;
+  }
+  async function existeDans(page, filtre, colonne, valeur) { if (!filtre) return null; let doc; try { doc = await getHtml(page + '?filter=' + encodeURIComponent(filtre) + '&pageSize=30'); } catch (err) { if (/HTTP 500/.test(String(err && err.message))) { if (await pageRepond500SurVide(page)) return null; return { c: [], illisible: true }; } throw err; /* OBC plante à l'affichage d'une ligne : elle est donc bien enregistrée */ } return lignesTable(doc).find((l) => N(l.c[colonne]) === N(valeur)) || null; }
   const existeBrousse = (e) => existeDans('/AgroAchatConnaissementBrousse/Index', e.lot.connaissement.numero, 4, e.lot.connaissement.numero);
   const existeUsine = (e) => existeDans('/AgroAchatConnaissementUsine/Index', e.lot.connaissement.numero, 4, e.lot.connaissement.numero);
   const existePesee = (e) => existeDans('/AgroAchatPeseeBrousse/Index', e.lot.pesee.code, 4, e.lot.pesee.code);
