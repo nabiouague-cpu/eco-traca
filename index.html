@@ -4741,7 +4741,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-16-499';
+const APP_VERSION = '2026-11-16-500';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7844,7 +7844,7 @@ function renderLiassesTab(){
   const compte = (o)=>'<span style="color:#1F6E5C;font-weight:600">'+o.present+'</span> / <span style="color:#B42318;font-weight:600">'+o.manquant+'</span>'+(o.serge?' / <span style="color:#8A6400;font-weight:600">'+o.serge+'</span>':'')+' <span class="hint">sur '+o.n+'</span>';
   let html = '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:12px">'
     + '<div><h3 style="margin:0 0 4px">Liasses documentaires — ce qui est rangé et ce qui manque</h3><div class="hint">Un PDF par connaissement, rangé dans LIASSE DOCUMENTAIRE 26-27 (port › traitant ou client › coopérative). Comparaison avec les camions déchargés dans nos usines.'+(E.inventaire?' Inventaire du '+dateFr(E.inventaire)+' '+String(E.inventaire).slice(11,16)+'.':'')+'</div></div>'
-    + '<div style="display:flex;gap:8px"><button class="btn" onclick="state.liasseCharge=false;render()">Actualiser</button><button class="btn" onclick="liasseExporter()">⬇ Excel</button></div></div>'
+    + '<div style="display:flex;gap:8px"><button class="btn" onclick="state.liasseCharge=false;render()">Actualiser</button><button class="btn btn-primary" onclick="liasseExportOuvrir(\'manquantes\')">⬇ Liasses manquantes</button><button class="btn" onclick="liasseExportOuvrir(\'tout\')">⬇ Tout l\'état</button></div></div>'
     + '<div class="gros" style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:14px">'
     + '<div><div class="v">'+T.n+'</div><div class="l">camions déchargés</div></div>'
     + '<div><div class="v" style="color:#1F6E5C">'+T.present+'</div><div class="l">liasses présentes</div></div>'
@@ -7880,13 +7880,162 @@ function renderLiassesTab(){
   }
   return html;
 }
-function liasseExporter(){
-  const E = liasseEtat(); const lignes = [['Client','Traitant / client','Coopérative','Usine','Connaissement','Déchargé le','Poids net (kg)','Liasse','Fichier']];
-  Object.keys(E.clients).sort().forEach(n=>{ const C = E.clients[n]; Object.keys(C.traitants).sort().forEach(t=>{ const Tr = C.traitants[t]; Object.keys(Tr.coops).sort().forEach(cn=>{ Tr.coops[cn].lignes.forEach(l=>lignes.push([n,t,cn,Tr.coops[cn].usine||'',l.cn,dateFr(l.date),l.kg,l.statut==='present'?'Présent':l.statut==='serge'?'Chez Serge seulement':'Manquant',l.fichiers.map(f=>f.nom).join(' ; ')])); }); }); });
-  const wb = XLSX.utils.book_new(); const ws = XLSX.utils.aoa_to_sheet(lignes); ws['!cols'] = [12,16,28,22,22,12,14,20,40].map(w=>({wch:w}));
-  XLSX.utils.book_append_sheet(wb, ws, 'Liasses');
-  if (E.orphelins.length){ const ws2 = XLSX.utils.aoa_to_sheet([['Dossier','Fichier','Modifié le']].concat(E.orphelins.map(f=>[[f.port,f.dossier_client,f.dossier_coop].filter(Boolean).join(' › '), f.nom, dateFr(f.modifie_le)]))); ws2['!cols']=[{wch:40},{wch:48},{wch:12}]; XLSX.utils.book_append_sheet(wb, ws2, 'Sans camion'); }
-  XLSX.writeFile(wb, 'Etat_liasses_documentaires_'+new Date().toISOString().slice(0,10)+'.xlsx');
+// ---- Export du point sur les liasses : même mise en page que le « Point des livraisons par client » (modèle TRACA_SAPO), au choix en Excel ou en PDF ----
+function liasseLibStatut(s){ return s==='present' ? 'Présent' : s==='serge' ? 'Chez Serge seulement' : 'Manquant'; }
+function liasseLignesExport(contenu, client){
+  const E = liasseEtat(), out = [];
+  Object.keys(E.clients).sort((a,b)=>a.localeCompare(b,'fr')).forEach(n=>{
+    if (client && n!==client) return;
+    const C = E.clients[n];
+    Object.keys(C.traitants).sort().forEach(t=>{ const Tr = C.traitants[t];
+      Object.keys(Tr.coops).sort((a,b)=>a.localeCompare(b,'fr')).forEach(cn=>{ const K = Tr.coops[cn];
+        K.lignes.slice().sort((x,y)=>String(x.date||'').localeCompare(String(y.date||'')) || String(x.cn).localeCompare(String(y.cn),'fr',{numeric:true})).forEach(l=>{
+          if (contenu==='manquantes' && l.statut==='present') return;
+          out.push({ client:n, traitant:t, coop:cn, usine:K.usine||'', cn:l.cn, date:l.date, kg:l.kg, statut:l.statut, refoulee:l.refoulee, fichiers:l.fichiers.map(f=>f.nom+(f.source==='serge'?' (Serge)':'')).join(' ; ') });
+        }); }); });
+  });
+  return { lignes:out, orphelins:(!client && contenu!=='manquantes') ? E.orphelins : [], inventaire:E.inventaire };
+}
+function liasseExportOuvrir(contenu){
+  state.modal = { type:'liasseExport', payload:{ contenu: contenu==='tout' ? 'tout' : 'manquantes', format:'xlsx', client: state.liasseClient||'' } }; render();
+}
+function liasseExpChoix(cle, v){ const pl = state.modal && state.modal.payload; if (!pl) return; pl[cle] = v; render(); }
+function renderLiasseExportModal(m){
+  const pl = m.payload, E = liasseEtat(), noms = Object.keys(E.clients).sort((a,b)=>a.localeCompare(b,'fr'));
+  const nb = liasseLignesExport(pl.contenu, pl.client).lignes.length;
+  const radio = (nom, val, lib, aide)=>'<label style="display:flex;gap:8px;align-items:flex-start;padding:6px 4px;cursor:pointer"><input type="radio" name="lx_'+nom+'" '+(pl[nom]===val?'checked':'')+' onchange="liasseExpChoix(\''+nom+'\',\''+val+'\')" style="margin-top:3px"><span><b>'+lib+'</b>'+(aide?'<br><span class="hint" style="margin:0">'+aide+'</span>':'')+'</span></label>';
+  return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>Point des liasses documentaires</h3><div id="modal-fields">'
+    + '<div style="font-weight:700;margin:2px 0">Que faut-il mettre dans le fichier ?</div>'
+    + radio('contenu','manquantes','Les liasses manquantes seulement','Camions déchargés dont le PDF n\'est pas rangé chez toi (y compris ceux qui n\'existent que chez Serge).')
+    + radio('contenu','tout','Tout l\'état','Tous les camions déchargés, avec leur statut, et les fichiers rangés sans camion.')
+    + '<div style="font-weight:700;margin:12px 0 4px">Quel client ?</div>'
+    + '<select class="input" onchange="liasseExpChoix(\'client\',this.value)" style="width:100%"><option value="">Tous les clients</option>'+noms.map(n=>'<option value="'+esc(n)+'" '+(pl.client===n?'selected':'')+'>'+esc(n)+'</option>').join('')+'</select>'
+    + '<div style="font-weight:700;margin:12px 0 2px">Quel format ?</div>'
+    + radio('format','xlsx','Excel (.xlsx)','Une feuille par client, même mise en page que le point des livraisons, plus un récap par coopérative.')
+    + radio('format','pdf','PDF','Document paysage prêt à envoyer ou à imprimer.')
+    + '<div class="hint" style="margin-top:10px"><b>'+nb+'</b> ligne'+(nb>1?'s':'')+' dans le fichier.</div>'
+    + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="liasseExportLancer()">⬇ Télécharger ('+(pl.format==='pdf'?'PDF':'Excel')+')</button></div></div></div>';
+}
+async function liasseExportLancer(){
+  const pl = state.modal && state.modal.type==='liasseExport' ? state.modal.payload : null; if (!pl) return;
+  const { contenu, format, client } = pl, D = liasseLignesExport(contenu, client);
+  if (!D.lignes.length && !D.orphelins.length){ closeModal(); showToast(contenu==='manquantes' ? 'Aucune liasse manquante : tout est rangé.' : 'Rien à exporter.', 'success'); return; }
+  closeModal();
+  const camp = campagneCourante(), campNom = camp ? lotsCampagneNom(camp.id) : 'toutes campagnes';
+  const base = (contenu==='manquantes' ? 'Liasses_manquantes_' : 'Etat_liasses_documentaires_')+String(campNom).replace(/[^A-Za-z0-9]+/g,'_')+(client ? '_'+String(client).replace(/[^A-Za-z0-9]+/g,'_') : '')+'_'+new Date().toISOString().slice(0,10);
+  try{
+    if (format==='pdf') await liasseExporterPdf(D, contenu, client, campNom, base+'.pdf');
+    else await liasseExporterExcel(D, contenu, client, campNom, base+'.xlsx');
+  }catch(e){ showToast('Échec de l\'export : '+(e&&e.message?e.message:e)); }
+}
+async function liasseExporterExcel(D, contenu, client, campNom, nomFichier){
+  const ExcelJS = await qcChargerExcelJS();
+  const ENTETE = 'FFC55A11', VERT = 'FFCCFFCC', NOIR = { argb:'FF000000' };
+  const bord = { style:'thin', color:NOIR }, cadre = { top:bord, bottom:bord, left:bord, right:bord };
+  const NB = '#,##0_ ;[Red]\\-#,##0\\ ';
+  const FOND = { present:'FFCCFFCC', serge:'FFFFF2CC', manquant:'FFF8CBAD' };
+  const cols = [['COOPERATIVES',26],['TRAITANT',14],['USINE',20],['DATE DÉCHARGEMENT',14.89],['N° CONNAISSEMENT',22.66],['POIDS NET (kg)',15.11],['LIASSE',22],['FICHIER RANGÉ',44]];
+  const wb = new ExcelJS.Workbook(); wb.creator = 'ORIGEN · ECORIGINE'; wb.created = new Date();
+  const noms = new Set(), feuilles = [];
+  const nomFeuille = n=>{ let b = String(n).replace(/[\\\/\?\*\[\]:]/g,' ').trim().slice(0,31) || 'Client', k = b, i = 2; while (noms.has(k.toLowerCase())){ k = b.slice(0,28)+' '+i; i++; } noms.add(k.toLowerCase()); return k; };
+  const dateXl = iso=>{ const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso||'')); return m ? new Date(Date.UTC(+m[1], +m[2]-1, +m[3])) : null; };
+  const entete = (ws, liste, ligne)=>{ const h = ws.getRow(ligne); h.height = 27.6;
+    liste.forEach((c,i)=>{ const x = h.getCell(i+2); x.value = c[0]; x.font = { name:'Calibri', size:10, bold:true, color:{ argb:'FFFFFFFF' } }; x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:ENTETE } }; x.alignment = { horizontal:'center', vertical:'middle', wrapText:true }; x.border = cadre; }); };
+  const parClient = new Map(); D.lignes.forEach(l=>{ if (!parClient.has(l.client)) parClient.set(l.client, []); parClient.get(l.client).push(l); });
+  parClient.forEach((rows, nom)=>{
+    const ws = wb.addWorksheet(nomFeuille(nom)); feuilles.push({ ws, coops:new Set(rows.map(r=>r.coop)) });
+    ws.columns = [{ width:9 }].concat(cols.map(c=>({ width:c[1] })));
+    ws.getCell('B1').value = (contenu==='manquantes' ? 'Liasses documentaires manquantes — ' : 'État des liasses documentaires — ')+nom+' — campagne '+campNom+' — au '+dateFr(aujourdhuiIso()); ws.getCell('B1').font = { name:'Calibri', size:11, bold:true };
+    entete(ws, cols, 4);
+    rows.forEach((l,i)=>{
+      const v = [ l.coop, l.traitant, l.usine, dateXl(l.date), l.cn+(l.refoulee?' (refoulé)':''), l.kg||null, liasseLibStatut(l.statut), l.fichiers ];
+      const row = ws.getRow(5+i);
+      v.forEach((val,k)=>{ const x = row.getCell(k+2); x.value = val; x.border = cadre; x.font = { name:'Calibri', size:10 };
+        x.alignment = k<=2 || k===7 ? { horizontal:'left' } : { horizontal: k===6 ? 'center' : 'right', indent: k===6 ? 0 : 1 };
+        if (k===3) x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:VERT } };
+        if (k===6) x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:FOND[l.statut] } };
+        if (k===3) x.numFmt = 'mm-dd-yy'; if (k===5) x.numFmt = NB; });
+    });
+    const rt = 5+rows.length, t = ws.getRow(rt);
+    const lt = t.getCell(2); lt.value = 'TOTAL · '+rows.length+' camion'+(rows.length>1?'s':''); lt.font = { name:'Calibri', size:10, bold:true };
+    const tk = t.getCell(7); tk.value = { formula:'SUM(G5:G'+(rt-1)+')' }; tk.numFmt = NB; tk.font = { name:'Calibri', size:10, bold:true }; tk.alignment = { horizontal:'right', indent:1 };
+    for (let c = 2; c<=9; c++){ const x = t.getCell(c); x.border = cadre; x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFF2F2F2' } }; }
+    ws.views = [{ state:'frozen', ySplit:4 }];
+  });
+  // Récap par coopérative : les chiffres sont des formules qui relisent les feuilles de détail (corriger une ligne = le récap suit)
+  const coops = Array.from(new Set(feuilles.flatMap(f=>Array.from(f.coops)))).sort((a,b)=>a.localeCompare(b,'fr'));
+  if (coops.length){
+    const ws = wb.addWorksheet('Récap coopératives'); const LIM = 2000;
+    const q = f=>"'"+String(f.ws.name).replace(/'/g,"''")+"'!";
+    const ent = [['COOPERATIVES',34],['CAMIONS',14],['LIASSES PRÉSENTES',16],['CHEZ SERGE SEULEMENT',16],['LIASSES MANQUANTES',16],['POIDS NET SANS LIASSE (kg)',20]];
+    ws.columns = [{ width:9 }].concat(ent.map(c=>({ width:c[1] })));
+    entete(ws, ent, 4);
+    const somme = (r, f, crit)=>'COUNTIFS('+q(f)+'$B$5:$B$'+LIM+',$B'+r+(crit ? ','+q(f)+'$H$5:$H$'+LIM+',"'+crit+'"' : '')+')';
+    coops.forEach((nom,i)=>{
+      const r = 5+i, row = ws.getRow(r);
+      row.getCell(2).value = nom;
+      row.getCell(3).value = { formula: feuilles.map(f=>somme(r,f,'')).join('+') };
+      row.getCell(4).value = { formula: feuilles.map(f=>somme(r,f,'Présent')).join('+') };
+      row.getCell(5).value = { formula: feuilles.map(f=>somme(r,f,'Chez Serge seulement')).join('+') };
+      row.getCell(6).value = { formula: feuilles.map(f=>somme(r,f,'Manquant')).join('+') };
+      row.getCell(7).value = { formula: feuilles.map(f=>'SUMIFS('+q(f)+'$G$5:$G$'+LIM+','+q(f)+'$B$5:$B$'+LIM+',$B'+r+','+q(f)+'$H$5:$H$'+LIM+',"<>Présent")').join('+') };
+      for (let c = 2; c<=7; c++){ const x = row.getCell(c); x.font = { name:'Calibri', size:10 }; x.border = cadre; x.alignment = c===2 ? { horizontal:'left' } : { horizontal:'right', indent:1 }; if (c>2) x.numFmt = NB; }
+    });
+    const rt = 5+coops.length, tot = ws.getRow(rt);
+    tot.getCell(2).value = 'TOTAL';
+    for (let c = 3; c<=7; c++){ const L = String.fromCharCode(64+c); tot.getCell(c).value = { formula:'SUM('+L+'5:'+L+(rt-1)+')' }; }
+    for (let c = 2; c<=7; c++){ const x = tot.getCell(c); x.font = { name:'Calibri', size:10, bold:true }; x.border = cadre; x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFF2F2F2' } }; if (c>2){ x.numFmt = NB; x.alignment = { horizontal:'right', indent:1 }; } }
+    ws.views = [{ state:'frozen', ySplit:4 }];
+    ws.orderNo = feuilles[0].ws.orderNo + 0.5;
+  }
+  if (D.orphelins.length){
+    const ws = wb.addWorksheet('Sans camion'); const ent = [['DOSSIER',44],['FICHIER',52],['MODIFIÉ LE',14]];
+    ws.columns = [{ width:9 }].concat(ent.map(c=>({ width:c[1] }))); entete(ws, ent, 4);
+    D.orphelins.forEach((f,i)=>{ const row = ws.getRow(5+i); [[f.port,f.dossier_client,f.dossier_coop].filter(Boolean).join(' › '), f.nom, dateFr(f.modifie_le)].forEach((val,k)=>{ const x = row.getCell(k+2); x.value = val; x.font = { name:'Calibri', size:10 }; x.border = cadre; }); });
+    ws.views = [{ state:'frozen', ySplit:4 }];
+  }
+  await qcTelechargerClasseur(wb, nomFichier);
+  showToast('Point des liasses téléchargé en Excel ('+D.lignes.length+' ligne'+(D.lignes.length>1?'s':'')+').', 'success');
+}
+async function liasseExporterPdf(D, contenu, client, campNom, nomFichier){
+  await chargerBibliothequesPdf();
+  const ENTETE = '#C55A11', FOND = { present:'#CCFFCC', serge:'#FFF2CC', manquant:'#F8CBAD' };
+  const titre = contenu==='manquantes' ? 'Liasses documentaires manquantes' : 'État des liasses documentaires';
+  const sousTitre = (client ? client+' · ' : 'Tous les clients · ')+'campagne '+campNom+' · au '+new Date().toLocaleDateString('fr-FR')+(D.inventaire ? ' (inventaire du '+dateFr(D.inventaire)+' '+String(D.inventaire).slice(11,16)+')' : '');
+  const nb = n=>n>0 ? Math.round(n).toLocaleString('fr-FR') : '—';
+  const th = (t,w,al)=>'<th style="box-sizing:border-box;width:'+w+';padding:7px 5px;text-align:'+(al||'center')+';font-weight:700;font-size:11px;line-height:1.2;border:1px solid #000">'+t+'</th>';
+  const td = (t,al,st)=>'<td style="padding:0 6px;text-align:'+(al||'center')+';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border:1px solid #999;'+(st||'')+'">'+t+'</td>';
+  const tete = '<thead><tr style="background:'+ENTETE+';color:#fff">'+th('Client','110px','left')+th('Traitant','90px')+th('Coopérative','200px','left')+th('Usine','130px')+th('Déchargé le','84px')+th('N° connaissement','150px')+th('Poids net (kg)','90px')+th('Liasse','150px')+'</tr></thead>';
+  const ligne = l=>'<tr style="height:27px">'+td(esc(l.client),'left')+td(esc(l.traitant))+td(esc(l.coop),'left','font-weight:700')+td(esc(l.usine))+td(esc(dateFr(l.date)))+td(esc(l.cn)+(l.refoulee?' (refoulé)':''),'center','font-size:10.5px')+td(nb(l.kg),'right')
+    +td('<span style="display:inline-block;padding:2px 10px;border-radius:999px;background:'+FOND[l.statut]+';font-weight:700;font-size:10.5px">'+liasseLibStatut(l.statut)+'</span>')+'</tr>';
+  const cnt = s=>D.lignes.filter(l=>l.statut===s).length, kgSans = D.lignes.filter(l=>l.statut!=='present').reduce((t,l)=>t+(l.kg||0),0);
+  const tot = '<tr style="height:30px;background:#F2F2F2;font-weight:800"><td colspan="6" style="padding:0 8px;text-align:left;border:1px solid #000">TOTAL · '+D.lignes.length+' camion'+(D.lignes.length>1?'s':'')+' — '+cnt('manquant')+' manquant'+(cnt('manquant')>1?'s':'')+(cnt('serge') ? ', '+cnt('serge')+' chez Serge seulement' : '')+(contenu!=='manquantes' ? ', '+cnt('present')+' présent'+(cnt('present')>1?'s':'') : '')+'</td>'+td(nb(D.lignes.reduce((t,l)=>t+(l.kg||0),0)),'right','border:1px solid #000')+td('','center','border:1px solid #000')+'</tr>';
+  const P1 = 16, P = 20, pages = []; let i0 = 0;
+  if (!D.lignes.length) pages.push([]);
+  while (i0 < D.lignes.length){ const n = pages.length===0 ? P1 : P; pages.push(D.lignes.slice(i0, i0+n)); i0 += n; }
+  if (D.lignes.length && pages[pages.length-1].length >= (pages.length===1 ? P1 : P) - 1) pages.push([]);
+  const orph = D.orphelins.length ? '<div style="margin-top:14px;font-size:11px;color:#5A6865"><b>'+D.orphelins.length+' fichier'+(D.orphelins.length>1?'s':'')+' rangé'+(D.orphelins.length>1?'s':'')+' sans camion correspondant</b> (numéro de connaissement absent ou inconnu) : voir l\'export Excel.</div>' : '';
+  const htmlPage = (rows, k)=>'<div style="width:1122px;height:794px;box-sizing:border-box;padding:34px 40px;background:#fff;font-family:Arial,Helvetica,sans-serif;color:#14231F;position:relative">'
+    + (k===0 ? '<div style="border-bottom:3px solid '+ENTETE+';padding-bottom:10px;margin-bottom:12px"><div style="font-size:11px;font-weight:700;letter-spacing:.12em;color:#8A4A1F">ECORIGINE · ORIGEN</div><div style="font-size:24px;font-weight:800;color:#14231F;margin-top:2px">'+esc(titre)+'</div><div style="font-size:12px;color:#5A6865;margin-top:3px">'+esc(sousTitre)+'</div></div>'
+      : '<div style="font-size:12px;color:#5A6865;margin-bottom:8px;border-bottom:1px solid #D5DDD9;padding-bottom:6px">'+esc(titre)+' · '+esc(client||'Tous les clients')+' (suite)</div>')
+    + '<table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:11px">'+(rows.length ? tete : '')+'<tbody>'+rows.map(ligne).join('')+(k===pages.length-1 ? tot : '')+'</tbody></table>'+(k===pages.length-1 ? orph : '')
+    + '<div style="position:absolute;left:40px;right:40px;bottom:18px;display:flex;justify-content:space-between;font-size:10px;color:#8A9591"><span>ECORIGINE SA · Abidjan — document généré par ORIGEN</span><span>Page '+(k+1)+' / '+pages.length+'</span></div></div>';
+  const cadre = document.createElement('iframe');
+  cadre.setAttribute('aria-hidden','true'); cadre.style.cssText = 'position:fixed;left:-10000px;top:0;width:1122px;height:800px;border:0;visibility:hidden;';
+  document.body.appendChild(cadre);
+  try{
+    const d = cadre.contentDocument; d.open(); d.write('<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0;background:#fff">'+pages.map(htmlPage).join('')+'</body></html>'); d.close();
+    await new Promise(r=>setTimeout(r,200));
+    const { jsPDF } = window.jspdf; const pdf = new jsPDF({ unit:'mm', format:'a4', orientation:'landscape', compress:true });
+    const els = [...d.body.children];
+    for (let k=0; k<els.length; k++){
+      const canvas = await window.html2canvas(els[k], { scale:2, backgroundColor:'#ffffff', useCORS:true, logging:false });
+      if (k>0) pdf.addPage('a4','landscape');
+      pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, 297, 210, undefined, 'FAST');
+    }
+    telechargerBlob(pdf.output('blob'), nomFichier);
+    showToast('Point des liasses téléchargé en PDF ('+D.lignes.length+' ligne'+(D.lignes.length>1?'s':'')+').', 'success');
+  } finally { cadre.remove(); }
 }
 function renderSacherieTab(){
   if (!state.sachCharge){ chargerSacherie().then(()=>render()); return '<div class="panel"><div class="hint" style="padding:18px">Chargement de la sacherie…</div></div>'; }
@@ -13088,6 +13237,7 @@ function lotsModalsHtml(){
   if (m.type==='usiPaiement') return renderUsiPaiementModal(m);
   if (m.type==='ctrTraitant') return renderCtrModal(m);
   if (m.type==='livrExport') return renderLivrExportModal(m);
+  if (m.type==='liasseExport') return renderLiasseExportModal(m);
   if (m.type==='finLtdLots') return renderFinLtdLotsModal(m);
   if (m.type==='lotsPoidsEntrepot'){
     const pl = m.payload, lots = lotsPoidsEntrepotLots(pl);
