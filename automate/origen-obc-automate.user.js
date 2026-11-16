@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.30
+// @version      0.4.31
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.30';
+  const VERSION = '0.4.31';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -684,7 +684,20 @@
     let prodRetenu = null, parcRetenue = null;
     for (const v of candidats) {
       setSelect(selProd, v); await dormir(1500);
-      const ok = await attendre(() => [...selParc.options].find((o) => o.value !== '' && !/^\s*-/.test(o.text)), 4000, 300);
+      let ok = await attendre(() => [...selParc.options].find((o) => o.value !== '' && !/^\s*-/.test(o.text)), 8000, 300);
+      if (!ok) {
+        // La liste en cascade d'OBC ne s'est pas remplie (lenteur, ou liste réinitialisée) : on interroge OBC directement, et on remplit la liste nous-mêmes.
+        const cid = (q('#txtcommodite_idAdd') || {}).value || '2';
+        journal(e, 'Parcelles du producteur ' + v + ' : liste restée vide (commodité ' + cid + ', ' + selParc.options.length + ' option) → interrogation directe d\'OBC');
+        let rep = null; try { rep = await getJson('/AppMethods1/LoadAgroParcellesByCommoditeEtProducteurId?CommoditeId=' + encodeURIComponent(cid) + '&ProducteurId=' + encodeURIComponent(v)); } catch (er) { journal(e, 'Interrogation des parcelles impossible : ' + (er && er.message)); }
+        const lst = ((rep && rep.parcellesProducteurData) || []).filter((x) => x && x.Value !== '' && x.Value != null && x.Text && !/^\s*-/.test(x.Text));
+        journal(e, 'OBC renvoie ' + lst.length + ' parcelle(s) pour ce producteur' + (lst.length ? ' : ' + lst.map((x) => x.Text).join(', ') : ''));
+        if (lst.length) {
+          selParc.innerHTML = ''; const o0 = document.createElement('option'); o0.value = ''; o0.textContent = '-Code parcelle-'; selParc.appendChild(o0);
+          lst.forEach((x) => { const o = document.createElement('option'); o.value = String(x.Value); o.textContent = x.Text; selParc.appendChild(o); });
+          rafraichirListes(f); ok = [...selParc.options].find((o) => o.value !== '');
+        }
+      }
       if (ok) { prodRetenu = v; parcRetenue = (modele && v === modele.producteur && [...selParc.options].find((o) => o.value === modele.parcelle && !/^\s*-/.test(o.text))) || ok; break; }
     }
     if (!prodRetenu) throw new Error('Aucun producteur de cette coopérative n\'a de parcelle avec un code : OBC ne saurait pas afficher le connaissement. Ajoute une parcelle (ex. P001) à un producteur, puis « Continuer ».');
