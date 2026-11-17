@@ -4741,7 +4741,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-16-502';
+const APP_VERSION = '2026-11-17-503';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8468,7 +8468,7 @@ function renderFinPartenaires(){
     const note = (p.sansPrix ? '<span class="badge warn" title="Prix loco-magasin non renseigné sur l\'usine">'+p.sansPrix+' sans prix</span> ' : '')+(p.sansPoids ? '<span class="badge neutral" title="Poids de base pas encore saisi">'+p.sansPoids+' sans poids</span>' : '');
     html += '<tr><td><b>'+esc(p.traitant)+'</b>'+(note?'<div style="margin-top:3px">'+note+'</div>':'')+'</td><td>'+esc(p.sites.map(s=>s.code).join(', '))+'</td><td class="num">'+p.achats.length+'</td><td class="num">'+fmtNum(p.kgUsine)+'</td><td class="num">'+(p.kgAgl?fmtNum(p.kgAgl):'—')+'</td><td>'+esc(p.base)+'</td>'
       + '<td class="num">'+fmtNum(p.du)+'</td><td class="num">'+fmtNum(p.paye)+'</td><td class="num"><b class="'+(p.reste>0?'txt-danger':'')+'">'+fmtNum(p.reste)+'</b></td>'
-      + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="finPartenaireDetail(\''+esc(encodeURIComponent(p.traitant))+'\')">Détail</button> <button class="btn-ghost btn-compact" onclick="finPartPaiementOuvrir(\''+esc(encodeURIComponent(p.traitant))+'\')">Paiement</button> <button class="btn-ghost btn-compact" onclick="ctrOuvrir(\''+esc(encodeURIComponent(p.traitant))+'\')">Contrat</button> <button class="btn-ghost btn-compact" onclick="finEtatTraitantExporter(\''+esc(encodeURIComponent(p.traitant))+'\')" title="Classeur Excel : éléments du prix du contrat × poids sorti usine de chaque lot produit chez ce traitant">⬇ État de paiement</button></td></tr>';
+      + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="finPartenaireDetail(\''+esc(encodeURIComponent(p.traitant))+'\')">Détail</button> <button class="btn-ghost btn-compact" onclick="finPartPaiementOuvrir(\''+esc(encodeURIComponent(p.traitant))+'\')">Paiement</button> <button class="btn-ghost btn-compact" onclick="ctrOuvrir(\''+esc(encodeURIComponent(p.traitant))+'\')">Contrat</button> <button class="btn-ghost btn-compact" onclick="finEtatTraitantExporter(\''+esc(encodeURIComponent(p.traitant))+'\')" title="Classeur Excel : éléments du prix du contrat × poids sorti usine de chaque lot produit chez ce traitant">⬇ État de paiement</button> <button class="btn-ghost btn-compact" onclick="finDechOuvrir(\''+esc(encodeURIComponent(p.traitant))+'\')" title="Classeur Excel pour les déclarations RA : tous les déchargements des coopératives cochées (poids net payé, sacs déchargés, sacs acceptés)">⬇ Déchargements (RA)</button></td></tr>';
   });
   return html + '</tbody></table></div><div class="hint" style="margin-top:8px">Montants en FCFA.</div></div></div>';
 }
@@ -8603,6 +8603,100 @@ async function finEtatTraitantExporter(t){
   const { campNom, lots } = d;
   await qcTelechargerClasseur(wb, 'Etat_paiement_traitant_'+String(traitant).replace(/[^A-Za-z0-9]+/g,'_')+'_'+String(campNom).replace(/[^A-Za-z0-9]+/g,'_')+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
   showToast('État de paiement de '+traitant+' téléchargé ('+lots.length+' lots).', 'success');
+}
+
+// ---- Export « Déchargements par coopérative » d'un traitant (déclarations Rainforest Alliance) ----
+// On coche les coopératives ; le classeur reprend tous leurs déchargements (camions refoulés exclus). Les chiffres de référence sont, dans cet ordre :
+// poids net payé (après réfaction), nombre de sacs déchargés à l'usine, nombre de sacs acceptés. Le « poids accepté » n'est jamais une référence : il n'est pas repris.
+// Déchargements retenus : pesés (poids net payé connu) et acceptés. Un camion refoulé (acceptation SAIGIC « REFOULE ») n'est jamais compté, même si la fiche ORIGEN ne le marque pas.
+function finDechRetenu(a){ return !a.refoulee && !/^REFOUL/i.test(pdVal(a,'Acceptation')) && Number(a.poids_net_produit)>0; }
+function finDechCoopsDe(traitant){
+  const p = finPartenaires().find(x=>x.traitant===traitant); if (!p) return [];
+  const par = {};
+  p.achats.filter(({a})=>finDechRetenu(a)).forEach(({a})=>{ const k = a.cooperative_id; const o = (par[k] = par[k] || { id:k, nom:(coopById(k)||{}).nom||k, n:0, kg:0 }); o.n++; o.kg += Number(a.poids_net_produit)||0; });
+  return Object.values(par).sort((x,y)=>String(x.nom).localeCompare(String(y.nom),'fr',{ sensitivity:'base' }));
+}
+function finDechOuvrir(t){
+  const traitant = decodeURIComponent(t), coops = finDechCoopsDe(traitant);
+  if (!coops.length){ showToast('Aucun déchargement chez '+traitant+' pour cette campagne.'); return; }
+  const sel = {}; coops.forEach(c=>{ sel[c.id] = true; });
+  state.modal = { type:'finDech', payload:{ traitant, coops, sel } }; render();
+}
+function finDechCocher(id, v){ const pl = state.modal && state.modal.type==='finDech' ? state.modal.payload : null; if (!pl) return; pl.sel[id] = !!v; const n = pl.coops.filter(c=>pl.sel[c.id]).length, el = document.getElementById('fin-dech-n'); if (el) el.textContent = n+' coopérative(s) cochée(s) sur '+pl.coops.length; }
+function finDechTout(v){ const pl = state.modal && state.modal.type==='finDech' ? state.modal.payload : null; if (!pl) return; pl.coops.forEach(c=>{ pl.sel[c.id] = !!v; }); document.querySelectorAll('.fin-dech-cb').forEach(x=>{ x.checked = !!v; }); const el = document.getElementById('fin-dech-n'); if (el) el.textContent = (v ? pl.coops.length : 0)+' coopérative(s) cochée(s) sur '+pl.coops.length; }
+function renderFinDechModal(m){
+  const pl = m.payload, camp = finCampagneId();
+  return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>Déchargements — '+esc(pl.traitant)+'</h3><div id="modal-fields">'
+    + '<div class="hint" style="margin-bottom:8px">Campagne'+(camp ? ' <b>'+esc(lotsCampagneNom(camp))+'</b>' : ' : toutes')+'. Coche les coopératives à reprendre dans le fichier. Il contient chaque déchargement avec le <b>poids net payé</b>, les <b>sacs déchargés à l\'usine</b> et les <b>sacs acceptés</b> (camions refoulés exclus).</div>'
+    + '<div style="display:flex;gap:8px;margin-bottom:6px"><button class="btn-ghost btn-compact" onclick="finDechTout(true)">Tout cocher</button><button class="btn-ghost btn-compact" onclick="finDechTout(false)">Tout décocher</button><span id="fin-dech-n" class="hint" style="align-self:center">'+pl.coops.length+' coopérative(s) cochée(s) sur '+pl.coops.length+'</span></div>'
+    + '<div style="max-height:44vh;overflow:auto;border:1px solid var(--border,#ddd);border-radius:8px;padding:6px 10px">'
+    + pl.coops.map(c=>'<label style="display:flex;align-items:center;gap:8px;padding:5px 0"><input type="checkbox" class="fin-dech-cb" '+(pl.sel[c.id]?'checked ':'')+'onchange="finDechCocher(\''+esc(String(c.id))+'\',this.checked)"><span style="flex:1">'+esc(c.nom)+'</span><span class="hint">'+c.n+' déchargement(s) · '+fmtNum(c.kg)+' kg net payé</span></label>').join('')
+    + '</div></div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="finDechExporter()">⬇ Télécharger (Excel)</button></div></div></div>';
+}
+async function finDechExporter(){
+  const pl = state.modal && state.modal.type==='finDech' ? state.modal.payload : null; if (!pl) return;
+  const ids = pl.coops.filter(c=>pl.sel[c.id]).map(c=>c.id);
+  if (!ids.length){ showToast('Coche au moins une coopérative.', 'error'); return; }
+  const traitant = pl.traitant; closeModal();
+  let ExcelJS; try{ ExcelJS = await qcChargerExcelJS(); }catch(e){ showToast('Impossible de préparer le classeur : '+e.message, 'error'); return; }
+  const p = finPartenaires().find(x=>x.traitant===traitant); if (!p){ showToast('Traitant introuvable.'); return; }
+  const camp = finCampagneId(), campNom = camp ? lotsCampagneNom(camp) : 'toutes campagnes';
+  const tous = p.achats.map(x=>x.a).filter(a=>ids.indexOf(a.cooperative_id)>=0);
+  const A = tous.filter(finDechRetenu), ecartes = tous.length - A.length;
+  A.sort((x,y)=>String((coopById(x.cooperative_id)||{}).nom||'').localeCompare(String((coopById(y.cooperative_id)||{}).nom||''),'fr') || String(x.date||'').localeCompare(String(y.date||'')) || String(x.connaissement||'').localeCompare(String(y.connaissement||''),'fr',{numeric:true}));
+  if (!A.length){ showToast('Aucun déchargement pour cette sélection.'); return; }
+  const ENTETE='FFC55A11', VERT='FFCCFFCC', JAUNE='FFFFF2CC', NOIR={argb:'FF000000'}, bord={style:'thin',color:NOIR}, cadre={top:bord,bottom:bord,left:bord,right:bord};
+  const NB='#,##0', F=o=>Object.assign({name:'Calibri',size:10},o||{});
+  const dateXl = iso=>{ const m=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso||'')); return m ? new Date(Date.UTC(+m[1],+m[2]-1,+m[3])) : null; };
+  const wb = new ExcelJS.Workbook(); wb.creator='ORIGEN · ECORIGINE'; wb.created=new Date();
+  const ws = wb.addWorksheet('Déchargements', { views:[{ state:'frozen', xSplit:3, ySplit:5 }] });
+  ws.getCell('B1').value = 'DÉCHARGEMENTS DES COOPÉRATIVES — '+String(traitant).toUpperCase(); ws.getCell('B1').font = F({size:13,bold:true,color:{argb:ENTETE}});
+  ws.getCell('B2').value = 'Campagne '+campNom+' · Établi le '+new Date().toLocaleDateString('fr-FR')+' · '+ids.length+' coopérative(s) · Source : ORIGEN (connaissements SAIGIC et pesées usine)'; ws.getCell('B2').font = F({italic:true,color:{argb:'FF595959'}});
+  ws.getCell('B3').value = 'Pour les déclarations RA : se baser sur le POIDS NET PAYÉ, les SACS DÉCHARGÉS à l\'usine et les SACS ACCEPTÉS. Camions refoulés non repris.'; ws.getCell('B3').font = F({italic:true,color:{argb:'FF595959'}});
+  const hdr = ['N°','COOPÉRATIVE','DATE DÉCHARGEMENT','N° CONNAISSEMENT','IMMATRICULATION','USINE','PRODUIT','SACS DÉCHARGÉS À L\'USINE','SACS ACCEPTÉS','POIDS NET PAYÉ (kg)','POIDS DU CONNAISSEMENT (kg)','OBSERVATION'];
+  ws.columns = [{width:2}].concat([5,28,14,22,16,8,18,14,12,16,16,26].map(w=>({width:w})));
+  const H = ws.getRow(5); H.height = 42;
+  hdr.forEach((h,i)=>{ const c=H.getCell(i+2); c.value=h; c.font=F({bold:true,color:{argb:'FFFFFFFF'}}); c.fill={type:'pattern',pattern:'solid',fgColor:{argb:ENTETE}}; c.alignment={horizontal:'center',vertical:'middle',wrapText:true}; c.border=cadre; });
+  let r = 6, n = 0, nonPeses = 0;
+  A.forEach(a=>{
+    n++; const c = coopById(a.cooperative_id), pn = Number(a.poids_net_produit)||null;
+    const sd = pdNum(a,'NSDechargé'), sa = Number(a.nombre_sacs_accepte)||null;
+    const d2 = pdDate(a,'Date P2'), d1 = pdDate(a,'Date P1'), dj = d2 || d1;
+    const dDech = dj ? dateXl(dj.jour.split('/').reverse().join('-')) : dateXl(a.date);
+    if (!pn) nonPeses++;
+    const v = [n, c?c.nom:'', dDech, a.connaissement||'', a.immat_vehicule||'', String(a.usine_dechargement||'').toUpperCase(), typeCacaoLibelleComplet(produitSaigicLibelle(a)||a.type_cacao||'').toUpperCase(), sd!=null ? sd : (sa||null), sa, pn, Number(a.quantite_kg)||null, !pn ? 'Poids net payé non renseigné (pas encore pesé)' : ''];
+    const row = ws.getRow(r);
+    v.forEach((x,i)=>{ const q=row.getCell(i+2); q.value=x; q.border=cadre; q.font=F(i===9||i===7||i===8 ? {bold:true} : {}); q.alignment={horizontal:[1,3,4,5,11].includes(i)?'left':'right'}; if (i===9||i===7||i===8) q.fill={type:'pattern',pattern:'solid',fgColor:{argb:VERT}}; });
+    row.getCell('D').numFmt='dd/mm/yyyy'; ['I','J','K','L'].forEach(k=>row.getCell(k).numFmt=NB); r++;
+  });
+  const r1 = 6, rl = r-1, T = ws.getRow(r); T.getCell('C').value='TOTAL';
+  ['I','J','K','L'].forEach(k=>{ T.getCell(k).value={ formula:`SUM(${k}${r1}:${k}${rl})` }; T.getCell(k).numFmt=NB; });
+  hdr.forEach((h,i)=>{ const q=T.getCell(i+2); q.border=cadre; q.fill={type:'pattern',pattern:'solid',fgColor:{argb:JAUNE}}; q.font=F({bold:true}); });
+  ws.autoFilter = { from:{row:5,column:2}, to:{row:rl,column:1+hdr.length} };
+  // Feuille 2 : récap par coopérative (formules sur la feuille 1)
+  const w2 = wb.addWorksheet('Récap par coopérative', { views:[{ state:'frozen', ySplit:4 }] });
+  w2.getCell('B1').value = 'RÉCAPITULATIF PAR COOPÉRATIVE — '+String(traitant).toUpperCase(); w2.getCell('B1').font = F({size:13,bold:true,color:{argb:ENTETE}});
+  w2.getCell('B2').value = 'Campagne '+campNom+' · Calculé sur la feuille « Déchargements »'; w2.getCell('B2').font = F({italic:true,color:{argb:'FF595959'}});
+  const h2 = ['N°','COOPÉRATIVE','DÉCHARGEMENTS','SACS DÉCHARGÉS À L\'USINE','SACS ACCEPTÉS','POIDS NET PAYÉ (kg)'];
+  w2.columns = [{width:2}].concat([5,30,15,16,14,18].map(w=>({width:w})));
+  const H2 = w2.getRow(4); H2.height = 42;
+  h2.forEach((h,i)=>{ const c=H2.getCell(i+2); c.value=h; c.font=F({bold:true,color:{argb:'FFFFFFFF'}}); c.fill={type:'pattern',pattern:'solid',fgColor:{argb:ENTETE}}; c.alignment={horizontal:'center',vertical:'middle',wrapText:true}; c.border=cadre; });
+  const S="'Déchargements'", rg=k=>`${S}!$${k}$${r1}:$${k}$${rl}`;
+  const coops = Array.from(new Set(A.map(a=>a.cooperative_id))).map(id=>coopById(id)||{ id, nom:String(id) }).sort((x,y)=>String(x.nom).localeCompare(String(y.nom),'fr',{sensitivity:'base'}));
+  let q = 5;
+  coops.forEach((c,i)=>{
+    const row = w2.getRow(q); row.getCell('B').value=i+1; row.getCell('C').value=c.nom;
+    row.getCell('D').value={ formula:`COUNTIF(${rg('C')},C${q})` };
+    row.getCell('E').value={ formula:`SUMIFS(${rg('I')},${rg('C')},C${q})` };
+    row.getCell('F').value={ formula:`SUMIFS(${rg('J')},${rg('C')},C${q})` };
+    row.getCell('G').value={ formula:`SUMIFS(${rg('K')},${rg('C')},C${q})` };
+    h2.forEach((h,k)=>{ const x=row.getCell(k+2); x.border=cadre; x.font=F(); x.alignment={horizontal:k===1?'left':'right'}; if (k>=2) x.numFmt=NB; }); q++;
+  });
+  const T2 = w2.getRow(q); T2.getCell('C').value='TOTAL';
+  ['D','E','F','G'].forEach(k=>{ T2.getCell(k).value={ formula:`SUM(${k}5:${k}${q-1})` }; T2.getCell(k).numFmt=NB; });
+  h2.forEach((h,k)=>{ const x=T2.getCell(k+2); x.border=cadre; x.fill={type:'pattern',pattern:'solid',fgColor:{argb:JAUNE}}; x.font=F({bold:true}); });
+  await qcTelechargerClasseur(wb, 'Dechargements_'+String(traitant).replace(/[^A-Za-z0-9]+/g,'_')+'_'+String(campNom).replace(/[^A-Za-z0-9]+/g,'_')+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
+  showToast('Déchargements de '+traitant+' téléchargés : '+A.length+' camion(s), '+coops.length+' coopérative(s).'+(ecartes ? ' '+ecartes+' camion(s) refoulé(s) ou pas encore pesé(s) non repris.' : ''), 'success');
 }
 
 // ---- Financement › Frais d'usinage : ce qu'on doit à chaque usinier (SUV…) pour l'usinage et le refoulement du cacao déchargé chez lui ----
@@ -13229,6 +13323,7 @@ function lotsModalsHtml(){
   if (m.type==='shipSuivi') return renderShipSuiviModal(m);
   if (m.type==='otInfos') return renderOtInfosModal(m);
   if (m.type==='finEtatPaiement') return renderFinEtatPaiementModal(m);
+  if (m.type==='finDech') return renderFinDechModal(m);
   if (m.type==='finLtd') return renderFinLtdModal(m);
   if (m.type==='finCoopDetail') return renderFinCoopDetailModal(m);
   if (m.type==='finPrime') return renderFinPrimeModal(m);
