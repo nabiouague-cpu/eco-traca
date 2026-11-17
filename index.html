@@ -4740,7 +4740,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-17-510';
+const APP_VERSION = '2026-11-17-511';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -31087,6 +31087,7 @@ function _renderBrut(){
   if (state.modal && state.modal.type==='questionnaireCargill') html += qcModalHtml();
   if (state.modal && state.modal.type==='qcTransfert') html += qcTransfertModalHtml();
   if (state.modal && state.modal.type==='questionnaireImport') html += qcImportModalHtml();
+  if (state.modal && state.modal.type==='questionnaireImportMulti') html += qcImportMultiModalHtml();
 
   if (state.modal && state.modal.type==='nouvelleDemande'){
     const nd = state.modal.payload || {};
@@ -31313,6 +31314,10 @@ function _renderBrut(){
       + '<div class="hint" style="margin:4px 0 8px">Un fichier Excel par coopérative du traitant choisi : 5 producteurs, listes déroulantes, questions grisées selon les réponses, onglet d\'exemples. La coopérative le remplit et te le renvoie ; tu l\'importes ensuite dans sa demande.</div>'
       + '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><select id="qc_modeles_traitant" style="min-width:200px">'+finPartenaires().map(p=>'<option value="'+esc(p.traitant)+'">'+esc(p.traitant)+'</option>').join('')+'</select>'
       + '<button type="button" class="btn btn-primary" onclick="qcModelesTraitant(encodeURIComponent(document.getElementById(\'qc_modeles_traitant\').value))">⬇ Télécharger les modèles (zip)</button></div></div>'
+      + '<div style="border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:10px"><b style="font-size:12px">Téléverser les modèles remplis</b>'
+      + '<div class="hint" style="margin:4px 0 8px">Un fichier Excel, plusieurs, ou le zip renvoyé : ORIGEN reconnaît chaque coopérative, te montre ce qui sera enregistré, puis ouvre l\'assistant « Saisir dans Forms » avec l\'automate. Aucun e-mail n\'est envoyé aux coopératives.</div>'
+      + '<button type="button" class="btn btn-primary" onclick="document.getElementById(\'qc_televerse\').click()">⬆ Téléverser (Excel ou zip)</button>'
+      + '<input type="file" id="qc_televerse" accept=".xlsx,.xls,.zip" multiple style="display:none" onchange="qcTeleverserFichiers(this)"></div>'
       + '<div style="max-height:430px;overflow:auto;border:1px solid var(--border);border-radius:8px"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="font-size:11px;text-transform:uppercase;color:var(--ink-faint);text-align:left;position:sticky;top:0;background:var(--surface,#fff)">'
       + ['Coopérative','Terminés','Saisis dans Forms','Demande',''].map(h=>'<th style="padding:8px 6px">'+h+'</th>').join('')
       + '</tr></thead><tbody>'+lst.map(qcpLigneHtml).join('')+'</tbody></table></div>'
@@ -32310,29 +32315,43 @@ function qcChoisirFichierImport(demandeId){
   const input = document.getElementById('qc-import-'+demandeId.replace(/[^A-Za-z0-9_-]/g,'_'));
   if (input){ input.value = ''; input.click(); }
 }
-async function qcImporterFichier(input, demandeId){
-  const fichier = input.files && input.files[0]; if (!fichier) return;
-  const d = qcDemandeParId(demandeId); if (!d) return;
-  if (typeof XLSX === 'undefined'){ showToast('La bibliothèque Excel ne s\'est pas chargée (connexion internet requise).'); return; }
-  let wb;
-  try{ wb = XLSX.read(await fichier.arrayBuffer(), { type:'array' }); }
-  catch(e){ showToast('Fichier illisible : '+e.message, 'error'); return; }
-  const ws = wb.Sheets['Questionnaire'] || wb.Sheets[wb.SheetNames[0]];
-  const aoa = XLSX.utils.sheet_to_json(ws, { header:1, raw:false, defval:'' });
-  if (!aoa.length){ showToast('Le fichier est vide.', 'error'); return; }
+// Lecture d'un tableur rempli (modele ORIGEN) : detection de la ligne d'en-tetes et des colonnes, nom de la cooperative,
+// puis analyse ligne par ligne. Partage entre l'import dans une demande et le televersement multi-fichiers.
+function qcEnteteTableur(aoa){
+  if (!aoa || !aoa.length) return { erreur:'Le fichier est vide.' };
   // Colonnes reconnues par leur libelle (tolerant aux accents / majuscules, au numero « 3. » et a l'etoile « * »
   // ajoutes dans le modele), dans n'importe quel ordre ; la ligne d'en-tetes est celle qui porte la colonne
   // d'identifiant ORIGEN (titre, consigne et bandes de sections se trouvent au-dessus), cherchee sur les 10 premieres lignes.
   const normEntete = h=>qcNormaliserTexte(String(h==null?'':h).replace(/^\s*\d+\s*[.)-]\s*/, '').replace(/\s*\*\s*$/, ''));
   let ligneEntetes = -1;
   for (let i=0; i<Math.min(10, aoa.length); i++){ const e=(aoa[i]||[]).map(normEntete); if (QC_QUESTIONS.filter(q=>e.includes(qcNormaliserTexte(q.libelle))).length>=10){ ligneEntetes = i; break; } }
-  if (ligneEntetes<0){ showToast('Ce fichier ne correspond pas au modèle du questionnaire (ligne d\'en-têtes introuvable). Téléchargez le modèle depuis ORIGEN.', 'error'); return; }
+  if (ligneEntetes<0) return { erreur:'ne correspond pas au modèle du questionnaire (ligne d\'en-têtes introuvable). Téléchargez le modèle depuis ORIGEN.' };
   const entetes = aoa[ligneEntetes].map(normEntete);
   const colonnes = {};
   QC_QUESTIONS.forEach(q=>{ const i = entetes.indexOf(qcNormaliserTexte(q.libelle)); if (i>=0) colonnes[q.cle] = i; });
   const manquantes = QC_QUESTIONS.filter(q=>colonnes[q.cle]==null);
-  if (manquantes.length>5){ showToast('Ce fichier ne correspond pas au modèle du questionnaire (colonnes introuvables : '+manquantes.slice(0,3).map(q=>q.libelle).join(' ; ')+'…). Téléchargez le modèle depuis ORIGEN.', 'error'); return; }
-  const coop = qcCoopDe(d), producteurs = qcProducteursDe(d), reps = qcReponsesDeDemande(demandeId);
+  if (manquantes.length>5) return { erreur:'ne correspond pas au modèle du questionnaire (colonnes introuvables : '+manquantes.slice(0,3).map(q=>q.libelle).join(' ; ')+'…). Téléchargez le modèle depuis ORIGEN.' };
+  return { ligneEntetes, colonnes };
+}
+// Nom de la cooperative d'un tableur : colonne « Nom de la cooperative » (premiere valeur), sinon fin du titre (« … PRODUCTEUR — COOP »).
+function qcNomCoopTableur(aoa, h){
+  if (h.colonnes.cooperative!=null){
+    for (let i=h.ligneEntetes+1; i<aoa.length; i++){ const v = String((aoa[i]||[])[h.colonnes.cooperative]||'').trim(); if (v) return v; }
+  }
+  const titre = String((aoa[0]||[])[0]||''); const k = titre.lastIndexOf('—');
+  return k>=0 ? titre.slice(k+1).trim() : '';
+}
+// Cooperative ORIGEN correspondant a un nom : nom exact (ou nom Forms), sinon correspondance partielle si elle est unique.
+function qcTrouverCoop(nom){
+  const n = qcNormaliserTexte(nom); if (!n) return null;
+  const L = state.cooperatives || [];
+  const exact = L.find(c=>qcNormaliserTexte(c.nom)===n || qcNormaliserTexte(c.nom_forms)===n); if (exact) return exact;
+  const part = L.filter(c=>{ const m = qcNormaliserTexte(c.nom); return m && (m.includes(n) || n.includes(m)); });
+  return part.length===1 ? part[0] : null;
+}
+function qcLignesTableur(aoa, h, d, producteurs){
+  const colonnes = h.colonnes, ligneEntetes = h.ligneEntetes;
+  const coop = qcCoopDe(d), reps = qcReponsesDeDemande(d.id);
   const lignes = [];
   for (let i=ligneEntetes+1; i<aoa.length; i++){
     const row = aoa[i]; if (!row || row.every(c=>String(c==null?'':c).trim()==='')) continue;
@@ -32360,8 +32379,132 @@ async function qcImporterFichier(input, demandeId){
       : (reps.find(x=>!x.producteur_id && qcNormaliserTexte(x.producteur_nom)===qcNormaliserTexte(nomLigne)) || null);
     lignes.push({ ligne:i+1, producteurId: pr ? pr.id : null, nom: nomLigne, r: propre, complet: qcComplet(propre), erreurs, existante });
   }
+  return lignes;
+}
+async function qcImporterFichier(input, demandeId){
+  const fichier = input.files && input.files[0]; if (!fichier) return;
+  const d = qcDemandeParId(demandeId); if (!d) return;
+  if (typeof XLSX === 'undefined'){ showToast('La bibliothèque Excel ne s\'est pas chargée (connexion internet requise).'); return; }
+  let wb;
+  try{ wb = XLSX.read(await fichier.arrayBuffer(), { type:'array' }); }
+  catch(e){ showToast('Fichier illisible : '+e.message, 'error'); return; }
+  const ws = wb.Sheets['Questionnaire'] || wb.Sheets[wb.SheetNames[0]];
+  const aoa = XLSX.utils.sheet_to_json(ws, { header:1, raw:false, defval:'' });
+  const h = qcEnteteTableur(aoa);
+  if (h.erreur){ showToast(h.erreur==='Le fichier est vide.' ? h.erreur : 'Ce fichier '+h.erreur, 'error'); return; }
+  const lignes = qcLignesTableur(aoa, h, d, qcProducteursDe(d));
   if (lignes.length===0){ showToast('Aucune ligne remplie trouvée dans le fichier (le consentement doit au moins être renseigné).', 'error'); return; }
   openModal('questionnaireImport', { demandeId, cooperativeId: d.cooperative_id, lignes, nomFichier: fichier.name });
+}
+// ---- Televersement direct (Excel ou zip, une ou plusieurs cooperatives) -> controle -> enregistrement -> assistant Forms ----
+async function qcLireFichiersTeleverses(files){
+  const out = [];
+  for (const f of files){
+    if (/\.zip$/i.test(f.name)){
+      if (typeof JSZip === 'undefined') throw new Error("La bibliothèque de compression n'a pas pu se charger (connexion internet requise).");
+      const z = await JSZip.loadAsync(await f.arrayBuffer());
+      for (const e of Object.values(z.files)){
+        const base = e.name.split('/').pop();
+        if (e.dir || /^__MACOSX/.test(e.name) || base.startsWith('.') || base.startsWith('~$') || !/\.xlsx?$/i.test(base)) continue;
+        out.push({ nom: base, buf: await e.async('arraybuffer') });
+      }
+    } else if (/\.xlsx?$/i.test(f.name)) out.push({ nom: f.name, buf: await f.arrayBuffer() });
+  }
+  return out;
+}
+async function qcTeleverserFichiers(input){
+  const fichiers = Array.from(input.files || []); input.value = '';
+  if (!fichiers.length) return;
+  if (typeof XLSX === 'undefined'){ showToast('La bibliothèque Excel ne s\'est pas chargée (connexion internet requise).'); return; }
+  let pieces;
+  try{ pieces = await qcLireFichiersTeleverses(fichiers); }catch(e){ showToast('Fichier illisible : '+(e && e.message ? e.message : e), 'error'); return; }
+  if (!pieces.length){ showToast('Aucun fichier Excel (.xlsx) trouvé dans ce que tu as choisi.', 'error'); return; }
+  const groupes = [], ignores = [];
+  for (const piece of pieces){
+    let wb; try{ wb = XLSX.read(piece.buf, { type:'array' }); }catch(e){ ignores.push(piece.nom+' : fichier illisible'); continue; }
+    const ws = wb.Sheets['Questionnaire'] || wb.Sheets[wb.SheetNames[0]];
+    const aoa = XLSX.utils.sheet_to_json(ws, { header:1, raw:false, defval:'' });
+    const h = qcEnteteTableur(aoa);
+    if (h.erreur){ ignores.push(piece.nom+' : '+(h.erreur==='Le fichier est vide.' ? 'fichier vide' : h.erreur)); continue; }
+    const nomCoop = qcNomCoopTableur(aoa, h), coop = qcTrouverCoop(nomCoop);
+    if (!coop){ ignores.push(piece.nom+' : coopérative introuvable dans ORIGEN ('+(nomCoop || 'nom absent du fichier')+')'); continue; }
+    let g = groupes.find(x=>x.coop.id===coop.id);
+    if (!g){
+      // Demande deja ouverte pour cette cooperative : on y ajoute les reponses ; sinon une demande sera creee a l'enregistrement.
+      const existante = (state.demandesCoop||[]).find(d=>qcEstQuestionnaire(d) && d.cooperative_id===coop.id && !['acceptee','rejetee','annulee'].includes(d.statut) && !qcSimulation(d)) || null;
+      const pseudo = existante || { id:'import_'+coop.id, cooperative_id:coop.id, document_modele:QC_MODELE, modele_params:{ echantillon:[] } };
+      g = { coop, demande: existante, pseudo, fichiers:[], lignes:[] }; groupes.push(g);
+    }
+    const prods = g.demande ? qcProducteursDe(g.demande) : qcTousProducteursDe(g.pseudo);
+    g.fichiers.push(piece.nom);
+    g.lignes.push(...qcLignesTableur(aoa, h, g.pseudo, prods));
+  }
+  const utiles = groupes.filter(g=>g.lignes.length>0);
+  groupes.filter(g=>g.lignes.length===0).forEach(g=>ignores.push(g.fichiers.join(', ')+' : aucune ligne remplie (le consentement doit au moins être renseigné)'));
+  if (!utiles.length){ showToast('Rien à importer — '+ignores.slice(0,2).join(' · '), 'error'); return; }
+  openModal('questionnaireImportMulti', { groupes: utiles, ignores });
+}
+function qcImportMultiModalHtml(){
+  const p = state.modal.payload;
+  const toutes = p.groupes.flatMap(g=>g.lignes), ok = toutes.filter(l=>l.erreurs.length===0), ko = toutes.filter(l=>l.erreurs.length>0);
+  const complets = ok.filter(l=>l.complet).length;
+  let html = '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal qc-import" style="max-width:760px">'
+    + '<h3>Importer les questionnaires remplis</h3>'
+    + '<div class="qc-import-resume">'
+    + '<span class="badge neutral">'+p.groupes.length+' coopérative'+(p.groupes.length>1?'s':'')+'</span>'
+    + '<span class="badge ok">'+complets+' complet'+(complets>1?'s':'')+'</span>'
+    + '<span class="badge warn">'+(ok.length-complets)+' brouillon'+(ok.length-complets>1?'s':'')+'</span>'
+    + (ko.length>0 ? '<span class="badge danger">'+ko.length+' ligne'+(ko.length>1?'s':'')+' ignorée'+(ko.length>1?'s':'')+'</span>' : '')
+    + '</div>';
+  if (p.ignores.length) html += '<div class="qc-import-erreurs"><strong>Fichiers ignorés :</strong><ul>'+p.ignores.map(t=>'<li>'+esc(t)+'</li>').join('')+'</ul></div>';
+  html += '<div style="max-height:380px;overflow:auto">';
+  p.groupes.forEach(g=>{
+    const gk = g.lignes.filter(l=>l.erreurs.length>0), gok = g.lignes.filter(l=>l.erreurs.length===0);
+    html += '<div style="margin:10px 0 4px"><b>'+esc(g.coop.nom)+'</b> <span class="hint">· '+esc(g.fichiers.join(', '))+' · '+(g.demande ? 'ajouté à la demande en cours' : 'une demande sera créée (sans e-mail à la coopérative)')+'</span></div>';
+    if (gk.length) html += '<div class="qc-import-erreurs"><ul>'+gk.map(l=>'<li>Ligne '+l.ligne+(l.nom?' — '+esc(l.nom):'')+' : '+esc(l.erreurs.join(' ; '))+'</li>').join('')+'</ul></div>';
+    html += '<div class="qc-import-liste">'+gok.map(l=>'<div><span class="badge '+(l.complet?'ok':'warn')+'">'+(l.complet?'complet':'brouillon')+'</span> '+esc(l.nom||'(sans nom)')+(l.producteurId?'':' <span class="badge neutral">hors registre</span>')+(l.existante?' · remplace la réponse existante':'')+'</div>').join('')+'</div>';
+  });
+  html += '</div><div class="hint" style="margin-top:8px">Après l\'enregistrement, l\'assistant « Saisir dans Forms » s\'ouvre (l\'automate s\'y lance). Rien n\'est envoyé à CARGILL sans ton action.</div>'
+    + '<div class="actions"><button class="btn" onclick="closeModal()">Annuler</button>'
+    + (ok.length>0 ? '<button class="btn btn-primary" onclick="qcEnregistrerImportMulti()">Enregistrer '+ok.length+' réponse'+(ok.length>1?'s':'')+' et continuer</button>' : '')
+    + '</div></div></div>';
+  return html;
+}
+async function qcEnregistrerImportMulti(){
+  const p = state.modal && state.modal.type==='questionnaireImportMulti' ? state.modal.payload : null; if (!p) return;
+  document.querySelectorAll('.modal.qc-import .actions button').forEach(b=>{ b.disabled = true; });
+  const maintenant = new Date().toISOString();
+  const userId = (state.session && state.session.user) ? state.session.user.id : null;
+  let faits = 0; const echecs = [], aOuvrir = [];
+  for (const g of p.groupes){
+    const ok = g.lignes.filter(l=>l.erreurs.length===0); if (!ok.length) continue;
+    let d = g.demande;
+    if (!d){
+      const ids = Array.from(new Set(ok.map(l=>l.producteurId).filter(Boolean)));
+      const obj = { id:'req_'+Date.now()+'_'+g.coop.id, name:'Questionnaire de Légalité EUDR 2026', cooperative_id:g.coop.id, statut:'en_validation', types:['questionnaires'],
+        deadline:null, requested_at:maintenant.slice(0,10), demandeur_nom:(state.session && state.session.user ? state.session.user.email : 'ECORIGINE'),
+        message:'Réponses reçues par fichier Excel et importées dans ORIGEN par ECORIGINE.', document_modele:QC_MODELE,
+        modele_params:{ echantillon:ids, echantillon_total:qcTousProducteursDe(g.pseudo).length, import_excel:true, importe_le:maintenant }, soumis_le:maintenant };
+      // Aucun e-mail « nouvelle demande » : la coopérative n'est pas sollicitée, ses réponses sont déjà là.
+      const r = await supabaseClient.from('demandes').insert(obj).select().single();
+      if (r.error){ echecs.push(g.coop.nom+' : demande non créée ('+r.error.message+')'); continue; }
+      d = r.data; g.demande = d; state.demandesCoop = (state.demandesCoop||[]).concat([d]);
+    }
+    for (const l of ok){
+      const ligne = { demande_id:d.id, cooperative_id:g.coop.id, producteur_id:l.producteurId, producteur_nom:l.nom||null, modele:QC_MODELE,
+        reponses:l.r, complet:l.complet, commence_le:(l.existante && l.existante.commence_le) || maintenant, termine_le:l.complet ? maintenant : null, saisi_par:userId, updated_at:maintenant };
+      let res;
+      if (l.existante) res = await supabaseClient.from('questionnaire_reponses').update(ligne).eq('id', l.existante.id).select().single();
+      else { ligne.id = 'qr_'+Date.now()+'_'+Math.random().toString(36).slice(2,8); res = await supabaseClient.from('questionnaire_reponses').insert(ligne).select().single(); }
+      if (res.error) echecs.push(g.coop.nom+' — '+(l.nom||'ligne '+l.ligne)+' : '+res.error.message); else { qcIntegrerReponse(res.data); faits++; }
+    }
+    aOuvrir.push(d.id);
+  }
+  state.modal = null; render();
+  if (echecs.length) showToast(faits+' réponse(s) importée(s), '+echecs.length+' échec(s) : '+echecs.slice(0,2).join(' · '), 'error');
+  else showToast(faits+' réponse'+(faits>1?'s':'')+' importée'+(faits>1?'s':'')+'.', 'success');
+  if (aOuvrir.length===1) qcTransfertOuvrir(aOuvrir[0]);
+  else if (aOuvrir.length>1){ state.modal = { type:'questionnaireProds', payload:{} }; render(); }
 }
 function qcImportModalHtml(){
   const p = state.modal.payload; const ok = p.lignes.filter(l=>l.erreurs.length===0), ko = p.lignes.filter(l=>l.erreurs.length>0);
