@@ -4741,7 +4741,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-17-505';
+const APP_VERSION = '2026-11-17-506';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -31467,6 +31467,7 @@ function qcTransfertReponses(demandeId){
     .sort((a,b)=>(a.transmis?1:0)-(b.transmis?1:0) || a.nom.localeCompare(b.nom, 'fr'));
 }
 function qcTransfertOuvrir(demandeId, repId){
+  if (qcSimulation(qcDemandeParId(demandeId))){ showToast('Simulation : ces réponses sont fictives, elles ne peuvent pas être saisies dans Forms CARGILL.', 'error'); return; }
   const liste = qcTransfertReponses(demandeId);
   if (!liste.length){ showToast('Aucun questionnaire terminé à saisir dans Forms pour l\'instant.'); return; }
   const courant = repId ? liste.find(l=>l.x.id===repId) : (liste.find(l=>!l.transmis) || liste[0]);
@@ -31581,7 +31582,7 @@ function qcTransfertModalHtml(){
 const QC_AUTOMATE_URL = 'https://nabiouague-cpu.github.io/eco-traca/automate/origen-forms-automate.user.js';
 function qcAutomateLot(demandeId){
   const d = qcDemandeParId(demandeId); const coop = d ? qcCoopDe(d) : null;
-  const restants = qcTransfertReponses(demandeId).filter(l=>!l.transmis);
+  const restants = qcSimulation(d) ? [] : qcTransfertReponses(demandeId).filter(l=>!l.transmis);
   return { origen_forms_lot: true, cooperative: coop ? qcNomForms(coop) : '', demande_id: demandeId, lien: qcLienForms() || '',
     questions: QC_QUESTIONS.map(q=>({ cle:q.cle, libelle:q.libelle, type:q.type })),
     reponses: restants.map(l=>{ const valeurs = {}; qcTransfertLignes(l.x).forEach(li=>{ if (li.valeur) valeurs[li.q.cle] = li.valeur; }); return { id:l.x.id, nom:l.nom, valeurs }; }) };
@@ -31628,6 +31629,8 @@ function qcAutomateHtml(demandeId, nbRestants){
     + '</ol><div class="hint">L\'automate s\'arrête et te le dit s\'il ne reconnaît pas une question ou une option : rien n\'est envoyé à moitié. Reste devant l\'écran pendant qu\'il tourne.</div></details>';
 }
 function qcEstQuestionnaire(d){ return !!(d && d.document_modele===QC_MODELE); }
+// Demande de SIMULATION (test) : reponses fictives pour essayer l'ecran. Verrouillee : jamais exportee, jamais envoyee vers Forms CARGILL, exclue du rapport de legalite.
+function qcSimulation(d){ return !!(d && d.modele_params && d.modele_params.simulation); }
 // ---- Echantillonnage CARGILL : seul un echantillon de producteurs est enquete, pas la totalite.
 // 10 % des producteurs pour une cooperative de moins de 500 producteurs, 5 % au-dela (arrondi au
 // superieur, 1 minimum). Tirage au sort deterministe (graine = identifiant de la demande) : l'admin
@@ -31869,6 +31872,7 @@ function qcPanneauHtml(demande, producteurs, opts){
     + '<span class="badge warn">'+s.en_cours+' en cours</span>'
     + '<span class="badge neutral">'+s.a_faire+' à faire</span>'
     + '</div></div>';
+  if (qcSimulation(demande)) html += '<div class="hint" style="background:#fff4d6;border:1px solid #e6c36a;color:#7a5a00;padding:8px 12px;border-radius:8px;margin:8px 0;"><b>SIMULATION</b> — réponses fictives pour tester l\'écran. Elles ne peuvent être ni exportées, ni saisies dans Forms CARGILL, ni comptées dans le rapport de légalité.</div>';
   html += qcEchantillonHtml(demande);
   html += '<div class="qc-outils">'
     + '<input type="search" name="qc_filtre" placeholder="Rechercher un producteur (nom, n° CCC)…" value="'+esc(state.qcFiltre||'')+'" oninput="qcFiltrer(this.value)">'
@@ -31876,8 +31880,8 @@ function qcPanneauHtml(demande, producteurs, opts){
     + (opts.lectureSeule ? '' : '<button class="btn" onclick="qcTelechargerModele(\''+qcJs(demande.id)+'\')" title="Fichier Excel pré-rempli avec les producteurs, à compléter hors ligne">⭳ Modèle Excel à remplir</button>'
         + '<button class="btn" onclick="qcChoisirFichierImport(\''+qcJs(demande.id)+'\')">⭱ Importer le modèle rempli</button>'
         + '<input type="file" accept=".xlsx,.xls,.csv" id="qc-import-'+esc(demande.id.replace(/[^A-Za-z0-9_-]/g,'_'))+'" style="display:none;" onchange="qcImporterFichier(this, \''+qcJs(demande.id)+'\')">')
-    + (s.remplis>0 ? '<button class="btn btn-primary" onclick="qcTransfertOuvrir(\''+qcJs(demande.id)+'\')" title="CARGILL exige la saisie dans son formulaire en ligne : cet assistant présente chaque questionnaire terminé dans l\'ordre du formulaire, avec copie et suivi">Saisir dans Forms CARGILL ('+(s.reps.filter(x=>(qcEtatReponse(x)==="complet"||qcEtatReponse(x)==="refus") && !x.transmis_forms_le).length)+' restants)</button>' : '')
-    + (s.remplis>0 ? '<button class="btn" onclick="qcExporterExcel(\''+qcJs(demande.id)+'\')" title="Usage interne : extraction Excel au format des réponses Forms">⭳ Export Excel (interne)</button>' : '')
+    + (s.remplis>0 && !qcSimulation(demande) ? '<button class="btn btn-primary" onclick="qcTransfertOuvrir(\''+qcJs(demande.id)+'\')" title="CARGILL exige la saisie dans son formulaire en ligne : cet assistant présente chaque questionnaire terminé dans l\'ordre du formulaire, avec copie et suivi">Saisir dans Forms CARGILL ('+(s.reps.filter(x=>(qcEtatReponse(x)==="complet"||qcEtatReponse(x)==="refus") && !x.transmis_forms_le).length)+' restants)</button>' : '')
+    + (s.remplis>0 && !qcSimulation(demande) ? '<button class="btn" onclick="qcExporterExcel(\''+qcJs(demande.id)+'\')" title="Usage interne : extraction Excel au format des réponses Forms">⭳ Export Excel (interne)</button>' : '')
     + (!opts.lectureSeule && s.reps.length>0 ? '<button class="btn-danger-text" onclick="qcSupprimerTout(\''+qcJs(demande.id)+'\')" title="Supprime toutes les réponses de ce questionnaire pour repartir de zéro">🗑 Supprimer toutes les réponses ('+s.reps.length+')</button>' : '')
     + '</div>';
   if (filtrees.length===0){
@@ -32102,6 +32106,7 @@ async function qcTelechargerModele(demandeId){
 // celui d'un export Forms : memes colonnes, meme ordre, « anonymous », une question non posee reste vide).
 async function qcExporterExcel(demandeId){
   const d = qcDemandeParId(demandeId); if (!d) return;
+  if (qcSimulation(d)){ showToast('Simulation : réponses fictives, export Excel bloqué.', 'error'); return; }
   const coop = qcCoopDe(d);
   const reps = qcReponsesDeDemande(demandeId)
     .filter(x=>qcEtatReponse(x)==='complet' || qcEtatReponse(x)==='refus')
@@ -32139,8 +32144,8 @@ function qcRapportDonnees(demandes){
 }
 function qcPct(n, base){ return base>0 ? Math.round(n/base*1000)/10 : null; }
 async function qcRapportLegalite(demandeIds, titrePerimetre){
-  const demandes = demandeIds.map(qcDemandeParId).filter(Boolean);
-  if (demandes.length===0){ showToast('Aucune demande de questionnaire.'); return; }
+  const demandes = demandeIds.map(qcDemandeParId).filter(Boolean).filter(d=>!qcSimulation(d));
+  if (demandes.length===0){ showToast('Aucune demande de questionnaire (les simulations sont exclues du rapport).'); return; }
   const D = qcRapportDonnees(demandes);
   if (D.finis.length===0){ showToast('Aucun questionnaire terminé : le rapport serait vide.'); return; }
   let ExcelJS;
