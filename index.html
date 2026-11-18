@@ -4740,7 +4740,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-18-513';
+const APP_VERSION = '2026-11-18-514';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -11072,46 +11072,22 @@ async function livraisonsCoopExporter(){
 //   -> Usine (lots d'usinage) -> Agree (lots marques agree_le) -> Embarque (OT avec date d'embarquement ou clos)
 // Tout vient d'ORIGEN. Le fichier commercial importe (suivi_achats_clients) ne sert plus qu'a une colonne d'ecart.
 function pipeTonnes(kg){ if (kg==null || isNaN(kg)) return '—'; return (Math.round(kg/100)/10).toLocaleString('fr-FR',{maximumFractionDigits:1})+' T'; }
-// Camion « mis de côté » : connaissement sans aucune pesée au SAIGIC alors qu'au moins ECARTE_DEPASSES camions chargés APRÈS lui, vers le même port (Abidjan ou
-// San Pedro, c'est ce qui sépare les files de déchargement), ont déjà été pesés. Un camion normal est pesé en quelques heures, sans être doublé de la sorte : celui-ci
-// est probablement refoulé ou déchargé pour un autre exportateur. Il sort des volumes et des camions en attente. Rien n'est modifié en base ; dès que le SAIGIC
-// le pèse (poids net payé ou code pesée), il redevient compté automatiquement. state.vusRang = heure et port de chaque connaissement lus sur le SAIGIC.
-const ECARTE_DEPASSES = 3;
-function ecartesCalculer(){
-  const R = state.vusRang; if (!R || !R.length) return new Set();
-  const A = state.achats || [];
-  const cle = A.length+'|'+A.filter(a=>Number(a.poids_net_produit)>0).length+'|'+A.filter(a=>a.refoulee).length+'|'+R.length;
-  if (state._ecartesCle === cle && state._ecartes) return state._ecartes;
-  const info = new Map(R.map(r=>[r.code, r]));
-  const pesees = [];
-  A.forEach(a=>{ if (a.producteur_id || !a.connaissement || a.refoulee || !(Number(a.poids_net_produit)>0)) return; const r = info.get(String(a.connaissement).toUpperCase()); if (r && r.t) pesees.push(r); });
-  const S = new Set();
-  A.forEach(a=>{
-    if (a.producteur_id || !a.connaissement || a.refoulee || Number(a.poids_net_produit)>0 || String(a.code_pesee||'').trim()) return;
-    const r = info.get(String(a.connaissement).toUpperCase()); if (!r || !r.t || !r.port) return;
-    if (pesees.filter(p=>p.t>r.t && p.port===r.port).length >= ECARTE_DEPASSES) S.add(a.connaissement);
-  });
-  state._ecartesCle = cle; state._ecartes = S; return S;
-}
+// Camion « mis de côté » : connaissement sans aucune pesée au SAIGIC plus de ECARTE_JOURS jours après sa date d'émission. Constat du 18/11/2026 : les camions sont
+// pesés en 1,3 jour en médiane, 95 % sous 7 jours, le plus long 15 jours ; au-delà de 20 jours, le camion est probablement refoulé ou déchargé pour un autre exportateur.
+// Il sort des volumes et des camions en attente. Rien n'est modifié en base ; dès que le SAIGIC le pèse (poids net payé ou code pesée), il est compté de nouveau.
+const ECARTE_JOURS = 20;
 function achatEcarteSansPesee(a){
   if (!a || a.producteur_id || !a.connaissement || a.refoulee || Number(a.poids_net_produit)>0 || String(a.code_pesee||'').trim()) return false;
-  return ecartesCalculer().has(a.connaissement);
-}
-async function ecartesChargerRang(){
-  try{
-    const { data, error } = await supabaseClient.from('saigic_connaissements_vus').select('code_connaissement,dt:donnees->>date_detail,port:donnees->>dest_port').order('premiere_vue_le', { ascending:false }).limit(1000);
-    if (error || !data) return;
-    state.vusRang = data.map(v=>{ const m = /^(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}):(\d{2}))?/.exec(String(v.dt||'')); return { code:String(v.code_connaissement||'').toUpperCase(), t: m ? Date.UTC(+m[3], +m[2]-1, +m[1], +(m[4]||0), +(m[5]||0)) : null, port:String(v.port||'').trim() }; });
-    state._ecartesCle = null;
-  }catch(e){}
+  const d = Date.parse(String(a.date||'').slice(0,10)+'T00:00:00Z'); if (isNaN(d)) return false;
+  return (Date.now()-d)/86400000 > ECARTE_JOURS;
 }
 function ecartesNoteHtml(){
   const l = (state.achats||[]).filter(achatEcarteSansPesee).sort((x,y)=>String(x.date||'').localeCompare(String(y.date||'')));
   if (!l.length) return '';
   const kg = l.reduce((s,a)=>s+(Number(a.quantite_kg)||Number(a.poids_brut)||0),0);
   return '<div class="achats-note" style="margin:12px 0 0;background:#F6F6F6;border:1px solid #bbb;color:#333">'
-    + '<div style="font-weight:700;margin-bottom:2px">⏸ '+l.length+' camion'+(l.length>1?'s':'')+' mis de côté — pas pesé'+(l.length>1?'s':'')+' alors que '+ECARTE_DEPASSES+' camions partis après '+(l.length>1?'eux':'lui')+' vers le même port le sont déjà ('+pipeTonnes(kg)+')</div>'
-    + '<div class="hint" style="margin:0 0 6px">Un camion normal n\'est pas doublé ainsi : ils sont probablement refoulés ou déchargés pour un autre exportateur. Ils ne sont comptés ni dans les volumes ni dans les camions en attente. Ils reviennent d\'eux-mêmes dès que le SAIGIC les pèse.</div>'
+    + '<div style="font-weight:700;margin-bottom:2px">⏸ '+l.length+' camion'+(l.length>1?'s':'')+' mis de côté — pas pesé'+(l.length>1?'s':'')+' au SAIGIC depuis plus de '+ECARTE_JOURS+' jours ('+pipeTonnes(kg)+')</div>'
+    + '<div class="hint" style="margin:0 0 6px">Probablement refoulés ou déchargés pour un autre exportateur. Ils ne sont comptés ni dans les volumes ni dans les camions en attente. Ils reviennent d\'eux-mêmes dès que le SAIGIC les pèse.</div>'
     + '<table class="tbl-fiches" style="background:#fff"><thead><tr><th>Date</th><th>Connaissement</th><th>Coopérative</th><th class="num">Poids déclaré (kg)</th></tr></thead><tbody>'
     + l.map(a=>'<tr><td>'+esc(dateFr(a.date)||'')+'</td><td><b>'+esc(a.connaissement)+'</b></td><td>'+esc((coopById(a.cooperative_id)||{}).nom||a.fournisseur_saigic||'—')+'</td><td class="num">'+fmtNum(Number(a.quantite_kg)||Number(a.poids_brut)||0)+'</td></tr>').join('')
     + '</tbody></table></div>';
@@ -15178,7 +15154,6 @@ async function loadAll(silencieux){
     // qui n'est jamais le cas puisqu'on vient de le remplir ci-dessus. Resultat : "Réponses (0/XX)"
     // affiche partout a chaque connexion/rechargement, meme quand les reponses existent bel et bien.
     await qcChargerReponsesAdmin();
-    await ecartesChargerRang();
     state.error = null;
     appliquerCampagneParDefaut();
   }catch(e){
