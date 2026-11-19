@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.51
+// @version      0.4.52
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.51';
+  const VERSION = '0.4.52';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -1027,11 +1027,13 @@
         location.href = urlReferentiel('usine'); return 'navigation';
       }
       await setSelectTexte(selU, reU, 'Usine'); }
-    setInput(q('#txtconnaissement_usine_nb_sacs_chargeAdd'), c.sacs_declares); setInput(q('#txtconnaissement_usine_nb_sacs_receptionneAdd'), c.sacs_declares);
+    // Sacs : « chargé » = ceux du connaissement (traçabilité) ; « réceptionné » = ceux acceptés à l'usine, d'après le ticket de pesée (le ticket fait foi pour la suite). À défaut de ticket dans le lot : ceux du connaissement.
+    const sacsTicket = lot.pesee && Number(lot.pesee.sacs_acceptes) > 0 ? Number(lot.pesee.sacs_acceptes) : c.sacs_declares;
+    setInput(q('#txtconnaissement_usine_nb_sacs_chargeAdd'), c.sacs_declares); setInput(q('#txtconnaissement_usine_nb_sacs_receptionneAdd'), sacsTicket);
     setInput(q('#txtconnaissement_usine_poids_brut_chargeAdd'), c.poids_brut_declare || ''); setInput(q('#txtconnaissement_usine_poids_refactionAdd'), '0');
     ['nb_sacs_charge', 'poids_brut_charge'].forEach((k) => { const el = q('#txtconnaissement_usine_' + k + 'Add'); if (el) el.dispatchEvent(new Event('focusout', { bubbles: true })); });
     { const m = await reappliquer(f); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
-    e.note = 'Livraison ' + c.numero + ' : ' + c.sacs_declares + ' sacs, brut déclaré ' + (c.poids_brut_declare || '?') + ', TKM ' + c.tkm + ', usine ' + c.usine_code + '.'; return 'rempli';
+    e.note = 'Livraison ' + c.numero + ' : ' + c.sacs_declares + ' sacs chargés, ' + sacsTicket + ' réceptionnés (ticket de pesée), brut déclaré ' + (c.poids_brut_declare || '?') + ', TKM ' + c.tkm + ', usine ' + c.usine_code + '.'; return 'rempli';
   }
   async function etapePesee(e) {
     const lot = e.lot;
