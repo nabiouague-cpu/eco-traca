@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.48
+// @version      0.4.49
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.48';
+  const VERSION = '0.4.49';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -717,7 +717,11 @@
     const p = lot.producteur;
     setEntite(q('#txtid_entiteAdd'));
     setInput(q('#txtproducteur_nomAdd'), p.nom); setInput(q('#txtproducteur_prenomsAdd'), p.prenoms);
-    setInput(q('#txtproducteur_matricule_cooperativeAdd'), p.code || lot.cooperative.ccc || ''); setInput(q('#txtproducteur_matricule_regulateurAdd'), p.matricule_ccc || lot.cooperative.ccc || '');
+    // 2e fiche d'une coopérative (un autre gros traitant, ex. « JATROPHAR COOP CA SITAPA ») : OBC refuse deux producteurs au même matricule coopérative ou régulateur → on ajoute le suffixe de la fiche (« SC070498 SITAPA »).
+    const nomFiche = String(e.ids.fournisseur_nom || ''), sigC = String(lot.cooperative.sigle || '');
+    const suff = sigC && N(nomFiche).startsWith(N(sigC) + ' ') ? nomFiche.slice(sigC.length).trim() : '';
+    const avecSuff = (v) => (v && suff ? v + ' ' + suff : v);
+    setInput(q('#txtproducteur_matricule_cooperativeAdd'), avecSuff(p.code || lot.cooperative.ccc || '')); setInput(q('#txtproducteur_matricule_regulateurAdd'), avecSuff(p.matricule_ccc || lot.cooperative.ccc || ''));
     setRadio('txtproducteur_typeAdd1'); setRadio('txtproducteur_genreAdd1');
     setInput(q('#txtproducteur_localiteAdd'), p.localite);
     await listeStable(q('#txtid_fournisseurAdd'));
