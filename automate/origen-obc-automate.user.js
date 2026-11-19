@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.52
+// @version      0.4.53
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.52';
+  const VERSION = '0.4.53';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -1177,8 +1177,15 @@
     if (!e || !e.lot) {
       // Pas de lot en mémoire (il a été mis en échec) : on le retrouve dans ORIGEN.
       try {
-        const r = await api('echecs'); const cand = (r.lots || []);
-        if (!cand.length) { alert('Aucun connaissement en échec à refaire dans ORIGEN.'); return; }
+        const r = await api('echecs'); let cand = (r.lots || []);
+        if (!cand.length) {
+          // Aucun camion en échec : on propose les camions DÉJÀ SAISIS (les 20 derniers), pour tout supprimer dans OBC et recommencer. Rien n'est supprimé avant la confirmation détaillée.
+          const s = await api('saisis'); const sl = (s.lots || []);
+          if (!sl.length) { alert('Aucun connaissement à refaire dans ORIGEN (ni en échec, ni déjà saisi).'); return; }
+          const rep = prompt('Aucun camion en échec. Camions DÉJÀ SAISIS dans OBC (les plus récents) :\n' + sl.map((x) => x.connaissement + (x.bordereau_numero ? '  (bordereau ' + x.bordereau_numero + ')' : '')).join('\n') + '\n\nTape le numéro du camion à supprimer dans OBC puis à refaire (rien ne sera supprimé avant la confirmation suivante) :', sl[0].connaissement);
+          if (!rep) return; const ch0 = sl.find((x) => String(x.connaissement).trim() === rep.trim()); if (!ch0) { alert('Numéro non reconnu.'); return; }
+          cand = [ch0];
+        }
         let ch = cand[0];
         if (cand.length > 1) { const rep = prompt('Plusieurs connaissements en échec. Tape le numéro à refaire :\n' + cand.map((x) => x.connaissement).join('\n'), cand[0].connaissement); if (!rep) return; ch = cand.find((x) => String(x.connaissement).trim() === rep.trim()); if (!ch) { alert('Numéro non reconnu.'); return; } }
         e = { v10: true, lot: ch.lot, etape: k === 7 ? 1 : k, statut: 'a_faire', ids: {}, fait: {}, journal: [], pause: false, erreur: null, note: '', enFile: true }; reprisDepuisFile = ch.achat_id;
