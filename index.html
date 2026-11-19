@@ -4745,7 +4745,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-19-528';
+const APP_VERSION = '2026-11-19-529';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -16329,31 +16329,38 @@ function renderDossiersTab(){
     const entete = (titre, detail, fond, couleur)=>'<tr><td colspan="10" style="background:'+fond+';color:'+couleur+';font-weight:700;padding:8px 10px;border-top:2px solid '+couleur+'">'+titre+' <span style="font-weight:500">'+detail+'</span></td></tr>';
     html += '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th>Coopérative</th><th>N° CCC</th><th>Usine(s)</th><th class="num">Producteurs</th><th class="num" title="Camions de cette coopérative à tracer pour les lots de ce client">Camions pour ce client</th><th class="num">Chez nous</th><th class="num">Tracés</th><th class="num">Simulés</th><th class="num">Reste à tracer</th><th></th></tr></thead><tbody>'
       + G.groupes.map(g=>entete(esc(g.nom)+(g.agrees ? ' <span class="badge ok">'+g.agrees+' lot'+(g.agrees>1?'s':'')+' agréé'+(g.agrees>1?'s':'')+'</span>' : ''),
-          '— '+g.rows.length+' coopérative'+(g.rows.length>1?'s':'')+' · '+g.n+' camion'+(g.n>1?'s':'')+' à tracer pour ses lots', '#f6e3df', '#7a2a20')
+          '— '+g.rows.length+' coopérative'+(g.rows.length>1?'s':'')+' · '+(g.n ? g.n+' camion'+(g.n>1?'s':'')+' à tracer' : 'rien à tracer'), '#f6e3df', '#7a2a20')
         + g.rows.map(r=>ligne(r.x, r.n)).join('')).join('')
-      + (G.reste.length ? entete('Pas dans un lot présenté à un client', '— '+G.reste.length+' coopérative'+(G.reste.length>1?'s':'')+' (rien à tracer pour les lots présentés)', '#eef1f4', '#4a5560') + G.reste.map(x=>ligne(x, null)).join('') : '')
       + '</tbody></table></div>'
-      + '<div class="hint" style="margin:6px 0 14px">Une coopérative dont les camions alimentent les lots de plusieurs clients apparaît sous chacun d\'eux, avec le nombre de camions propre à ce client.</div>';
+      + '<div class="hint" style="margin:6px 0 14px">Le client se déduit de l\'usine où le camion est déchargé. Une coopérative qui livre à plusieurs clients apparaît sous chacun, avec ses camions propres à ce client.</div>';
   }
   return html + '</div></div>';
 }
-// Regroupe les coopératives du tableau par client : pour chaque client (ordre de priorité de l'alerte), les coopératives dont des camions restent à tracer pour ses lots.
+// Regroupe les coopératives du tableau par client. Le client d'un camion se déduit de son usine de déchargement (achatClientEffectif) :
+// aucun camion n'est « sans client ». Une coopérative dont les camions vont à plusieurs clients apparaît sous chacun, avec ses camions à tracer pour ce client.
 function ocDossiersParClient(vue){
-  const U = ocUrgenceCalcul(), parId = new Map(vue.map(x=>[x.c.id, x])), vus = new Set(), groupes = [];
-  U.clients.forEach(cl=>{
-    const m = new Map();
-    cl.det.forEach(d=>d.comp.forEach(x=>{
-      if (x.c.st!=='atracer') return;
-      const id = x.c.a.cooperative_id; if (!parId.has(id)) return;
-      if (!m.has(id)) m.set(id, new Set()); m.get(id).add(x.c.key);
-    }));
-    if (!m.size) return;
-    const rows = Array.from(m.entries()).map(([id,s])=>({ x:parId.get(id), n:s.size }))
-      .sort((a,b)=>(b.n-a.n) || String(a.x.c.nom).localeCompare(String(b.x.c.nom),'fr'));
-    rows.forEach(r=>vus.add(r.x.c.id));
-    groupes.push({ nom:cl.nom, agrees:cl.agrees, rows, n:rows.reduce((t,r)=>t+r.n,0) });
+  const U = ocUrgenceCalcul(), agrees = new Map(U.clients.map(c=>[ccClefClient(c.nom), c.agrees])), ordre = new Map(U.clients.map((c,i)=>[ccClefClient(c.nom), i]));
+  const G = new Map();
+  vue.forEach(x=>{
+    const id = x.c.id, aTracer = new Set();
+    ocSimGroupes(id).forEach(g=>{ const D = ocDossierDonnees(id, g.cle); if (D) D.lignes.forEach(l=>{ if (l.nous && l.st==='atracer') aTracer.add(String(l.code)); }); });
+    const parClient = new Map();
+    (state.achats||[]).filter(a=>a.cooperative_id===id && !a.producteur_id && !a.refoulee && a.connaissement && ocATracerSite(a)).forEach(a=>{
+      const nom = achatClientEffectif(a) || ('Client à définir (usine '+(a.usine_dechargement||'?')+')');
+      if (!parClient.has(nom)) parClient.set(nom, new Set());
+      if (aTracer.has(String(a.connaissement))) parClient.get(nom).add(String(a.connaissement));
+    });
+    if (!parClient.size) parClient.set('Client à définir', new Set());
+    parClient.forEach((set, nom)=>{
+      const k = ccClefClient(nom); if (!G.has(k)) G.set(k, { k, nom, rows:[] });
+      G.get(k).rows.push({ x, n:set.size });
+    });
   });
-  return { groupes, reste: vue.filter(x=>!vus.has(x.c.id)) };
+  const groupes = Array.from(G.values()).map(g=>{
+    g.rows.sort((a,b)=>(b.n-a.n) || String(a.x.c.nom).localeCompare(String(b.x.c.nom),'fr'));
+    return { nom:g.nom, agrees:agrees.get(g.k)||0, rows:g.rows, n:g.rows.reduce((t,r)=>t+r.n,0), ordre:ordre.has(g.k) ? ordre.get(g.k) : 999 };
+  }).sort((a,b)=>(a.ordre-b.ordre) || (b.n-a.n) || String(a.nom).localeCompare(String(b.nom),'fr'));
+  return { groupes, reste:[] };
 }
 function ocDossierOuvrir(coopId){ const gs = ocSimGroupes(coopId); state.modal = { type:'ocDossier', payload:{ coopId, cle: gs.length ? gs[0].cle : '' } }; render(); }
 function ocDossierSerie(cle){ const pl = state.modal && state.modal.type==='ocDossier' ? state.modal.payload : null; if (!pl) return; pl.cle = cle; render(); }
