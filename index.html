@@ -4745,7 +4745,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-19-537';
+const APP_VERSION = '2026-11-19-538';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -29258,7 +29258,17 @@ async function obcMarquer(achatId, fait){
   const patch = fait ? { obc_saisi_le: new Date().toISOString(), obc_bordereau_numero: numero } : { obc_saisi_le: null, obc_bordereau_numero: null };
   const { error } = await supabaseClient.from('achats').update(patch).eq('id', achatId);
   if (error){ showToast('Échec : '+error.message); return; }
-  Object.assign(a, patch); showToast(fait ? 'Livraison marquée « saisie dans OBC ».' : 'Marque OBC retirée.', 'success'); render();
+  Object.assign(a, patch);
+  // Annuler la marque = le camion redevient « à saisir » : on retire aussi sa ligne « saisi » de la file de Noah, sinon il reste exclu des envois (et du décompte des prêts).
+  if (!fait){
+    const f = state.obcFile && state.obcFile[achatId];
+    if (f && f.statut==='saisi'){
+      const d = await supabaseClient.from('obc_file').delete().eq('achat_id', achatId).eq('statut', 'saisi');
+      if (d.error) showToast('Marque retirée, mais la file de Noah n\'a pas été remise à zéro : '+d.error.message);
+      else delete state.obcFile[achatId];
+    }
+  }
+  showToast(fait ? 'Livraison marquée « saisie dans OBC ».' : 'Marque OBC retirée.', 'success'); render();
 }
 // Cacao déchargé à SUV (UA10) : le responsable (ECORIGINE = coopérative en propre, SUCDEN = rattachée au gros traitant SUCDEN) se choisit camion par camion dans ORIGEN ; Noah le lit dans le lot.
 function obcEstSuv(a){ const s = sachSiteDe(a.usine_dechargement); return String((s && s.code) || a.usine_dechargement || '').toUpperCase()==='UA10'; }
