@@ -4745,7 +4745,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-19-530';
+const APP_VERSION = '2026-11-19-531';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -13284,7 +13284,7 @@ function lotsModalsHtml(){
           + '<td>'+(l.st==='atracer' ? '<button class="btn btn-primary btn-compact" onclick="ocDossierTracer(\''+escJs(pl.coopId)+'\',\''+escJs(l.code)+'\')" title="Simule d\'abord les camions précédents qui manquent, puis répartit ce connaissement sur ce qu\'il reste">Tracer avec la simulation</button>' : (l.st==='simule' ? '<button class="btn btn-primary btn-compact" onclick="ocDossierAppliquer(\''+escJs(pl.coopId)+'\',\''+escJs(l.code)+'\')" title="La répartition simulée devient le vrai traçage de ce camion (achats producteurs + fiche)">Appliquer (tracer pour de bon)</button> <button class="btn-ghost btn-compact" onclick="ocDossierRetirerSim(\''+escJs(pl.coopId)+'\',\''+escJs(l.code)+'\')" title="Efface seulement la simulation de ce camion (rien de réel n\'est touché)">Retirer</button>' : (l.st==='trace' ? '<button class="btn-ghost btn-compact" style="color:#a33" onclick="ocDossierSupprimerTracage(\''+escJs(pl.coopId)+'\',\''+escJs(l.code)+'\')" title="Supprime le traçage de ce camion (après sauvegarde) : il redevient à tracer">🗑 Supprimer</button>'+(true ? ' <button class="btn btn-compact" onclick="ocCargillTelecharger(\''+escJs(pl.coopId)+'\',\''+escJs(l.code)+'\')" title="Fiche de ce camion au format Cargill (EUDR Delivery Template)">📥 Format Cargill</button>' : '') : '')))+'</td></tr>'); i++; continue; }
         let j = i; while (j+1<D.lignes.length && !D.lignes[j+1].nous) j++;
         const plage = D.lignes.slice(i, j+1), toutSim = plage.every(x=>x.st==='simule'), nb = plage.length;
-        rows.push('<tr style="opacity:.8"><td>'+(nb>1 ? plage[0].seq+'–'+plage[nb-1].seq : plage[0].seq)+'</td><td>Ailleurs</td><td class="hint">'+nb+' camion'+(nb>1?'s':'')+' livré'+(nb>1?'s':'')+' ailleurs</td><td></td><td class="num">≈ '+fmtKg(nb*35000)+'</td><td>'+(toutSim ? badge('simule') : badge('asimuler'))+'</td><td class="num">'+(toutSim ? plage.reduce((t,x)=>t+x.nProd,0) : '—')+'</td><td></td></tr>');
+        rows.push('<tr style="opacity:.8"><td>'+(nb>1 ? plage[0].seq+'–'+plage[nb-1].seq : plage[0].seq)+'</td><td>Ailleurs</td><td class="hint">'+nb+' camion'+(nb>1?'s':'')+' livré'+(nb>1?'s':'')+' ailleurs'+(toutSim ? '' : ' — non simulé'+(nb>1?'s':'')+' (client inconnu)')+'</td><td></td><td class="num">'+(toutSim ? '≈ '+fmtKg(nb*35000) : '—')+'</td><td>'+(toutSim ? badge('simule') : '<span class="hint" style="margin:0">ignoré</span>')+'</td><td class="num">'+(toutSim ? plage.reduce((t,x)=>t+x.nProd,0) : '—')+'</td><td></td></tr>');
         i = j+1;
       }
       corps = '<div style="display:flex;gap:18px;flex-wrap:wrap;margin:10px 0;font-size:13.5px"><span><b>'+D.nNous+'</b> chez nous</span><span><b>'+D.nTrace+'</b> tracé'+(D.nTrace>1?'s':'')+'</span><span><b>'+D.nSimule+'</b> simulé'+(D.nSimule>1?'s':'')+'</span><span style="color:'+(D.nATracer?'#b36b00':'#1e8449')+'"><b>'+D.nATracer+'</b> à tracer</span><span>série <b>'+esc(D.g.cle)+'</b> · n° 1 à '+D.g.max+'</span></div>'
@@ -13304,14 +13304,14 @@ function lotsModalsHtml(){
     if (!nP) corps = '<div class="hint" style="color:#b9770e;margin:12px 0">Cette coopérative n\'a aucun producteur (base non importée dans ORIGEN) : la simulation a besoin de ses producteurs et de leur potentiel. Choisis une coopérative avec sa base producteurs.</div>';
     else if (!R) corps = '<div class="hint">Aucune séquence.</div>';
     else {
-      const nR = R.camions.filter(x=>x.reel).length, nS = R.camions.length-nR, kgR = R.camions.filter(x=>x.reel).reduce((t,x)=>t+x.kg,0), kgS = R.camions.filter(x=>!x.reel).reduce((t,x)=>t+x.kg,0);
+      const nR = R.camions.filter(x=>x.reel).length, nS = R.camions.filter(x=>x.externe).length, nIg = R.camions.filter(x=>x.ignore).length, kgR = R.camions.filter(x=>x.reel).reduce((t,x)=>t+x.kg,0), kgS = R.camions.filter(x=>x.externe).reduce((t,x)=>t+x.kg,0);
       const manque = R.camions.reduce((t,x)=>t+x.manque,0), tot = R.camions.reduce((t,x)=>t+x.kg-x.manque,0), utilises = R.produits.length;
       let cum = 0;
-      corps = '<div style="display:flex;gap:18px;flex-wrap:wrap;margin:10px 0;font-size:13.5px"><span><b>'+R.camions.length+'</b> camions (n° '+R.camions[0].seq+' à '+R.camions[R.camions.length-1].seq+')</span><span><b>'+nR+'</b> chez nous · '+fmtKg(kgR)+'</span><span><b>'+nS+'</b> ailleurs (simulés) · '+fmtKg(kgS)+'</span><span><b>'+utilises+'</b> producteur(s) sur '+R.nProd+'</span><span>potentiel utilisé : <b>'+(R.plafond>0 ? Math.round(tot/R.plafond*1000)/10 : 0)+' %</b> du plafond de 70 %</span></div>'
+      corps = '<div style="display:flex;gap:18px;flex-wrap:wrap;margin:10px 0;font-size:13.5px"><span><b>'+R.camions.length+'</b> camions (n° '+R.camions[0].seq+' à '+R.camions[R.camions.length-1].seq+')</span><span><b>'+nR+'</b> chez nous · '+fmtKg(kgR)+'</span><span><b>'+nS+'</b> chez un traitant (simulés) · '+fmtKg(kgS)+'</span>'+(nIg ? '<span><b>'+nIg+'</b> n° manquant'+(nIg>1?'s':'')+' non simulé'+(nIg>1?'s':'')+' (client inconnu)</span>' : '')+'<span><b>'+utilises+'</b> producteur(s) sur '+R.nProd+'</span><span>potentiel utilisé : <b>'+(R.plafond>0 ? Math.round(tot/R.plafond*1000)/10 : 0)+' %</b> du plafond de 70 %</span></div>'
         + (manque>0 ? '<div style="color:#c0392b;margin:0 0 8px">⚠ '+fmtKg(manque)+' ne peuvent pas être attribués : les producteurs de cette coopérative n\'ont plus de marge (règle des '+OC_LIVRAISONS_MIN+' livraisons) : <b>limite du potentiel atteinte</b>. Il faut tracer ces volumes sur une autre coopérative (ou ils ont une autre origine).</div>' : '')
         + '<div class="achats-defile" style="max-height:34vh;overflow:auto"><table class="tbl-fiches"><thead><tr><th>N°</th><th>Origine</th><th>Connaissement</th><th>Date</th><th class="num">Poids</th><th class="num">Producteurs</th><th class="num">Potentiel utilisé (cumul)</th><th></th></tr></thead><tbody>'
         + R.camions.map(x=>{ cum += x.kg-x.manque; const ouv = !!pl.ouvert[x.seq];
-            return '<tr style="'+(x.reel?'background:#F2F8F4':'opacity:.8')+'"><td>'+x.seq+'</td><td>'+(x.reel?'<b>Chez nous</b>':(x.externe?'Chez le traitant (poids réel)':'Ailleurs (simulé)'))+'</td><td>'+esc(x.code)+'</td><td>'+esc(dateFr(x.iso))+'</td><td class="num">'+fmtKg(x.kg)+(x.manque?' <span class="badge warn">−'+fmtNum(x.manque)+'</span>':'')+'</td><td class="num">'+x.alloc.length+'</td><td class="num">'+(R.plafond>0 ? Math.round(cum/R.plafond*1000)/10+' %' : '—')+'</td><td><button class="btn-ghost btn-compact" onclick="ocSimToggle('+x.seq+')">'+(ouv?'Masquer':'Voir')+'</button></td></tr>'
+            return '<tr style="'+(x.reel?'background:#F2F8F4':'opacity:.8')+'"><td>'+x.seq+'</td><td>'+(x.reel?'<b>Chez nous</b>':(x.externe?'Chez le traitant (poids réel)':(x.ignore?'Ailleurs (non simulé : client inconnu)':'Ailleurs (simulé)')))+'</td><td>'+esc(x.code)+'</td><td>'+esc(dateFr(x.iso))+'</td><td class="num">'+fmtKg(x.kg)+(x.manque?' <span class="badge warn">−'+fmtNum(x.manque)+'</span>':'')+'</td><td class="num">'+x.alloc.length+'</td><td class="num">'+(R.plafond>0 ? Math.round(cum/R.plafond*1000)/10+' %' : '—')+'</td><td><button class="btn-ghost btn-compact" onclick="ocSimToggle('+x.seq+')">'+(ouv?'Masquer':'Voir')+'</button></td></tr>'
               + (ouv ? '<tr><td colspan="8"><div class="lots-compo">'+(x.alloc.length ? x.alloc.map(a=>'<span class="lots-puce">'+esc(a.nom||a.farm)+' <span class="hint" style="margin:0">'+esc(a.farm)+'</span> — <b>'+fmtKg(a.kg)+'</b></span>').join('') : '<span class="hint">Aucun producteur disponible.</span>')+'</div></td></tr>' : ''); }).join('')
         + '</tbody></table></div>'
         + '<div style="font-weight:600;margin:12px 0 4px">Producteurs (cumul simulé)</div><div class="achats-defile" style="max-height:24vh;overflow:auto"><table class="tbl-fiches"><thead><tr><th>Producteur</th><th>Farm ID</th><th class="num">Potentiel</th><th class="num">Simulé</th><th class="num">% du potentiel</th><th class="num">Livraisons</th></tr></thead><tbody>'
@@ -15929,6 +15929,8 @@ function ocSimuler(pl){
     const r = reels.get(seq), kg = r ? Math.max(0, Math.round(r.kg)) || pmin : pmin;
     const code = r ? r.code : g.cle+'-'+seq;
     const ligne = { seq, reel:!!r && !r.externe, externe:!!(r && r.externe), code, kg, iso:dateDe(seq), alloc:[], manque:0 };
+    // Numéro manquant sans aucune info (absent du fichier d'un traitant) : on ne sait pas s'il est parti chez le même client, donc on ne le simule pas.
+    if (!r){ ligne.ignore = true; ligne.kg = 0; camions.push(ligne); continue; }
     if (traces.has(code)){ ligne.trace = true; camions.push(ligne); continue; }   // déjà tracé pour de bon : il pèse déjà dans le cumul
     const a = ocSimAllouer(prods, cumul, pl.campagneId, kg); ligne.alloc = a.alloc; ligne.manque = a.manque;
     camions.push(ligne);
@@ -16033,7 +16035,7 @@ async function ocSimSupprimer(coopId, campagneId, serie, seq){
 async function ocSimEnregistrer(){
   const pl = state.modal && state.modal.type==='ocSim' ? state.modal.payload : null; if (!pl || !pl.res) return;
   if (!pl.campagneId){ showToast('Choisis la campagne avant d\'enregistrer la simulation.'); return; }
-  const lignes = pl.res.camions.filter(x=>!x.trace).map(x=>ocSimLigneBase(pl.coopId, pl.campagneId, pl.groupeCle, x));
+  const lignes = pl.res.camions.filter(x=>!x.trace && !x.ignore).map(x=>ocSimLigneBase(pl.coopId, pl.campagneId, pl.groupeCle, x));
   try{
     await ocSimSupprimer(pl.coopId, pl.campagneId, pl.groupeCle, null);
     if (lignes.length){ const { error } = await supabaseClient.from('tracabilite_simulee').insert(lignes); if (error) throw error; }
@@ -16058,6 +16060,7 @@ async function ocSimCombler(coopId, campagneId, code, courant, pminT){
   for (let seq=1; seq<c.seq; seq++){
     const r = reels.get(seq), code_s = r ? r.code : c.cle+'-'+seq;
     if (deja.has(seq) || traces.has(code_s)) continue;
+    if (!r) continue;   // numéro manquant sans info : pas de simulation (client inconnu)
     const kg = r ? (Math.max(0, Math.round(r.kg)) || pmin) : pmin;
     const a = ocSimAllouer(prods, cumul, campagneId, kg);
     lignes.push(ocSimLigneBase(coopId, campagneId, c.cle, { seq, code:code_s, kg, iso:dateDe(seq), reel:!!r && !r.externe, alloc:a.alloc, manque:a.manque }));
