@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.42';
+  const VERSION = '0.4.43';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
