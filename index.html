@@ -4745,7 +4745,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-19-543';
+const APP_VERSION = '2026-11-19-544';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -29493,12 +29493,16 @@ function bdNorm(s){ return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'')
 function bdLivraisons(){
   return (state.achats||[]).filter(a=>!a.producteur_id && a.connaissement && !a.refoulee && Number(a.poids_net_produit)>0);
 }
-function bdOuvrir(){ state.modal = { type:'bordereauParticulier', payload:{ q:'', sel:'' } }; render(); setTimeout(()=>{ const i = document.getElementById('bd-q'); if (i) i.focus(); }, 50); }
+function bdOuvrir(){ state.modal = { type:'bordereauParticulier', payload:{ q:'', sel:[] } }; render(); setTimeout(()=>{ const i = document.getElementById('bd-q'); if (i) i.focus(); }, 50); }
+// Sélection multiple : on coche un ou plusieurs déchargements (de plusieurs coopératives si on veut) ; la sélection est gardée quand on change la recherche.
+let bdAffiches = [], bdNomsAffiches = [];
+function bdSelListe(){ const pl = state.modal && state.modal.payload; if (!pl) return []; if (!Array.isArray(pl.sel)) pl.sel = pl.sel ? [pl.sel] : []; return pl.sel; }
 function bdListeHtml(){
   const pl = state.modal && state.modal.payload; if (!pl) return '';
-  const q = bdNorm(pl.q).trim();
+  const q = bdNorm(pl.q).trim(), sel = new Set(bdSelListe());
   let liste = bdLivraisons();
   if (q) liste = liste.filter(a=> bdNorm(bdCoopNom(a)).includes(q) || bdNorm(a.connaissement).includes(q));
+  bdAffiches = []; bdNomsAffiches = [];
   if (!liste.length) return '<div class="hint" style="padding:14px;text-align:center">'+(q ? 'Aucun déchargement pour « '+esc(pl.q)+' ».' : 'Aucun déchargement pesé.')+'</div>';
   const groupes = new Map();
   liste.forEach(a=>{ const k = bdCoopNom(a); if (!groupes.has(k)) groupes.set(k, []); groupes.get(k).push(a); });
@@ -29506,35 +29510,54 @@ function bdListeHtml(){
   const lim = q ? 400 : 60; let n = 0, coupe = false, h = '';
   for (const nom of noms){
     const ls = groupes.get(nom).sort((x,y)=>String(y.date||'').localeCompare(String(x.date||'')) || String(y.connaissement).localeCompare(String(x.connaissement),'fr',{numeric:true}));
-    h += (n>0?'<div style="height:8px;background:#fff"></div>':'')+'<div class="bd-coop"><span>'+esc(nom)+'</span><small>'+ls.length+' déchargement'+(ls.length>1?'s':'')+'</small></div>';
+    const ni = bdNomsAffiches.length; bdNomsAffiches.push([]);
+    const rows = [];
     for (const a of ls){
       if (n>=lim){ coupe = true; break; } n++;
-      const on = pl.sel===a.id;
-      h += '<div class="bd-cn" onclick="bdChoisir(\''+a.id+'\')" style="display:flex;gap:10px;align-items:center;padding:7px 10px;cursor:pointer;border-bottom:1px solid #eee;font-size:13px;'+(on?'background:#fff3d6;':'')+'">'
-        + '<input type="radio" '+(on?'checked':'')+' style="pointer-events:none">'
-        + '<b style="min-width:120px">'+esc(a.connaissement)+'</b><span style="min-width:84px">'+esc(dateFr(a.date))+'</span><span style="flex:1;text-align:right">'+fmtNum(Math.round(Number(a.poids_net_produit)))+' kg</span></div>';
+      bdAffiches.push(a.id); bdNomsAffiches[ni].push(a.id);
+      const on = sel.has(a.id);
+      rows.push('<div class="bd-cn" onclick="bdBascule(\''+a.id+'\')" style="display:flex;gap:10px;align-items:center;padding:7px 10px;cursor:pointer;border-bottom:1px solid #eee;font-size:13px;'+(on?'background:#fff3d6;':'')+'">'
+        + '<input type="checkbox" '+(on?'checked':'')+' style="pointer-events:none;width:16px;height:16px">'
+        + '<b style="min-width:120px">'+esc(a.connaissement)+'</b><span style="min-width:84px">'+esc(dateFr(a.date))+'</span><span style="flex:1;text-align:right">'+fmtNum(Math.round(Number(a.poids_net_produit)))+' kg</span></div>');
     }
+    const tousCoches = bdNomsAffiches[ni].length>0 && bdNomsAffiches[ni].every(id=>sel.has(id));
+    h += (ni>0?'<div style="height:8px;background:#fff"></div>':'')+'<div class="bd-coop"><span>'+esc(nom)+'</span><span style="display:flex;gap:10px;align-items:center"><small>'+ls.length+' déchargement'+(ls.length>1?'s':'')+'</small>'
+      + '<button type="button" onclick="bdBasculeCoop('+ni+')" style="font:inherit;font-size:12px;padding:3px 9px;border:0;border-radius:6px;background:#d9a441;color:#1f1f1f;font-weight:700;cursor:pointer">'+(tousCoches?'Décocher la coopérative':'Cocher la coopérative')+'</button></span></div>'
+      + rows.join('');
     if (coupe) break;
   }
   if (coupe) h += '<div class="hint" style="padding:10px;text-align:center">Liste limitée : tape le nom de la coopérative pour afficher le reste.</div>';
   return h;
 }
 function bdMajListe(){
-  const el = document.getElementById('bd-liste'); if (el) el.innerHTML = bdListeHtml();
-  const pl = state.modal && state.modal.payload, btn = document.getElementById('bd-ok');
-  if (btn && pl) btn.disabled = !pl.sel;
+  const el = document.getElementById('bd-liste'); if (el){ const t = el.scrollTop; el.innerHTML = bdListeHtml(); el.scrollTop = t; }
+  const pl = state.modal && state.modal.payload, btn = document.getElementById('bd-ok'), n = pl ? bdSelListe().length : 0;
+  if (btn && pl){ btn.disabled = !n; btn.textContent = n>1 ? '⬇ Télécharger les '+n+' bordereaux (un seul PDF)' : '⬇ Valider et télécharger'; }
+  const c = document.getElementById('bd-compte'); if (c) c.textContent = n ? n+' bordereau'+(n>1?'x':'')+' sélectionné'+(n>1?'s':'') : 'Aucun bordereau sélectionné';
 }
 function bdRecherche(v){ const pl = state.modal && state.modal.payload; if (!pl) return; pl.q = v; bdMajListe(); }
-function bdChoisir(id){ const pl = state.modal && state.modal.payload; if (!pl) return; pl.sel = id; bdMajListe(); }
-function renderBordereauParticulierModal(m){
-  return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>🖨 Imprimer un bordereau</h3><div id="modal-fields">'
-    + '<input id="bd-q" class="bd-q" type="search" placeholder="Rechercher une coopérative…" value="'+esc(m.payload.q)+'" oninput="bdRecherche(this.value)" autocomplete="off">'
-    + '<div id="bd-liste" style="max-height:52vh;overflow:auto;border:1px solid #d7ded9;border-radius:8px">'+bdListeHtml()+'</div>'
-    + '<div class="hint" style="margin-top:8px">Choisis le déchargement (n° de connaissement), puis valide : le bordereau se télécharge en PDF.</div>'
-    + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button id="bd-ok" class="btn btn-primary" onclick="bdTelecharger()" '+(m.payload.sel?'':'disabled')+'>⬇ Valider et télécharger</button></div></div></div>';
+function bdBascule(id){ const l = bdSelListe(), i = l.indexOf(id); if (i>=0) l.splice(i,1); else l.push(id); bdMajListe(); }
+function bdBasculeCoop(ni){
+  const ids = bdNomsAffiches[ni] || [], l = bdSelListe();
+  if (ids.every(id=>l.indexOf(id)>=0)) ids.forEach(id=>{ const i = l.indexOf(id); if (i>=0) l.splice(i,1); });
+  else ids.forEach(id=>{ if (l.indexOf(id)<0) l.push(id); });
+  bdMajListe();
 }
-// Le bordereau (mise en page OBC, positions en points) est dessiné hors écran, photographié, puis mis dans un PDF Lettre.
-async function bdPdfBlob(b){
+function bdToutCocher(){ const l = bdSelListe(); bdAffiches.forEach(id=>{ if (l.indexOf(id)<0) l.push(id); }); bdMajListe(); }
+function bdToutDecocher(){ const pl = state.modal && state.modal.payload; if (!pl) return; pl.sel = []; bdMajListe(); }
+function renderBordereauParticulierModal(m){
+  const n = bdSelListe().length;
+  return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>🖨 Imprimer un bordereau</h3><div id="modal-fields">'
+    + '<input id="bd-q" class="bd-q" type="search" placeholder="Rechercher une coopérative ou un n° de connaissement…" value="'+esc(m.payload.q)+'" oninput="bdRecherche(this.value)" autocomplete="off">'
+    + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0"><span id="bd-compte" style="font-weight:700;flex:1;min-width:150px">'+(n ? n+' bordereau'+(n>1?'x':'')+' sélectionné'+(n>1?'s':'') : 'Aucun bordereau sélectionné')+'</span>'
+    + '<button type="button" class="btn btn-compact" onclick="bdToutCocher()">Tout cocher (liste affichée)</button><button type="button" class="btn btn-compact" onclick="bdToutDecocher()">Tout décocher</button></div>'
+    + '<div id="bd-liste" style="max-height:48vh;overflow:auto;border:1px solid #d7ded9;border-radius:8px">'+bdListeHtml()+'</div>'
+    + '<div class="hint" style="margin-top:8px">Coche un ou plusieurs déchargements (même de coopératives différentes) : ils sont réunis dans un seul PDF, un bordereau par page. Ce téléchargement ne change rien au statut « téléchargé en groupe ».</div>'
+    + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button id="bd-ok" class="btn btn-primary" onclick="bdTelecharger()" '+(n?'':'disabled')+'>'+(n>1 ? '⬇ Télécharger les '+n+' bordereaux (un seul PDF)' : '⬇ Valider et télécharger')+'</button></div></div></div>';
+}
+// Le bordereau (mise en page OBC, positions en points) est dessiné hors écran, photographié, puis mis dans un PDF Lettre (une page par bordereau).
+async function bdPdfBlob(liste, progression){
+  const bs = Array.isArray(liste) ? liste : [liste];
   if (!window.html2canvas) await chargerScriptExterne(CDN_PDF.canvas);
   if (!(window.jspdf && window.jspdf.jsPDF)) await chargerScriptExterne(CDN_PDF.jspdf);
   const cadre = document.createElement('iframe');
@@ -29542,34 +29565,53 @@ async function bdPdfBlob(b){
   document.body.appendChild(cadre);
   try{
     const d = cadre.contentDocument;
-    d.open(); d.write(bordereauReceptionHTML(b).replace('</head>','<style>.bar,.note{display:none!important}body.avecbar{padding-top:0!important;background:#fff!important}.page{margin:0!important}</style></head>')); d.close();
+    d.open(); d.write(bordereauReceptionHTML(bs).replace('</head>','<style>.bar,.note{display:none!important}body.avecbar{padding-top:0!important;background:#fff!important}.page{margin:0!important}</style></head>')); d.close();
     if (d.fonts && d.fonts.ready) { try{ await d.fonts.ready; }catch(e){} }
     await new Promise(r=>setTimeout(r,150));
-    const page = d.querySelector('.page');
-    const canvas = await window.html2canvas(page, { scale:2.5, backgroundColor:'#ffffff', useCORS:true, logging:false });
+    const pages = Array.from(d.querySelectorAll('.page')), multi = pages.length>1;
     const pdf = new window.jspdf.jsPDF({ unit:'mm', format:'letter', orientation:'portrait', compress:true });
-    pdf.addImage(canvas.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, 215.9, 279.4, undefined, 'FAST');
+    for (let i=0; i<pages.length; i++){
+      if (progression) progression(i+1, pages.length);
+      const canvas = await window.html2canvas(pages[i], { scale: multi ? 2 : 2.5, backgroundColor:'#ffffff', useCORS:true, logging:false });
+      if (i>0) pdf.addPage('letter','portrait');
+      pdf.addImage(canvas.toDataURL('image/jpeg', multi ? 0.9 : 0.95), 'JPEG', 0, 0, 215.9, 279.4, undefined, 'FAST');
+      await new Promise(r=>setTimeout(r,0));
+    }
     return pdf.output('blob');
   } finally { cadre.remove(); }
 }
 async function bdTelecharger(){
   const pl = state.modal && state.modal.type==='bordereauParticulier' ? state.modal.payload : null;
-  if (!pl || !pl.sel){ showToast('Choisis d\'abord un déchargement dans la liste.'); return; }
-  const a = (state.achats||[]).find(x=>x.id===pl.sel);
-  if (!a){ showToast('Livraison introuvable.'); return; }
+  const ids = pl ? bdSelListe().slice() : [];
+  if (!ids.length){ showToast('Coche d\'abord au moins un déchargement dans la liste.'); return; }
   if (!state.prefCharge) await chargerPrefinancements();
-  const b = bordereauReceptionData(a);
-  if (b.manque==='prix'){ showToast('Renseigne d\'abord le prix d\'entrée usine de la campagne (paramètres de paiement).'); return; }
-  const btn = document.getElementById('bd-ok'); if (btn){ btn.disabled = true; btn.textContent = 'Préparation du PDF…'; }
+  // On garde l'ordre de la liste : coopérative, puis date décroissante, comme à l'écran.
+  const achats = ids.map(id=>(state.achats||[]).find(x=>x.id===id)).filter(Boolean);
+  if (!achats.length){ showToast('Livraison introuvable.'); return; }
+  achats.sort((x,y)=> bdCoopNom(x).localeCompare(bdCoopNom(y),'fr') || String(y.date||'').localeCompare(String(x.date||'')) || String(y.connaissement).localeCompare(String(x.connaissement),'fr',{numeric:true}));
+  const bs = [], sans = [];
+  achats.forEach(a=>{ const b = bordereauReceptionData(a); if (b.manque==='prix') sans.push(a.connaissement); else bs.push(b); });
+  if (!bs.length){ showToast('Renseigne d\'abord le prix d\'entrée usine de la campagne (paramètres de paiement).'); return; }
+  const btn = document.getElementById('bd-ok'), txt = btn ? btn.textContent : '';
+  if (btn){ btn.disabled = true; btn.textContent = 'Préparation du PDF…'; }
   try{
-    const blob = await bdPdfBlob(b);
-    const nom = 'Bordereau '+String(a.connaissement).replace(/[\\\/:*?"<>|]/g,'-')+' '+bdCoopNom(a).replace(/[\\\/:*?"<>|]/g,'-')+'.pdf';
+    const blob = await bdPdfBlob(bs, (i,n)=>{ if (btn && n>1) btn.textContent = 'Page '+i+' / '+n+'…'; });
+    let nom;
+    if (bs.length===1){ const a = achats[0]; nom = 'Bordereau '+String(a.connaissement).replace(/[\\\/:*?"<>|]/g,'-')+' '+bdCoopNom(a).replace(/[\\\/:*?"<>|]/g,'-')+'.pdf'; }
+    else {
+      const coops = Array.from(new Set(achats.map(bdCoopNom)));
+      nom = 'Bordereaux ('+bs.length+') '+(coops.length===1 ? coops[0].replace(/[\\\/:*?"<>|]/g,'-') : 'plusieurs coopératives')+' '+new Date().toISOString().slice(0,10)+'.pdf';
+    }
     telechargerBlob(blob, nom);
-    closeModal(); showToast('Bordereau '+a.connaissement+' téléchargé.', 'success');
+    closeModal(); showToast(bs.length===1 ? 'Bordereau '+achats[0].connaissement+' téléchargé.' : bs.length+' bordereaux téléchargés dans un seul PDF.', 'success');
+    if (sans.length) showToast(sans.length+' bordereau(x) ignoré(s) : prix d\'entrée usine manquant ('+sans.slice(0,3).join(', ')+(sans.length>3 ? '…' : '')+').');
   }catch(e){
-    if (btn){ btn.disabled = false; btn.textContent = '⬇ Valider et télécharger'; }
-    showToast('Impossible de générer le PDF : '+e.message+' — ouverture du bordereau à imprimer à la place.');
-    ouvrirBordereauReception(a.id);
+    if (btn){ btn.disabled = false; btn.textContent = txt; }
+    if (bs.length===1){ showToast('Impossible de générer le PDF : '+e.message+' — ouverture du bordereau à imprimer à la place.'); ouvrirBordereauReception(achats[0].id); }
+    else {
+      showToast('Impossible de générer le PDF : '+e.message+' — ouverture des bordereaux à imprimer à la place.');
+      const f = window.open('', '_blank'); if (f){ f.document.open(); f.document.write(bordereauReceptionHTML(bs)); f.document.close(); }
+    }
   }
 }
 // ====================== TICKET DE PESEE (bordereau de réception de cacao) ======================
@@ -30054,7 +30096,7 @@ function renderSaisieObcTab(){
     + '<b>🧾 Bordereaux groupés</b> du <input type="date" value="'+esc(state.sobcDu||'')+'" onchange="setSobcPeriode(\'sobcDu\', this.value)"> au <input type="date" value="'+esc(state.sobcAu||'')+'" onchange="setSobcPeriode(\'sobcAu\', this.value)">'
     + '<label style="display:flex;gap:4px;align-items:center"><input type="checkbox"'+(state.sobcInclureNonSaisis?' checked':'')+' onchange="state.sobcInclureNonSaisis=this.checked;render()"> inclure ceux pas encore saisis</label>'
     + '<button type="button" class="btn btn-primary btn-compact" onclick="ouvrirBordereauxGroupes()" title="Réunit tous les bordereaux de la période dans un seul document : Imprimer › Enregistrer au format PDF = un seul fichier">⬇ Télécharger les '+fmtNum(bordereauxGroupesListe().length)+' bordereaux (un seul PDF)</button>'
-    + '<button type="button" class="btn btn-primary btn-compact" onclick="bdOuvrir()" title="Choisir une coopérative, puis un de ses déchargements (n° de connaissement) : le bordereau se télécharge en PDF">🖨 Imprimer un bordereau</button></div>'
+    + '<button type="button" class="btn btn-primary btn-compact" onclick="bdOuvrir()" title="Cocher un ou plusieurs déchargements (n° de connaissement), de une ou plusieurs coopératives : les bordereaux se téléchargent dans un seul PDF">🖨 Imprimer un bordereau</button></div>'
     + (function(){ const lots = obcLotsSaisie(), sel = state.obcRapportLot||'';
         return '<div class="sobc-groupe" style="display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;padding:0 18px 10px;font-size:13px">'
           + '<b>📄 Rapport de saisie OBC</b> <select id="obc-rapport-lot" onchange="state.obcRapportLot=this.value">'
