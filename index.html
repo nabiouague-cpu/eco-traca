@@ -4740,7 +4740,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-19-518';
+const APP_VERSION = '2026-11-19-519';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -13360,6 +13360,7 @@ function lotsModalsHtml(){
   if (m.type==='ctrTraitant') return renderCtrModal(m);
   if (m.type==='livrExport') return renderLivrExportModal(m);
   if (m.type==='liasseExport') return renderLiasseExportModal(m);
+  if (m.type==='bordereauParticulier') return renderBordereauParticulierModal(m);
   if (m.type==='finLtdLots') return renderFinLtdLotsModal(m);
   if (m.type==='lotsPoidsEntrepot'){
     const pl = m.payload, lots = lotsPoidsEntrepotLots(pl);
@@ -29179,6 +29180,93 @@ async function ouvrirBordereauReception(achatId){
   if (!f){ showToast('Le navigateur a bloqué l\'ouverture — autorise les fenêtres pop-up pour afficher le bordereau.'); return; }
   f.document.open(); f.document.write(bordereauReceptionHTML(b)); f.document.close();
 }
+// ====================== IMPRIMER UN BORDEREAU EN PARTICULIER ======================
+// Fenêtre : barre de recherche (nom de coopérative ou n° de connaissement) + liste des déchargements de la coopérative, identifiés par leur connaissement.
+// On choisit un déchargement, on valide, le bordereau (même modèle OBC) se télécharge en PDF.
+function bdCoopNom(a){ const c = coopById(a.cooperative_id); return String((c && c.nom) || a.fournisseur_saigic || '—').replace(/\s*\/\s*/g,' '); }
+function bdNorm(s){ return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase(); }
+function bdLivraisons(){
+  return (state.achats||[]).filter(a=>!a.producteur_id && a.connaissement && !a.refoulee && Number(a.poids_net_produit)>0);
+}
+function bdOuvrir(){ state.modal = { type:'bordereauParticulier', payload:{ q:'', sel:'' } }; render(); setTimeout(()=>{ const i = document.getElementById('bd-q'); if (i) i.focus(); }, 50); }
+function bdListeHtml(){
+  const pl = state.modal && state.modal.payload; if (!pl) return '';
+  const q = bdNorm(pl.q).trim();
+  let liste = bdLivraisons();
+  if (q) liste = liste.filter(a=> bdNorm(bdCoopNom(a)).includes(q) || bdNorm(a.connaissement).includes(q));
+  if (!liste.length) return '<div class="hint" style="padding:14px;text-align:center">'+(q ? 'Aucun déchargement pour « '+esc(pl.q)+' ».' : 'Aucun déchargement pesé.')+'</div>';
+  const groupes = new Map();
+  liste.forEach(a=>{ const k = bdCoopNom(a); if (!groupes.has(k)) groupes.set(k, []); groupes.get(k).push(a); });
+  const noms = Array.from(groupes.keys()).sort((x,y)=>x.localeCompare(y,'fr'));
+  const lim = q ? 400 : 60; let n = 0, coupe = false, h = '';
+  for (const nom of noms){
+    const ls = groupes.get(nom).sort((x,y)=>String(y.date||'').localeCompare(String(x.date||'')) || String(y.connaissement).localeCompare(String(x.connaissement),'fr',{numeric:true}));
+    h += '<div style="position:sticky;top:0;background:#eef3ef;padding:6px 10px;font-weight:700;font-size:13px;border-bottom:1px solid #d7ded9">'+esc(nom)+' <span style="font-weight:400;color:#666">· '+ls.length+' déchargement'+(ls.length>1?'s':'')+'</span></div>';
+    for (const a of ls){
+      if (n>=lim){ coupe = true; break; } n++;
+      const on = pl.sel===a.id;
+      h += '<div onclick="bdChoisir(\''+a.id+'\')" style="display:flex;gap:10px;align-items:center;padding:7px 10px;cursor:pointer;border-bottom:1px solid #eee;font-size:13px;'+(on?'background:#fff3d6;':'')+'">'
+        + '<input type="radio" '+(on?'checked':'')+' style="pointer-events:none">'
+        + '<b style="min-width:120px">'+esc(a.connaissement)+'</b><span style="min-width:84px">'+esc(dateFr(a.date))+'</span><span style="flex:1;text-align:right">'+fmtNum(Math.round(Number(a.poids_net_produit)))+' kg</span></div>';
+    }
+    if (coupe) break;
+  }
+  if (coupe) h += '<div class="hint" style="padding:10px;text-align:center">Liste limitée : tape le nom de la coopérative pour afficher le reste.</div>';
+  return h;
+}
+function bdMajListe(){
+  const el = document.getElementById('bd-liste'); if (el) el.innerHTML = bdListeHtml();
+  const pl = state.modal && state.modal.payload, btn = document.getElementById('bd-ok');
+  if (btn && pl) btn.disabled = !pl.sel;
+}
+function bdRecherche(v){ const pl = state.modal && state.modal.payload; if (!pl) return; pl.q = v; bdMajListe(); }
+function bdChoisir(id){ const pl = state.modal && state.modal.payload; if (!pl) return; pl.sel = id; bdMajListe(); }
+function renderBordereauParticulierModal(m){
+  return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>🖨 Imprimer un bordereau</h3><div id="modal-fields">'
+    + '<input id="bd-q" class="input" type="search" placeholder="Rechercher une coopérative (ou un n° de connaissement)…" value="'+esc(m.payload.q)+'" oninput="bdRecherche(this.value)" style="width:100%;margin-bottom:8px" autocomplete="off">'
+    + '<div id="bd-liste" style="max-height:52vh;overflow:auto;border:1px solid #d7ded9;border-radius:8px">'+bdListeHtml()+'</div>'
+    + '<div class="hint" style="margin-top:8px">Choisis le déchargement (n° de connaissement), puis valide : le bordereau se télécharge en PDF.</div>'
+    + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button id="bd-ok" class="btn btn-primary" onclick="bdTelecharger()" '+(m.payload.sel?'':'disabled')+'>⬇ Valider et télécharger</button></div></div></div>';
+}
+// Le bordereau (mise en page OBC, positions en points) est dessiné hors écran, photographié, puis mis dans un PDF Lettre.
+async function bdPdfBlob(b){
+  if (!window.html2canvas) await chargerScriptExterne(CDN_PDF.canvas);
+  if (!(window.jspdf && window.jspdf.jsPDF)) await chargerScriptExterne(CDN_PDF.jspdf);
+  const cadre = document.createElement('iframe');
+  cadre.setAttribute('aria-hidden','true'); cadre.style.cssText = 'position:fixed;left:-10000px;top:0;width:816px;height:1056px;border:0;visibility:hidden;';
+  document.body.appendChild(cadre);
+  try{
+    const d = cadre.contentDocument;
+    d.open(); d.write(bordereauReceptionHTML(b).replace('</head>','<style>.bar,.note{display:none!important}body.avecbar{padding-top:0!important;background:#fff!important}.page{margin:0!important}</style></head>')); d.close();
+    if (d.fonts && d.fonts.ready) { try{ await d.fonts.ready; }catch(e){} }
+    await new Promise(r=>setTimeout(r,150));
+    const page = d.querySelector('.page');
+    const canvas = await window.html2canvas(page, { scale:2.5, backgroundColor:'#ffffff', useCORS:true, logging:false });
+    const pdf = new window.jspdf.jsPDF({ unit:'mm', format:'letter', orientation:'portrait', compress:true });
+    pdf.addImage(canvas.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, 215.9, 279.4, undefined, 'FAST');
+    return pdf.output('blob');
+  } finally { cadre.remove(); }
+}
+async function bdTelecharger(){
+  const pl = state.modal && state.modal.type==='bordereauParticulier' ? state.modal.payload : null;
+  if (!pl || !pl.sel){ showToast('Choisis d\'abord un déchargement dans la liste.'); return; }
+  const a = (state.achats||[]).find(x=>x.id===pl.sel);
+  if (!a){ showToast('Livraison introuvable.'); return; }
+  if (!state.prefCharge) await chargerPrefinancements();
+  const b = bordereauReceptionData(a);
+  if (b.manque==='prix'){ showToast('Renseigne d\'abord le prix d\'entrée usine de la campagne (paramètres de paiement).'); return; }
+  const btn = document.getElementById('bd-ok'); if (btn){ btn.disabled = true; btn.textContent = 'Préparation du PDF…'; }
+  try{
+    const blob = await bdPdfBlob(b);
+    const nom = 'Bordereau '+String(a.connaissement).replace(/[\\\/:*?"<>|]/g,'-')+' '+bdCoopNom(a).replace(/[\\\/:*?"<>|]/g,'-')+'.pdf';
+    telechargerBlob(blob, nom);
+    closeModal(); showToast('Bordereau '+a.connaissement+' téléchargé.', 'success');
+  }catch(e){
+    if (btn){ btn.disabled = false; btn.textContent = '⬇ Valider et télécharger'; }
+    showToast('Impossible de générer le PDF : '+e.message+' — ouverture du bordereau à imprimer à la place.');
+    ouvrirBordereauReception(a.id);
+  }
+}
 // ====================== TICKET DE PESEE (bordereau de réception de cacao) ======================
 // Modèle Word fourni (modeles/ticket_de_pesee.docx). Chaque intitulé reste à sa place ; les valeurs sont écrites alignées les unes sous les autres (textes à
 // gauche, chiffres à droite). Ce que ORIGEN connaît (coopérative, connaissement, transport, sacs et poids déclarés / acceptés, poids net payé) est repris tel quel ;
@@ -29660,7 +29748,8 @@ function renderSaisieObcTab(){
     + '<div class="sobc-groupe" style="display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;padding:0 18px 10px;font-size:13px">'
     + '<b>🧾 Bordereaux groupés</b> du <input type="date" value="'+esc(state.sobcDu||'')+'" onchange="setSobcPeriode(\'sobcDu\', this.value)"> au <input type="date" value="'+esc(state.sobcAu||'')+'" onchange="setSobcPeriode(\'sobcAu\', this.value)">'
     + '<label style="display:flex;gap:4px;align-items:center"><input type="checkbox"'+(state.sobcInclureNonSaisis?' checked':'')+' onchange="state.sobcInclureNonSaisis=this.checked;render()"> inclure ceux pas encore saisis</label>'
-    + '<button type="button" class="btn btn-primary btn-compact" onclick="ouvrirBordereauxGroupes()" title="Réunit tous les bordereaux de la période dans un seul document : Imprimer › Enregistrer au format PDF = un seul fichier">⬇ Télécharger les '+fmtNum(bordereauxGroupesListe().length)+' bordereaux (un seul PDF)</button></div>'
+    + '<button type="button" class="btn btn-primary btn-compact" onclick="ouvrirBordereauxGroupes()" title="Réunit tous les bordereaux de la période dans un seul document : Imprimer › Enregistrer au format PDF = un seul fichier">⬇ Télécharger les '+fmtNum(bordereauxGroupesListe().length)+' bordereaux (un seul PDF)</button>'
+    + '<button type="button" class="btn btn-primary btn-compact" onclick="bdOuvrir()" title="Choisir une coopérative, puis un de ses déchargements (n° de connaissement) : le bordereau se télécharge en PDF">🖨 Imprimer un bordereau</button></div>'
     + (function(){ const lots = obcLotsSaisie(), sel = state.obcRapportLot||'';
         return '<div class="sobc-groupe" style="display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;padding:0 18px 10px;font-size:13px">'
           + '<b>📄 Rapport de saisie OBC</b> <select id="obc-rapport-lot" onchange="state.obcRapportLot=this.value">'
