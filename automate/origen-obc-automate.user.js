@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.47
+// @version      0.4.48
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.47';
+  const VERSION = '0.4.48';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -571,6 +571,10 @@
     if (aff && aff.length >= 3) { const lettres = aff.toUpperCase().replace(/[^A-Z0-9]/g, ''); return { cle: N(aff), code: (lettres.slice(0, 4) + 'XXXX').slice(0, 4) + '001', nom: aff.toUpperCase() }; }
     return null;
   }
+  // Texte lisible du gros traitant visé par le lot (affiché dans les étapes « rien à créer »).
+  function libelleTraitant(lot) {
+    try { if (coopEnPropre(lot)) return 'coopérative en propre, aucun gros traitant'; const v = traitantVoulu(lot); return v ? 'gros traitant visé : ' + v + ' (déjà en place dans OBC)' : 'aucun gros traitant'; } catch (er) { return 'gros traitant non déterminé'; }
+  }
   // Gros traitant déjà présent dans OBC sous son NOM (autre code possible : ex. INVESTIR PLUS = fiche n°80 passée en type GROS TRAITANT, code A03860606). OBC refuse deux fiches de même nom : on la réutilise.
   async function grosTraitantParNom(g) {
     const doc = await getHtml('/Fournisseur/Index?isProjetProv=0&filterEntite=' + ENTITE + '&filtrePosteComptable=&filter=' + encodeURIComponent(g.nom.split(' ')[0]) + '&pageSize=100');
@@ -585,7 +589,7 @@
   }
   async function etapeGrosTraitantTiers(e) {
     const g = grosTraitantCible(e.lot);
-    if (!g) { e.fait[1] = 'rien à créer'; return 'suivant'; }
+    if (!g) { e.fait[1] = 'rien à créer : ' + libelleTraitant(e.lot); journal(e, 'Compte tiers gros traitant : rien à créer (' + libelleTraitant(e.lot) + ')'); return 'suivant'; }
     { const exn = await grosTraitantParNom(g); if (exn) { e.fait[1] = 'gros traitant déjà dans OBC : ' + exn.c[2] + ' (' + exn.c[3] + ')'; journal(e, 'Gros traitant déjà dans OBC sous son nom : ' + exn.c[2] + ' (' + exn.c[3] + ') : pas de compte tiers à créer'); return 'suivant'; } }
     const ex = await trouverCompteTiers(g.code);
     if (ex) { e.fait[1] = 'déjà dans OBC : ' + (ex.Text || g.code); journal(e, 'Compte tiers gros traitant trouvé : ' + (ex.Text || g.code)); return 'suivant'; }
@@ -597,7 +601,7 @@
   function champsFournisseurVides() { return [['txttelephone_fournisseurAdd', 'Téléphone'], ['txtmobile_fournisseurAdd', 'Mobile'], ['txtville_fournisseurAdd', 'Ville'], ['txtadresse_geographique_fournisseurAdd', 'Adresse géographique'], ['txtcode_fournisseurAdd', 'Sigle'], ['txtnom_fournisseurAdd', 'Dénomination sociale']].filter(([id]) => { const el = document.getElementById(id); return !el || !String(el.value || '').trim(); }).map((x) => x[1]); }
   async function etapeGrosTraitant(e) {
     const g = grosTraitantCible(e.lot);
-    if (!g) { e.fait[2] = 'rien à créer'; return 'suivant'; }
+    if (!g) { e.fait[2] = 'rien à créer : ' + libelleTraitant(e.lot); journal(e, 'Gros traitant : rien à créer (' + libelleTraitant(e.lot) + ')'); return 'suivant'; }
     { const exn = await grosTraitantParNom(g); if (exn) { e.fait[2] = 'déjà dans OBC : ' + exn.c[2]; journal(e, 'Gros traitant trouvé par son nom : ' + exn.c[2]); return 'suivant'; } }
     const doc = await getHtml('/Fournisseur/Index?isProjetProv=0&filterEntite=' + ENTITE + '&filtrePosteComptable=&filter=' + encodeURIComponent(g.nom.split(' ')[0]) + '&pageSize=100');
     const ex = lignesTable(doc).find((l) => N(l.c[3]) === N(g.code));   // par le code seulement : le même nom existe déjà sous un autre code (simple fournisseur)
@@ -633,7 +637,7 @@
   }
   async function etapeCooperative(e) {
     const lot = e.lot;
-    if (!e.ids.fournisseur_id) { const r = await trouverFournisseur(lot); if (r) { e.ids.fournisseur_id = r.id; e.ids.fournisseur_nom = r.code; e.fait[4] = 'déjà dans OBC : ' + r.code; journal(e, 'Coopérative trouvée : ' + r.code + ' (id ' + r.id + ')'); return 'suivant'; } }
+    if (!e.ids.fournisseur_id) { const r = await trouverFournisseur(lot); if (r) { e.ids.fournisseur_id = r.id; e.ids.fournisseur_nom = r.code; let gtF = ''; try { const t = await traitantDeFiche(r.id); gtF = ' — gros traitant de la fiche : ' + (t.choisi || 'aucun'); } catch (er) { /* ignoré */ } e.fait[4] = 'déjà dans OBC : ' + r.code + gtF; journal(e, 'Coopérative trouvée : ' + r.code + ' (id ' + r.id + ')' + gtF); return 'suivant'; } }
     else return 'suivant';
     if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
     const plan = await getJson('/AppMethods1/LoadPlanComptableEntiteTiersFournisseurByEntiteId?EntiteId=' + ENTITE);
