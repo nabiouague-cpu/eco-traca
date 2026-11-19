@@ -4745,7 +4745,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-19-531';
+const APP_VERSION = '2026-11-19-532';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -13364,6 +13364,7 @@ function lotsModalsHtml(){
   if (m.type==='usiFacture') return renderUsiFactureModal(m);
   if (m.type==='usiPaiement') return renderUsiPaiementModal(m);
   if (m.type==='ctrTraitant') return renderCtrModal(m);
+  if (m.type==='partAffil') return renderPartAffilModal(m);
   if (m.type==='livrExport') return renderLivrExportModal(m);
   if (m.type==='liasseExport') return renderLiasseExportModal(m);
   if (m.type==='bordereauParticulier') return renderBordereauParticulierModal(m);
@@ -15325,6 +15326,7 @@ async function loadAll(silencieux){
       state.saigicATracer = avErr ? (state.saigicATracer||[]) : (av || []); }
     { const ts = await supabaseClient.from('tracabilite_simulee').select('*'); state.tracaSim = ts.error ? (state.tracaSim||[]) : (ts.data||[]); }
     { const ce = await supabaseClient.from('connaissements_externes').select('*'); state.connExt = ce.error ? (state.connExt||[]) : (ce.data||[]); }
+    { const tc = await supabaseClient.from('traitant_cooperatives').select('*'); state.traitantCoops = tc.error ? (state.traitantCoops||[]) : (tc.data||[]); }
     await connChargerNouveaux(); await connChargerAchats(); connVeille();
     { const { data: pp, error: ppErr } = await supabaseClient.from('parametres_paiement').select('*'); state.parametresPaiement = ppErr ? (state.parametresPaiement||[]) : (pp || []); }
 
@@ -16125,9 +16127,16 @@ function ocPartenairesGroupes(){
     const g = groupes.get(ocPartenaireCle(s)); if (!g) return;
     g.coops.set(a.cooperative_id, (g.coops.get(a.cooperative_id)||0) + 1);
   });
+  // Coopératives affiliées à un traitant (enregistrées à la main) : elles s'ajoutent à celles qui ont livré chez lui ; un traitant sans usine propre peut exister.
+  (state.traitantCoops||[]).forEach(r=>{
+    const nom = String(r.traitant||'').trim(); if (!nom || !r.cooperative_id) return;
+    let g = groupes.get(nom); if (!g){ g = { cle:nom, sites:[], coops:new Map(), manuel:true }; groupes.set(nom, g); }
+    if (!g.coops.has(r.cooperative_id)) g.coops.set(r.cooperative_id, 0);
+    (g.affilies = g.affilies || new Set()).add(r.cooperative_id);
+  });
   const ordre = { nous:0, a_decider:1, partenaire:2 };
   return Array.from(groupes.values()).map(g=>{
-    g.mode = (g.sites.find(x=>x.trace_par==='nous') ? 'nous' : (g.sites.every(x=>x.trace_par==='partenaire') ? 'partenaire' : 'a_decider'));
+    g.mode = !g.sites.length ? 'a_decider' : (g.sites.find(x=>x.trace_par==='nous') ? 'nous' : (g.sites.every(x=>x.trace_par==='partenaire') ? 'partenaire' : 'a_decider'));
     return g;
   }).sort((x,y)=>(ordre[x.mode]-ordre[y.mode]) || x.cle.localeCompare(y.cle,'fr'));
 }
@@ -16140,6 +16149,48 @@ async function ocPartenaireMode(cle, mode){
   _dossCache = null; render();
   showToast(cle+' : '+(mode==='nous' ? 'nous traçons' : mode==='partenaire' ? 'le partenaire trace' : 'à décider'));
 }
+// ---- Traitants : création et coopératives affiliées ----
+function partAffilOuvrir(cle){
+  const sel = new Set((state.traitantCoops||[]).filter(r=>r.traitant===cle).map(r=>r.cooperative_id));
+  if (cle){ const g = ocPartenairesGroupes().find(x=>x.cle===cle); if (g && g.affilies) g.affilies.forEach(id=>sel.add(id)); }
+  state.modal = { type:'partAffil', payload:{ traitant:cle||'', nouveau:!cle, sel:Array.from(sel), avant:Array.from(sel) } }; render();
+}
+function partAffilCocher(id, coche){
+  const pl = state.modal && state.modal.type==='partAffil' ? state.modal.payload : null; if (!pl) return;
+  const i = pl.sel.indexOf(id); if (coche && i<0) pl.sel.push(id); if (!coche && i>=0) pl.sel.splice(i,1);
+  const el = document.getElementById('part-affil-nb'); if (el) el.textContent = pl.sel.length;
+}
+function partAffilFiltrer(txt){
+  const t = qcNormaliserTexte(txt);
+  document.querySelectorAll('#part-affil-liste [data-nom]').forEach(el=>{ el.style.display = (!t || el.getAttribute('data-nom').indexOf(t)>=0) ? '' : 'none'; });
+}
+function renderPartAffilModal(m){
+  const pl = m.payload, sel = new Set(pl.sel);
+  const ailleurs = new Map(); (state.traitantCoops||[]).forEach(r=>{ if (r.traitant!==pl.traitant) ailleurs.set(r.cooperative_id, r.traitant); });
+  const coops = (state.cooperatives||[]).slice().sort((a,b)=>String(a.nom).localeCompare(String(b.nom),'fr'));
+  const lignes = coops.map(c=>'<label data-nom="'+esc(qcNormaliserTexte(c.nom+' '+(c.ccc_num||'')))+'" style="display:flex;gap:8px;align-items:center;padding:3px 0"><input type="checkbox" '+(sel.has(c.id)?'checked':'')+' onchange="partAffilCocher(\''+escJs(c.id)+'\', this.checked)"> <span>'+esc(c.nom)+'</span> <span class="hint" style="margin:0">'+esc(c.ccc_num||'')+(ailleurs.has(c.id) ? ' · déjà affiliée à '+esc(ailleurs.get(c.id)) : '')+'</span></label>').join('');
+  return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>'+(pl.nouveau ? 'Nouveau traitant' : 'Coopératives affiliées — '+esc(pl.traitant))+'</h3><div id="modal-fields">'
+    + (pl.nouveau ? '<label class="field">Nom du traitant<input type="text" name="pa_nom" placeholder="ex. INVESTIR PLUS"></label>' : '')
+    + '<div class="hint" style="margin:8px 0">Coche les coopératives qui dépendent de ce traitant. Elles s\'ajoutent à celles qui ont déjà livré chez lui. Sélection : <b id="part-affil-nb">'+pl.sel.length+'</b></div>'
+    + '<input type="text" placeholder="Chercher une coopérative…" oninput="partAffilFiltrer(this.value)" style="width:100%;margin-bottom:6px">'
+    + '<div id="part-affil-liste" style="max-height:40vh;overflow:auto;border:1px solid var(--bord,#d9e2dc);border-radius:8px;padding:6px 10px">'+lignes+'</div>'
+    + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="partAffilEnregistrer()">Enregistrer</button></div></div></div>';
+}
+async function partAffilEnregistrer(){
+  const pl = state.modal && state.modal.type==='partAffil' ? state.modal.payload : null; if (!pl) return;
+  const nom = pl.nouveau ? String(fv('pa_nom')||'').replace(/\s+/g,' ').trim() : pl.traitant;
+  if (!nom){ showToast('Donne un nom au traitant.'); return; }
+  if (pl.nouveau && !pl.sel.length){ showToast('Choisis au moins une coopérative affiliée : sans elle, le traitant n\'apparaîtrait nulle part.'); return; }
+  if (pl.nouveau && ocPartenairesGroupes().some(g=>qcNormaliserTexte(g.cle)===qcNormaliserTexte(nom))){ showToast('Ce partenaire existe déjà : ouvre-le dans la liste pour choisir ses coopératives.'); return; }
+  const dejaEnBase = new Set((state.traitantCoops||[]).filter(r=>r.traitant===nom).map(r=>r.cooperative_id));
+  const aAjouter = pl.sel.filter(id=>!dejaEnBase.has(id)), aRetirer = Array.from(dejaEnBase).filter(id=>pl.sel.indexOf(id)<0);
+  try{
+    if (aRetirer.length){ const { error } = await supabaseClient.from('traitant_cooperatives').delete().eq('traitant', nom).in('cooperative_id', aRetirer); if (error) throw error; }
+    if (aAjouter.length){ const { error } = await supabaseClient.from('traitant_cooperatives').insert(aAjouter.map(id=>({ traitant:nom, cooperative_id:id }))); if (error) throw error; }
+    state.traitantCoops = (state.traitantCoops||[]).filter(r=>!(r.traitant===nom && aRetirer.indexOf(r.cooperative_id)>=0)).concat(aAjouter.map(id=>({ traitant:nom, cooperative_id:id })));
+    _dossCache = null; closeModal(); showToast('Traitant « '+nom+' » enregistré : '+pl.sel.length+' coopérative'+(pl.sel.length>1?'s':'')+' affiliée'+(pl.sel.length>1?'s':'')+'.', 'success'); render();
+  }catch(e){ showToast('Enregistrement impossible : '+(e && e.message ? e.message : e)); }
+}
 function ocPartenaireOuvrir(cle){ state.partOuvert = state.partOuvert || {}; state.partOuvert[cle] = !state.partOuvert[cle]; render(); }
 function ocPartenairesHtml(){
   const G = ocPartenairesGroupes(), L = ocDossiersListe(), parId = new Map(L.map(x=>[x.c.id, x]));
@@ -16148,17 +16199,20 @@ function ocPartenairesHtml(){
   const vus = new Set();
   let html = '<div style="margin:2px 0 6px;font-weight:700;font-size:14px;color:#14402a">🤝 Clients et partenaires — qui trace ?</div>'
     + '<div class="hint" style="margin:0 0 10px">Chaque partenaire regroupe ses usines et les coopératives qui y livrent. Marque « Nous » si nous traçons, « Partenaire » s\'il trace lui-même. Seuls les partenaires « Nous » comptent dans « à tracer ».</div>'
+    + '<div style="margin:0 0 8px"><button class="btn btn-primary btn-compact" onclick="partAffilOuvrir(null)">+ Nouveau traitant</button> <span class="hint">Un traitant peut livrer lui-même et avoir des coopératives affiliées qui livrent aussi.</span></div>'
     + '<div class="achats-defile"><table class="tbl-fiches tbl-dense"><thead><tr><th>Partenaire</th><th>Usine(s)</th><th class="num">Coopératives</th><th>Qui trace ?</th><th></th></tr></thead><tbody>';
   G.forEach(g=>{
     g.coops.forEach((n,id)=>vus.add(id));
     const nom = g.sites.map(s=>s.nom).join(', ');
     html += '<tr><td><b>'+esc(g.cle)+'</b></td><td class="hint">'+esc(nom)+'</td><td class="num">'+g.coops.size+'</td>'
-      + '<td><div style="display:flex;gap:6px;flex-wrap:wrap">'+btn(g,'nous','Nous')+btn(g,'partenaire','Partenaire')+btn(g,'a_decider','À décider')+'</div></td>'
+      + '<td>'+(g.sites.length ? '<div style="display:flex;gap:6px;flex-wrap:wrap">'+btn(g,'nous','Nous')+btn(g,'partenaire','Partenaire')+btn(g,'a_decider','À décider')+'</div>' : '<span class="hint" style="margin:0">Sans usine propre : ça suit l\'usine où ses coopératives livrent</span>')+'</td>'
       + '<td><button class="btn-ghost btn-compact" onclick="ocPartenaireOuvrir(\''+escJs(g.cle)+'\')">'+(ouvert[g.cle] ? 'Masquer' : 'Voir les coopératives')+'</button></td></tr>';
     if (ouvert[g.cle]){
       const lignes = Array.from(g.coops.keys()).map(id=>coopById(id)).filter(Boolean).sort((a,b)=>String(a.nom).localeCompare(String(b.nom),'fr'));
       html += '<tr><td colspan="5" style="background:var(--surface-2)">'+(lignes.length ? lignes.map(c=>{ const x = parId.get(c.id); const nb = g.coops.get(c.id);
-        return '<span style="display:inline-block;margin:2px 10px 2px 0"><a href="#" onclick="ocDossierOuvrir(\''+escJs(c.id)+'\');return false;">'+esc(c.nom)+'</a> <span class="hint">('+nb+' camion'+(nb>1?'s':'')+(x && g.mode==='nous' && x.nATracer ? ', '+x.nATracer+' à tracer' : '')+')</span></span>'; }).join('') : '<span class="hint">Aucune coopérative n\'a encore livré chez ce partenaire.</span>')+'</td></tr>';
+        const aff = g.affilies && g.affilies.has(c.id);
+        return '<span style="display:inline-block;margin:2px 10px 2px 0"><a href="#" onclick="ocDossierOuvrir(\''+escJs(c.id)+'\');return false;">'+esc(c.nom)+'</a> <span class="hint">('+(aff ? 'affiliée'+(nb ? ', ' : '') : '')+(nb ? nb+' camion'+(nb>1?'s':'')+(x && g.mode==='nous' && x.nATracer ? ', '+x.nATracer+' à tracer' : '') : (aff ? '' : '0 camion'))+')</span></span>'; }).join('') : '<span class="hint">Aucune coopérative n\'a encore livré chez ce partenaire.</span>')
+        + '<div style="margin-top:6px"><button class="btn btn-compact" onclick="partAffilOuvrir(\''+escJs(g.cle)+'\')">Choisir les coopératives affiliées</button></div></td></tr>';
     }
   });
   html += '</tbody></table></div>';
