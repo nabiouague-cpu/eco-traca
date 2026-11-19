@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.53
+// @version      0.4.54
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.53';
+  const VERSION = '0.4.54';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -589,12 +589,15 @@
   }
   async function grosTraitantParNom(g) {
     const doc = await getHtml('/Fournisseur/Index?isProjetProv=0&filterEntite=' + ENTITE + '&filtrePosteComptable=&filter=' + encodeURIComponent(g.nom.split(' ')[0]) + '&pageSize=100');
-    // Nom exact, ou nom + « GT » (INVESTIR PLUS existe déjà dans OBC comme coopérative : son gros traitant s'appelle « INVESTIR PLUS GT », même compte A03860606).
-    const lignes = lignesTable(doc).filter((x) => N(x.c[2]) === N(g.nom) || N(x.c[2]) === N(g.nom + ' GT'));
+    // Nom exact, nom avec tirets (INVESTIR PLUS existe déjà dans OBC comme coopérative : son gros traitant s'appelle « INVESTIR-PLUS », même compte A03860606), ou ancien nom + « GT ».
+    // Comparaison STRICTE (les tirets comptent) : « INVESTIR PLUS » (coopérative) et « INVESTIR-PLUS » (gros traitant) sont deux fiches différentes.
+    const K = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/\s+/g, ' ').trim();
+    const noms = [K(g.nom), K(g.nom).replace(/ /g, '-'), K(g.nom + ' GT')];
+    const lignes = lignesTable(doc).filter((x) => noms.indexOf(K(x.c[2])) >= 0);
     for (const l of lignes) {
       const id = (l.c[10] || '').trim(); if (!id) continue;
       const t = await traitantDeFiche(id);   // la fiche doit être proposée dans la liste des gros traitants de la fiche coopérative
-      if (t.options.some((o) => N(o) === N(l.c[2]))) return l;
+      if (t.options.some((o) => K(o) === K(l.c[2]))) return l;
     }
     return null;
   }
@@ -622,7 +625,7 @@
     if (!plan) { e.erreur = 'Le compte tiers « ' + g.code + ' – ' + g.nom + ' » n\'existe pas encore dans OBC : crée-le d\'abord, puis « Continuer ».'; return 'stop'; }
     const f = await ouvrirFormulaire(2); if (!f) return 'navigation';
     setEntite(q('#txtid_entiteAdd'));
-    const nomGT = (lignesTable(doc).some((l) => N(l.c[2]) === N(g.nom)) ? g.nom + ' GT' : g.nom);   // nom déjà pris par une coopérative : OBC refuse deux fiches de même nom
+    const nomGT = (lignesTable(doc).some((l) => N(l.c[2]) === N(g.nom)) ? (/\s/.test(g.nom.trim()) ? g.nom.trim().replace(/\s+/g, '-') : g.nom + ' GT') : g.nom);   // nom déjà pris par une coopérative : OBC refuse deux fiches de même nom → on met des tirets (INVESTIR-PLUS)
     setInput(q('#txtnom_fournisseurAdd'), nomGT); setInput(q('#txtcode_fournisseurAdd'), g.code);   // la colonne « Code » de la liste = le sigle (ex. AWAH001)
     setSelect(q('#txtmode_reglement_fournisseurAdd'), '2'); setSelect(q('#txtsecteur_fournisseurAdd'), '1');
     setInput(q('#txtville_fournisseurAdd'), 'ABIDJAN'); setInput(q('#txtadresse_geographique_fournisseurAdd'), 'ABIDJAN');
