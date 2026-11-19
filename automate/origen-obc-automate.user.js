@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.42
+// @version      0.4.43
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -530,6 +530,9 @@
     if (usineDuLotCode(lot) === USINE_A_CHOIX) return responsableSuv(lot) === 'SUCDEN' ? GROS_TRAITANTS.find((x) => x.cle === 'SUCDEN') : null;
     if (c.coop_propre) return null;
     for (const cand of (c.gros_traitants || [])) { const n = N(cand); const g = GROS_TRAITANTS.find((x) => n.includes(x.cle)); if (g) return g; }
+    // Traitant d'affiliation créé dans ORIGEN (Fournisseurs › Nouveau traitant), sans usine propre : créé dans OBC s'il manque. Code = 4 premières lettres + 001.
+    const aff = String(c.traitant_a_creer || '').replace(/\s+/g, ' ').trim();
+    if (aff && aff.length >= 3) { const lettres = aff.toUpperCase().replace(/[^A-Z0-9]/g, ''); return { cle: N(aff), code: (lettres.slice(0, 4) + 'XXXX').slice(0, 4) + '001', nom: aff.toUpperCase() }; }
     return null;
   }
   async function etapeGrosTraitantTiers(e) {
