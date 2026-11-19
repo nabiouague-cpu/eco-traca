@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.43
+// @version      0.4.44
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.43';
+  const VERSION = '0.4.44';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -464,10 +464,44 @@
     const parse = (doc) => lignesTable(doc).map((l) => ({ nom: l.c[2], code: l.c[3], poste: l.c[9] || '', id: (l.c[10] || '').trim() })).filter((r) => r.id);
     const mot = N(lot.cooperative.sigle).split(' ').find((m) => m.length >= 3) || N(lot.cooperative.sigle).split(' ')[0] || '';
     let rows = parse(await getHtml('/Fournisseur/Index?isProjetProv=0&filterEntite=' + ENTITE + '&filtrePosteComptable=&filter=' + encodeURIComponent(mot) + '&pageSize=100'));
+    const estCoop = (x) => (ccc && x.poste.toUpperCase().includes(ccc)) || N(x.code) === N(lot.cooperative.sigle) || N(x.nom) === N(lot.cooperative.nom_complet) || (N(x.code).startsWith(N(lot.cooperative.sigle) + ' ') && ccc && x.poste.toUpperCase().includes(ccc));
     let r = rows.find((x) => ccc && x.poste.toUpperCase().includes(ccc)) || rows.find((x) => N(x.code) === N(lot.cooperative.sigle) || N(x.nom) === N(lot.cooperative.nom_complet));
     if (!r && ccc) { rows = parse(await getHtml('/Fournisseur/Index?isProjetProv=0&filterEntite=' + ENTITE + '&filtrePosteComptable=&filter=' + encodeURIComponent(ccc) + '&pageSize=100')); r = rows.find((x) => x.poste.toUpperCase().includes(ccc)); }
     if (!r && ccc) { rows = parse(await getHtml('/Fournisseur/Index?isProjetProv=0&filterEntite=' + ENTITE + '&filtrePosteComptable=&filter=&pageSize=5000')); r = rows.find((x) => x.poste.toUpperCase().includes(ccc)); }
-    return r || null;
+    if (!r) return null;
+    // Une fiche par gros traitant : le gros traitant d'OBC est rattaché à la FICHE fournisseur (un seul par fiche). Une coopérative qui décharge chez deux traitants (JATROPHAR : Awahus et Sitapa)
+    // a donc une fiche par traitant. Si le lot a un traitant reconnu par OBC et que la fiche trouvée est rattachée à un AUTRE traitant, on cherche la fiche du bon traitant ; à défaut, on en crée une (code « SIGLE TRAITANT »).
+    // Fiche sans traitant, ou traitant du lot inconnu d'OBC : comportement d'avant (on garde la fiche trouvée).
+    const voulu = traitantVoulu(lot); lot._fiche_suffixe = '';
+    if (!voulu) return r;
+    const fiches = rows.filter(estCoop); if (!fiches.some((x) => x.id === r.id)) fiches.unshift(r);
+    let valide = false;
+    for (const x of fiches) {
+      const t = await traitantDeFiche(x.id); x.traitant = t.choisi;
+      const opt = t.options.find((o) => N(o) === N(voulu)) || t.options.find((o) => { const on = N(o); return on.length >= 3 && (N(voulu).includes(on) || on.includes(N(voulu))); });
+      if (opt) valide = true; x.voulu_opt = opt || '';
+      if (opt && N(t.choisi) === N(opt)) return x;
+    }
+    if (!valide) return r;
+    if (fiches.every((x) => !x.traitant)) return r;
+    lot._fiche_suffixe = String(voulu).replace(/\s+/g, ' ').trim().toUpperCase();
+    return null;
+  }
+  // Gros traitant visé pour ce lot (nom lisible), '' si coopérative en propre ou sans traitant.
+  function traitantVoulu(lot) {
+    if (coopEnPropre(lot)) return '';
+    const gt = grosTraitantCible(lot); if (gt) return gt.nom;
+    for (const cand of (lot.cooperative.gros_traitants || [])) { const s = String(cand || '').trim(); if (N(s).length >= 3 && !/^COOPS?\b/i.test(N(s))) return s; }
+    return '';
+  }
+  // Gros traitant rattaché à une fiche fournisseur d'OBC + liste des traitants proposés (lus dans la fiche d'édition, sans rien modifier).
+  const _cacheFiches = {};
+  async function traitantDeFiche(id) {
+    if (_cacheFiches[id]) return _cacheFiches[id];
+    let res = { choisi: '', options: [] };
+    try { const doc = await getHtml('/Fournisseur/Edit?id=' + encodeURIComponent(id)); const s = doc.querySelector('#txtid_fournisseur_agro_gros_traitantAdd') || doc.querySelector('[name="x_fournisseur.id_fournisseur_agro_gros_traitant"]');
+      if (s) { const opts = [...s.options].filter((o) => o.value !== ''); const sel = opts.find((o) => o.selected && o.value !== ''); res = { choisi: sel ? sel.text.trim() : '', options: opts.map((o) => o.text.trim()) }; } } catch (er) { /* fiche illisible : on garde le comportement d'avant */ }
+    return (_cacheFiches[id] = res);
   }
   async function listerTransporteurs(nom) {
     const doc = await getHtml('/AgroParametrageTransporteur/GetAllAgroTransporteurs?id_entite=&filter=' + encodeURIComponent(nom));
@@ -591,7 +625,8 @@
     const f = await ouvrirFormulaire(4); if (!f) return 'navigation';
     const c = lot.cooperative;
     setEntite(q('#txtid_entiteAdd'));
-    setInput(q('#txtnom_fournisseurAdd'), c.sigle); setInput(q('#txtcode_fournisseurAdd'), c.sigle); // modèle CAEZ COOP-CA : dénomination = code = sigle
+    const nomFiche = c.sigle + (lot._fiche_suffixe ? ' ' + lot._fiche_suffixe : ''); // 2e fiche pour un autre gros traitant : « SIGLE TRAITANT »
+    setInput(q('#txtnom_fournisseurAdd'), nomFiche); setInput(q('#txtcode_fournisseurAdd'), nomFiche); // modèle CAEZ COOP-CA : dénomination = code = sigle
     setSelect(q('#txtmode_reglement_fournisseurAdd'), '2'); setSelect(q('#txtsecteur_fournisseurAdd'), '1');
     // Coopérative créée depuis SAIGIC (fiche vide dans ORIGEN) : ville = localité du producteur, à défaut le département d'origine du connaissement ; adresse géographique = ville.
     const villeC = String(c.ville || (lot.producteur && lot.producteur.localite) || (lot.connaissement && lot.connaissement.origine) || 'ABIDJAN').toUpperCase();
@@ -623,7 +658,7 @@
     { const m = await reappliquer(f); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
     try { if (typeof window.validateCreateFournisseur === 'function') window.validateCreateFournisseur(); } catch (er) { /* ignoré */ }
     { const bs = q('#btnCreateFournisseur'); if (bs && bs.disabled) { const v = champsFournisseurVides(); throw new Error('« Enregistrer » reste grisé dans OBC. ' + (v.length ? 'Champs vides : ' + v.join(', ') + '. Remplis-les à la main, puis « Continuer ».' : 'Aucun champ obligatoire vide détecté : retape une lettre dans « Dénomination sociale » pour relancer le contrôle d\'OBC, puis « Continuer ».')); } }
-    e.note = 'Coopérative ' + c.sigle + ' (' + c.ccc + ').' + traitantNote; return 'rempli';
+    e.note = 'Coopérative ' + nomFiche + ' (' + c.ccc + ').' + (lot._fiche_suffixe ? ' Fiche supplémentaire : la coopérative a déjà une fiche rattachée à un autre gros traitant, celle-ci est rattachée à ' + lot._fiche_suffixe + '.' : '') + traitantNote; return 'rempli';
   }
   async function etapeTransporteur(e) {
     const lot = e.lot;
