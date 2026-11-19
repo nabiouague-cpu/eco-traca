@@ -4745,7 +4745,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-19-538';
+const APP_VERSION = '2026-11-19-539';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -29363,7 +29363,16 @@ function bordereauReceptionData(a){
   const port = (pdVal(a,'Destination') || (site && site.ville) || '').toUpperCase();
   return {
     campagne: camp ? 'CAMP '+libelleCampagneCourt(camp.nom) : '', port, usine: pdVal(a,'Magasin') || ({UA10:'SUV-ABIDJAN'})[String(a.usine_dechargement||'').toUpperCase()] || (site ? site.nom : (a.usine_dechargement||'')),
-    fournisseurPrinc: (()=>{ const t = String((site && site.traitant) || '').replace(/^\s*(M\.?|MR\.?|MME\.?)\s+/i,'').trim().toUpperCase(); return t && !/ECORIGINE/.test(t) ? t : ''; })(),
+    // Fournisseur principal = le gros traitant, comme dans le lot envoyé à Noah : la coopérative affiliée à un traitant (ex. INVESTIR PLUS) prime à SUV ; sinon le traitant de l'usine ; sinon l'affilié. Le nom écrit est celui d'OBC (mémoire des traitants : INVESTIR-PLUS, TOUTON…).
+    fournisseurPrinc: (()=>{
+      const affil = String(((state.traitantCoops||[]).find(r=>r.cooperative_id===a.cooperative_id)||{}).traitant||'').trim();
+      const siteT = String((site && site.traitant) || '').trim();
+      const cle = (affil && obcEstSuv(a)) ? affil : (siteT ? (/ECORIGINE/i.test(siteT) ? '' : siteT) : affil);
+      if (!cle) return '';
+      const mem = obcTraitantMemoire(cle);
+      if (mem && mem.nom_obc) return String(mem.nom_obc).trim().toUpperCase();
+      return cle.replace(/^\s*(M\.?|MR\.?|MME\.?)\s+/i,'').replace(/^\s*COOPS\s+/i,'').trim().toUpperCase();
+    })(),
     connaissement: a.connaissement||'', dateDechargement: (d2 ? d2.jour : d1 ? d1.jour : dateFr(a.date)), /* date de la pesée à l'usine, comme OBC */ dateSaigic: d1 ? d1.jour+(d1.heure ? ' '+d1.heure : '') : (d2 ? d2.jour : ''),
     dateConnaissement: dateFr(a.date), typeCacao, nature,
     fournisseur: String(coop.nom||a.fournisseur_saigic||'').replace(/\s*\/\s*/g,' '), /* OBC écrit « SOCOWIZ SCOOPS » là où ORIGEN a « SOCOWIZ/SCOOPS » */ agrement: coop.ccc_num||a.code_fourn||'', origine: a.lieu_origine || pdVal(a,'Departement') || ''   /* l'origine du connaissement SAIGIC (BONON), pas le département (BOUAFLE) : c'est sur elle que le TKM est calculé */,
