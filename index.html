@@ -4740,7 +4740,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-19-519';
+const APP_VERSION = '2026-11-19-520';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -29188,44 +29188,56 @@ function bdNorm(s){ return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'')
 function bdLivraisons(){
   return (state.achats||[]).filter(a=>!a.producteur_id && a.connaissement && !a.refoulee && Number(a.poids_net_produit)>0);
 }
-function bdOuvrir(){ state.modal = { type:'bordereauParticulier', payload:{ q:'', sel:'' } }; render(); setTimeout(()=>{ const i = document.getElementById('bd-q'); if (i) i.focus(); }, 50); }
+function bdOuvrir(){ state.modal = { type:'bordereauParticulier', payload:{ q:'', sel:'', coop:'' } }; render(); setTimeout(()=>{ const i = document.getElementById('bd-q'); if (i) i.focus(); }, 50); }
+function bdLignes(ls, pl){
+  return ls.slice().sort((x,y)=>String(y.date||'').localeCompare(String(x.date||'')) || String(y.connaissement).localeCompare(String(x.connaissement),'fr',{numeric:true})).map(a=>{
+    const on = pl.sel===a.id;
+    return '<div onclick="bdChoisir(\''+a.id+'\')" style="display:flex;gap:10px;align-items:center;padding:7px 10px;cursor:pointer;border-bottom:1px solid #eee;font-size:13px;'+(on?'background:#fff3d6;':'')+'">'
+      + '<input type="radio" '+(on?'checked':'')+' style="pointer-events:none">'
+      + '<b style="min-width:120px">'+esc(a.connaissement)+'</b><span style="min-width:84px">'+esc(dateFr(a.date))+'</span><span style="flex:1;text-align:right">'+fmtNum(Math.round(Number(a.poids_net_produit)))+' kg</span></div>';
+  }).join('');
+}
+const BD_ENTETE_COOP = 'position:sticky;top:0;background:#eef3ef;padding:6px 10px;font-weight:700;font-size:13px;border-bottom:1px solid #d7ded9';
 function bdListeHtml(){
   const pl = state.modal && state.modal.payload; if (!pl) return '';
-  const q = bdNorm(pl.q).trim();
-  let liste = bdLivraisons();
-  if (q) liste = liste.filter(a=> bdNorm(bdCoopNom(a)).includes(q) || bdNorm(a.connaissement).includes(q));
-  if (!liste.length) return '<div class="hint" style="padding:14px;text-align:center">'+(q ? 'Aucun déchargement pour « '+esc(pl.q)+' ».' : 'Aucun déchargement pesé.')+'</div>';
+  const tous = bdLivraisons(), q = bdNorm(pl.q).trim();
   const groupes = new Map();
-  liste.forEach(a=>{ const k = bdCoopNom(a); if (!groupes.has(k)) groupes.set(k, []); groupes.get(k).push(a); });
-  const noms = Array.from(groupes.keys()).sort((x,y)=>x.localeCompare(y,'fr'));
-  const lim = q ? 400 : 60; let n = 0, coupe = false, h = '';
-  for (const nom of noms){
-    const ls = groupes.get(nom).sort((x,y)=>String(y.date||'').localeCompare(String(x.date||'')) || String(y.connaissement).localeCompare(String(x.connaissement),'fr',{numeric:true}));
-    h += '<div style="position:sticky;top:0;background:#eef3ef;padding:6px 10px;font-weight:700;font-size:13px;border-bottom:1px solid #d7ded9">'+esc(nom)+' <span style="font-weight:400;color:#666">· '+ls.length+' déchargement'+(ls.length>1?'s':'')+'</span></div>';
-    for (const a of ls){
-      if (n>=lim){ coupe = true; break; } n++;
-      const on = pl.sel===a.id;
-      h += '<div onclick="bdChoisir(\''+a.id+'\')" style="display:flex;gap:10px;align-items:center;padding:7px 10px;cursor:pointer;border-bottom:1px solid #eee;font-size:13px;'+(on?'background:#fff3d6;':'')+'">'
-        + '<input type="radio" '+(on?'checked':'')+' style="pointer-events:none">'
-        + '<b style="min-width:120px">'+esc(a.connaissement)+'</b><span style="min-width:84px">'+esc(dateFr(a.date))+'</span><span style="flex:1;text-align:right">'+fmtNum(Math.round(Number(a.poids_net_produit)))+' kg</span></div>';
-    }
-    if (coupe) break;
+  tous.forEach(a=>{ const k = bdCoopNom(a); if (!groupes.has(k)) groupes.set(k, []); groupes.get(k).push(a); });
+  // 1) une coopérative choisie : ses déchargements
+  if (pl.coop && groupes.has(pl.coop)){
+    const ls = groupes.get(pl.coop);
+    return '<div style="'+BD_ENTETE_COOP+';display:flex;gap:10px;align-items:center"><button type="button" class="btn btn-compact" onclick="bdRetour()">← Coopératives</button><span>'+esc(pl.coop)+' <span style="font-weight:400;color:#666">· '+ls.length+' déchargement'+(ls.length>1?'s':'')+'</span></span></div>'+bdLignes(ls, pl);
   }
-  if (coupe) h += '<div class="hint" style="padding:10px;text-align:center">Liste limitée : tape le nom de la coopérative pour afficher le reste.</div>';
-  return h;
+  // 2) une recherche : tous les déchargements des coopératives (ou connaissements) qui correspondent
+  if (q){
+    const noms = Array.from(groupes.keys()).filter(k=>bdNorm(k).includes(q)).sort((x,y)=>x.localeCompare(y,'fr'));
+    let h = noms.map(k=>{ const ls = groupes.get(k); return '<div style="'+BD_ENTETE_COOP+'">'+esc(k)+' <span style="font-weight:400;color:#666">· '+ls.length+' déchargement'+(ls.length>1?'s':'')+'</span></div>'+bdLignes(ls, pl); }).join('');
+    if (!noms.length){
+      const parCn = tous.filter(a=>bdNorm(a.connaissement).includes(q));
+      if (parCn.length) h = parCn.slice(0,100).map(a=>'<div style="'+BD_ENTETE_COOP+'">'+esc(bdCoopNom(a))+'</div>'+bdLignes([a], pl)).join('');
+    }
+    return h || '<div class="hint" style="padding:14px;text-align:center">Aucune coopérative ni connaissement pour « '+esc(pl.q)+' ».</div>';
+  }
+  // 3) départ : la liste des coopératives
+  const noms = Array.from(groupes.keys()).sort((x,y)=>x.localeCompare(y,'fr'));
+  if (!noms.length) return '<div class="hint" style="padding:14px;text-align:center">Aucun déchargement pesé.</div>';
+  return noms.map(k=>{ const ls = groupes.get(k), kg = ls.reduce((t,a)=>t+(Number(a.poids_net_produit)||0),0);
+    return '<div onclick="bdChoisirCoop(decodeURIComponent(\''+encodeURIComponent(k).replace(/'/g,'%27')+'\'))" style="display:flex;gap:10px;align-items:center;padding:9px 10px;cursor:pointer;border-bottom:1px solid #eee;font-size:13px"><b style="flex:1">'+esc(k)+'</b><span style="color:#666">'+ls.length+' déchargement'+(ls.length>1?'s':'')+' · '+fmtNum(Math.round(kg/1000))+' t</span><span>›</span></div>'; }).join('');
 }
+function bdChoisirCoop(nom){ const pl = state.modal && state.modal.payload; if (!pl) return; pl.coop = nom; pl.q = ''; pl.sel = ''; const i = document.getElementById('bd-q'); if (i) i.value = ''; bdMajListe(); }
+function bdRetour(){ const pl = state.modal && state.modal.payload; if (!pl) return; pl.coop = ''; pl.sel = ''; bdMajListe(); }
 function bdMajListe(){
   const el = document.getElementById('bd-liste'); if (el) el.innerHTML = bdListeHtml();
   const pl = state.modal && state.modal.payload, btn = document.getElementById('bd-ok');
   if (btn && pl) btn.disabled = !pl.sel;
 }
-function bdRecherche(v){ const pl = state.modal && state.modal.payload; if (!pl) return; pl.q = v; bdMajListe(); }
+function bdRecherche(v){ const pl = state.modal && state.modal.payload; if (!pl) return; pl.q = v; if (v) pl.coop = ''; bdMajListe(); }
 function bdChoisir(id){ const pl = state.modal && state.modal.payload; if (!pl) return; pl.sel = id; bdMajListe(); }
 function renderBordereauParticulierModal(m){
   return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>🖨 Imprimer un bordereau</h3><div id="modal-fields">'
-    + '<input id="bd-q" class="input" type="search" placeholder="Rechercher une coopérative (ou un n° de connaissement)…" value="'+esc(m.payload.q)+'" oninput="bdRecherche(this.value)" style="width:100%;margin-bottom:8px" autocomplete="off">'
+    + '<input id="bd-q" class="input" type="search" placeholder="Rechercher une coopérative…" value="'+esc(m.payload.q)+'" oninput="bdRecherche(this.value)" style="width:100%;margin-bottom:8px" autocomplete="off">'
     + '<div id="bd-liste" style="max-height:52vh;overflow:auto;border:1px solid #d7ded9;border-radius:8px">'+bdListeHtml()+'</div>'
-    + '<div class="hint" style="margin-top:8px">Choisis le déchargement (n° de connaissement), puis valide : le bordereau se télécharge en PDF.</div>'
+    + '<div class="hint" style="margin-top:8px">Clique sur une coopérative (ou tape son nom) pour voir ses déchargements, choisis le n° de connaissement, puis valide : le bordereau se télécharge en PDF.</div>'
     + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button id="bd-ok" class="btn btn-primary" onclick="bdTelecharger()" '+(m.payload.sel?'':'disabled')+'>⬇ Valider et télécharger</button></div></div></div>';
 }
 // Le bordereau (mise en page OBC, positions en points) est dessiné hors écran, photographié, puis mis dans un PDF Lettre.
