@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.44
+// @version      0.4.45
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.44';
+  const VERSION = '0.4.45';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -558,11 +558,13 @@
     if (r !== 'SUCDEN' && r !== 'ECORIGINE') throw new Error('Cacao déchargé à SUV : responsable non choisi dans ORIGEN. Dans ORIGEN › Saisie OBC, choisis ECORIGINE ou SUCDEN sur la ligne du camion, puis renvoie-le à l\'automate.');
     return r;
   }
-  function coopEnPropre(lot) { return usineDuLotCode(lot) === USINE_A_CHOIX ? responsableSuv(lot) === 'ECORIGINE' : !!lot.cooperative.coop_propre; }
+  // Affiliation prioritaire (ORIGEN) : coopérative affiliée à un traitant (ex. INVESTIR PLUS) déchargée à SUV. Le choix ECORIGINE/SUCDEN de SUV est une autre question ; le traitant d'affiliation doit exister dans OBC avant la coopérative.
+  const affiliePrioritaire = (lot) => !!(lot.cooperative && lot.cooperative.affilie_prioritaire && String(lot.cooperative.traitant_a_creer || '').trim());
+  function coopEnPropre(lot) { if (affiliePrioritaire(lot)) return false; return usineDuLotCode(lot) === USINE_A_CHOIX ? responsableSuv(lot) === 'ECORIGINE' : !!lot.cooperative.coop_propre; }
   function grosTraitantCible(lot) {
     const c = lot.cooperative;
-    if (usineDuLotCode(lot) === USINE_A_CHOIX) return responsableSuv(lot) === 'SUCDEN' ? GROS_TRAITANTS.find((x) => x.cle === 'SUCDEN') : null;
-    if (c.coop_propre) return null;
+    if (usineDuLotCode(lot) === USINE_A_CHOIX && !affiliePrioritaire(lot)) return responsableSuv(lot) === 'SUCDEN' ? GROS_TRAITANTS.find((x) => x.cle === 'SUCDEN') : null;
+    if (c.coop_propre && !affiliePrioritaire(lot)) return null;
     for (const cand of (c.gros_traitants || [])) { const n = N(cand); const g = GROS_TRAITANTS.find((x) => n.includes(x.cle)); if (g) return g; }
     // Traitant d'affiliation créé dans ORIGEN (Fournisseurs › Nouveau traitant), sans usine propre : créé dans OBC s'il manque. Code = 4 premières lettres + 001.
     const aff = String(c.traitant_a_creer || '').replace(/\s+/g, ' ').trim();
