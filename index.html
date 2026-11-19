@@ -4745,7 +4745,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-19-526';
+const APP_VERSION = '2026-11-19-527';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -16230,13 +16230,15 @@ function ocUrgenceCalcul(){
   const camions = new Map(), clients = new Map();
   lots.forEach(l=>{
     const P = (R[l.site_code].parLot||{})[l.id] || { comp:[], manque:0 };
-    let cl = clients.get(l.client); if (!cl){ cl = { nom:l.client, lots:[], agrees:0, cams:new Set(), manque:0 }; clients.set(l.client, cl); }
+    let cl = clients.get(l.client); if (!cl){ cl = { nom:l.client, lots:[], det:[], agrees:0, cams:new Set(), manque:0 }; clients.set(l.client, cl); }
     cl.lots.push(l); if (l.agree_le) cl.agrees++; if (P.manque>0 || !P.comp.length) cl.manque++;
+    const dets = [];
     P.comp.forEach(x=>{
       const key = x.c.a.id || x.c.a.connaissement; let c = camions.get(key);
       if (!c){ c = { key, a:x.c.a, d:x.c.d, net:x.c.net, st:etat(x.c.a), lots:[], clients:new Set() }; camions.set(key, c); }
-      c.lots.push({ l, kg:x.kg }); c.clients.add(l.client); cl.cams.add(key);
+      c.lots.push({ l, kg:x.kg }); c.clients.add(l.client); cl.cams.add(key); dets.push({ c, kg:x.kg });
     });
+    cl.det.push({ l, manque:P.manque, comp:dets });
   });
   const liste = Array.from(clients.values()).map(cl=>{
     const cs = Array.from(cl.cams).map(k=>camions.get(k));
@@ -16253,23 +16255,47 @@ function ocUrgenceCalcul(){
   _urgCache = { cle, res }; return res;
 }
 function ocUrgenceBascule(){ state.urgenceTout = !state.urgenceTout; render(); }
+function ocUrgenceOuvre(nom){ state.urgOuvert = state.urgOuvert || {}; state.urgOuvert[nom] = !state.urgOuvert[nom]; render(); }
+// Détail d'un client : ses lots à tracer rangés par usine de départ (sous-groupes), chaque lot avec ses camions encore à tracer.
+function ocUrgenceDetailHtml(cl){
+  const parSite = new Map();
+  cl.det.slice().sort((a,b)=>rdueNumLot(a.l)-rdueNumLot(b.l)).forEach(d=>{
+    const k = d.l.site_code||'—'; if (!parSite.has(k)) parSite.set(k, { lot:d.l, det:[] }); parSite.get(k).det.push(d);
+  });
+  let h = '';
+  parSite.forEach(g=>{
+    const aTr = g.det.filter(d=>d.comp.some(x=>x.c.st==='atracer'));
+    const cams = new Set(); aTr.forEach(d=>d.comp.forEach(x=>{ if (x.c.st==='atracer') cams.add(x.c.key); }));
+    h += '<div style="margin:10px 0 4px;padding:6px 10px;background:#f6e3df;border-radius:8px;font-weight:700;font-size:13px;color:#7a2a20">'+esc(rdueUsineLib(g.lot))+' <span style="font-weight:500">— '+aTr.length+' lot'+(aTr.length>1?'s':'')+' à tracer sur '+g.det.length+' · '+cams.size+' camion'+(cams.size>1?'s':'')+'</span></div>';
+    if (!aTr.length){ h += '<div class="hint" style="margin:0 0 6px 10px">Rien à tracer ici : tous les camions de ces lots sont tracés, simulés ou hors de notre traçabilité.</div>'; return; }
+    h += '<div class="achats-defile"><table class="tbl-fiches tbl-dense"><thead><tr><th>Lot</th><th>Agréage</th><th>Camions à tracer</th></tr></thead><tbody>'
+      + aTr.map(d=>'<tr><td><b>'+esc(d.l.numero)+'</b>'+(d.manque>0 ? ' <span class="badge warn" title="Les camions déchargés ne couvrent pas tout le lot">incomplet</span>' : '')+'</td>'
+        + '<td>'+(d.l.agree_le ? '<span class="badge ok">agréé le '+esc(dateFr(d.l.agree_le))+'</span>' : '<span class="hint">pas encore agréé</span>')+'</td>'
+        + '<td>'+d.comp.filter(x=>x.c.st==='atracer').map(x=>{ const a = x.c.a, co = coopById(a.cooperative_id);
+            return '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:2px 0"><b>'+esc(a.connaissement)+'</b><span>'+esc(co ? co.nom : (a.cooperative_nom||'—'))+'</span><span class="hint">'+(x.c.d ? esc(x.c.d.aff+'/'+x.c.d.iso.slice(0,4)) : '—')+' · '+fmtNum(x.c.net)+' kg</span>'
+              + '<button class="btn btn-primary btn-compact" onclick="ocDossierOuvrir(\''+escJs(a.cooperative_id)+'\')">Tracer</button></div>'; }).join('')+'</td></tr>').join('')
+      + '</tbody></table></div>';
+  });
+  return h;
+}
 function ocUrgenceHtml(){
   const U = ocUrgenceCalcul(); if (!U.file.length) return '';
-  const tout = !!state.urgenceTout, vue = tout ? U.file : U.file.slice(0,10);
-  const lotsTxt = c=>{ const ns = c.lots.map(x=>String(x.l.numero)).sort((a,b)=>a-b); return ns.length>4 ? ns.slice(0,3).join(', ')+' … '+ns[ns.length-1] : ns.join(', '); };
-  const puces = U.clients.map(cl=>'<span style="display:inline-block;background:#fff;border:1px solid #e0a39b;border-radius:999px;padding:3px 11px;margin:2px 6px 2px 0;font-size:12.5px"><b>'+esc(cl.nom)+'</b> : '+cl.nATracer+' camion'+(cl.nATracer>1?'s':'')+' à tracer sur '+cl.nCam+' ('+fmtNum(Math.round(cl.kgATracer/1000))+' t)'+(cl.agrees ? ' · '+cl.agrees+' lot'+(cl.agrees>1?'s':'')+' agréé'+(cl.agrees>1?'s':'') : '')+'</span>').join('');
+  state.urgOuvert = state.urgOuvert || (function(){ const o = {}; o[U.clients[0].nom] = true; return o; })();
+  const prem = U.file[0], coP = coopById(prem.c.a.cooperative_id);
+  const lignes = U.clients.map((cl,i)=>{
+    const sites = Array.from(new Set(cl.det.map(d=>d.l.site_code).filter(Boolean))).map(c=>{ const s = lotsSiteParCode(c); return s ? s.nom : c; }).join(', ');
+    const lotsATracer = cl.det.filter(d=>d.comp.some(x=>x.c.st==='atracer')).length, ouv = !!state.urgOuvert[cl.nom];
+    return '<tr style="background:'+(ouv ? '#fbe4e0' : 'transparent')+'"><td class="num"><b>'+(i+1)+'</b></td><td><b>'+esc(cl.nom)+'</b>'+(cl.agrees ? ' <span class="badge ok">'+cl.agrees+' lot'+(cl.agrees>1?'s':'')+' agréé'+(cl.agrees>1?'s':'')+'</span>' : '')+'</td><td class="hint">'+esc(sites)+'</td>'
+      + '<td class="num">'+lotsATracer+' / '+cl.lots.length+'</td><td class="num"><span class="badge warn" style="font-weight:700">'+cl.nATracer+' / '+cl.nCam+'</span></td><td class="num">'+fmtNum(Math.round(cl.kgATracer/1000))+' t</td>'
+      + '<td><button class="btn-ghost btn-compact" onclick="ocUrgenceOuvre(\''+escJs(cl.nom)+'\')">'+(ouv ? 'Masquer' : 'Voir les lots')+'</button></td></tr>'
+      + (ouv ? '<tr><td></td><td colspan="6" style="padding-bottom:12px">'+ocUrgenceDetailHtml(cl)+'</td></tr>' : '');
+  }).join('');
   return '<div class="panel" style="border:2px solid #c0392b;background:#fdf1ef">'
-    + '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><span style="font-size:20px">🚨</span><div style="font-weight:800;font-size:16px;color:#a52a1d">URGENT — commence la traçabilité par ces camions</div></div>'
-    + '<div style="margin:4px 0 8px;font-size:13px;color:#5b2a24;max-width:900px">Ce sont les camions qui composent les lots déjà attribués à un client et qui ne sont pas encore tracés. En les traçant dans cet ordre, le dossier de chaque client avance le plus vite.</div>'
-    + '<div style="margin:0 0 8px">'+puces+'</div>'
-    + '<div class="achats-defile"><table class="tbl-fiches tbl-dense"><thead><tr><th class="num">N°</th><th>Client</th><th>Connaissement</th><th>Coopérative</th><th>Pesée</th><th class="num">Net (kg)</th><th>Lots</th><th></th></tr></thead><tbody>'
-    + vue.map(r=>{ const a = r.c.a, co = coopById(a.cooperative_id);
-      return '<tr><td class="num"><b>'+r.rang+'</b></td><td><b>'+esc(r.client)+'</b>'+(r.c.clients.size>1 ? ' <span class="hint">+ '+esc(Array.from(r.c.clients).filter(x=>x!==r.client).join(', '))+'</span>' : '')+'</td>'
-        + '<td><b>'+esc(a.connaissement)+'</b></td><td>'+esc(co ? co.nom : (a.cooperative_nom||'—'))+'</td><td>'+(r.c.d ? esc(r.c.d.aff+'/'+r.c.d.iso.slice(0,4)) : '—')+'</td>'
-        + '<td class="num">'+fmtNum(r.c.net)+'</td><td class="hint">'+esc(lotsTxt(r.c))+'</td>'
-        + '<td><button class="btn btn-primary btn-compact" onclick="ocDossierOuvrir(\''+escJs(a.cooperative_id)+'\')">Tracer</button></td></tr>'; }).join('')
-    + '</tbody></table></div>'
-    + (U.file.length>10 ? '<div style="margin-top:8px"><button class="btn-ghost btn-compact" onclick="ocUrgenceBascule()">'+(tout ? 'Réduire la liste' : 'Voir les '+U.file.length+' camions')+'</button></div>' : '')
+    + '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><span style="font-size:20px">🚨</span><div style="font-weight:800;font-size:16px;color:#a52a1d">URGENT — lots présentés aux clients dont la traçabilité reste à faire</div></div>'
+    + '<div style="margin:4px 0 8px;font-size:13px;color:#5b2a24;max-width:900px">Clients classés par priorité : ceux qui ont des lots agréés d\'abord, puis le dossier le plus proche d\'être complet. Ouvre un client pour voir ses lots à tracer, rangés par usine, avec les camions à tracer.</div>'
+    + '<div style="margin:0 0 10px;padding:8px 12px;background:#fff;border:1px solid #e0a39b;border-radius:8px;font-size:13.5px"><b>Commence par :</b> '+esc(prem.c.a.connaissement)+' — '+esc(coP ? coP.nom : '—')+' ('+esc(prem.client)+', lot'+(prem.c.lots.length>1?'s':'')+' '+esc(prem.c.lots.map(x=>x.l.numero).sort((a,b)=>a-b).join(', '))+') '
+    + '<button class="btn btn-primary btn-compact" style="margin-left:8px" onclick="ocDossierOuvrir(\''+escJs(prem.c.a.cooperative_id)+'\')">Tracer</button></div>'
+    + '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th class="num">N°</th><th>Client</th><th>Usine(s)</th><th class="num">Lots à tracer</th><th class="num">Camions à tracer</th><th class="num">Volume</th><th></th></tr></thead><tbody>'+lignes+'</tbody></table></div>'
     + '</div>';
 }
 function ocDossiersFiltre(f){ state.dossiersFiltre = f; render(); }
