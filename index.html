@@ -4745,7 +4745,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-19-534';
+const APP_VERSION = '2026-11-19-535';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -24309,6 +24309,7 @@ function defoModalsHtml(){
   if (m && m.type==='defoEnvoi') return defoModalEnvoiHtml();
   if (m && m.type==='defoRapports') return defoModalRapportsHtml();
   if (m && m.type==='obcSuv') return obcModalSuvHtml();
+  if (m && m.type==='obcTrait') return obcModalTraitHtml();
   if (m && m.type==='defoCompare') return defoModalCompareHtml();
   if (!m || m.type!=='defoPrep') return '';
   const opts = [...state.cooperatives].sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr')).map(c=>'<option value="'+esc(c.nom)+'"></option>').join('');
@@ -29102,6 +29103,66 @@ function obcFileCandidats(){
 // Envoi à l'automate : s'il y a des camions déchargés à SUV dans le lot, un formulaire demande d'abord, camion par camion, ECORIGINE ou SUCDEN.
 async function obcFileEnvoyer(){
   await obcFileCharger();
+  const max0 = Math.floor(Number(state.obcFileMax)) || 0, cand0 = obcFileCandidats(), pris0 = max0 ? cand0.slice(0, max0) : cand0;
+  const aRattacher = obcTraitantItems(pris0);
+  if (aRattacher.length){ openModal('obcTrait', { items: aRattacher, choix:{}, nouveau:{}, suite:{ envoyer:true } }); return; }
+  return obcFileEnvoyerSuv();
+}
+// Règle de rattachement : une coopérative qui livre dans une usine SANS traitant (et qui n'est pas une usine Ecorigine en propre) n'a pas de gros traitant à saisir dans OBC tant qu'on ne l'a pas dit à ORIGEN.
+// Usines en propre (SUV/UA10, traitant « Coops Ecorigine ») : jamais de question, ce sera toujours ECORIGINE ou SUCDEN. Réponse « plus tard » mémorisée pour la session.
+function obcTraitantAAffecter(a){
+  if (!a || a.producteur_id || !a.connaissement || a.refoulee || !a.cooperative_id) return false;
+  const site = sachSiteDe(a.usine_dechargement); if (!site) return false;
+  if (obcEstSuv(a) || /ECORIGINE/i.test(String(site.traitant||''))) return false;
+  if (String(site.traitant||'').trim()) return false;
+  if ((state.traitantCoops||[]).some(r=>r.cooperative_id===a.cooperative_id)) return false;
+  return !(state.obcTraitPlusTard && state.obcTraitPlusTard[a.cooperative_id]);
+}
+function obcTraitantItems(liste){
+  const m = new Map();
+  (liste||[]).filter(obcTraitantAAffecter).forEach(a=>{
+    const site = sachSiteDe(a.usine_dechargement) || {}, c = coopById(a.cooperative_id) || {};
+    if (!m.has(a.cooperative_id)) m.set(a.cooperative_id, { coopId:a.cooperative_id, coop:c.nom||a.fournisseur_saigic||a.cooperative_id, usines:[], n:0 });
+    const it = m.get(a.cooperative_id), u = String(site.nom||site.code||a.usine_dechargement||'').trim(); if (u && it.usines.indexOf(u)<0) it.usines.push(u); it.n++;
+  });
+  return Array.from(m.values()).sort((x,y)=>String(x.coop).localeCompare(String(y.coop),'fr'));
+}
+function obcTraitantsExistants(){ return ocPartenairesGroupes().map(g=>g.cle).filter(c=>c && !/^coops?\s/i.test(c)); }
+function obcModalTraitHtml(){
+  const m = state.modal.payload, ex = obcTraitantsExistants();
+  const lignes = m.items.map(it=>{
+    const v = m.choix[it.coopId] || '';
+    const opts = '<option value=""'+(v?'':' selected')+'>— choisir —</option>' + ex.map(t=>'<option value="'+esc(t)+'"'+(v===t?' selected':'')+'>'+esc(t)+'</option>').join('') + '<option value="__plus_tard"'+(v==='__plus_tard'?' selected':'')+'>Je décide plus tard</option>';
+    return '<div id="trait_'+esc(it.coopId)+'" style="padding:8px;border-bottom:1px solid var(--border);border-left:3px solid '+(v||m.nouveau[it.coopId] ? 'transparent' : '#B3261E')+'">'
+      + '<div><b>'+esc(it.coop)+'</b> <span class="hint" style="margin:0">· '+it.n+' camion'+(it.n>1?'s':'')+' à '+esc(it.usines.join(', '))+'</span></div>'
+      + '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:4px"><select onchange="obcTraitChoisir(\''+escJs(it.coopId)+'\', this.value)" style="font-size:12px;padding:2px 4px">'+opts+'</select>'
+      + '<span class="hint" style="margin:0">ou nouveau traitant :</span><input type="text" value="'+esc(m.nouveau[it.coopId]||'')+'" placeholder="ex. INVESTIR PLUS" oninput="obcTraitNouveau(\''+escJs(it.coopId)+'\', this.value)" style="font-size:12px;padding:2px 6px;min-width:150px"></div></div>';
+  }).join('');
+  return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:680px;max-height:92vh;overflow:auto"><h3>Usine sans traitant : rattacher la coopérative ?</h3>'
+    + '<div class="hint" style="margin:0 0 8px">Ces coopératives ont livré dans une usine qui n\'a aucun traitant. À quel traitant faut-il les rattacher ? C\'est mémorisé (Fournisseurs › Nouveau traitant) : la question ne sera plus posée pour elles. Les usines Ecorigine en propre (SUV) ne sont jamais concernées : ce sera toujours ECORIGINE ou SUCDEN.</div>'
+    + '<div id="modal-fields">'+lignes+'<div id="defo-erreur" style="display:none;color:#c0392b;font-size:13px;margin:6px 0"></div></div>'
+    + '<div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="obcTraitValider()">Enregistrer et continuer</button></div></div></div>';
+}
+function obcTraitChoisir(id, v){ const m = state.modal.payload; m.choix[id] = v; const r = document.getElementById('trait_'+id); if (r) r.style.borderLeftColor = (v || m.nouveau[id]) ? 'transparent' : '#B3261E'; }
+function obcTraitNouveau(id, v){ const m = state.modal.payload; m.nouveau[id] = v; const r = document.getElementById('trait_'+id); if (r) r.style.borderLeftColor = (v.trim() || m.choix[id]) ? 'transparent' : '#B3261E'; }
+async function obcTraitValider(){
+  const m = state.modal.payload, err = document.getElementById('defo-erreur');
+  const nomDe = it=>String(m.nouveau[it.coopId]||'').replace(/\s+/g,' ').trim() || (m.choix[it.coopId]&&m.choix[it.coopId]!=='__plus_tard' ? m.choix[it.coopId] : '');
+  const sans = m.items.filter(it=>!nomDe(it) && m.choix[it.coopId]!=='__plus_tard');
+  if (sans.length){ if (err){ err.style.display=''; err.textContent = sans.length+' coopérative'+(sans.length>1?'s':'')+' sans réponse (ligne rouge) : choisis un traitant, tape-en un nouveau, ou « Je décide plus tard ».'; } m.items.forEach(it=>{ const r = document.getElementById('trait_'+it.coopId); if (r) r.style.borderLeftColor = (nomDe(it)||m.choix[it.coopId]==='__plus_tard') ? 'transparent' : '#B3261E'; }); return; }
+  const lignes = [];
+  state.obcTraitPlusTard = state.obcTraitPlusTard || {};
+  m.items.forEach(it=>{ const nom = nomDe(it); if (nom) lignes.push({ traitant:nom, cooperative_id:it.coopId }); else state.obcTraitPlusTard[it.coopId] = true; });
+  if (lignes.length){
+    const { error } = await supabaseClient.from('traitant_cooperatives').insert(lignes);
+    if (error){ if (err){ err.style.display=''; err.textContent = 'Échec : '+error.message; } return; }
+    state.traitantCoops = (state.traitantCoops||[]).concat(lignes); _dossCache = null;
+  }
+  const suite = m.suite || {}; closeModal();
+  if (suite.envoyer) return obcFileEnvoyerSuv();
+  if (suite.copier) return obcCopierLot(suite.copier);
+}
+async function obcFileEnvoyerSuv(){
   const max = Math.floor(Number(state.obcFileMax)) || 0, cand = obcFileCandidats(), pris = max ? cand.slice(0, max) : cand, suv = pris.filter(obcEstSuv);
   if (suv.length){ const choix = {}; suv.forEach(a=>{ choix[a.id] = /^(ECORIGINE|SUCDEN)$/.test(String(a.obc_responsable_suv||'').toUpperCase()) ? String(a.obc_responsable_suv).toUpperCase() : ''; }); openModal('obcSuv', { ids: suv.map(a=>a.id), choix }); return; }
   return obcFileEnvoyerSuite();
@@ -29209,6 +29270,8 @@ async function obcCopierLot(achatId){
   const a = (state.achats||[]).find(x=>x.id===achatId);
   if (!a){ showToast('Livraison introuvable.'); return; }
   if (!(Number(a.poids_net_produit)>0)){ showToast('La pesée à l\'usine n\'est pas encore connue : OBC se renseigne après la pesée.'); return; }
+  const aRattacher = obcTraitantItems([a]);
+  if (aRattacher.length){ openModal('obcTrait', { items: aRattacher, choix:{}, nouveau:{}, suite:{ copier: achatId } }); return; }
   const lot = obcLot(a), manques = obcManques(lot);
   try{ await navigator.clipboard.writeText(JSON.stringify(lot, null, 1)); }
   catch(e){ showToast('Copie impossible : autorise l\'accès au presse-papiers.'); return; }
