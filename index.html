@@ -4745,7 +4745,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-19-527';
+const APP_VERSION = '2026-11-19-528';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -16318,13 +16318,42 @@ function renderDossiersTab(){
     + puce(A.length, 'coopérative'+(A.length>1?'s':''), 'var(--ink)') + puce(tot('nNous'), 'connaissements chez nous', 'var(--ink)') + puce(tot('nTrace'), 'tracés', '#1e8449') + puce(tot('nSimule'), 'simulés', '#1F4E8C') + puce(nA, 'à tracer', nA ? '#b36b00' : '#1e8449') + '</div>'
     + '<div style="display:flex;gap:8px;margin:0 0 12px"><button class="'+(filtre==='tous'?'btn btn-primary':'btn')+' btn-compact" onclick="ocDossiersFiltre(\'tous\')">Toutes ('+A.length+')</button><button class="'+(filtre==='atracer'?'btn btn-primary':'btn')+' btn-compact" onclick="ocDossiersFiltre(\'atracer\')">À tracer seulement ('+A.filter(x=>x.nATracer>0).length+')</button></div>';
   if (!vue.length) html += '<div class="hint" style="margin-bottom:14px">'+(filtre==='atracer' ? 'Plus aucun connaissement à tracer chez les partenaires marqués « Nous ». 🎉 🎉' : 'Aucun partenaire n\'est marqué « Nous » avec des connaissements déchargés.')+'</div>';
-  else html += '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th>Coopérative</th><th>N° CCC</th><th>Usine(s)</th><th class="num">Producteurs</th><th class="num">Chez nous</th><th class="num">Tracés</th><th class="num">Simulés</th><th class="num">Reste à tracer</th><th></th></tr></thead><tbody>'
-    + vue.map(x=>'<tr><td><b>'+esc(x.c.nom)+'</b></td><td>'+esc(x.c.ccc_num||'—')+'</td><td class="hint">'+esc(x.usines.join(', ')||'—')+'</td>'
-      + '<td class="num">'+(x.nProd ? fmtNum(x.nProd) : '<span class="badge warn" title="Base producteurs non importée : traçabilité impossible">aucun</span>')+'</td><td class="num">'+x.nNous+'</td><td class="num">'+x.nTrace+'</td><td class="num">'+x.nSimule+'</td>'
+  else {
+    const G = ocDossiersParClient(vue);
+    const ligne = (x, n)=>'<tr><td><b>'+esc(x.c.nom)+'</b></td><td>'+esc(x.c.ccc_num||'—')+'</td><td class="hint">'+esc(x.usines.join(', ')||'—')+'</td>'
+      + '<td class="num">'+(x.nProd ? fmtNum(x.nProd) : '<span class="badge warn" title="Base producteurs non importée : traçabilité impossible">aucun</span>')+'</td>'
+      + '<td class="num">'+(n==null ? '<span class="hint">—</span>' : '<b>'+n+'</b>')+'</td>'
+      + '<td class="num">'+x.nNous+'</td><td class="num">'+x.nTrace+'</td><td class="num">'+x.nSimule+'</td>'
       + '<td class="num">'+(x.nATracer ? '<span class="badge warn" style="font-weight:700;font-size:13px">'+x.nATracer+' à tracer</span>' : '<span class="badge ok">à jour</span>')+'</td>'
-      + '<td><button class="btn btn-primary btn-compact" onclick="ocDossierOuvrir(\''+escJs(x.c.id)+'\')">Ouvrir le dossier</button></td></tr>').join('')
-    + '</tbody></table></div>';
+      + '<td><button class="btn btn-primary btn-compact" onclick="ocDossierOuvrir(\''+escJs(x.c.id)+'\')">Ouvrir le dossier</button></td></tr>';
+    const entete = (titre, detail, fond, couleur)=>'<tr><td colspan="10" style="background:'+fond+';color:'+couleur+';font-weight:700;padding:8px 10px;border-top:2px solid '+couleur+'">'+titre+' <span style="font-weight:500">'+detail+'</span></td></tr>';
+    html += '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th>Coopérative</th><th>N° CCC</th><th>Usine(s)</th><th class="num">Producteurs</th><th class="num" title="Camions de cette coopérative à tracer pour les lots de ce client">Camions pour ce client</th><th class="num">Chez nous</th><th class="num">Tracés</th><th class="num">Simulés</th><th class="num">Reste à tracer</th><th></th></tr></thead><tbody>'
+      + G.groupes.map(g=>entete(esc(g.nom)+(g.agrees ? ' <span class="badge ok">'+g.agrees+' lot'+(g.agrees>1?'s':'')+' agréé'+(g.agrees>1?'s':'')+'</span>' : ''),
+          '— '+g.rows.length+' coopérative'+(g.rows.length>1?'s':'')+' · '+g.n+' camion'+(g.n>1?'s':'')+' à tracer pour ses lots', '#f6e3df', '#7a2a20')
+        + g.rows.map(r=>ligne(r.x, r.n)).join('')).join('')
+      + (G.reste.length ? entete('Pas dans un lot présenté à un client', '— '+G.reste.length+' coopérative'+(G.reste.length>1?'s':'')+' (rien à tracer pour les lots présentés)', '#eef1f4', '#4a5560') + G.reste.map(x=>ligne(x, null)).join('') : '')
+      + '</tbody></table></div>'
+      + '<div class="hint" style="margin:6px 0 14px">Une coopérative dont les camions alimentent les lots de plusieurs clients apparaît sous chacun d\'eux, avec le nombre de camions propre à ce client.</div>';
+  }
   return html + '</div></div>';
+}
+// Regroupe les coopératives du tableau par client : pour chaque client (ordre de priorité de l'alerte), les coopératives dont des camions restent à tracer pour ses lots.
+function ocDossiersParClient(vue){
+  const U = ocUrgenceCalcul(), parId = new Map(vue.map(x=>[x.c.id, x])), vus = new Set(), groupes = [];
+  U.clients.forEach(cl=>{
+    const m = new Map();
+    cl.det.forEach(d=>d.comp.forEach(x=>{
+      if (x.c.st!=='atracer') return;
+      const id = x.c.a.cooperative_id; if (!parId.has(id)) return;
+      if (!m.has(id)) m.set(id, new Set()); m.get(id).add(x.c.key);
+    }));
+    if (!m.size) return;
+    const rows = Array.from(m.entries()).map(([id,s])=>({ x:parId.get(id), n:s.size }))
+      .sort((a,b)=>(b.n-a.n) || String(a.x.c.nom).localeCompare(String(b.x.c.nom),'fr'));
+    rows.forEach(r=>vus.add(r.x.c.id));
+    groupes.push({ nom:cl.nom, agrees:cl.agrees, rows, n:rows.reduce((t,r)=>t+r.n,0) });
+  });
+  return { groupes, reste: vue.filter(x=>!vus.has(x.c.id)) };
 }
 function ocDossierOuvrir(coopId){ const gs = ocSimGroupes(coopId); state.modal = { type:'ocDossier', payload:{ coopId, cle: gs.length ? gs[0].cle : '' } }; render(); }
 function ocDossierSerie(cle){ const pl = state.modal && state.modal.type==='ocDossier' ? state.modal.payload : null; if (!pl) return; pl.cle = cle; render(); }
