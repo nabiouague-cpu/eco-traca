@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.50
+// @version      0.4.51
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.50';
+  const VERSION = '0.4.51';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -563,8 +563,13 @@
   function coopEnPropre(lot) { if (affiliePrioritaire(lot)) return false; return usineDuLotCode(lot) === USINE_A_CHOIX ? responsableSuv(lot) === 'ECORIGINE' : !!lot.cooperative.coop_propre; }
   function grosTraitantCible(lot) {
     const c = lot.cooperative;
-    if (usineDuLotCode(lot) === USINE_A_CHOIX && !affiliePrioritaire(lot)) return responsableSuv(lot) === 'SUCDEN' ? GROS_TRAITANTS.find((x) => x.cle === 'SUCDEN') : null;
+    // Mémoire des gros traitants d'OBC tenue dans ORIGEN (table obc_traitants, envoyée dans le lot : c.traitants_obc). Les 3 traitants écrits en dur (GROS_TRAITANTS) ne servent plus que de secours pour un lot ancien.
+    const mem = Array.isArray(c.traitants_obc) ? c.traitants_obc : [];
+    const deMem = (m) => ({ cle: N(m.nom_obc), code: m.code || ((String(m.nom_obc).toUpperCase().replace(/[^A-Z0-9]/g, '') + 'XXXX').slice(0, 4) + '001'), nom: String(m.nom_obc).toUpperCase(), memoire: m });
+    const parMem = (cand) => { const n = N(cand); if (!n) return null; return mem.find((m) => N(m.cle) === n) || mem.find((m) => N(m.cle).length >= 4 && (n.includes(N(m.cle)) || N(m.cle).includes(n))) || null; };
+    if (usineDuLotCode(lot) === USINE_A_CHOIX && !affiliePrioritaire(lot)) { if (responsableSuv(lot) !== 'SUCDEN') return null; const m = mem.find((x) => N(x.nom_obc) === 'SUCDEN'); return m ? deMem(m) : GROS_TRAITANTS.find((x) => x.cle === 'SUCDEN'); }
     if (c.coop_propre && !affiliePrioritaire(lot)) return null;
+    for (const cand of (c.gros_traitants || [])) { const m = parMem(cand); if (m) return deMem(m); }
     for (const cand of (c.gros_traitants || [])) { const n = N(cand); const g = GROS_TRAITANTS.find((x) => n.includes(x.cle)); if (g) return g; }
     // Traitant d'affiliation créé dans ORIGEN (Fournisseurs › Nouveau traitant), sans usine propre : créé dans OBC s'il manque. Code = 4 premières lettres + 001.
     const aff = String(c.traitant_a_creer || '').replace(/\s+/g, ' ').trim();
@@ -576,6 +581,12 @@
     try { if (coopEnPropre(lot)) return 'coopérative en propre, aucun gros traitant'; const v = traitantVoulu(lot); return v ? 'gros traitant visé : ' + v + ' (déjà en place dans OBC)' : 'aucun gros traitant'; } catch (er) { return 'gros traitant non déterminé'; }
   }
   // Gros traitant déjà présent dans OBC sous son NOM (autre code possible : ex. INVESTIR PLUS = fiche n°80 passée en type GROS TRAITANT, code A03860606). OBC refuse deux fiches de même nom : on la réutilise.
+  // Dit à ORIGEN que ce gros traitant existe dans OBC (nom, code, n° de fiche) : c'est la mémoire des traitants d'ORIGEN. Sans effet si ORIGEN ne le sait pas / réseau coupé.
+  async function rapporterTraitant(g, ligne) {
+    try { if (!g || !g.memoire || !ligne) return; const fid = Number(String((ligne.c && ligne.c[10]) || '').trim()) || null;
+      if (g.memoire.statut === 'existe' && g.memoire.fournisseur_id && fid && Number(g.memoire.fournisseur_id) === fid) return;
+      await api('traitant', { cle: g.memoire.cle, nom_obc: String((ligne.c && ligne.c[2]) || g.nom), code: String((ligne.c && ligne.c[3]) || g.code), fournisseur_id: fid }); } catch (er) { /* ignoré : mémoire d'ORIGEN mise à jour au prochain camion */ }
+  }
   async function grosTraitantParNom(g) {
     const doc = await getHtml('/Fournisseur/Index?isProjetProv=0&filterEntite=' + ENTITE + '&filtrePosteComptable=&filter=' + encodeURIComponent(g.nom.split(' ')[0]) + '&pageSize=100');
     // Nom exact, ou nom + « GT » (INVESTIR PLUS existe déjà dans OBC comme coopérative : son gros traitant s'appelle « INVESTIR PLUS GT », même compte A03860606).
@@ -590,7 +601,7 @@
   async function etapeGrosTraitantTiers(e) {
     const g = grosTraitantCible(e.lot);
     if (!g) { e.fait[1] = 'rien à créer : ' + libelleTraitant(e.lot); journal(e, 'Compte tiers gros traitant : rien à créer (' + libelleTraitant(e.lot) + ')'); return 'suivant'; }
-    { const exn = await grosTraitantParNom(g); if (exn) { e.fait[1] = 'gros traitant déjà dans OBC : ' + exn.c[2] + ' (' + exn.c[3] + ')'; journal(e, 'Gros traitant déjà dans OBC sous son nom : ' + exn.c[2] + ' (' + exn.c[3] + ') : pas de compte tiers à créer'); return 'suivant'; } }
+    { const exn = await grosTraitantParNom(g); if (exn) { await rapporterTraitant(g, exn); e.fait[1] = 'gros traitant déjà dans OBC : ' + exn.c[2] + ' (' + exn.c[3] + ')'; journal(e, 'Gros traitant déjà dans OBC sous son nom : ' + exn.c[2] + ' (' + exn.c[3] + ') : pas de compte tiers à créer'); return 'suivant'; } }
     const ex = await trouverCompteTiers(g.code);
     if (ex) { e.fait[1] = 'déjà dans OBC : ' + (ex.Text || g.code); journal(e, 'Compte tiers gros traitant trouvé : ' + (ex.Text || g.code)); return 'suivant'; }
     if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
@@ -602,7 +613,7 @@
   async function etapeGrosTraitant(e) {
     const g = grosTraitantCible(e.lot);
     if (!g) { e.fait[2] = 'rien à créer : ' + libelleTraitant(e.lot); journal(e, 'Gros traitant : rien à créer (' + libelleTraitant(e.lot) + ')'); return 'suivant'; }
-    { const exn = await grosTraitantParNom(g); if (exn) { e.fait[2] = 'déjà dans OBC : ' + exn.c[2]; journal(e, 'Gros traitant trouvé par son nom : ' + exn.c[2]); return 'suivant'; } }
+    { const exn = await grosTraitantParNom(g); if (exn) { await rapporterTraitant(g, exn); e.fait[2] = 'déjà dans OBC : ' + exn.c[2]; journal(e, 'Gros traitant trouvé par son nom : ' + exn.c[2]); return 'suivant'; } }
     const doc = await getHtml('/Fournisseur/Index?isProjetProv=0&filterEntite=' + ENTITE + '&filtrePosteComptable=&filter=' + encodeURIComponent(g.nom.split(' ')[0]) + '&pageSize=100');
     const ex = lignesTable(doc).find((l) => N(l.c[3]) === N(g.code));   // par le code seulement : le même nom existe déjà sous un autre code (simple fournisseur)
     if (ex) { e.fait[2] = 'déjà dans OBC : ' + ex.c[2]; journal(e, 'Gros traitant trouvé : ' + ex.c[2]); return 'suivant'; }

@@ -4745,7 +4745,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-19-536';
+const APP_VERSION = '2026-11-19-537';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -15327,6 +15327,7 @@ async function loadAll(silencieux){
     { const ts = await supabaseClient.from('tracabilite_simulee').select('*'); state.tracaSim = ts.error ? (state.tracaSim||[]) : (ts.data||[]); }
     { const ce = await supabaseClient.from('connaissements_externes').select('*'); state.connExt = ce.error ? (state.connExt||[]) : (ce.data||[]); }
     { const tc = await supabaseClient.from('traitant_cooperatives').select('*'); state.traitantCoops = tc.error ? (state.traitantCoops||[]) : (tc.data||[]); }
+    { const ot = await supabaseClient.from('obc_traitants').select('*'); state.obcTraitants = ot.error ? (state.obcTraitants||[]) : (ot.data||[]); }
     await connChargerNouveaux(); await connChargerAchats(); connVeille();
     { const { data: pp, error: ppErr } = await supabaseClient.from('parametres_paiement').select('*'); state.parametresPaiement = ppErr ? (state.parametresPaiement||[]) : (pp || []); }
 
@@ -16113,6 +16114,21 @@ function ocATracerSite(a){
   return ocAwahusSite(a) || ocSitapaSite(a);
 }
 // ---- Partenaires (traitants / usiniers) : chacun regroupe ses usines et les coopératives qui y livrent ; on marque qui trace : nous, le partenaire, ou pas encore décidé ----
+// Mémoire des gros traitants d'OBC : pour chaque traitant d'ORIGEN, son nom et son code dans OBC et s'il existe déjà là-bas (table obc_traitants, mise à jour par Noah).
+function obcTraitantMemoire(nom){ const n = qcNormaliserTexte(String(nom||'')); if (!n) return null; return (state.obcTraitants||[]).find(r=>qcNormaliserTexte(r.cle)===n) || null; }
+function obcTraitantCodeDefaut(nom){ const L = String(nom||'').toUpperCase().replace(/[^A-Z0-9]/g,''); return (L.slice(0,4)+'XXXX').slice(0,4)+'001'; }
+async function obcTraitantEnregistrerMemoire(nom){
+  nom = String(nom||'').replace(/\s+/g,' ').trim(); if (!nom || obcTraitantMemoire(nom)) return;
+  const ligne = { cle: nom, nom_obc: nom.toUpperCase(), code: obcTraitantCodeDefaut(nom), statut: 'a_creer', note: 'créé dans ORIGEN : Noah le créera dans OBC au premier camion' };
+  const { error } = await supabaseClient.from('obc_traitants').insert(ligne);
+  if (!error) state.obcTraitants = (state.obcTraitants||[]).concat([ligne]);
+}
+function obcTraitantBadge(nom){
+  const m = obcTraitantMemoire(nom); if (!m) return '<span class="hint" style="margin:0" title="Pas encore connu d\'OBC : Noah le créera au premier camion">OBC : inconnu</span>';
+  return m.statut==='existe'
+    ? '<span style="color:#1f7a4d;font-weight:600" title="Gros traitant « '+esc(m.nom_obc)+' », code '+esc(m.code||'')+'">OBC : créé ('+esc(m.nom_obc)+')</span>'
+    : '<span style="color:#b26a00;font-weight:600" title="Noah le créera dans OBC au premier camion, code '+esc(m.code||'')+'">OBC : à créer ('+esc(m.nom_obc)+')</span>';
+}
 function ocPartenaireCle(site){ return String(site.traitant || site.nom || site.code || '').trim(); }
 function ocPartenairesGroupes(){
   const groupes = new Map();
@@ -16188,6 +16204,7 @@ async function partAffilEnregistrer(){
     if (aRetirer.length){ const { error } = await supabaseClient.from('traitant_cooperatives').delete().eq('traitant', nom).in('cooperative_id', aRetirer); if (error) throw error; }
     if (aAjouter.length){ const { error } = await supabaseClient.from('traitant_cooperatives').insert(aAjouter.map(id=>({ traitant:nom, cooperative_id:id }))); if (error) throw error; }
     state.traitantCoops = (state.traitantCoops||[]).filter(r=>!(r.traitant===nom && aRetirer.indexOf(r.cooperative_id)>=0)).concat(aAjouter.map(id=>({ traitant:nom, cooperative_id:id })));
+    if (pl.nouveau) await obcTraitantEnregistrerMemoire(nom);
     _dossCache = null; closeModal(); showToast('Traitant « '+nom+' » enregistré : '+pl.sel.length+' coopérative'+(pl.sel.length>1?'s':'')+' affiliée'+(pl.sel.length>1?'s':'')+'.', 'success'); render();
   }catch(e){ showToast('Enregistrement impossible : '+(e && e.message ? e.message : e)); }
 }
@@ -16204,7 +16221,7 @@ function ocPartenairesHtml(){
   G.forEach(g=>{
     g.coops.forEach((n,id)=>vus.add(id));
     const nom = g.sites.map(s=>s.nom).join(', ');
-    html += '<tr><td><b>'+esc(g.cle)+'</b></td><td class="hint">'+esc(nom)+'</td><td class="num">'+g.coops.size+'</td>'
+    html += '<tr><td><b>'+esc(g.cle)+'</b>'+(/ecorigine/i.test(g.cle) ? '' : '<div style="font-size:11px">'+obcTraitantBadge(g.cle)+'</div>')+'</td><td class="hint">'+esc(nom)+'</td><td class="num">'+g.coops.size+'</td>'
       + '<td>'+(g.sites.length ? '<div style="display:flex;gap:6px;flex-wrap:wrap">'+btn(g,'nous','Nous')+btn(g,'partenaire','Partenaire')+btn(g,'a_decider','À décider')+'</div>' : '<span class="hint" style="margin:0">Sans usine propre : ça suit l\'usine où ses coopératives livrent</span>')+'</td>'
       + '<td><button class="btn-ghost btn-compact" onclick="ocPartenaireOuvrir(\''+escJs(g.cle)+'\')">'+(ouvert[g.cle] ? 'Masquer' : 'Voir les coopératives')+'</button></td></tr>';
     if (ouvert[g.cle]){
@@ -28984,6 +29001,7 @@ function obcLot(a){
       gros_traitants: [ ((affil && obcEstSuv(a)) ? affil : '') || String((site&&site.traitant)||'').trim() || affil || String((site&&site.nom)||'').trim() ].filter(Boolean),
       traitant_a_creer: (affil && obcEstSuv(a)) ? affil : ((site && String(site.traitant||'').trim()) ? '' : affil),   // traitant d'affiliation à créer dans OBC s'il manque
       traitant_affilie: affil, affilie_prioritaire: !!(affil && obcEstSuv(a)),
+      traitants_obc: (state.obcTraitants||[]).map(r=>({ cle:r.cle, nom_obc:r.nom_obc, code:r.code||'', statut:r.statut, fournisseur_id:r.fournisseur_id||null })),   // mémoire des gros traitants d'OBC (Noah s'en sert au lieu d'une liste écrite en dur)
       coop_propre: (affil && obcEstSuv(a)) ? false : !!(site && /ECORIGINE/i.test(String(site.traitant||''))),
       interlocuteur_nom: coop.contact_nom||coop.adg_nom||coop.representant_legal_nom||'', interlocuteur_tel: tel(coop.contact_contact||coop.adg_contact||coop.representant_legal_contact) },
     transporteur: trp,
