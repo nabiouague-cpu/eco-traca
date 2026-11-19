@@ -4740,7 +4740,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-18-514';
+const APP_VERSION = '2026-11-19-515';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -6480,7 +6480,7 @@ function ocAllerProducteur(id){
 })();
 // ---- Barre laterale v2 ----
 const SIDEBAR_GROUPES = [
-  { titre:'Pilotage',       items:[ ['dashboard','ICON_DASHBOARD','Tableau de bord'], ['tracage','ICON_TRACAGE','Traçage de volume'], ['saisieobc','ICON_OBC','Saisie OBC'], ['courriels','ICON_COURRIELS','Courriels'] ] },
+  { titre:'Pilotage',       items:[ ['dashboard','ICON_DASHBOARD','Tableau de bord'], ['tracage','ICON_TRACAGE','Traçage & dossier RDUE'], ['saisieobc','ICON_OBC','Saisie OBC'], ['courriels','ICON_COURRIELS','Courriels'] ] },
   { titre:'Opérations',     items:[ ['cooperatives','ICON_COOPS','Coopératives'], ['demandes','ICON_DEMANDES','Demandes coopératives'], ['shipping','ICON_LOTS','Shipping'], ['prefinancements','ICON_PREFI','Finance'] ] },
   { titre:'Conformité',     items:[ ['conformite','ICON_CONFORMITE','Conformité & documents'], ['basedonnees','ICON_BASEDONNEES','Base de données coop.'], ['cartes','ICON_CARTE','Cartes & déforestation'] ] },
   { titre:'Administration', items:[ ['acces','ICON_ACCES','Accès coopératives'], ['stockage','ICON_STOCKAGE','Stockage'], ['sauvegardes','ICON_SAUVEGARDES','Sauvegardes'] ] },
@@ -14049,17 +14049,126 @@ function renderTracageDirect(tr){
     + '<div class="pied">'+pill(3)+'</div></div>';
   return html + '</div></div>';
 }
+// ---- Dossier de conformité RDUE (onglet « Traçage & dossier RDUE ») ----
+// Étapes 1 (sélection) et 2 (rapport d'usinage). Tout est calculé à l'écran à partir des livraisons et des lots : aucune écriture en base.
+// Le rapport d'usinage est UNIQUE : il est le même pour tous les clients. Seules la géolocalisation et les volumes (étape 4) suivent le format du client.
+// Date de production d'un lot : celle de l'usinier si elle est saisie (« usinier »), sinon reconstituée (« reconstituée ») = jour où le cumul des
+// camions déchargés (dans l'ordre de pesée, poids net payé) atteint le cumul des lots du site.
+function rdueEtat(){ return state.rdue || (state.rdue = { client:'', site:'', de:'', a:'' }); }
+function rdueNumLot(l){ const n = parseInt(String(l.numero).replace(/\D+/g,''),10); return isNaN(n) ? null : n; }
+function rdueDatePesee(a){
+  const d = pdDate(a,'Date P2') || pdDate(a,'Date P1');
+  if (!d) return null;
+  const j = d.jour.split('/');
+  return { iso:j[2]+'-'+j[1]+'-'+j[0], aff:d.jour.slice(0,5), tri:j[2]+j[1]+j[0]+(d.heure||'00:00') };
+}
+function rdueCamionsSite(site){
+  const pre = String(site||'').toUpperCase();
+  return (state.achats||[]).filter(a=>!a.producteur_id && a.connaissement && String(a.code_pesee||'').toUpperCase().indexOf(pre)===0 && (Number(a.poids_net_produit)>0 || a.refoulee))
+    .map(a=>({ a, d:rdueDatePesee(a), net:a.refoulee ? 0 : Number(a.poids_net_produit)||0 }))
+    .sort((x,y)=>(x.d?x.d.tri:'9').localeCompare(y.d?y.d.tri:'9'));
+}
+function rdueCalcul(site){
+  const camions = rdueCamionsSite(site), vivants = camions.filter(c=>!c.a.refoulee && c.net>0);
+  const lots = (state.lotsUsinage||[]).filter(l=>l.site_code===site && rdueNumLot(l)!=null).slice().sort((a,b)=>rdueNumLot(a)-rdueNumLot(b));
+  const reste = vivants.map(c=>c.net); let i = 0; const parLot = {};
+  lots.forEach(l=>{
+    let need = lotsUsinagePoidsRetenu(l); const comp = []; const besoin = need;
+    while (need>0 && i<vivants.length){ const t = Math.min(need, reste[i]); comp.push({ c:vivants[i], kg:t }); reste[i] -= t; need -= t; if (reste[i]<=0) i++; }
+    const dern = comp.length ? comp[comp.length-1].c : null;
+    parLot[l.id] = { comp, complet: need<=0 && besoin>0, manque: Math.max(0,need), date: dern && dern.d ? dern.d : null };
+  });
+  const nonAffecte = reste.reduce((s,x)=>s+Math.max(0,x),0);
+  return { camions, vivants, lots, parLot, nonAffecte };
+}
+function rdueSetClient(v){ const e = rdueEtat(); e.client = v; e.site = ''; e.de = ''; e.a = ''; render(); }
+function rdueSetSite(v){ const e = rdueEtat(); e.site = v; e.de = ''; e.a = ''; render(); }
+function rdueSetPlage(k,v){ rdueEtat()[k] = v; render(); }
+function rdueCoopNom(a){ const c = coopById(a.cooperative_id); return c ? c.nom : (a.cooperative_nom||'—'); }
+function renderDossierRdue(){
+  if (!state.lotsCharges){
+    if (!state.lotsChargementLance){ state.lotsChargementLance = true; chargerLots().then(()=>render()); }
+    return '<div class="panel"><div class="hint" style="padding:6px 0">Chargement des lots d\'usinage…</div></div>';
+  }
+  const e = rdueEtat(), tousLots = (state.lotsUsinage||[]).filter(l=>l.client && l.site_code && rdueNumLot(l)!=null);
+  const clients = Array.from(new Set(tousLots.map(l=>l.client))).sort((a,b)=>a.localeCompare(b,'fr'));
+  if (!e.client && clients.length) e.client = clients.indexOf('CARGILL')>=0 ? 'CARGILL' : clients[0];
+  const sites = Array.from(new Set(tousLots.filter(l=>l.client===e.client).map(l=>l.site_code))).sort();
+  if ((!e.site || sites.indexOf(e.site)<0) && sites.length) e.site = sites[0];
+  const site = lotsSiteParCode(e.site), nomSite = site ? site.nom : e.site;
+  const R = e.site ? rdueCalcul(e.site) : { camions:[], vivants:[], lots:[], parLot:{}, nonAffecte:0 };
+  const mesLots = R.lots.filter(l=>l.client===e.client);
+  const nums = mesLots.map(rdueNumLot), mini = nums.length ? Math.min.apply(null,nums) : 0, maxi = nums.length ? Math.max.apply(null,nums) : 0;
+  const de = Number(e.de)||mini, a = Number(e.a)||maxi;
+  const sel = mesLots.filter(l=>rdueNumLot(l)>=de && rdueNumLot(l)<=a);
+  const kgLots = sel.reduce((s,l)=>s+lotsUsinagePoidsRetenu(l),0);
+  const idCam = {}; sel.forEach(l=>{ (R.parLot[l.id]||{comp:[]}).comp.forEach(x=>{ idCam[x.c.a.id||x.c.a.connaissement] = x.c; }); });
+  const camSel = Object.keys(idCam).map(k=>idCam[k]).sort((x,y)=>(x.d?x.d.tri:'9').localeCompare(y.d?y.d.tri:'9'));
+  const dMin = camSel.length && camSel[0].d ? camSel[0].d.aff : '—', dMax = camSel.length && camSel[camSel.length-1].d ? camSel[camSel.length-1].d.aff : '—';
+  const refoules = R.camions.filter(c=>c.a.refoulee);
+  const sacs = camSel.reduce((s,c)=>s+(Number(c.a.nombre_sacs_accepte)||0),0);
+  const sansSerie = sel.filter(l=>!l.serie_id).length, sansPoids = sel.filter(l=>!(lotsUsinagePese(l)>0)).length, incomplets = sel.filter(l=>!(R.parLot[l.id]||{}).complet).length;
+  const optC = clients.map(c=>'<option value="'+esc(c)+'"'+(c===e.client?' selected':'')+'>'+esc(c)+'</option>').join('');
+  const optS = sites.map(s=>{ const x = lotsSiteParCode(s); return '<option value="'+esc(s)+'"'+(s===e.site?' selected':'')+'>'+esc(s)+(x?' · '+esc(x.nom):'')+'</option>'; }).join('');
+  const bb = (cls,t)=>'<span class="badge '+cls+'">'+t+'</span>';
+  let h = '<div class="panel"><div class="panel-head"><div><h2>Dossier de conformité RDUE</h2><p style="margin:2px 0 0;color:var(--ink-soft);font-size:13px">Un dossier complet pour un client : sélection des lots, rapport d\'usinage, liasses et fiches, puis géolocalisation et volumes. Rien n\'est enregistré : tout est calculé à partir des livraisons et des lots.</p></div></div>'
+    + '<div class="trc-progress">'
+    + '<div class="pt fait"><b>✓</b>1. Sélection</div><div class="pl"></div>'
+    + '<div class="pt encours"><b>2</b>Rapport d\'usinage</div><div class="pl"></div>'
+    + '<div class="pt attente"><b>3</b>Liasses et fiches</div><div class="pl"></div>'
+    + '<div class="pt attente"><b>4</b>Géolocalisation et volumes</div></div></div>';
+  h += '<div class="panel"><h3 style="margin:0 0 8px">1. Sélection</h3><div style="display:flex;flex-wrap:wrap;gap:10px 16px;align-items:flex-end">'
+    + '<label style="display:flex;flex-direction:column;gap:3px;font-size:12.5px;color:var(--ink-soft)">Client<select onchange="rdueSetClient(this.value)">'+optC+'</select></label>'
+    + '<label style="display:flex;flex-direction:column;gap:3px;font-size:12.5px;color:var(--ink-soft)">Usinier<select onchange="rdueSetSite(this.value)">'+optS+'</select></label>'
+    + '<label style="display:flex;flex-direction:column;gap:3px;font-size:12.5px;color:var(--ink-soft)">Du lot<input type="number" style="width:90px" value="'+de+'" min="'+mini+'" max="'+maxi+'" onchange="rdueSetPlage(\'de\',this.value)"></label>'
+    + '<label style="display:flex;flex-direction:column;gap:3px;font-size:12.5px;color:var(--ink-soft)">Au lot<input type="number" style="width:90px" value="'+a+'" min="'+mini+'" max="'+maxi+'" onchange="rdueSetPlage(\'a\',this.value)"></label></div>'
+    + '<div style="display:flex;flex-wrap:wrap;gap:6px 24px;margin-top:12px">'
+    + [[sel.length,'lots'],[fmtKg(kgLots).replace(' kg',' kg'),'poids entrepôt des lots'],[camSel.length,'camions reçus à '+esc(nomSite)+' ('+dMin+' → '+dMax+')'],[fmtNum(sacs),'sacs acceptés'],[refoules.length,'camions refoulés du site, exclus']]
+      .map(x=>'<div><div style="font-size:17px;font-weight:600;font-variant-numeric:tabular-nums">'+x[0]+'</div><div style="font-size:12.5px;color:var(--ink-soft)">'+x[1]+'</div></div>').join('')
+    + '</div></div>';
+  h += '<div class="panel"><h3 style="margin:0 0 8px">2. Rapport d\'usinage</h3>'
+    + '<div style="border:1px solid var(--line);background:var(--bg-soft,rgba(0,0,0,.04));border-radius:8px;padding:10px 12px;margin-bottom:10px"><b>Un seul rapport d\'usinage, le même pour tous les clients.</b> Il décrit ce que l\'usine a fait des lots, pas ce que le client demande. Seules la géolocalisation et les volumes (étape 4) suivent le format de chaque client.</div>'
+    + '<div class="hint" style="margin-bottom:8px">'+bb('warn','reconstituée')+' date calculée à partir des camions déchargés (poids net payé, dans l\'ordre de pesée), à un jour près. '+bb('ok','usinier')+' date saisie sur le lot : elle remplace la reconstituée.</div>'
+    + '<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Lot</th><th style="text-align:right">Poids entrepôt (kg)</th><th>Date de production</th><th>Camions d\'origine (connaissement, kg pris sur le net payé)</th></tr></thead><tbody>'
+    + sel.map(l=>{
+        const P = R.parLot[l.id] || { comp:[], complet:false, manque:0, date:null };
+        const dt = l.date_production ? bb('ok','usinier')+' '+esc(dateFr(l.date_production)) : (P.date ? bb('warn','reconstituée')+' '+esc(P.date.aff+'/'+P.date.iso.slice(0,4)) : '<span class="hint">—</span>');
+        const cams = P.comp.map(x=>'<div style="display:flex;justify-content:space-between;gap:12px"><span style="font-family:monospace;font-size:12.5px">'+esc(x.c.a.connaissement)+'</span><span style="color:var(--ink-soft);white-space:nowrap">'+fmtNum(x.kg)+' kg</span></div>').join('')
+          + (P.manque>0 ? '<div style="color:var(--danger,#a3231b)">Camions insuffisants : il manque '+fmtNum(P.manque)+' kg</div>' : '');
+        return '<tr><td style="font-weight:600;white-space:nowrap">'+esc(l.numero)+'</td><td style="text-align:right;font-variant-numeric:tabular-nums">'+fmtNum(lotsUsinagePoidsRetenu(l))+'</td><td style="white-space:nowrap">'+dt+'</td><td>'+(cams||'<span class="hint">—</span>')+'</td></tr>';
+      }).join('') + (sel.length ? '' : '<tr><td colspan="4" class="hint">Aucun lot pour ce client sur ce site.</td></tr>')
+    + '</tbody></table></div></div>';
+  h += '<div class="panel"><h3 style="margin:0 0 8px">Camions du site '+esc(e.site)+' · '+esc(nomSite)+'</h3><div style="overflow-x:auto;max-height:420px;overflow-y:auto"><table class="tbl"><thead><tr><th>Pesée</th><th>Connaissement</th><th>Coopérative</th><th style="text-align:right">Sacs acceptés</th><th style="text-align:right">Net payé (kg)</th><th>Dans ce dossier</th></tr></thead><tbody>'
+    + R.camions.map(c=>{
+        const a = c.a, dans = !!idCam[a.id||a.connaissement];
+        if (a.refoulee) return '<tr style="background:rgba(163,35,27,.10)"><td>'+(c.d?c.d.aff:'—')+'</td><td style="font-family:monospace;font-size:12.5px">'+esc(a.connaissement)+'</td><td>'+esc(rdueCoopNom(a))+'</td><td colspan="2"><b style="color:var(--danger,#a3231b)">REFOULÉ</b></td><td>exclu</td></tr>';
+        return '<tr><td>'+(c.d?c.d.aff:'—')+'</td><td style="font-family:monospace;font-size:12.5px">'+esc(a.connaissement)+'</td><td>'+esc(rdueCoopNom(a))+'</td><td style="text-align:right">'+fmtNum(Number(a.nombre_sacs_accepte)||0)+'</td><td style="text-align:right">'+fmtNum(c.net)+'</td><td>'+(dans ? 'oui' : '<span class="hint">autre lot / client</span>')+'</td></tr>';
+      }).join('')
+    + '</tbody></table></div><p class="hint" style="margin-top:8px">Les camions refoulés au SAIGIC ne comptent dans aucun total. Reste non rattaché à un lot de ce site : '+fmtKg(R.nonAffecte)+'.</p></div>';
+  h += '<div class="panel"><h3 style="margin:0 0 8px">Contrôles avant de passer à l\'étape 3</h3><ul style="margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px">'
+    + '<li>'+(incomplets ? bb('warn',incomplets)+' lot(s) sans assez de camions rattachés.' : bb('ok','OK')+' tous les lots ont leurs camions.')+'</li>'
+    + '<li>'+(sansPoids ? bb('warn',sansPoids)+' lot(s) sans poids pesé à l\'entrepôt (le poids de sortie est utilisé).' : bb('ok','OK')+' tous les lots ont un poids pesé à l\'entrepôt.')+'</li>'
+    + '<li>'+(sansSerie ? bb('warn',sansSerie)+' lot(s) sans série de numérotation.' : bb('ok','OK')+' tous les lots ont une série.')+'</li></ul>'
+    + '<p class="hint" style="margin-top:8px">Étapes 3 (liasses et fiches en archive zip) et 4 (géolocalisation et volumes au format du client) : à construire ensuite.</p></div>';
+  return h;
+}
+
 // Onglet « Traçage de volume » : un seul endroit pour les dossiers par coopérative, les volumes à tracer, les coopératives à classer et la chaîne de traçage.
 // Chaque rubrique s'ouvre en un clic et se referme en recliquant dessus.
 function ocTracageSousDefaut(){ return ocTracageCourant() ? 'tracer' : 'dossiers'; }
 function ocTracageSousActif(){ return state.tracageSous===undefined ? ocTracageSousDefaut() : state.tracageSous; }
 function ocTracageSous(k){ state.tracageSous = (ocTracageSousActif()===k) ? '' : k; render(); }
-function ocAllerTracage(k){ ocFermerSurcouches(); state.recherche = null; state.coopDashboardId = null; state.tab = 'tracage'; state.tracageSous = k; render(); }
+function ocAllerTracage(k){ state.tracageMode = 'simple'; ocFermerSurcouches(); state.recherche = null; state.coopDashboardId = null; state.tab = 'tracage'; state.tracageSous = k; render(); }
+function ocTracageMode(k){ state.tracageMode = k; render(); }
 function renderTracageTab(){
+  if (state.tracageMode==='rdue'){
+    return '<div class="panel" style="padding-bottom:6px"><div class="panel-head"><div><h2>Traçage &amp; dossier RDUE</h2></div></div><div class="oc-subtabs" style="margin:10px 0 4px"><button onclick="ocTracageMode(\'simple\')">Traçage de volume</button><button class="active" onclick="ocTracageMode(\'rdue\')">📋 Dossier de conformité RDUE</button></div></div>' + renderDossierRdue();
+  }
   const actif = ocTracageSousActif(), tr = ocTracageCourant();
   const nDoss = ocDossiersTotalATracer(), nVus = saigicATracerListe().length, nCl = coopsAClasser().length;
   const onglets = [['dossiers','📁 Dossiers de traçabilité', nDoss], ['atracer','📦 Volumes à tracer', nVus], ['classer','🆕 Coopératives à classer', nCl], ['tracer','⛓ Tracer un volume'+(tr ? ' (en cours)' : ''), 0]];
-  let html = '<div class="panel" style="padding-bottom:6px"><div class="panel-head"><div><h2>Traçage de volume</h2><p style="margin:2px 0 0;color:var(--ink-soft);font-size:13px">Tout ce qui concerne la traçabilité au même endroit. Clique sur une rubrique pour l\'ouvrir, reclique dessus pour la refermer.</p></div></div>'
+  let html = '<div class="panel" style="padding-bottom:6px"><div class="panel-head"><div><h2>Traçage &amp; dossier RDUE</h2><p style="margin:2px 0 0;color:var(--ink-soft);font-size:13px">Tout ce qui concerne la traçabilité au même endroit. Clique sur une rubrique pour l\'ouvrir, reclique dessus pour la refermer.</p></div></div>'
+    + '<div class="oc-subtabs" style="margin:10px 0 4px"><button class="active" onclick="ocTracageMode(\'simple\')">Traçage de volume</button><button onclick="ocTracageMode(\'rdue\')">📋 Dossier de conformité RDUE</button></div>'
     + '<div class="oc-subtabs" style="margin:10px 0 4px">'
     + onglets.map(([id,l,n])=>'<button class="'+(actif===id?'active':'')+'" onclick="ocTracageSous(\''+id+'\')">'+l+(n>0 ? ' <span class="oc-pastille">'+n+'</span>' : '')+'</button>').join('')
     + '</div></div>';
@@ -26973,7 +27082,7 @@ const AIDE_ECRANS = {
     qui:'Durabilité & conformité.', actions:['Demander les documents manquants depuis l\'onglet Coopératives (détail de la coopérative)'] },
   basedonnees: { titre:'Base de données coop.', objectif:'Les registres de producteurs et les fichiers de géolocalisation déposés par les coopératives.',
     lecture:[['Registre','fichier Excel des producteurs (surface, rendement, volume estimé).'],['Géolocalisation','GeoJSON des parcelles (polygones, centroïdes).']], qui:'Coopératives (dépôt) · Durabilité (contrôle, import).', actions:['Importer le registre dans ORIGEN depuis la fiche coopérative'] },
-  tracage: { titre:'Traçage de volume', objectif:'Repérer les connaissements vus au SAIGIC qui ne sont pas encore tracés dans ORIGEN et les rattacher.',
+  tracage: { titre:'Traçage & dossier RDUE', objectif:'Repérer les connaissements vus au SAIGIC qui ne sont pas encore tracés dans ORIGEN et les rattacher ; préparer le dossier de conformité RDUE d\'un client (sélection des lots, rapport d\'usinage).',
     lecture:[['À tracer','connaissement SAIGIC sans équivalent ORIGEN.']], qui:'Durabilité & conformité.', actions:['Tracer chaque connaissement vers sa coopérative'] },
   acces: { titre:'Accès coopératives', objectif:'Gérer les comptes du portail coopérative.', lecture:[], qui:'Administration.', actions:[] },
   stockage: { titre:'Stockage', objectif:'Tous les fichiers déposés, par coopérative, avec téléchargement groupé.', lecture:[], qui:'Tous.', actions:[] },
