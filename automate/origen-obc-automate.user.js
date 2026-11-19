@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.49
+// @version      0.4.50
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.49';
+  const VERSION = '0.4.50';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -173,9 +173,9 @@
     let n = 0;
     const t = setInterval(() => {
       // Fenêtre OBC visible (SweetAlert, Bootbox, modale) : si c'est un message de REFUS, on le lit, on le garde et on NE le ferme PAS (avant, Noah la fermait avant qu'on puisse la lire) ; sinon c'est une demande de confirmation : on l'accepte.
-      const boite = [...document.querySelectorAll('.swal2-popup, .sweet-alert, .bootbox, .modal.show, .modal.in')].find((x) => x.offsetParent !== null);
+      const boite = [...document.querySelectorAll('.swal2-popup, .swal-modal, .sweet-alert, .bootbox, .modal.show, .modal.in')].find((x) => x.offsetParent !== null);
       const txt = boite ? String(boite.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 300) : '';
-      if (txt && /introuvable|erreur|impossible|invalide|refus|échec|echec|n'existe|obligatoire|interdit|doit /i.test(txt)) {
+      if (txt && /introuvable|erreur|impossible|invalide|refus|échec|echec|n'existe|obligatoire|interdit|doit |non enregistr|existe d[ée]j[àa]|d[ée]j[àa] (enregistr|dans la base|utilis)/i.test(txt)) {
         clearInterval(t); const ee = lireEtat(); if (ee) { ee.erreurBoite = txt; journal(ee, 'Fenêtre OBC : ' + txt); ecrireEtat(ee); }
         return;
       }
