@@ -4745,7 +4745,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-19-525';
+const APP_VERSION = '2026-11-19-526';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -14244,7 +14244,7 @@ function renderTracageTab(){
   const actif = ocTracageSousActif(), tr = ocTracageCourant();
   const nDoss = ocDossiersTotalATracer(), nVus = saigicATracerListe().length, nCl = coopsAClasser().length;
   const onglets = [['dossiers','📁 Dossiers de traçabilité', nDoss], ['atracer','📦 Volumes à tracer', nVus], ['classer','🆕 Coopératives à classer', nCl], ['tracer','⛓ Tracer un volume'+(tr ? ' (en cours)' : ''), 0]];
-  let html = '<div class="panel" style="padding-bottom:6px"><div class="panel-head"><div><h2>Traçage &amp; dossier RDUE</h2><p style="margin:2px 0 0;color:var(--ink-soft);font-size:13px">Tout ce qui concerne la traçabilité au même endroit. Clique sur une rubrique pour l\'ouvrir, reclique dessus pour la refermer.</p></div></div>'
+  let html = ocUrgenceHtml() + '<div class="panel" style="padding-bottom:6px"><div class="panel-head"><div><h2>Traçage &amp; dossier RDUE</h2><p style="margin:2px 0 0;color:var(--ink-soft);font-size:13px">Tout ce qui concerne la traçabilité au même endroit. Clique sur une rubrique pour l\'ouvrir, reclique dessus pour la refermer.</p></div></div>'
     + '<div class="oc-subtabs" style="margin:10px 0 4px"><button class="active" onclick="ocTracageMode(\'simple\')">Traçage de volume</button><button onclick="ocTracageMode(\'rdue\')">📋 Dossier de conformité RDUE</button></div>'
     + '<div class="oc-subtabs" style="margin:10px 0 4px">'
     + onglets.map(([id,l,n])=>'<button class="'+(actif===id?'active':'')+'" onclick="ocTracageSous(\''+id+'\')">'+l+(n>0 ? ' <span class="oc-pastille">'+n+'</span>' : '')+'</button>').join('')
@@ -16206,6 +16206,72 @@ function ocDossiersListe(){
   _dossCache = { cle, liste }; return liste;
 }
 function ocDossiersTotalATracer(){ return ocDossiersListe().filter(x=>x.awahus).reduce((t,x)=>t+x.nATracer,0); }
+// ---- Alerte d'urgence : par quels camions commencer la traçabilité ----
+// On part des lots déjà attribués à un client (c'est ce qui lui est présenté), on retrouve les camions qui les composent (même reconstitution que le
+// rapport d'usinage) et on liste ceux qui ne sont pas encore tracés. Ordre : clients qui ont des lots agréés d'abord, puis le dossier le plus proche d'être complet.
+// Calculé à l'écran : aucune écriture en base.
+let _urgCache = null;
+function ocUrgenceCalcul(){
+  const cle = [(state.achats||[]).length, (state.lotsUsinage||[]).length, (state.tracaSim||[]).length, (state.sitesUsinage||[]).length, (state.lotsUsinage||[]).map(l=>(l.client||'')+(l.agree_le||'')).join('').length].join('|');
+  if (_urgCache && _urgCache.cle===cle) return _urgCache.res;
+  const traces = new Set(); (state.achats||[]).forEach(a=>{ if (a.producteur_id && a.connaissement) traces.add(a.cooperative_id+'|'+String(a.connaissement).trim()); });
+  const simC = new Map();
+  const etat = a=>{
+    const conn = String(a.connaissement||'').trim();
+    if (traces.has(a.cooperative_id+'|'+conn)) return 'trace';
+    const c = ocSimAnalyseCode(conn);
+    if (c){ const k = a.cooperative_id+'|'+(a.campagne_id||'')+'|'+c.cle; let s = simC.get(k);
+      if (!s){ s = new Set(ocSimLignesSauvees(a.cooperative_id, a.campagne_id||'', c.cle).map(r=>r.seq)); simC.set(k, s); }
+      if (s.has(c.seq)) return 'simule'; }
+    return ocATracerSite({ usine_dechargement:a.usine_dechargement }) ? 'atracer' : 'autre';
+  };
+  const lots = (state.lotsUsinage||[]).filter(l=>l.client && l.site_code && rdueNumLot(l)!=null);
+  const R = {}; Array.from(new Set(lots.map(l=>l.site_code))).forEach(s=>{ R[s] = rdueCalcul(s); });
+  const camions = new Map(), clients = new Map();
+  lots.forEach(l=>{
+    const P = (R[l.site_code].parLot||{})[l.id] || { comp:[], manque:0 };
+    let cl = clients.get(l.client); if (!cl){ cl = { nom:l.client, lots:[], agrees:0, cams:new Set(), manque:0 }; clients.set(l.client, cl); }
+    cl.lots.push(l); if (l.agree_le) cl.agrees++; if (P.manque>0 || !P.comp.length) cl.manque++;
+    P.comp.forEach(x=>{
+      const key = x.c.a.id || x.c.a.connaissement; let c = camions.get(key);
+      if (!c){ c = { key, a:x.c.a, d:x.c.d, net:x.c.net, st:etat(x.c.a), lots:[], clients:new Set() }; camions.set(key, c); }
+      c.lots.push({ l, kg:x.kg }); c.clients.add(l.client); cl.cams.add(key);
+    });
+  });
+  const liste = Array.from(clients.values()).map(cl=>{
+    const cs = Array.from(cl.cams).map(k=>camions.get(k));
+    return Object.assign(cl, { nCam:cs.length, nTrace:cs.filter(c=>c.st==='trace').length, nSimule:cs.filter(c=>c.st==='simule').length, nATracer:cs.filter(c=>c.st==='atracer').length, kgATracer:cs.filter(c=>c.st==='atracer').reduce((s,c)=>s+c.net,0) });
+  }).filter(cl=>cl.nATracer>0).sort((a,b)=>((b.agrees>0)-(a.agrees>0)) || (a.nATracer-b.nATracer) || String(a.nom).localeCompare(String(b.nom),'fr'));
+  const vus = new Set(), file = [];
+  liste.forEach(cl=>{
+    const cs = Array.from(cl.cams).map(k=>camions.get(k)).filter(c=>c.st==='atracer' && !vus.has(c.key));
+    const minLot = c=>Math.min.apply(null, c.lots.map(x=>rdueNumLot(x.l)));
+    cs.sort((x,y)=>(minLot(x)-minLot(y)) || (x.d?x.d.tri:'9').localeCompare(y.d?y.d.tri:'9'));
+    cs.forEach(c=>{ vus.add(c.key); file.push({ rang:file.length+1, c, client:cl.nom }); });
+  });
+  const res = { clients:liste, file };
+  _urgCache = { cle, res }; return res;
+}
+function ocUrgenceBascule(){ state.urgenceTout = !state.urgenceTout; render(); }
+function ocUrgenceHtml(){
+  const U = ocUrgenceCalcul(); if (!U.file.length) return '';
+  const tout = !!state.urgenceTout, vue = tout ? U.file : U.file.slice(0,10);
+  const lotsTxt = c=>{ const ns = c.lots.map(x=>String(x.l.numero)).sort((a,b)=>a-b); return ns.length>4 ? ns.slice(0,3).join(', ')+' … '+ns[ns.length-1] : ns.join(', '); };
+  const puces = U.clients.map(cl=>'<span style="display:inline-block;background:#fff;border:1px solid #e0a39b;border-radius:999px;padding:3px 11px;margin:2px 6px 2px 0;font-size:12.5px"><b>'+esc(cl.nom)+'</b> : '+cl.nATracer+' camion'+(cl.nATracer>1?'s':'')+' à tracer sur '+cl.nCam+' ('+fmtNum(Math.round(cl.kgATracer/1000))+' t)'+(cl.agrees ? ' · '+cl.agrees+' lot'+(cl.agrees>1?'s':'')+' agréé'+(cl.agrees>1?'s':'') : '')+'</span>').join('');
+  return '<div class="panel" style="border:2px solid #c0392b;background:#fdf1ef">'
+    + '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><span style="font-size:20px">🚨</span><div style="font-weight:800;font-size:16px;color:#a52a1d">URGENT — commence la traçabilité par ces camions</div></div>'
+    + '<div style="margin:4px 0 8px;font-size:13px;color:#5b2a24;max-width:900px">Ce sont les camions qui composent les lots déjà attribués à un client et qui ne sont pas encore tracés. En les traçant dans cet ordre, le dossier de chaque client avance le plus vite.</div>'
+    + '<div style="margin:0 0 8px">'+puces+'</div>'
+    + '<div class="achats-defile"><table class="tbl-fiches tbl-dense"><thead><tr><th class="num">N°</th><th>Client</th><th>Connaissement</th><th>Coopérative</th><th>Pesée</th><th class="num">Net (kg)</th><th>Lots</th><th></th></tr></thead><tbody>'
+    + vue.map(r=>{ const a = r.c.a, co = coopById(a.cooperative_id);
+      return '<tr><td class="num"><b>'+r.rang+'</b></td><td><b>'+esc(r.client)+'</b>'+(r.c.clients.size>1 ? ' <span class="hint">+ '+esc(Array.from(r.c.clients).filter(x=>x!==r.client).join(', '))+'</span>' : '')+'</td>'
+        + '<td><b>'+esc(a.connaissement)+'</b></td><td>'+esc(co ? co.nom : (a.cooperative_nom||'—'))+'</td><td>'+(r.c.d ? esc(r.c.d.aff+'/'+r.c.d.iso.slice(0,4)) : '—')+'</td>'
+        + '<td class="num">'+fmtNum(r.c.net)+'</td><td class="hint">'+esc(lotsTxt(r.c))+'</td>'
+        + '<td><button class="btn btn-primary btn-compact" onclick="ocDossierOuvrir(\''+escJs(a.cooperative_id)+'\')">Tracer</button></td></tr>'; }).join('')
+    + '</tbody></table></div>'
+    + (U.file.length>10 ? '<div style="margin-top:8px"><button class="btn-ghost btn-compact" onclick="ocUrgenceBascule()">'+(tout ? 'Réduire la liste' : 'Voir les '+U.file.length+' camions')+'</button></div>' : '')
+    + '</div>';
+}
 function ocDossiersFiltre(f){ state.dossiersFiltre = f; render(); }
 function ocDossiersAutresBascule(){ state.dossiersAutresOuvert = !state.dossiersAutresOuvert; render(); }
 function renderDossiersTab(){
