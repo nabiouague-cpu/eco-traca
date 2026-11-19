@@ -4745,7 +4745,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-19-529';
+const APP_VERSION = '2026-11-19-530';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -11858,7 +11858,8 @@ async function lotsExporterDossier(id){
 // (ségrégation) : un lot vient du melange des camions de l'usinage, dans l'ordre d'arrivee. Cas particulier (series de lots reservees a une
 // cooperative) : le rapport nomme alors la cooperative au-dessus de ses camions et de ses lots, et un meme numero de lot peut se poursuivre sur
 // plusieurs jours (queue de lot).
-const USINE_CODE_CAMION = /^[A-Z]{1,5}\d{1,4}\s?[-–]\s?\d{2,6}$/;
+// deux formes : code de pesee de l'usine (ex. AB12-345) ou connaissement CCC-année-saison-n° (ex. SC040287-2025-2-23, format du rapport SUV)
+const USINE_CODE_CAMION = /^(?:[A-Z]{1,5}\d{1,4}\s?[-–]\s?\d{2,6}|[A-Z]{1,5}\d{4,8}\s?[-–]\s?\d{4}\s?[-–]\s?\d\s?[-–]\s?\d{1,4})$/;
 const USINE_BRUIT = /^(sechoirs?|silos?|total.*|volume|n°|poids|reusinage.*|freinte.*|dechets.*|brisures.*|grabots.*|balayure.*|petites feves.*|humidite.*|vidage.*|productions.*)$/;
 function usineNorm(t){ return String(t==null?'':t).normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/\s+/g,' ').trim(); }
 function usineCodeNorm(c){ return String(c||'').toUpperCase().replace(/\s+/g,'').replace(/–/g,'-'); }
@@ -12139,7 +12140,7 @@ async function lotsUsinageImporterExcel(input){
 // Rapport au modele de l'usinier : lots (poids cumules sur les jours), camions (codes de pesee) relies aux livraisons d'ORIGEN, composition proposee.
 function lotsUsineAchatsParCode(){
   const m = new Map();
-  (state.achats||[]).filter(a=>a.code_pesee && !a.producteur_id).forEach(a=>m.set(usineCodeNorm(a.code_pesee), a));
+  (state.achats||[]).filter(a=>!a.producteur_id && !a.refoulee).forEach(a=>{ if (a.code_pesee) m.set(usineCodeNorm(a.code_pesee), a); if (a.connaissement) m.set(usineCodeNorm(a.connaissement), a); });
   return m;
 }
 function lotsUsineCalculerCompo(lots, camions){
