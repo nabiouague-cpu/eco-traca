@@ -4745,7 +4745,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-20-549';
+const APP_VERSION = '2026-11-20-550';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7873,7 +7873,7 @@ function renderLiassesTab(){
   const compte = (o)=>'<span style="color:#1F6E5C;font-weight:600">'+o.present+'</span> / <span style="color:#B42318;font-weight:600">'+o.manquant+'</span>'+(o.serge?' / <span style="color:#8A6400;font-weight:600">'+o.serge+'</span>':'')+' <span class="hint">sur '+o.n+'</span>';
   let html = '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:12px">'
     + '<div><h3 style="margin:0 0 4px">Liasses documentaires — ce qui est rangé et ce qui manque</h3><div class="hint">Un PDF par connaissement, rangé dans LIASSE DOCUMENTAIRE 26-27 (port › traitant › coopérative). Classement par traitant ; le client de chaque camion est déduit des lots d\'usinage. Comparaison avec les camions déchargés dans nos usines.'+(E.inventaire?' Inventaire du '+dateFr(E.inventaire)+' '+String(E.inventaire).slice(11,16)+'.':'')+'</div></div>'
-    + '<div style="display:flex;gap:8px"><button class="btn" onclick="state.liasseCharge=false;render()">Actualiser</button><button class="btn btn-primary" onclick="liasseExportOuvrir(\'manquantes\')">⬇ Liasses manquantes</button><button class="btn" onclick="liasseExportOuvrir(\'tout\')">⬇ Tout l\'état</button><button class="btn" onclick="liasseBordereauxChoisir()" title="Dépose des PDF de liasse : ORIGEN y ajoute le bordereau de réception en première page">📎 Ajouter les bordereaux</button><input type="file" id="liasseBordFichiers" accept="application/pdf,.pdf" multiple style="display:none" onchange="liasseBordereauxLancer(this.files);this.value=\'\'"></div></div><div class="hint" id="liasseBordStatut" style="margin:-6px 0 8px"></div>'
+    + '<div style="display:flex;gap:8px"><button class="btn" onclick="state.liasseCharge=false;render()">Actualiser</button><button class="btn btn-primary" onclick="liasseExportOuvrir(\'manquantes\')">⬇ Liasses manquantes</button><button class="btn" onclick="liasseExportOuvrir(\'tout\')">⬇ Tout l\'état</button>'+liasseOneDriveBoutons()+'<button class="btn" onclick="liasseBordereauxChoisir()" title="Dépose des PDF de liasse : ORIGEN y ajoute le bordereau de réception en première page">📎 Ajouter les bordereaux</button><input type="file" id="liasseBordFichiers" accept="application/pdf,.pdf" multiple style="display:none" onchange="liasseBordereauxLancer(this.files);this.value=\'\'"></div></div><div class="hint" id="liasseBordStatut" style="margin:-6px 0 8px"></div>'
     + '<div class="gros" style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:14px">'
     + '<div><div class="v">'+T.n+'</div><div class="l">camions déchargés</div></div>'
     + '<div><div class="v" style="color:#1F6E5C">'+T.present+'</div><div class="l">liasses présentes</div></div>'
@@ -7934,6 +7934,114 @@ async function liasseBordMarquerCoop(traitant, coop){
   state.liasseBordereaux = state.liasseBordereaux || {};
   cibles.forEach(l=>{ state.liasseBordereaux[l.cle] = { connaissement:l.cle, source:'manuel', ajoute_le:new Date().toISOString() }; });
   render();
+}
+// ---- Connexion d'ORIGEN à OneDrive (Microsoft Graph) : lire une liasse, y ajouter le bordereau en première page, remplacer le fichier SOUS LE MÊME NOM ----
+// L'identifiant ci-dessous est celui de l'application Entra « ORIGEN – Liasses » (application web monopage d'ECORIGINE, droits : Files.ReadWrite sur le OneDrive de l'utilisateur connecté).
+// Ce n'est pas un secret. OneDrive garde l'historique des versions : l'ancien PDF reste récupérable.
+const GRAPH_CLIENT_ID = '';
+const GRAPH_SCOPES = ['User.Read','Files.ReadWrite'];
+const MSAL_CDN = ['https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.3/lib/msal-browser.min.js', 'https://unpkg.com/@azure/msal-browser@2.38.3/lib/msal-browser.min.js'];
+let _msalApp = null;
+async function graphApp(){
+  if (!GRAPH_CLIENT_ID) throw new Error("la connexion à OneDrive n'est pas encore configurée (identifiant d'application manquant)");
+  if (_msalApp) return _msalApp;
+  if (typeof msal==='undefined') await chargerScriptExterne(MSAL_CDN);
+  if (typeof msal==='undefined') throw new Error('la bibliothèque de connexion Microsoft n\'a pas pu se charger');
+  const app = new msal.PublicClientApplication({ auth:{ clientId:GRAPH_CLIENT_ID, authority:'https://login.microsoftonline.com/organizations', redirectUri: location.origin+location.pathname.replace(/index\.html$/,'') }, cache:{ cacheLocation:'localStorage' } });
+  if (app.initialize) await app.initialize();
+  _msalApp = app; return app;
+}
+async function graphJeton(interactif){
+  const app = await graphApp();
+  const compte = app.getActiveAccount() || app.getAllAccounts()[0];
+  if (compte){
+    app.setActiveAccount(compte);
+    try{ return (await app.acquireTokenSilent({ scopes:GRAPH_SCOPES, account:compte })).accessToken; }catch(e){ if (!interactif) throw e; }
+  } else if (!interactif) throw new Error('OneDrive non connecté');
+  const r = await app.acquireTokenPopup({ scopes:GRAPH_SCOPES, prompt: compte ? undefined : 'select_account' });
+  app.setActiveAccount(r.account); return r.accessToken;
+}
+async function graphFetch(chemin, opt, interactif){
+  const jeton = await graphJeton(!!interactif);
+  const r = await fetch(chemin.indexOf('http')===0 ? chemin : 'https://graph.microsoft.com/v1.0'+chemin, Object.assign({}, opt, { headers:Object.assign({ Authorization:'Bearer '+jeton }, (opt && opt.headers) || {}) }));
+  if (!r.ok){ let t = ''; try{ t = (await r.json()).error.message; }catch(e){} throw new Error('OneDrive '+r.status+(t ? ' : '+t : '')); }
+  return r;
+}
+async function graphRemplacer(id, octets){
+  if (octets.length < 3500000) return await (await graphFetch('/me/drive/items/'+id+'/content', { method:'PUT', headers:{ 'Content-Type':'application/pdf' }, body:octets })).json();
+  const sess = await (await graphFetch('/me/drive/items/'+id+'/createUploadSession', { method:'POST', headers:{ 'Content-Type':'application/json' }, body:JSON.stringify({ item:{ '@microsoft.graph.conflictBehavior':'replace' } }) })).json();
+  const r = await fetch(sess.uploadUrl, { method:'PUT', headers:{ 'Content-Range':'bytes 0-'+(octets.length-1)+'/'+octets.length }, body:octets });
+  if (!r.ok) throw new Error('envoi vers OneDrive refusé ('+r.status+')');
+  return await r.json();
+}
+async function liasseOneDriveConnecter(){
+  try{ await graphJeton(true); const me = await (await graphFetch('/me?$select=userPrincipalName')).json(); state.graphCompte = me.userPrincipalName || 'connecté'; showToast('OneDrive connecté ('+state.graphCompte+').', 'success'); render(); }
+  catch(e){ showToast('Connexion OneDrive impossible : '+(e && e.message ? e.message : e)); }
+}
+function liasseAutoActif(){ try{ return localStorage.getItem('origen_liasse_auto')==='1'; }catch(e){ return false; } }
+function liasseAutoBasculer(){ try{ localStorage.setItem('origen_liasse_auto', liasseAutoActif() ? '0' : '1'); }catch(e){} render(); }
+function liasseOneDriveBoutons(){
+  if (!GRAPH_CLIENT_ID) return '<span class="hint" style="align-self:center">Connexion OneDrive : en cours de mise en place</span>';
+  return '<button class="btn" onclick="liasseOneDriveConnecter()">🔗 '+(state.graphCompte ? 'OneDrive : '+esc(state.graphCompte) : 'Connecter OneDrive')+'</button>'
+    + '<button class="btn btn-primary" onclick="liasseBordereauxOneDrive(false)" title="Pour chaque liasse sans bordereau : ORIGEN ajoute le bordereau en première page et remplace le PDF dans OneDrive, même nom">⚡ Ajouter tous les bordereaux</button>'
+    + '<button class="btn" onclick="liasseAutoBasculer()" title="Quand ORIGEN s\'ouvre, il ajoute lui-même les bordereaux manquants (OneDrive doit être connecté)">Automatique : '+(liasseAutoActif() ? 'oui' : 'non')+'</button>';
+}
+// Déclenché à l'ouverture d'ORIGEN quand le mode automatique est activé et que OneDrive est déjà connecté (aucune fenêtre ne s'ouvre).
+async function liasseAutoSiActif(){
+  if (!GRAPH_CLIENT_ID || !liasseAutoActif() || state.liasseAutoFait) return;
+  state.liasseAutoFait = true;
+  try{ await graphJeton(false); }catch(e){ return; }
+  await liasseBordereauxOneDrive(true);
+}
+async function liasseBordereauxOneDrive(auto){
+  if (state.liasseBordEnCours) return;
+  const statut = t=>{ const el = document.getElementById('liasseBordStatut'); if (el) el.textContent = t; };
+  try{
+    if (!state.prefCharge) await chargerPrefinancements();
+    if (!state.liasseCharge) await chargerLiasses();
+    await graphJeton(!auto);
+    const E = liasseEtat(), cibles = [], ignores = [], avert = [];
+    const camp = campagneCourante(), cid = camp ? camp.id : null;
+    const parCn = {}; (state.achats||[]).filter(a=>!a.producteur_id && a.connaissement && (!cid || a.campagne_id===cid)).forEach(a=>{ const k = liasseCnNorm(a.connaissement); if (k) parCn[k] = a; });
+    Object.values(E.traitants).forEach(T=>Object.values(T.coops).forEach(K=>K.lignes.forEach(l=>{
+      if (l.statut!=='present' || l.bord || l.refoulee) return;
+      const fs = l.fichiers.filter(f=>f.source!=='serge');
+      if (fs.length!==1){ ignores.push({ nom:l.cn, raison: fs.length>1 ? 'plusieurs fichiers pour ce camion dans le dossier : à ranger d\'abord' : 'fichier introuvable' }); return; }
+      cibles.push({ l, f:fs[0], a:parCn[l.cle] });
+    })));
+    if (!cibles.length){ if (!auto) showToast('Toutes les liasses présentes ont déjà leur bordereau.', 'success'); return; }
+    if (!auto && !confirm('Ajouter le bordereau en première page de '+cibles.length+' liasse'+(cibles.length>1?'s':'')+' et remplacer ces PDF dans OneDrive (même nom, ancienne version gardée dans l\'historique OneDrive) ?')) return;
+    state.liasseBordEnCours = true;
+    const L = await chargerPdfLib(), ok = [], pris = [];
+    for (let i=0; i<cibles.length; i++){
+      const { l, f, a } = cibles[i];
+      statut('OneDrive '+(i+1)+' / '+cibles.length+' · '+f.nom);
+      try{
+        if (!a || !(Number(a.poids_net_produit)>0)){ ignores.push({ nom:f.nom, raison: !a ? 'camion introuvable dans la campagne' : 'pas encore pesé à l\'usine : pas de bordereau' }); continue; }
+        const b = bordereauReceptionData(a);
+        if (b.manque==='prix'){ ignores.push({ nom:f.nom, raison:'prix d\'entrée usine de la campagne à renseigner' }); continue; }
+        const buf = await (await graphFetch('/me/drive/items/'+f.id+'/content')).arrayBuffer();
+        const doc = await L.PDFDocument.load(buf, { ignoreEncryption:true, updateMetadata:false });
+        const mots = doc.getKeywords() || '';
+        if (mots.indexOf(LIASSE_MARQUE_BORDEREAU)>=0){ pris.push({ connaissement:l.cle, nom:f.nom, source:'origen', taille_apres:buf.byteLength }); ignores.push({ nom:f.nom, raison:'bordereau déjà dans le PDF : noté dans le suivi' }); continue; }
+        const img = await doc.embedJpg(await liasseBordereauImage(b));
+        const page = doc.insertPage(0, [612,792]); page.drawImage(img, { x:0, y:0, width:612, height:792 });
+        doc.setKeywords([(mots ? mots+' ' : '')+LIASSE_MARQUE_BORDEREAU]);
+        const sortie = await doc.save();
+        const rep = await graphRemplacer(f.id, sortie);
+        if (rep && rep.size && Number(rep.size)!==sortie.length) throw new Error('la taille du fichier enregistré ne correspond pas');
+        pris.push({ connaissement:l.cle, nom:f.nom, source:'origen', taille_apres:sortie.length }); ok.push({ nom:f.nom });
+      }catch(e){ ignores.push({ nom:f.nom, raison:(e && e.message ? e.message : String(e)) }); }
+    }
+    if (pris.length){
+      const r = await supabaseClient.from('liasse_bordereaux').upsert(pris);
+      if (r.error) showToast('Bordereaux ajoutés, mais le suivi n\'a pas pu être enregistré : '+r.error.message);
+      else { state.liasseBordereaux = state.liasseBordereaux || {}; pris.forEach(x=>{ state.liasseBordereaux[x.connaissement] = Object.assign({ ajoute_le:new Date().toISOString() }, x); }); }
+    }
+    state.modal = { type:'liasseBordRapport', payload:{ ok, ignores, avert, mode:'onedrive' } };
+    if (!auto || ok.length || ignores.length) render();
+  }catch(e){ if (!auto) showToast('Échec : '+(e && e.message ? e.message : e)); }
+  state.liasseBordEnCours = false; statut('');
 }
 // ---- Bordereau de réception ORIGEN ajouté en première page des liasses (PDF) ----
 // Le navigateur ne voit pas OneDrive (et le robot ne peut pas réécrire un PDF de plus de 1 Mo) : on dépose ici les PDF de liasse téléchargés,
@@ -8004,7 +8112,7 @@ async function liasseBordereauxLancer(fichiers){
 function renderLiasseBordRapportModal(m){
   const p = m.payload;
   return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>Bordereaux ajoutés aux liasses</h3><div id="modal-fields">'
-    + (p.ok.length ? '<p><b style="color:#1F6E5C">'+p.ok.length+' liasse'+(p.ok.length>1?'s':'')+'</b> avec le bordereau en première page, même nom de fichier. Le ZIP vient d\'être téléchargé : remets ces fichiers dans le dossier de la liasse, à la place des anciens.</p>' : '<p><b>Aucun fichier modifié.</b></p>')
+    + (p.ok.length ? '<p><b style="color:#1F6E5C">'+p.ok.length+' liasse'+(p.ok.length>1?'s':'')+'</b> avec le bordereau en première page, même nom de fichier. '+(p.mode==='onedrive' ? 'Les PDF ont été remplacés directement dans OneDrive (l\'ancienne version reste dans l\'historique du fichier).' : 'Le ZIP vient d\'être téléchargé : remets ces fichiers dans le dossier de la liasse, à la place des anciens.')+'</p>' : '<p><b>Aucun fichier modifié.</b></p>')
     + ((p.avert||[]).length ? '<p style="margin-top:10px"><b style="color:#B25E00">À vérifier ('+p.avert.length+')</b></p><table class="data-table" style="width:100%"><tbody>'+p.avert.map(x=>'<tr><td>'+esc(x.nom)+'</td><td class="hint">'+esc(x.raison)+'</td></tr>').join('')+'</tbody></table>' : '')
     + (p.ignores.length ? '<p style="margin-top:10px"><b style="color:#B42318">'+p.ignores.length+' laissé'+(p.ignores.length>1?'s':'')+' tel'+(p.ignores.length>1?'s':'')+' quel</b></p><table class="data-table" style="width:100%"><thead><tr><th>Fichier</th><th>Raison</th></tr></thead><tbody>'+p.ignores.map(x=>'<tr><td>'+esc(x.nom)+'</td><td class="hint">'+esc(x.raison)+'</td></tr>').join('')+'</tbody></table>' : '')
     + '</div><div class="actions"><button class="btn btn-primary" onclick="closeModal()">Fermer</button></div></div></div>';
@@ -30277,7 +30385,7 @@ function setSaisieObcFiltre(k){ state.saisieObcFiltre = k; render(); }
 // Section « Saisie OBC » : deux vues — les connaissements à saisir dans OBC, et l'état des liasses documentaires rangées dans OneDrive.
 function renderObcSection(){
   const vue = state.obcVue==='liasses' ? 'liasses' : 'saisie';
-  if (!state.liasseCharge && !state.liasseChargementLance){ state.liasseChargementLance = true; chargerLiasses().then(()=>render()); }   // pour le repère rouge sur l'onglet Liasses
+  if (!state.liasseCharge && !state.liasseChargementLance){ state.liasseChargementLance = true; chargerLiasses().then(()=>{ render(); liasseAutoSiActif(); }); }   // pour le repère rouge sur l'onglet Liasses ; lance aussi l'ajout automatique si activé
   const barre = '<div class="panel" style="padding:0 18px 4px"><div class="oc-subtabs">'
     + [['saisie','Connaissements à saisir'],['liasses','Liasses documentaires']].map(([k,l])=>{ const nA = k==='liasses' ? liasseAlertes() : 0; return '<button class="'+(vue===k?'active':'')+'" onclick="state.obcVue=\''+k+'\';render()">'+l+(nA?' <span style="display:inline-block;min-width:18px;padding:0 6px;border-radius:9px;background:#B42318;color:#fff;font-size:11px;font-weight:700;text-align:center" title="Liasses manquantes + liasses sans bordereau">'+nA+'</span>':'')+'</button>'; }).join('')
     + '</div></div>';
