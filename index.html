@@ -4745,7 +4745,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-20-547';
+const APP_VERSION = '2026-11-20-548';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7865,7 +7865,7 @@ function renderLiassesTab(){
   const compte = (o)=>'<span style="color:#1F6E5C;font-weight:600">'+o.present+'</span> / <span style="color:#B42318;font-weight:600">'+o.manquant+'</span>'+(o.serge?' / <span style="color:#8A6400;font-weight:600">'+o.serge+'</span>':'')+' <span class="hint">sur '+o.n+'</span>';
   let html = '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:12px">'
     + '<div><h3 style="margin:0 0 4px">Liasses documentaires — ce qui est rangé et ce qui manque</h3><div class="hint">Un PDF par connaissement, rangé dans LIASSE DOCUMENTAIRE 26-27 (port › traitant › coopérative). Classement par traitant ; le client de chaque camion est déduit des lots d\'usinage. Comparaison avec les camions déchargés dans nos usines.'+(E.inventaire?' Inventaire du '+dateFr(E.inventaire)+' '+String(E.inventaire).slice(11,16)+'.':'')+'</div></div>'
-    + '<div style="display:flex;gap:8px"><button class="btn" onclick="state.liasseCharge=false;render()">Actualiser</button><button class="btn btn-primary" onclick="liasseExportOuvrir(\'manquantes\')">⬇ Liasses manquantes</button><button class="btn" onclick="liasseExportOuvrir(\'tout\')">⬇ Tout l\'état</button></div></div>'
+    + '<div style="display:flex;gap:8px"><button class="btn" onclick="state.liasseCharge=false;render()">Actualiser</button><button class="btn btn-primary" onclick="liasseExportOuvrir(\'manquantes\')">⬇ Liasses manquantes</button><button class="btn" onclick="liasseExportOuvrir(\'tout\')">⬇ Tout l\'état</button><button class="btn" onclick="liasseBordereauxChoisir()" title="Dépose des PDF de liasse : ORIGEN y ajoute le bordereau de réception en première page">📎 Ajouter les bordereaux</button><input type="file" id="liasseBordFichiers" accept="application/pdf,.pdf" multiple style="display:none" onchange="liasseBordereauxLancer(this.files);this.value=\'\'"></div></div><div class="hint" id="liasseBordStatut" style="margin:-6px 0 8px"></div>'
     + '<div class="gros" style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:14px">'
     + '<div><div class="v">'+T.n+'</div><div class="l">camions déchargés</div></div>'
     + '<div><div class="v" style="color:#1F6E5C">'+T.present+'</div><div class="l">liasses présentes</div></div>'
@@ -7896,6 +7896,70 @@ function renderLiassesTab(){
       + E.orphelins.map(f=>'<tr><td>'+esc([f.port,f.dossier_client,f.dossier_coop].filter(Boolean).join(' › '))+'</td><td>'+esc(f.nom)+'</td><td>'+esc(dateFr(f.modifie_le))+'</td></tr>').join('')+'</tbody></table></div>';
   }
   return html;
+}
+// ---- Bordereau de réception ORIGEN ajouté en première page des liasses (PDF) ----
+// Le navigateur ne voit pas OneDrive (et le robot ne peut pas réécrire un PDF de plus de 1 Mo) : on dépose ici les PDF de liasse téléchargés,
+// ORIGEN reconnaît le camion par le n° de connaissement du nom de fichier, ajoute le bordereau en première page et rend les MÊMES fichiers, SOUS LE MÊME NOM, dans un ZIP à remettre dans le dossier.
+// Les fichiers déposés ne sont jamais modifiés. Un PDF où ORIGEN a déjà ajouté son bordereau est repéré (mot-clé interne) et laissé tel quel.
+const LIASSE_MARQUE_BORDEREAU = 'ORIGEN-BORDEREAU';
+function liasseBordereauxChoisir(){ const el = document.getElementById('liasseBordFichiers'); if (el) el.click(); }
+async function liasseBordereauImage(b){
+  await chargerBibliothequesPdf();
+  const cadre = document.createElement('iframe');
+  cadre.setAttribute('aria-hidden','true'); cadre.style.cssText = 'position:fixed;left:-10000px;top:0;width:840px;height:1100px;border:0;visibility:hidden;';
+  document.body.appendChild(cadre);
+  try{
+    const d = cadre.contentDocument; d.open(); d.write(bordereauReceptionHTML([b])); d.close();
+    d.body.className = ''; d.querySelectorAll('.bar,.note').forEach(x=>x.remove());
+    await Promise.all(Array.from(d.images).map(i=>i.complete ? 1 : new Promise(r=>{ i.onload = i.onerror = r; })));
+    await new Promise(r=>setTimeout(r,250));
+    const canvas = await window.html2canvas(d.querySelector('.page'), { scale:3, backgroundColor:'#ffffff', useCORS:true, logging:false });
+    const blob = await new Promise(res=>canvas.toBlob(res, 'image/jpeg', 0.92));
+    return await blob.arrayBuffer();
+  } finally { document.body.removeChild(cadre); }
+}
+async function liasseBordereauxLancer(fichiers){
+  const liste = Array.from(fichiers||[]).filter(f=>/\.pdf$/i.test(f.name)); if (!liste.length){ showToast('Dépose des fichiers PDF.'); return; }
+  if (state.liasseBordEnCours) return; state.liasseBordEnCours = true;
+  const statut = t=>{ const el = document.getElementById('liasseBordStatut'); if (el) el.textContent = t; };
+  const ok = [], ignores = [];
+  try{
+    if (typeof JSZip === 'undefined') throw new Error("la bibliothèque de compression n'a pas pu se charger (connexion internet requise)");
+    if (!state.prefCharge) await chargerPrefinancements();
+    const L = await chargerPdfLib(), zip = new JSZip(), vus = new Set();
+    const camp = campagneCourante(), cid = camp ? camp.id : null;
+    const parCn = {}; (state.achats||[]).filter(a=>!a.producteur_id && a.connaissement && (!cid || a.campagne_id===cid)).forEach(a=>{ const k = liasseCnNorm(a.connaissement); if (k) parCn[k] = a; });
+    for (let i=0; i<liste.length; i++){
+      const f = liste[i]; statut('Traitement '+(i+1)+' / '+liste.length+' · '+f.name);
+      const k = liasseCnNorm(f.name), a = k ? parCn[k] : null;
+      if (!k) { ignores.push({ nom:f.name, raison:'pas de numéro de connaissement dans le nom' }); continue; }
+      if (!a) { ignores.push({ nom:f.name, raison:'camion introuvable dans la campagne en cours' }); continue; }
+      if (a.refoulee) { ignores.push({ nom:f.name, raison:'camion refoulé : pas de bordereau' }); continue; }
+      if (!(Number(a.poids_net_produit)>0)) { ignores.push({ nom:f.name, raison:'pas encore pesé à l\'usine : pas de bordereau' }); continue; }
+      if (vus.has(f.name.toLowerCase())) { ignores.push({ nom:f.name, raison:'deux fichiers du même nom' }); continue; }
+      const b = bordereauReceptionData(a);
+      if (b.manque==='prix') { ignores.push({ nom:f.name, raison:'prix d\'entrée usine de la campagne à renseigner' }); continue; }
+      try{
+        const doc = await L.PDFDocument.load(await f.arrayBuffer(), { ignoreEncryption:true, updateMetadata:false });
+        const mots = doc.getKeywords() || '';
+        if (mots.indexOf(LIASSE_MARQUE_BORDEREAU)>=0) { ignores.push({ nom:f.name, raison:'bordereau déjà ajouté' }); continue; }
+        const img = await doc.embedJpg(await liasseBordereauImage(b));
+        const page = doc.insertPage(0, [612,792]); page.drawImage(img, { x:0, y:0, width:612, height:792 });
+        doc.setKeywords([(mots ? mots+' ' : '')+LIASSE_MARQUE_BORDEREAU]);
+        zip.file(f.name, await doc.save(), { compression:'STORE' }); vus.add(f.name.toLowerCase()); ok.push({ nom:f.name });
+      }catch(e){ ignores.push({ nom:f.name, raison:'PDF illisible ou protégé ('+(e && e.message ? e.message : e)+')' }); }
+    }
+    if (ok.length) telechargerBlob(await zip.generateAsync({ type:'blob' }), 'Liasses_avec_bordereau_'+new Date().toISOString().slice(0,10)+'.zip');
+  }catch(e){ showToast('Échec : '+(e && e.message ? e.message : e)); }
+  state.liasseBordEnCours = false; statut('');
+  if (ok.length || ignores.length){ state.modal = { type:'liasseBordRapport', payload:{ ok, ignores } }; render(); }
+}
+function renderLiasseBordRapportModal(m){
+  const p = m.payload;
+  return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>Bordereaux ajoutés aux liasses</h3><div id="modal-fields">'
+    + (p.ok.length ? '<p><b style="color:#1F6E5C">'+p.ok.length+' liasse'+(p.ok.length>1?'s':'')+'</b> avec le bordereau en première page, même nom de fichier. Le ZIP vient d\'être téléchargé : remets ces fichiers dans le dossier de la liasse, à la place des anciens.</p>' : '<p><b>Aucun fichier modifié.</b></p>')
+    + (p.ignores.length ? '<p style="margin-top:10px"><b style="color:#B42318">'+p.ignores.length+' laissé'+(p.ignores.length>1?'s':'')+' tel'+(p.ignores.length>1?'s':'')+' quel</b></p><table class="data-table" style="width:100%"><thead><tr><th>Fichier</th><th>Raison</th></tr></thead><tbody>'+p.ignores.map(x=>'<tr><td>'+esc(x.nom)+'</td><td class="hint">'+esc(x.raison)+'</td></tr>').join('')+'</tbody></table>' : '')
+    + '</div><div class="actions"><button class="btn btn-primary" onclick="closeModal()">Fermer</button></div></div></div>';
 }
 // ---- Export du point sur les liasses : même mise en page que le « Point des livraisons par client » (modèle TRACA_SAPO), au choix en Excel ou en PDF ----
 function liasseLibStatut(s){ return s==='present' ? 'Présent' : s==='serge' ? 'Chez Serge seulement' : 'Manquant'; }
@@ -13381,6 +13445,7 @@ function lotsModalsHtml(){
   if (m.type==='partAffil') return renderPartAffilModal(m);
   if (m.type==='livrExport') return renderLivrExportModal(m);
   if (m.type==='liasseExport') return renderLiasseExportModal(m);
+  if (m.type==='liasseBordRapport') return renderLiasseBordRapportModal(m);
   if (m.type==='bordereauParticulier') return renderBordereauParticulierModal(m);
   if (m.type==='finLtdLots') return renderFinLtdLotsModal(m);
   if (m.type==='lotsPoidsEntrepot'){
