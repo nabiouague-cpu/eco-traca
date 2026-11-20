@@ -4745,7 +4745,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-19-545';
+const APP_VERSION = '2026-11-20-546';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7815,28 +7815,42 @@ async function chargerLiasses(){
 }
 function liasseCnNorm(s){ const m = String(s||'').toUpperCase().match(/(SC\d{6})-(\d{4})-(?:(\d)-)?0*(\d+)[A-Z]?/); return m ? m[1]+'-'+m[2]+'-'+(m[3]||'2')+'-'+m[4] : ''; }
 function liasseTraitantLib(t){ const u = String(t||'').toLowerCase(); if (!u) return '—'; if (u.indexOf('awahus')>=0) return 'AWAHUS'; if (u.indexOf('sitapa')>=0) return 'SITAPA'; if (u.indexOf('bobby')>=0) return 'BOBBY VO'; if (u.indexOf('ecorigine')>=0) return 'ECORIGINE'; if (u.indexOf('touton')>=0) return 'TOUTON'; if (u.indexOf('sucden')>=0) return 'SUCDEN'; return String(t).toUpperCase(); }
+// Client de chaque camion d'après les lots d'usinage (même reconstitution que le dossier RDUE : camions dans l'ordre de pesée, lots par numéro).
+// Un camion qui alimente des lots de deux clients affiche les deux (le plus gros volume d'abord) ; un camion pas encore usiné garde le client de l'achat.
+function liasseClientsParCamion(achats){
+  const sites = new Set(); achats.forEach(a=>{ const ex = livrExecutantDe(a); if (ex && ex.cle) sites.add(ex.cle); });
+  const m = {};
+  sites.forEach(code=>{
+    let R = null; try{ R = rdueCalcul(code); }catch(e){ R = null; } if (!R) return;
+    R.lots.forEach(l=>{ const P = R.parLot[l.id], cl = l.client ? clientCanonique(l.client) : ''; if (!P || !cl) return;
+      P.comp.forEach(x=>{ const id = x.c.a.id, o = m[id] = m[id]||{}; o[cl] = (o[cl]||0)+x.kg; }); });
+  });
+  const out = {}; Object.keys(m).forEach(id=>{ out[id] = Object.entries(m[id]).sort((p,q)=>q[1]-p[1]).map(x=>x[0]).join(' / '); });
+  return out;
+}
 function liasseEtat(){
   const camp = campagneCourante(), cid = camp ? camp.id : null;
   const tous = (state.achats||[]).filter(a=>!a.producteur_id && a.connaissement && a.usine_dechargement && (!cid || a.campagne_id===cid));
   // Camions refoulés : pas de liasse à attendre (ni manquante, ni comptée) ; leur numéro reste « connu » pour que un éventuel fichier ne passe pas en « sans camion »
   const achats = tous.filter(a=>!a.refoulee);
   const parCn = {}; (state.liasseFichiers||[]).forEach(f=>{ const k = liasseCnNorm(f.connaissement||f.nom); if (!k) return; (parCn[k] = parCn[k]||[]).push(f); });
-  const clients = {}; const vus = new Set(tous.filter(a=>a.refoulee).map(a=>liasseCnNorm(a.connaissement)));
+  const clientsCamion = liasseClientsParCamion(achats);
+  const traitants = {}; const vus = new Set(tous.filter(a=>a.refoulee).map(a=>liasseCnNorm(a.connaissement)));
   achats.forEach(a=>{
-    const client = achatClientEffectif(a) || '—', ex = livrExecutantDe(a), traitant = liasseTraitantLib(ex && ex.traitant), coop = coopById(a.cooperative_id);
+    const ex = livrExecutantDe(a), traitant = liasseTraitantLib(ex && ex.traitant), client = clientsCamion[a.id] || achatClientEffectif(a) || '—', coop = coopById(a.cooperative_id);
     const k = liasseCnNorm(a.connaissement); vus.add(k);
     const fs = parCn[k]||[], nabi = fs.filter(f=>f.source!=='serge'), serge = fs.filter(f=>f.source==='serge');
     const statut = nabi.length ? 'present' : serge.length ? 'serge' : 'manquant';
-    const C = clients[client] = clients[client] || { client, traitants:{}, n:0, present:0, serge:0, manquant:0 };
-    const T = C.traitants[traitant] = C.traitants[traitant] || { traitant, coops:{}, n:0, present:0, serge:0, manquant:0 };
+    const T = traitants[traitant] = traitants[traitant] || { traitant, coops:{}, n:0, present:0, serge:0, manquant:0 };
     const nomCoop = coop ? coop.nom : (a.cooperative_id||'?');
     const K = T.coops[nomCoop] = T.coops[nomCoop] || { coop:nomCoop, usine: ex ? ex.usine : a.usine_dechargement, lignes:[] };
-    K.lignes.push({ cn:a.connaissement, date:a.date, kg:Number(a.poids_net_produit)||0, refoulee:!!a.refoulee, statut, fichiers:fs });
-    [C,T].forEach(o=>{ o.n++; o[statut]++; });
+    K.lignes.push({ cn:a.connaissement, client, date:a.date, kg:Number(a.poids_net_produit)||0, refoulee:!!a.refoulee, statut, fichiers:fs });
+    T.n++; T[statut]++;
   });
   const orphelins = (state.liasseFichiers||[]).filter(f=>f.source!=='serge' && (!liasseCnNorm(f.connaissement||f.nom) || !vus.has(liasseCnNorm(f.connaissement||f.nom))));
   const inventaire = (state.liasseFichiers||[]).reduce((m,f)=>f.vu_le>m?f.vu_le:m, '');
-  return { clients, orphelins, inventaire, total:{ n:achats.length, present:Object.values(clients).reduce((t,c)=>t+c.present,0), serge:Object.values(clients).reduce((t,c)=>t+c.serge,0), manquant:Object.values(clients).reduce((t,c)=>t+c.manquant,0) } };
+  const som = c=>Object.values(traitants).reduce((t,x)=>t+x[c],0);
+  return { traitants, orphelins, inventaire, total:{ n:achats.length, present:som('present'), serge:som('serge'), manquant:som('manquant') } };
 }
 function liassePastille(statut){
   return statut==='present' ? '<span style="display:inline-block;padding:2px 9px;border-radius:12px;background:#E6F4EA;color:#1F6E5C;font-size:11.5px;font-weight:600">Présent</span>'
@@ -7846,11 +7860,11 @@ function liassePastille(statut){
 function liasseBasculer(cle){ state.liasseOuverts = state.liasseOuverts || {}; state.liasseOuverts[cle] = !state.liasseOuverts[cle]; render(); }
 function renderLiassesTab(){
   if (!state.liasseCharge){ chargerLiasses().then(()=>render()); return '<div class="hint" style="padding:18px">Chargement de l\'inventaire des liasses…</div>'; }
-  const E = liasseEtat(), T = E.total, filtre = state.liasseClient || '';
-  const noms = Object.keys(E.clients).sort();
+  const E = liasseEtat(), T = E.total, filtre = state.liasseTraitant || '';
+  const noms = Object.keys(E.traitants).sort();
   const compte = (o)=>'<span style="color:#1F6E5C;font-weight:600">'+o.present+'</span> / <span style="color:#B42318;font-weight:600">'+o.manquant+'</span>'+(o.serge?' / <span style="color:#8A6400;font-weight:600">'+o.serge+'</span>':'')+' <span class="hint">sur '+o.n+'</span>';
   let html = '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:12px">'
-    + '<div><h3 style="margin:0 0 4px">Liasses documentaires — ce qui est rangé et ce qui manque</h3><div class="hint">Un PDF par connaissement, rangé dans LIASSE DOCUMENTAIRE 26-27 (port › traitant ou client › coopérative). Comparaison avec les camions déchargés dans nos usines.'+(E.inventaire?' Inventaire du '+dateFr(E.inventaire)+' '+String(E.inventaire).slice(11,16)+'.':'')+'</div></div>'
+    + '<div><h3 style="margin:0 0 4px">Liasses documentaires — ce qui est rangé et ce qui manque</h3><div class="hint">Un PDF par connaissement, rangé dans LIASSE DOCUMENTAIRE 26-27 (port › traitant › coopérative). Classement par traitant ; le client de chaque camion est déduit des lots d\'usinage. Comparaison avec les camions déchargés dans nos usines.'+(E.inventaire?' Inventaire du '+dateFr(E.inventaire)+' '+String(E.inventaire).slice(11,16)+'.':'')+'</div></div>'
     + '<div style="display:flex;gap:8px"><button class="btn" onclick="state.liasseCharge=false;render()">Actualiser</button><button class="btn btn-primary" onclick="liasseExportOuvrir(\'manquantes\')">⬇ Liasses manquantes</button><button class="btn" onclick="liasseExportOuvrir(\'tout\')">⬇ Tout l\'état</button></div></div>'
     + '<div class="gros" style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:14px">'
     + '<div><div class="v">'+T.n+'</div><div class="l">camions déchargés</div></div>'
@@ -7858,24 +7872,20 @@ function renderLiassesTab(){
     + '<div><div class="v" style="color:#B42318">'+T.manquant+'</div><div class="l">manquantes</div></div>'
     + (T.serge?'<div><div class="v" style="color:#8A6400">'+T.serge+'</div><div class="l">chez Serge seulement</div></div>':'')
     + '<div><div class="v">'+E.orphelins.length+'</div><div class="l">fichiers sans camion</div></div></div>'
-    + '<div class="oc-subtabs" style="margin-top:0"><button class="'+(filtre?'':'active')+'" onclick="state.liasseClient=\'\';render()">Tous les clients</button>'+noms.map(n=>'<button class="'+(filtre===n?'active':'')+'" onclick="state.liasseClient=\''+esc(n)+'\';render()">'+esc(n)+'</button>').join('')+'</div>';
+    + '<div class="oc-subtabs" style="margin-top:0"><button class="'+(filtre?'':'active')+'" onclick="state.liasseTraitant=\'\';render()">Tous les traitants</button>'+noms.map(n=>'<button class="'+(filtre===n?'active':'')+'" onclick="state.liasseTraitant=\''+esc(n)+'\';render()">'+esc(n)+'</button>').join('')+'</div>';
   noms.filter(n=>!filtre || n===filtre).forEach(n=>{
-    const C = E.clients[n];
-    html += '<div class="panel" style="margin:0 0 14px;padding:14px 18px"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><h3 style="margin:0">'+esc(n)+'</h3><div>'+compte(C)+'</div></div>';
-    Object.keys(C.traitants).sort().forEach(t=>{
-      const Tr = C.traitants[t];
-      html += '<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap"><strong>'+esc(t)+'</strong><span>'+compte(Tr)+'</span></div>';
-      Object.keys(Tr.coops).sort().forEach(cn=>{
-        const K = Tr.coops[cn], cle = n+'|'+t+'|'+cn, ouvert = (state.liasseOuverts||{})[cle];
-        const pres = K.lignes.filter(l=>l.statut==='present').length, manq = K.lignes.filter(l=>l.statut==='manquant').length, sg = K.lignes.filter(l=>l.statut==='serge').length;
-        html += '<div style="margin:8px 0 0 12px"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;cursor:pointer" onclick="liasseBasculer(\''+esc(cle).replace(/'/g,"\\'")+'\')"><span>'+(ouvert?'▾':'▸')+' '+esc(cn)+' <span class="hint">'+esc(K.usine||'')+'</span></span><span>'+compte({present:pres,manquant:manq,serge:sg,n:K.lignes.length})+'</span></div>';
-        if (ouvert){
-          html += '<table class="data-table" style="margin:6px 0 4px 18px;width:auto;min-width:560px"><thead><tr><th>Connaissement</th><th>Déchargé le</th><th class="num">Poids net (kg)</th><th>Liasse</th><th>Fichier</th></tr></thead><tbody>'
-            + K.lignes.slice().sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))).map(l=>'<tr><td>'+esc(l.cn)+(l.refoulee?' <span class="hint">(refoulé)</span>':'')+'</td><td>'+esc(dateFr(l.date))+'</td><td class="num">'+fmtNum(l.kg)+'</td><td>'+liassePastille(l.statut)+'</td><td class="hint">'+esc(l.fichiers.map(f=>f.nom+(f.source==='serge'?' (Serge)':'')).join(' ; '))+'</td></tr>').join('')
-            + '</tbody></table>';
-        }
-        html += '</div>';
-      });
+    const Tr = E.traitants[n];
+    html += '<div class="panel" style="margin:0 0 14px;padding:14px 18px"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><h3 style="margin:0">'+esc(n)+'</h3><div>'+compte(Tr)+'</div></div>';
+    Object.keys(Tr.coops).sort((x,y)=>x.localeCompare(y,'fr')).forEach(cn=>{
+      const K = Tr.coops[cn], cle = n+'|'+cn, ouvert = (state.liasseOuverts||{})[cle];
+      const pres = K.lignes.filter(l=>l.statut==='present').length, manq = K.lignes.filter(l=>l.statut==='manquant').length, sg = K.lignes.filter(l=>l.statut==='serge').length;
+      const clients = Array.from(new Set(K.lignes.map(l=>l.client))).join(', ');
+      html += '<div style="margin:10px 0 0 12px;padding-top:8px;border-top:1px solid var(--border)"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;cursor:pointer" onclick="liasseBasculer(\''+esc(cle).replace(/'/g,"\\'")+'\')"><span>'+(ouvert?'▾':'▸')+' <strong>'+esc(cn)+'</strong> <span class="hint">'+esc(K.usine||'')+' · client : '+esc(clients)+'</span></span><span>'+compte({present:pres,manquant:manq,serge:sg,n:K.lignes.length})+'</span></div>';
+      if (ouvert){
+        html += '<table class="data-table" style="margin:6px 0 4px 18px;width:auto;min-width:560px"><thead><tr><th>Connaissement</th><th>Client</th><th>Déchargé le</th><th class="num">Poids net (kg)</th><th>Liasse</th><th>Fichier</th></tr></thead><tbody>'
+          + K.lignes.slice().sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))).map(l=>'<tr><td>'+esc(l.cn)+(l.refoulee?' <span class="hint">(refoulé)</span>':'')+'</td><td>'+esc(l.client)+'</td><td>'+esc(dateFr(l.date))+'</td><td class="num">'+fmtNum(l.kg)+'</td><td>'+liassePastille(l.statut)+'</td><td class="hint">'+esc(l.fichiers.map(f=>f.nom+(f.source==='serge'?' (Serge)':'')).join(' ; '))+'</td></tr>').join('')
+          + '</tbody></table>';
+      }
       html += '</div>';
     });
     html += '</div>';
@@ -7889,36 +7899,35 @@ function renderLiassesTab(){
 }
 // ---- Export du point sur les liasses : même mise en page que le « Point des livraisons par client » (modèle TRACA_SAPO), au choix en Excel ou en PDF ----
 function liasseLibStatut(s){ return s==='present' ? 'Présent' : s==='serge' ? 'Chez Serge seulement' : 'Manquant'; }
-function liasseLignesExport(contenu, client){
+function liasseLignesExport(contenu, traitant){
   const E = liasseEtat(), out = [];
-  Object.keys(E.clients).sort((a,b)=>a.localeCompare(b,'fr')).forEach(n=>{
-    if (client && n!==client) return;
-    const C = E.clients[n];
-    Object.keys(C.traitants).sort().forEach(t=>{ const Tr = C.traitants[t];
-      Object.keys(Tr.coops).sort((a,b)=>a.localeCompare(b,'fr')).forEach(cn=>{ const K = Tr.coops[cn];
-        K.lignes.slice().sort((x,y)=>String(x.date||'').localeCompare(String(y.date||'')) || String(x.cn).localeCompare(String(y.cn),'fr',{numeric:true})).forEach(l=>{
-          if (contenu==='manquantes' && l.statut==='present') return;
-          out.push({ client:n, traitant:t, coop:cn, usine:K.usine||'', cn:l.cn, date:l.date, kg:l.kg, statut:l.statut, refoulee:l.refoulee, fichiers:l.fichiers.map(f=>f.nom+(f.source==='serge'?' (Serge)':'')).join(' ; ') });
-        }); }); });
+  Object.keys(E.traitants).sort((a,b)=>a.localeCompare(b,'fr')).forEach(t=>{
+    if (traitant && t!==traitant) return;
+    const Tr = E.traitants[t];
+    Object.keys(Tr.coops).sort((a,b)=>a.localeCompare(b,'fr')).forEach(cn=>{ const K = Tr.coops[cn];
+      K.lignes.slice().sort((x,y)=>String(x.date||'').localeCompare(String(y.date||'')) || String(x.cn).localeCompare(String(y.cn),'fr',{numeric:true})).forEach(l=>{
+        if (contenu==='manquantes' && l.statut==='present') return;
+        out.push({ client:l.client, traitant:t, coop:cn, usine:K.usine||'', cn:l.cn, date:l.date, kg:l.kg, statut:l.statut, refoulee:l.refoulee, fichiers:l.fichiers.map(f=>f.nom+(f.source==='serge'?' (Serge)':'')).join(' ; ') });
+      }); });
   });
-  return { lignes:out, orphelins:(!client && contenu!=='manquantes') ? E.orphelins : [], inventaire:E.inventaire };
+  return { lignes:out, orphelins:(!traitant && contenu!=='manquantes') ? E.orphelins : [], inventaire:E.inventaire };
 }
 function liasseExportOuvrir(contenu){
-  state.modal = { type:'liasseExport', payload:{ contenu: contenu==='tout' ? 'tout' : 'manquantes', format:'xlsx', client: state.liasseClient||'' } }; render();
+  state.modal = { type:'liasseExport', payload:{ contenu: contenu==='tout' ? 'tout' : 'manquantes', format:'xlsx', client: state.liasseTraitant||'' } }; render();
 }
 function liasseExpChoix(cle, v){ const pl = state.modal && state.modal.payload; if (!pl) return; pl[cle] = v; render(); }
 function renderLiasseExportModal(m){
-  const pl = m.payload, E = liasseEtat(), noms = Object.keys(E.clients).sort((a,b)=>a.localeCompare(b,'fr'));
+  const pl = m.payload, E = liasseEtat(), noms = Object.keys(E.traitants).sort((a,b)=>a.localeCompare(b,'fr'));
   const nb = liasseLignesExport(pl.contenu, pl.client).lignes.length;
   const radio = (nom, val, lib, aide)=>'<label style="display:flex;gap:8px;align-items:flex-start;padding:6px 4px;cursor:pointer"><input type="radio" name="lx_'+nom+'" '+(pl[nom]===val?'checked':'')+' onchange="liasseExpChoix(\''+nom+'\',\''+val+'\')" style="margin-top:3px"><span><b>'+lib+'</b>'+(aide?'<br><span class="hint" style="margin:0">'+aide+'</span>':'')+'</span></label>';
   return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>Point des liasses documentaires</h3><div id="modal-fields">'
     + '<div style="font-weight:700;margin:2px 0">Que faut-il mettre dans le fichier ?</div>'
     + radio('contenu','manquantes','Les liasses manquantes seulement','Camions déchargés dont le PDF n\'est pas rangé chez toi (y compris ceux qui n\'existent que chez Serge).')
     + radio('contenu','tout','Tout l\'état','Tous les camions déchargés, avec leur statut, et les fichiers rangés sans camion.')
-    + '<div style="font-weight:700;margin:12px 0 4px">Quel client ?</div>'
-    + '<select class="input" onchange="liasseExpChoix(\'client\',this.value)" style="width:100%"><option value="">Tous les clients</option>'+noms.map(n=>'<option value="'+esc(n)+'" '+(pl.client===n?'selected':'')+'>'+esc(n)+'</option>').join('')+'</select>'
+    + '<div style="font-weight:700;margin:12px 0 4px">Quel traitant ?</div>'
+    + '<select class="input" onchange="liasseExpChoix(\'client\',this.value)" style="width:100%"><option value="">Tous les traitants</option>'+noms.map(n=>'<option value="'+esc(n)+'" '+(pl.client===n?'selected':'')+'>'+esc(n)+'</option>').join('')+'</select>'
     + '<div style="font-weight:700;margin:12px 0 2px">Quel format ?</div>'
-    + radio('format','xlsx','Excel (.xlsx)','Une feuille par client, même mise en page que le point des livraisons, plus un récap par coopérative.')
+    + radio('format','xlsx','Excel (.xlsx)','Une feuille par traitant, même mise en page que le point des livraisons, plus un récap par coopérative.')
     + radio('format','pdf','PDF','Document paysage prêt à envoyer ou à imprimer.')
     + '<div class="hint" style="margin-top:10px"><b>'+nb+'</b> ligne'+(nb>1?'s':'')+' dans le fichier.</div>'
     + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="liasseExportLancer()">⬇ Télécharger ('+(pl.format==='pdf'?'PDF':'Excel')+')</button></div></div></div>';
@@ -7941,21 +7950,21 @@ async function liasseExporterExcel(D, contenu, client, campNom, nomFichier){
   const bord = { style:'thin', color:NOIR }, cadre = { top:bord, bottom:bord, left:bord, right:bord };
   const NB = '#,##0_ ;[Red]\\-#,##0\\ ';
   const FOND = { present:'FFCCFFCC', serge:'FFFFF2CC', manquant:'FFF8CBAD' };
-  const cols = [['COOPERATIVES',26],['TRAITANT',14],['USINE',20],['DATE DÉCHARGEMENT',14.89],['N° CONNAISSEMENT',22.66],['POIDS NET (kg)',15.11],['LIASSE',22],['FICHIER RANGÉ',44]];
+  const cols = [['COOPERATIVES',26],['CLIENT',18],['USINE',20],['DATE DÉCHARGEMENT',14.89],['N° CONNAISSEMENT',22.66],['POIDS NET (kg)',15.11],['LIASSE',22],['FICHIER RANGÉ',44]];
   const wb = new ExcelJS.Workbook(); wb.creator = 'ORIGEN · ECORIGINE'; wb.created = new Date();
   const noms = new Set(), feuilles = [];
   const nomFeuille = n=>{ let b = String(n).replace(/[\\\/\?\*\[\]:]/g,' ').trim().slice(0,31) || 'Client', k = b, i = 2; while (noms.has(k.toLowerCase())){ k = b.slice(0,28)+' '+i; i++; } noms.add(k.toLowerCase()); return k; };
   const dateXl = iso=>{ const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso||'')); return m ? new Date(Date.UTC(+m[1], +m[2]-1, +m[3])) : null; };
   const entete = (ws, liste, ligne)=>{ const h = ws.getRow(ligne); h.height = 27.6;
     liste.forEach((c,i)=>{ const x = h.getCell(i+2); x.value = c[0]; x.font = { name:'Calibri', size:10, bold:true, color:{ argb:'FFFFFFFF' } }; x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:ENTETE } }; x.alignment = { horizontal:'center', vertical:'middle', wrapText:true }; x.border = cadre; }); };
-  const parClient = new Map(); D.lignes.forEach(l=>{ if (!parClient.has(l.client)) parClient.set(l.client, []); parClient.get(l.client).push(l); });
+  const parClient = new Map(); D.lignes.forEach(l=>{ if (!parClient.has(l.traitant)) parClient.set(l.traitant, []); parClient.get(l.traitant).push(l); });
   parClient.forEach((rows, nom)=>{
     const ws = wb.addWorksheet(nomFeuille(nom)); feuilles.push({ ws, coops:new Set(rows.map(r=>r.coop)) });
     ws.columns = [{ width:9 }].concat(cols.map(c=>({ width:c[1] })));
     ws.getCell('B1').value = (contenu==='manquantes' ? 'Liasses documentaires manquantes — ' : 'État des liasses documentaires — ')+nom+' — campagne '+campNom+' — au '+dateFr(aujourdhuiIso()); ws.getCell('B1').font = { name:'Calibri', size:11, bold:true };
     entete(ws, cols, 4);
     rows.forEach((l,i)=>{
-      const v = [ l.coop, l.traitant, l.usine, dateXl(l.date), l.cn+(l.refoulee?' (refoulé)':''), l.kg||null, liasseLibStatut(l.statut), l.fichiers ];
+      const v = [ l.coop, l.client, l.usine, dateXl(l.date), l.cn+(l.refoulee?' (refoulé)':''), l.kg||null, liasseLibStatut(l.statut), l.fichiers ];
       const row = ws.getRow(5+i);
       v.forEach((val,k)=>{ const x = row.getCell(k+2); x.value = val; x.border = cadre; x.font = { name:'Calibri', size:10 };
         x.alignment = k<=2 || k===7 ? { horizontal:'left' } : { horizontal: k===6 ? 'center' : 'right', indent: k===6 ? 0 : 1 };
@@ -8008,12 +8017,12 @@ async function liasseExporterPdf(D, contenu, client, campNom, nomFichier){
   await chargerBibliothequesPdf();
   const ENTETE = '#C55A11', FOND = { present:'#CCFFCC', serge:'#FFF2CC', manquant:'#F8CBAD' };
   const titre = contenu==='manquantes' ? 'Liasses documentaires manquantes' : 'État des liasses documentaires';
-  const sousTitre = (client ? client+' · ' : 'Tous les clients · ')+'campagne '+campNom+' · au '+new Date().toLocaleDateString('fr-FR')+(D.inventaire ? ' (inventaire du '+dateFr(D.inventaire)+' '+String(D.inventaire).slice(11,16)+')' : '');
+  const sousTitre = (client ? client+' · ' : 'Tous les traitants · ')+'campagne '+campNom+' · au '+new Date().toLocaleDateString('fr-FR')+(D.inventaire ? ' (inventaire du '+dateFr(D.inventaire)+' '+String(D.inventaire).slice(11,16)+')' : '');
   const nb = n=>n>0 ? Math.round(n).toLocaleString('fr-FR') : '—';
   const th = (t,w,al)=>'<th style="box-sizing:border-box;width:'+w+';padding:7px 5px;text-align:'+(al||'center')+';font-weight:700;font-size:11px;line-height:1.2;border:1px solid #000">'+t+'</th>';
   const td = (t,al,st)=>'<td style="padding:0 6px;text-align:'+(al||'center')+';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border:1px solid #999;'+(st||'')+'">'+t+'</td>';
-  const tete = '<thead><tr style="background:'+ENTETE+';color:#fff">'+th('Client','110px','left')+th('Traitant','90px')+th('Coopérative','200px','left')+th('Usine','130px')+th('Déchargé le','84px')+th('N° connaissement','150px')+th('Poids net (kg)','90px')+th('Liasse','150px')+'</tr></thead>';
-  const ligne = l=>'<tr style="height:27px">'+td(esc(l.client),'left')+td(esc(l.traitant))+td(esc(l.coop),'left','font-weight:700')+td(esc(l.usine))+td(esc(dateFr(l.date)))+td(esc(l.cn)+(l.refoulee?' (refoulé)':''),'center','font-size:10.5px')+td(nb(l.kg),'right')
+  const tete = '<thead><tr style="background:'+ENTETE+';color:#fff">'+th('Traitant','100px','left')+th('Client','120px')+th('Coopérative','180px','left')+th('Usine','130px')+th('Déchargé le','84px')+th('N° connaissement','150px')+th('Poids net (kg)','90px')+th('Liasse','150px')+'</tr></thead>';
+  const ligne = l=>'<tr style="height:27px">'+td(esc(l.traitant),'left')+td(esc(l.client))+td(esc(l.coop),'left','font-weight:700')+td(esc(l.usine))+td(esc(dateFr(l.date)))+td(esc(l.cn)+(l.refoulee?' (refoulé)':''),'center','font-size:10.5px')+td(nb(l.kg),'right')
     +td('<span style="display:inline-block;padding:2px 10px;border-radius:999px;background:'+FOND[l.statut]+';font-weight:700;font-size:10.5px">'+liasseLibStatut(l.statut)+'</span>')+'</tr>';
   const cnt = s=>D.lignes.filter(l=>l.statut===s).length, kgSans = D.lignes.filter(l=>l.statut!=='present').reduce((t,l)=>t+(l.kg||0),0);
   const tot = '<tr style="height:30px;background:#F2F2F2;font-weight:800"><td colspan="6" style="padding:0 8px;text-align:left;border:1px solid #000">TOTAL · '+D.lignes.length+' camion'+(D.lignes.length>1?'s':'')+' — '+cnt('manquant')+' manquant'+(cnt('manquant')>1?'s':'')+(cnt('serge') ? ', '+cnt('serge')+' chez Serge seulement' : '')+(contenu!=='manquantes' ? ', '+cnt('present')+' présent'+(cnt('present')>1?'s':'') : '')+'</td>'+td(nb(D.lignes.reduce((t,l)=>t+(l.kg||0),0)),'right','border:1px solid #000')+td('','center','border:1px solid #000')+'</tr>';
@@ -8024,7 +8033,7 @@ async function liasseExporterPdf(D, contenu, client, campNom, nomFichier){
   const orph = D.orphelins.length ? '<div style="margin-top:14px;font-size:11px;color:#5A6865"><b>'+D.orphelins.length+' fichier'+(D.orphelins.length>1?'s':'')+' rangé'+(D.orphelins.length>1?'s':'')+' sans camion correspondant</b> (numéro de connaissement absent ou inconnu) : voir l\'export Excel.</div>' : '';
   const htmlPage = (rows, k)=>'<div style="width:1122px;height:794px;box-sizing:border-box;padding:34px 40px;background:#fff;font-family:Arial,Helvetica,sans-serif;color:#14231F;position:relative">'
     + (k===0 ? '<div style="border-bottom:3px solid '+ENTETE+';padding-bottom:10px;margin-bottom:12px"><div style="font-size:11px;font-weight:700;letter-spacing:.12em;color:#8A4A1F">ECORIGINE · ORIGEN</div><div style="font-size:24px;font-weight:800;color:#14231F;margin-top:2px">'+esc(titre)+'</div><div style="font-size:12px;color:#5A6865;margin-top:3px">'+esc(sousTitre)+'</div></div>'
-      : '<div style="font-size:12px;color:#5A6865;margin-bottom:8px;border-bottom:1px solid #D5DDD9;padding-bottom:6px">'+esc(titre)+' · '+esc(client||'Tous les clients')+' (suite)</div>')
+      : '<div style="font-size:12px;color:#5A6865;margin-bottom:8px;border-bottom:1px solid #D5DDD9;padding-bottom:6px">'+esc(titre)+' · '+esc(client||'Tous les traitants')+' (suite)</div>')
     + '<table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:11px">'+(rows.length ? tete : '')+'<tbody>'+rows.map(ligne).join('')+(k===pages.length-1 ? tot : '')+'</tbody></table>'+(k===pages.length-1 ? orph : '')
     + '<div style="position:absolute;left:40px;right:40px;bottom:18px;display:flex;justify-content:space-between;font-size:10px;color:#8A9591"><span>ECORIGINE SA · Abidjan — document généré par ORIGEN</span><span>Page '+(k+1)+' / '+pages.length+'</span></div></div>';
   const cadre = document.createElement('iframe');
