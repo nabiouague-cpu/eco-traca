@@ -4745,7 +4745,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-20-546';
+const APP_VERSION = '2026-11-20-547';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7899,10 +7899,11 @@ function renderLiassesTab(){
 }
 // ---- Export du point sur les liasses : même mise en page que le « Point des livraisons par client » (modèle TRACA_SAPO), au choix en Excel ou en PDF ----
 function liasseLibStatut(s){ return s==='present' ? 'Présent' : s==='serge' ? 'Chez Serge seulement' : 'Manquant'; }
-function liasseLignesExport(contenu, traitant){
+function liasseLignesExport(contenu, sel){
+  sel = Array.isArray(sel) ? sel : (sel ? [sel] : []);
   const E = liasseEtat(), out = [];
   Object.keys(E.traitants).sort((a,b)=>a.localeCompare(b,'fr')).forEach(t=>{
-    if (traitant && t!==traitant) return;
+    if (sel.length && sel.indexOf(t)<0) return;
     const Tr = E.traitants[t];
     Object.keys(Tr.coops).sort((a,b)=>a.localeCompare(b,'fr')).forEach(cn=>{ const K = Tr.coops[cn];
       K.lignes.slice().sort((x,y)=>String(x.date||'').localeCompare(String(y.date||'')) || String(x.cn).localeCompare(String(y.cn),'fr',{numeric:true})).forEach(l=>{
@@ -7910,22 +7911,24 @@ function liasseLignesExport(contenu, traitant){
         out.push({ client:l.client, traitant:t, coop:cn, usine:K.usine||'', cn:l.cn, date:l.date, kg:l.kg, statut:l.statut, refoulee:l.refoulee, fichiers:l.fichiers.map(f=>f.nom+(f.source==='serge'?' (Serge)':'')).join(' ; ') });
       }); });
   });
-  return { lignes:out, orphelins:(!traitant && contenu!=='manquantes') ? E.orphelins : [], inventaire:E.inventaire };
+  return { lignes:out, orphelins:(!sel.length && contenu!=='manquantes') ? E.orphelins : [], inventaire:E.inventaire };
 }
 function liasseExportOuvrir(contenu){
-  state.modal = { type:'liasseExport', payload:{ contenu: contenu==='tout' ? 'tout' : 'manquantes', format:'xlsx', client: state.liasseTraitant||'' } }; render();
+  state.modal = { type:'liasseExport', payload:{ contenu: contenu==='tout' ? 'tout' : 'manquantes', format:'xlsx', traitants: state.liasseTraitant ? [state.liasseTraitant] : [] } }; render();
 }
+function liasseExpCoche(nom){ const pl = state.modal && state.modal.payload; if (!pl) return; const l = pl.traitants = pl.traitants||[], i = l.indexOf(nom); if (i>=0) l.splice(i,1); else l.push(nom); render(); }
 function liasseExpChoix(cle, v){ const pl = state.modal && state.modal.payload; if (!pl) return; pl[cle] = v; render(); }
 function renderLiasseExportModal(m){
   const pl = m.payload, E = liasseEtat(), noms = Object.keys(E.traitants).sort((a,b)=>a.localeCompare(b,'fr'));
-  const nb = liasseLignesExport(pl.contenu, pl.client).lignes.length;
+  const nb = liasseLignesExport(pl.contenu, pl.traitants).lignes.length;
   const radio = (nom, val, lib, aide)=>'<label style="display:flex;gap:8px;align-items:flex-start;padding:6px 4px;cursor:pointer"><input type="radio" name="lx_'+nom+'" '+(pl[nom]===val?'checked':'')+' onchange="liasseExpChoix(\''+nom+'\',\''+val+'\')" style="margin-top:3px"><span><b>'+lib+'</b>'+(aide?'<br><span class="hint" style="margin:0">'+aide+'</span>':'')+'</span></label>';
   return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>Point des liasses documentaires</h3><div id="modal-fields">'
     + '<div style="font-weight:700;margin:2px 0">Que faut-il mettre dans le fichier ?</div>'
     + radio('contenu','manquantes','Les liasses manquantes seulement','Camions déchargés dont le PDF n\'est pas rangé chez toi (y compris ceux qui n\'existent que chez Serge).')
     + radio('contenu','tout','Tout l\'état','Tous les camions déchargés, avec leur statut, et les fichiers rangés sans camion.')
-    + '<div style="font-weight:700;margin:12px 0 4px">Quel traitant ?</div>'
-    + '<select class="input" onchange="liasseExpChoix(\'client\',this.value)" style="width:100%"><option value="">Tous les traitants</option>'+noms.map(n=>'<option value="'+esc(n)+'" '+(pl.client===n?'selected':'')+'>'+esc(n)+'</option>').join('')+'</select>'
+    + '<div style="font-weight:700;margin:12px 0 4px">Quels traitants ?</div>'
+    + '<div class="hint" style="margin:0 0 4px">Coche un ou plusieurs traitants : chacun aura sa propre feuille. Rien de coché = tous.</div>'
+    + noms.map(n=>'<label style="display:flex;gap:8px;align-items:center;padding:3px 4px;cursor:pointer"><input type="checkbox" '+((pl.traitants||[]).indexOf(n)>=0?'checked':'')+' onchange="liasseExpCoche(\''+esc(n).replace(/'/g,"\\'")+'\')"><span>'+esc(n)+' <span class="hint" style="margin:0">'+E.traitants[n].n+' camion'+(E.traitants[n].n>1?'s':'')+'</span></span></label>').join('')
     + '<div style="font-weight:700;margin:12px 0 2px">Quel format ?</div>'
     + radio('format','xlsx','Excel (.xlsx)','Une feuille par traitant, même mise en page que le point des livraisons, plus un récap par coopérative.')
     + radio('format','pdf','PDF','Document paysage prêt à envoyer ou à imprimer.')
@@ -7934,7 +7937,7 @@ function renderLiasseExportModal(m){
 }
 async function liasseExportLancer(){
   const pl = state.modal && state.modal.type==='liasseExport' ? state.modal.payload : null; if (!pl) return;
-  const { contenu, format, client } = pl, D = liasseLignesExport(contenu, client);
+  const { contenu, format } = pl, sel = pl.traitants||[], client = sel.join(' + '), D = liasseLignesExport(contenu, sel);
   if (!D.lignes.length && !D.orphelins.length){ closeModal(); showToast(contenu==='manquantes' ? 'Aucune liasse manquante : tout est rangé.' : 'Rien à exporter.', 'success'); return; }
   closeModal();
   const camp = campagneCourante(), campNom = camp ? lotsCampagneNom(camp.id) : 'toutes campagnes';
