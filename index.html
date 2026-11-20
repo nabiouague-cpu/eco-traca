@@ -4745,7 +4745,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-20-555';
+const APP_VERSION = '2026-11-20-556';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -12153,6 +12153,7 @@ function renderLotsUsinage(){
     + '<input type="file" id="lu-import-transfert" accept=".xlsx,.xls,.csv" style="display:none" onchange="lotsTransfertImporter(this)">'
     + (lots.length ? '<button class="btn btn-primary" title="Excel avec les numéros de lot et leurs poids pesés à l\'entrée de l\'entrepôt export (poids définitif ; le format du tableau de transfert convient)" onclick="lotsPoidsChoisirFichier()">⭱ Importer les poids pesés (Excel)</button><input type="file" id="lu-import-poids" accept=".xlsx,.xls,.csv" style="display:none" onchange="lotsPoidsImporter(this)"><button class="btn" onclick="lotsPoidsEntrepotOuvrir()">⚖ Saisir les poids pesés</button>' : '')
     + ((lots||[]).some(l=>l.origine==='transfert') ? '<button class="btn" onclick="lotsTransfertExporter()">⭳ Exporter le tableau de transfert</button>' : '')
+    + (lots.length ? (function(){ const ss = lotsRapportSuvSites(); return ss.length ? '<span style="display:inline-flex;gap:6px;align-items:center"><select id="lu-suv-site" aria-label="Usine du rapport d\'usinage">'+ss.map(x=>'<option value="'+esc(x.code)+'">'+esc(x.nom)+' ('+esc(x.code)+') · '+x.n+' lots</option>').join('')+'</select><button class="btn btn-primary" title="Rapport d\'usinage reconstitué par ORIGEN au modèle SUV, à partir des lots et des camions déchargés (pour les usiniers qui ne remettent pas de rapport)" onclick="lotsRapportSuv(document.getElementById(\'lu-suv-site\').value)">⭳ Rapport d\'usinage (modèle SUV)</button></span>' : ''; })() : '')
     + (lots.length ? '<button class="btn-danger-text" onclick="lotsUsinageSupprimerTout()">Tout supprimer</button>' : '')
     + '<span class="hint" style="margin:0">'+recus.length+' livraison'+(recus.length>1?'s':'')+' reçue'+(recus.length>1?'s':'')+' à l\'usine · <b>'+fmtKg(dispo)+'</b> pas encore affectés à un lot</span></div>'
     + '<div class="hint" style="margin:-6px 0 14px">Le rapport d\'usinage reprend les numéros déjà attribués par les séries de numérotation : le client de chaque lot importé est retrouvé automatiquement à partir de son numéro.</div>';
@@ -12486,6 +12487,202 @@ async function lotsRapportClient(clientNom){
   const sansCompo = lots.filter(l=>!(compo.get(l.id)||[]).some(x=>x.achat)).length;
   await qcTelechargerClasseur(wb, 'Rapport_usinage_'+String(clientNom).replace(/[^A-Za-z0-9_-]+/g,'_')+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
   showToast('Rapport de '+clientNom+' prêt : '+lots.length+' lot'+(lots.length>1?'s':'')+(sansCompo?' ('+sansCompo+' sans composition renseignée)':'')+'.', sansCompo?'':'success');
+}
+
+// ---- Rapport d'usinage « modèle SUV » ---------------------------------------------------------------
+// Pour les usiniers qui travaillent en loco-magasin et ne remettent aucun rapport : ORIGEN reconstitue un rapport propre et cohérent, au modèle des
+// rapports SUV (une feuille RECAP LOTS, puis une feuille par séance d'usinage avec VIDAGE TREMIE / PRODUCTIONS / FREINTE / HUMIDITE / REUSINAGE).
+// Règles validées : base = poids net AVANT réfaction ; camions refoulés jamais montrés ; un seul rapport FINAL pour toute la série (pas de camions en attente) ;
+// séances de 3 à 4 camions aux dates les plus proches ; coopérative = nom court + (n° de connaissement) ; queue de lot reportée d'une séance à l'autre ;
+// freinte brute = (lots + queues) - vidées, dont 80 % de déchets (le reste = perte d'eau), brisures / grabots / ficelles à 0.
+const SUV_PART_DECHETS = 0.80;
+function suvCourt(nom){
+  let x = String(nom||'').toUpperCase();
+  ['COOP-CA','COOP CA','SCOOPS'].forEach(m=>{ x = x.split(m).join(' '); });
+  x = x.replace(/\s+/g,' ').trim().replace(/^[\s-]+|[\s-]+$/g,'');
+  return x.replace(/\s*-\s*$|^\s*-\s*/g,'').trim();
+}
+function suvCamions(site){
+  return rdueCamionsSite(site).map(c=>{
+    const a = c.a, paye = Number(a.poids_net_produit)||0, brut = Number(a.poids_brut_accepte)||0, avant = (brut>0 && brut>=paye) ? brut : paye;
+    const dp = pdDate(a,'Date P2') || pdDate(a,'Date P1'), jour = dp ? dp.jour : dateFr(a.date), j = jour.split('/'), h = dp && dp.heure ? dp.heure.split(':') : ['0','0'];
+    const ts = Date.UTC(+j[2], +j[1]-1, +j[0], +h[0], +h[1]) / 36e5;
+    const coop = String(a.fournisseur_saigic || pdVal(a,'Fournisseur') || rdueCoopNom(a) || '').trim();
+    return { a, coop, conn:String(a.connaissement||''), jour, ts, avant, ref:Math.max(0, avant-paye) };
+  }).filter(t=>t.avant>0 && isFinite(t.ts)).sort((x,y)=>x.ts-y.ts);
+}
+function suvBatir(lots, camions){
+  if (!lots.length || !camions.length) return null;
+  const T0 = camions.slice();
+  const consommer = ratio=>{
+    const reste = T0.map(t=>t.avant); let i = 0, last = 0; const comp = {}, lotin = {}, lotshort = {}, lotidx = {};
+    for (const L of lots){
+      let need = L.w, used = 0, short = 0; comp[L.num] = [];
+      while (need > 1e-6){
+        if (i >= T0.length){ short = need; break; }
+        const outAv = reste[i]*(1-ratio[i]), take = Math.min(need, outAv), kIn = take/(1-ratio[i]);
+        reste[i] -= kIn; need -= take; used += kIn; comp[L.num].push([i, kIn]); last = i;
+        if (reste[i] < 1e-6) i++;
+      }
+      lotin[L.num] = used; lotshort[L.num] = short; lotidx[L.num] = last;
+      if (short > 1e-6) break;
+    }
+    return { comp, lotin, lotshort, lotidx, last };
+  };
+  const somme = (o)=>Object.keys(o).reduce((s,k)=>s+o[k],0);
+  const totW = lots.reduce((s,L)=>s+L.w,0), totAv = T0.reduce((s,t)=>s+t.avant,0);
+  let mode = 'refaction', res = consommer(T0.map(t=>t.ref/t.avant));
+  // Si, avec la réfaction, le cacao reçu ne suffit pas à faire les lots, la perte réelle est forcément plus faible : taux unique déduit du poids entré et du poids sorti.
+  if (somme(res.lotshort) > 1 && totW < totAv){ const rs = 1 - totW/totAv; mode = 'deduite'; res = consommer(T0.map(()=>rs)); Object.keys(res.lotshort).forEach(k=>{ if (res.lotshort[k] < 1) res.lotshort[k] = 0; }); }
+  const manque = somme(res.lotshort);
+  const T = T0.slice(0, res.last+1), nT = T.length;       // camions au-delà du dernier utilisé = en attente d'usinage : jamais dans le rapport
+  // séances : groupes de 3 ou 4 camions (2 ou 5 en bout de série) dont la somme des écarts de dates est minimale
+  let groupes;
+  if (nT < 2) groupes = [[0]];
+  else {
+    const best = new Array(nT+1).fill(Infinity), prev = new Array(nT+1).fill(0); best[0] = 0;
+    const pen = { 2:150, 3:0, 4:0, 5:60 };
+    for (let k=1;k<=nT;k++) [2,3,4,5].forEach(tl=>{
+      if (k-tl < 0 || best[k-tl] === Infinity) return;
+      const cout = best[k-tl] + (T[k-1].ts - T[k-tl].ts) + pen[tl];
+      if (cout < best[k]){ best[k] = cout; prev[k] = tl; }
+    });
+    groupes = []; let k = nT; while (k > 0){ const tl = prev[k] || k; groupes.push(Array.from({length:tl}, (_,q)=>k-tl+q)); k -= tl; }
+    groupes.reverse();
+  }
+  const sessDe = {}; groupes.forEach((idxs,g)=>idxs.forEach(i=>{ sessDe[i] = g; }));
+  const lotdate = {}; lots.forEach(L=>{ if (res.lotin[L.num] > 0) lotdate[L.num] = T[groupes[sessDe[res.lotidx[L.num]]].slice(-1)[0]].jour; });
+  let carry = 0; const sheets = [];
+  groupes.forEach((idxs,g)=>{
+    const lotsS = lots.filter(L=>res.lotin[L.num] > 0 && sessDe[res.lotidx[L.num]] === g);
+    const entree = carry + idxs.reduce((s,i)=>s+T[i].avant,0), used = lotsS.reduce((s,L)=>s+res.lotin[L.num],0), queue = Math.max(0, entree-used);
+    sheets.push({ d:T[idxs[idxs.length-1]].jour, idxs, lots:lotsS, report:carry, queue, g }); carry = queue;
+  });
+  const dern = sheets.reduce((m,s,k)=>s.lots.length ? k : m, -1);
+  const feuilles = sheets.slice(0, dern+1);
+  return { T, lots, comp:res.comp, lotdate, sheets:feuilles, mode, manque, totAvant:feuilles.reduce((s,sh)=>s+sh.idxs.reduce((u,i)=>u+T[i].avant,0),0) };
+}
+function suvClasseur(ExcelJS, M, meta){
+  const wb = new ExcelJS.Workbook(); wb.creator = 'ORIGEN · ECORIGINE'; wb.created = new Date();
+  const FN = { name:'Arial', size:10 }, FB = { name:'Arial', size:10, bold:true };
+  const trait = { style:'thin', color:{ argb:'FF999999' } }, cadre = { top:trait, bottom:trait, left:trait, right:trait };
+  const fond = argb=>({ type:'pattern', pattern:'solid', fgColor:{ argb } });
+  const HEAD = fond('FFD9E1F2'), QUEUE = fond('FFFFF2CC'), TOT = fond('FFE2EFDA'), CTR = { horizontal:'center', vertical:'middle', wrapText:true };
+  const NUM = '#,##0', PCT = '0.00%', dv = (a,b)=>b ? a/b : 0;
+  const milliers = n=>String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  const etiq = t=>suvCourt(t.coop)+' ('+t.conn+')';
+  const put = (ws, r, c, v, o)=>{ o = o||{}; const x = ws.getCell(r,c); x.value = v; x.font = o.b ? FB : FN; if (o.fmt) x.numFmt = o.fmt; if (o.al) x.alignment = o.al; if (o.fill) x.fill = o.fill; if (o.box) x.border = cadre; return x; };
+  // RECAP LOTS
+  const ws = wb.addWorksheet('RECAP LOTS', { views:[{ state:'frozen', ySplit:3 }], pageSetup:{ fitToPage:true, fitToWidth:1, fitToHeight:0, orientation:'landscape' } });
+  put(ws,1,1,meta.titre,{ b:true }).font = { name:'Arial', size:12, bold:true };
+  ['N° lot','Client','Date de production','Pesée AGL (port)','Poids du lot (kg)','Composition (coopérative (n° de connaissement) : kg)'].forEach((h,k)=>put(ws,3,k+1,h,{ b:true, fill:HEAD, al:CTR, box:true }));
+  ws.getRow(3).height = 32;
+  let r = 4; const R0 = r;
+  M.lots.forEach(L=>{
+    put(ws,r,1,L.num,{ al:CTR, fmt:'0', box:true }); put(ws,r,2,L.client||'',{ al:CTR, box:true }); put(ws,r,3,M.lotdate[L.num]||'',{ al:CTR, box:true }); put(ws,r,4,L.agl||'',{ al:CTR, box:true });
+    put(ws,r,5,L.w,{ fmt:NUM, box:true });
+    const parts = new Map(); (M.comp[L.num]||[]).forEach(([i,k])=>{ const e = etiq(M.T[i]); parts.set(e, (parts.get(e)||0)+k); });
+    put(ws,r,6,Array.from(parts.entries()).map(([e,v])=>e+' : '+milliers(v)).join(' ; '),{ al:{ wrapText:true, vertical:'middle' }, box:true });
+    r++;
+  });
+  const RL = r-1, totLots = M.lots.reduce((s,L)=>s+L.w,0);
+  put(ws,r,1,'TOTAL',{ b:true }); put(ws,r,5,{ formula:'SUM(E'+R0+':E'+RL+')', result:totLots },{ b:true, fmt:NUM }); r++;
+  meta.clients.forEach(cl=>{
+    put(ws,r,1,'dont '+cl.nom+' ('+cl.mn+'–'+cl.mx+')',{ b:true });
+    put(ws,r,5,{ formula:'SUMIF(B'+R0+':B'+RL+',"'+cl.nom+'",E'+R0+':E'+RL+')', result:M.lots.filter(L=>L.client===cl.nom).reduce((s,L)=>s+L.w,0) },{ b:true, fmt:NUM }); r++;
+  });
+  r++;
+  put(ws,r,1,'Camions vidés (poids net avant réfaction)',{ b:true }); put(ws,r,5,M.totAvant,{ b:true, fmt:NUM });
+  [40,12,20,16,16,120].forEach((w,k)=>{ ws.getColumn(k+1).width = w; });
+  // une feuille par séance
+  const noms = new Set();
+  M.sheets.forEach(s=>{
+    let nom = s.d.slice(0,6).replace(/\//g,'-') + s.d.slice(-2); if (noms.has(nom)) nom += ' ('+(s.g+1)+')'; noms.add(nom);
+    const w = wb.addWorksheet(nom, { views:[{ showGridLines:false }], pageSetup:{ fitToPage:true, fitToWidth:1, fitToHeight:1, orientation:'portrait' } });
+    put(w,3,1,'ECORIGINE ECO',{ b:true });
+    let q = 6;
+    [[1,'VIDAGE TREMIE (Camions)'],[2,'ORDINAIRE'],[4,'RA'],[7,'GENERAL']].forEach(([c,h])=>put(w,q,c,h,{ b:true, fill:HEAD, al:CTR, box:true }));
+    [3,5,6].forEach(c=>{ w.getCell(q,c).fill = HEAD; });
+    q++; [2,4,7].forEach(c=>put(w,q,c,'VOLUME',{ b:true, al:CTR }));
+    q++; const first = q; let entree = 0;
+    if (s.report > 0){
+      put(w,q,1,s.report < 25000 ? 'QUEUE DE LOT' : "CACAO EN ATTENTE D'USINAGE",{ b:true }); put(w,q,4,Math.round(s.report),{ fmt:NUM });
+      for (let c=1;c<=7;c++) w.getCell(q,c).fill = QUEUE;
+      entree += Math.round(s.report); q++;
+    }
+    s.idxs.forEach(i=>{ const t = M.T[i]; put(w,q,1,etiq(t)); put(w,q,4,t.avant,{ fmt:NUM }); entree += t.avant; q++; });
+    const lastT = q-1; q = Math.max(q+1, 15);
+    const vid = q, vidD = entree;
+    put(w,q,1,'TOTAL VIDEES',{ b:true }); put(w,q,2,0,{ b:true }); put(w,q,4,{ formula:'SUM(D'+first+':D'+lastT+')', result:vidD },{ b:true, fmt:NUM }); put(w,q,7,{ formula:'B'+q+'+D'+q, result:vidD },{ b:true, fmt:NUM });
+    for (let c=1;c<=7;c++) w.getCell(q,c).fill = TOT;
+    q++;
+    [[1,'PRODUCTIONS (LOTS)'],[2,'N°'],[3,'POIDS'],[4,'N°'],[5,'POIDS']].forEach(([c,h])=>put(w,q,c,h,{ b:true, fill:HEAD, al:CTR, box:true }));
+    q++; put(w,q,1,'SECHOIR '); put(w,q,3,0); q++; put(w,q,1,'SILOS'); q++;
+    const lfirst = q; let sortie = 0;
+    s.lots.forEach(L=>{ put(w,q,4,L.num,{ al:CTR, fmt:'0' }); put(w,q,5,L.w,{ fmt:NUM }); sortie += L.w; q++; });
+    if (s.queue > 1){
+      put(w,q,1,s.queue < 25000 ? 'QUEUE DE LOT' : "CACAO EN ATTENTE D'USINAGE",{ b:true }); put(w,q,5,Math.round(s.queue),{ fmt:NUM });
+      for (let c=1;c<=7;c++) w.getCell(q,c).fill = QUEUE;
+      sortie += Math.round(s.queue); q++;
+    }
+    const plast = q-1; q = Math.max(q+1, vid+13);
+    const tot = q;
+    put(w,q,1,'TOTAL LOTS + QUEUES DE LOT',{ b:true }); put(w,q,3,0,{ b:true }); put(w,q,5,{ formula:'SUM(E'+lfirst+':E'+plast+')', result:sortie },{ b:true, fmt:NUM }); put(w,q,7,{ formula:'C'+q+'+E'+q, result:sortie },{ b:true, fmt:NUM });
+    for (let c=1;c<=7;c++) w.getCell(q,c).fill = TOT;
+    // FREINTE BRUTE = (lots + queues) - vidées
+    const br = tot+2, Dbr = sortie - vidD, Gbr = sortie - vidD;
+    put(w,br,1,'FREINTE  BRUTE',{ b:true }); put(w,br,2,{ formula:'C'+tot+'-B'+vid, result:0 }); put(w,br,3,{ formula:'IFERROR(B'+br+'/B'+vid+',0)', result:0 },{ fmt:PCT });
+    put(w,br,4,{ formula:'E'+tot+'-D'+vid, result:Dbr }); put(w,br,5,{ formula:'IFERROR(D'+br+'/D'+vid+',0)', result:dv(Dbr,vidD) },{ fmt:PCT });
+    put(w,br,7,{ formula:'G'+tot+'-G'+vid, result:Gbr },{ b:true }); put(w,br+1,7,{ formula:'IFERROR(G'+br+'/G'+vid+',0)', result:dv(Gbr,vidD) },{ fmt:PCT });
+    const perte = Math.max(0, entree - sortie), dech = Math.round(SUV_PART_DECHETS*perte), dr = br+3;
+    [['DECHETS :',dech],['BRISURES :',0],['GRABOTS :',0],['FICELLES:',0]].forEach(([lab,v],k)=>{
+      const rr = dr+k; put(w,rr,1,lab); put(w,rr,2,0); put(w,rr,3,'kg'); put(w,rr,4,v,{ fmt:NUM }); put(w,rr,5,'kg');
+      put(w,rr,7,{ formula:'IFERROR((B'+rr+'+D'+rr+')/G'+vid+',0)', result:dv(v,vidD) },{ fmt:PCT });
+    });
+    const imp = '(B'+dr+'+D'+dr+'+B'+(dr+1)+'+D'+(dr+1)+'+B'+(dr+2)+'+D'+(dr+2)+'+B'+(dr+3)+'+D'+(dr+3)+')';
+    const hr = dr+5, rel = hr+6, Grel = Gbr + dech;
+    put(w,hr,1,'HUMIDITE ORD:'); put(w,hr,2,0); put(w,hr,3,0); put(w,hr,4,0); put(w,hr,5,'kg'); put(w,hr,7,{ formula:'IFERROR('+imp+'/G'+vid+',0)', result:dv(dech,vidD) },{ fmt:PCT });
+    put(w,hr+1,1,'HUMIDITE  RA:'); put(w,hr+1,2,{ formula:'D'+vid, result:vidD },{ fmt:NUM });
+    put(w,hr+1,3,{ formula:'IFERROR(D'+(hr+1)+'/B'+(hr+1)+',0)', result:dv(-Grel,vidD) },{ fmt:PCT }); put(w,hr+1,4,{ formula:'-G'+rel, result:-Grel },{ fmt:NUM }); put(w,hr+1,5,'kg');
+    [[2,'HUMIDITE    COH:'],[3,'HUMIDITE    FT:']].forEach(([k,lab])=>{ put(w,hr+k,1,lab); put(w,hr+k,2,0); put(w,hr+k,3,0); put(w,hr+k,4,0); put(w,hr+k,5,'kg'); });
+    // FREINTE REELLE = brute + déchets + brisures + grabots + ficelles
+    put(w,rel,1,'FREINTE  REELLE',{ b:true }); put(w,rel,2,{ formula:'B'+dr+'+B'+(dr+1)+'+B'+(dr+2)+'+B'+(dr+3), result:0 });
+    put(w,rel,3,{ formula:'IFERROR(B'+rel+'/B'+vid+',0)', result:0 },{ fmt:PCT });
+    put(w,rel,4,{ formula:'D'+br, result:Dbr }); put(w,rel,5,{ formula:'IFERROR(D'+rel+'/D'+vid+',0)', result:dv(Dbr,vidD) },{ fmt:PCT });
+    put(w,rel,7,{ formula:'G'+br+'+'+imp, result:Grel },{ b:true }); put(w,rel+1,7,{ formula:'IFERROR(G'+rel+'/G'+vid+',0)', result:dv(Grel,vidD) },{ fmt:PCT });
+    put(w,rel+3,2,'REUSINAGE:');
+    for (let rr=1; rr<=rel+3; rr++) [2,4,7].forEach(c=>{
+      const x = w.getCell(rr,c), v = x.value;
+      if (x.numFmt || v===null || v===undefined || typeof v==='string') return;
+      x.numFmt = NUM;
+    });
+    [30,12,12,16,14,3,16].forEach((wd,k)=>{ w.getColumn(k+1).width = wd; });
+  });
+  return wb;
+}
+async function lotsRapportSuv(siteCode){
+  const site = lotsSiteParCode(siteCode), nomSite = site ? site.nom : siteCode;
+  const lotsDb = (state.lotsUsinage||[]).filter(l=>l.site_code===siteCode && rdueNumLot(l)!=null).sort(rdueParNum);
+  if (!lotsDb.length){ showToast('Aucun lot d\'usinage pour '+nomSite+'.'); return; }
+  const lots = lotsDb.map(l=>({ num:rdueNumLot(l), w:lotsUsinagePoidsRetenu(l), client:l.client||'', agl:l.date_pesee_entrepot ? dateFr(l.date_pesee_entrepot) : '', date_production:l.date_production||'' })).filter(L=>L.w>0);
+  const camions = suvCamions(siteCode);
+  if (!camions.length){ showToast('Aucun camion déchargé à '+nomSite+'.'); return; }
+  let ExcelJS; try{ ExcelJS = await qcChargerExcelJS(); }catch(e){ showToast('Impossible de préparer le classeur : '+e.message, 'error'); return; }
+  const M = suvBatir(lots, camions);
+  if (!M){ showToast('Rapport impossible : pas assez de données.'); return; }
+  lots.forEach(L=>{ if (L.date_production && M.lotdate[L.num]) M.lotdate[L.num] = dateFr(L.date_production); });
+  const mn = lots[0].num, mx = lots[lots.length-1].num, clientsNom = Array.from(new Set(lots.map(L=>L.client).filter(Boolean)));
+  const traitant = site && site.traitant && site.traitant.toLowerCase()!==String(nomSite).toLowerCase() ? site.traitant : '';
+  const meta = { clients: clientsNom.length>1 ? clientsNom.map(c=>{ const n = lots.filter(L=>L.client===c).map(L=>L.num); return { nom:c, mn:Math.min.apply(null,n), mx:Math.max.apply(null,n) }; }) : [],
+    titre:"RAPPORT D'USINAGE – "+nomSite+' ('+siteCode+')'+(traitant ? ' – '+traitant.toUpperCase() : '')+' – lots '+mn+' à '+mx+(clientsNom.length===1 ? ' ('+clientsNom[0]+')' : '') };
+  let wb; try{ wb = suvClasseur(ExcelJS, M, meta); }catch(e){ showToast('Rapport impossible : '+e.message, 'error'); return; }
+  await qcTelechargerClasseur(wb, "Rapport d'usinage "+(traitant ? traitant+' ' : '')+nomSite+' '+mn+'-'+mx+'.xlsx');
+  const m = M.manque > 1 ? ' · attention : '+fmtNum(Math.round(M.manque))+' kg de lots sans assez de camions pesés' : '';
+  showToast("Rapport d'usinage "+nomSite+' prêt : '+M.lots.length+' lots, '+M.sheets.reduce((s,x)=>s+x.idxs.length,0)+' camions, '+M.sheets.length+' séances'+m+'.', M.manque>1 ? '' : 'success');
+}
+function lotsRapportSuvSites(){
+  const m = new Map(); (state.lotsUsinage||[]).forEach(l=>{ if (l.site_code && rdueNumLot(l)!=null) m.set(l.site_code, (m.get(l.site_code)||0)+1); });
+  return Array.from(m.entries()).sort((a,b)=>a[0].localeCompare(b[0])).map(([code,n])=>({ code, n, nom:(lotsSiteParCode(code)||{}).nom||code }));
 }
 
 // ---- Import du rapport d'usinage (Excel) -------------------------------------------------------------
@@ -14598,7 +14795,7 @@ function rdueEtape2(){
     + tabs
     + '<div style="overflow-x:auto"><table class="rdue-tbl rdue-c"><thead><tr>'+ent.map((h,i)=>'<th'+(i===6?' class="gap"':([4,5,9,11].includes(i)?' class="r"':''))+'>'+esc(h)+'</th>').join('')+'</tr></thead><tbody><tr class="tot">'+tot+'</tr>'+rows+'</tbody></table></div>'
     + '<p class="hint" style="margin-top:10px">'+(nbReco ? nbReco+' date(s) de production reconstituée(s) à partir des déchargements, à un jour près, en attendant celles de l\'usinier. ' : '')+(R.manque ? R.manque+' lot(s) sans assez de camions pesés. ' : '')+(niv==='export' ? 'Volume vendu, réf vendeur et N°BL se remplissent quand les lots sont sous OT.' : '')+'</p>'
-    + '<div style="margin-top:10px"><button class="btn" onclick="rdueExporter()">Exporter en Excel</button></div>'
+    + '<div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:8px"><button class="btn" onclick="rdueExporter()">Exporter en Excel</button>'+Array.from(new Set(R.lots.map(o=>o.l.site_code).filter(Boolean))).map(sc=>'<button class="btn btn-primary" title="Rapport d\'usinage complet de l\'usine, au modèle SUV (lots, camions, séances, freinte)" onclick="lotsRapportSuv(\''+esc(sc)+'\')">⭳ Rapport d\'usinage '+esc((lotsSiteParCode(sc)||{}).nom||sc)+' (modèle SUV)</button>').join('')+'</div>'
     + rdueNav(2, '<b>'+R.cams.length+' camions</b> · '+R.lots.length+' lots')+'</div>';
 }
 function rdueEtape3(){
