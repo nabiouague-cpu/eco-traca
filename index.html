@@ -4745,7 +4745,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-20-548';
+const APP_VERSION = '2026-11-20-549';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7811,6 +7811,9 @@ async function chargerLiasses(){
   const r = await supabaseClient.from('liasse_fichiers').select('*');
   if (r.error) showToast('Impossible de charger l\'inventaire des liasses : '+r.error.message);
   state.liasseFichiers = r.error ? (state.liasseFichiers||[]) : (r.data||[]);
+  const rb = await supabaseClient.from('liasse_bordereaux').select('*');
+  if (rb.error) showToast('Impossible de charger le suivi des bordereaux : '+rb.error.message);
+  else { state.liasseBordereaux = {}; (rb.data||[]).forEach(x=>{ state.liasseBordereaux[x.connaissement] = x; }); }
   state.liasseCharge = true;
 }
 function liasseCnNorm(s){ const m = String(s||'').toUpperCase().match(/(SC\d{6})-(\d{4})-(?:(\d)-)?0*(\d+)[A-Z]?/); return m ? m[1]+'-'+m[2]+'-'+(m[3]||'2')+'-'+m[4] : ''; }
@@ -7835,23 +7838,27 @@ function liasseEtat(){
   const achats = tous.filter(a=>!a.refoulee);
   const parCn = {}; (state.liasseFichiers||[]).forEach(f=>{ const k = liasseCnNorm(f.connaissement||f.nom); if (!k) return; (parCn[k] = parCn[k]||[]).push(f); });
   const clientsCamion = liasseClientsParCamion(achats);
+  const bords = state.liasseBordereaux || {};
   const traitants = {}; const vus = new Set(tous.filter(a=>a.refoulee).map(a=>liasseCnNorm(a.connaissement)));
   achats.forEach(a=>{
     const ex = livrExecutantDe(a), traitant = liasseTraitantLib(ex && ex.traitant), client = clientsCamion[a.id] || achatClientEffectif(a) || '—', coop = coopById(a.cooperative_id);
     const k = liasseCnNorm(a.connaissement); vus.add(k);
     const fs = parCn[k]||[], nabi = fs.filter(f=>f.source!=='serge'), serge = fs.filter(f=>f.source==='serge');
     const statut = nabi.length ? 'present' : serge.length ? 'serge' : 'manquant';
-    const T = traitants[traitant] = traitants[traitant] || { traitant, coops:{}, n:0, present:0, serge:0, manquant:0 };
+    const T = traitants[traitant] = traitants[traitant] || { traitant, coops:{}, n:0, present:0, serge:0, manquant:0, sansBord:0 };
     const nomCoop = coop ? coop.nom : (a.cooperative_id||'?');
     const K = T.coops[nomCoop] = T.coops[nomCoop] || { coop:nomCoop, usine: ex ? ex.usine : a.usine_dechargement, lignes:[] };
-    K.lignes.push({ cn:a.connaissement, client, date:a.date, kg:Number(a.poids_net_produit)||0, refoulee:!!a.refoulee, statut, fichiers:fs });
-    T.n++; T[statut]++;
+    const bord = bords[k] || null;
+    K.lignes.push({ cn:a.connaissement, cle:k, client, date:a.date, kg:Number(a.poids_net_produit)||0, refoulee:!!a.refoulee, statut, bord, fichiers:fs });
+    T.n++; T[statut]++; if (statut==='present' && !bord) T.sansBord++;
   });
   const orphelins = (state.liasseFichiers||[]).filter(f=>f.source!=='serge' && (!liasseCnNorm(f.connaissement||f.nom) || !vus.has(liasseCnNorm(f.connaissement||f.nom))));
   const inventaire = (state.liasseFichiers||[]).reduce((m,f)=>f.vu_le>m?f.vu_le:m, '');
   const som = c=>Object.values(traitants).reduce((t,x)=>t+x[c],0);
-  return { traitants, orphelins, inventaire, total:{ n:achats.length, present:som('present'), serge:som('serge'), manquant:som('manquant') } };
+  return { traitants, orphelins, inventaire, total:{ n:achats.length, present:som('present'), serge:som('serge'), manquant:som('manquant'), sansBord:som('sansBord') } };
 }
+// Nombre de points à traiter (liasses manquantes + liasses présentes sans bordereau), pour le repère sur l'onglet.
+function liasseAlertes(){ try{ if (!state.liasseCharge) return 0; const T = liasseEtat().total; return T.manquant + T.sansBord; }catch(e){ return 0; } }
 function liassePastille(statut){
   return statut==='present' ? '<span style="display:inline-block;padding:2px 9px;border-radius:12px;background:#E6F4EA;color:#1F6E5C;font-size:11.5px;font-weight:600">Présent</span>'
     : statut==='serge' ? '<span style="display:inline-block;padding:2px 9px;border-radius:12px;background:#FFF4D6;color:#8A6400;font-size:11.5px;font-weight:600" title="Le PDF est dans le OneDrive de Serge Amouzoun, pas dans la liasse de référence">Chez Serge seulement</span>'
@@ -7861,7 +7868,8 @@ function liasseBasculer(cle){ state.liasseOuverts = state.liasseOuverts || {}; s
 function renderLiassesTab(){
   if (!state.liasseCharge){ chargerLiasses().then(()=>render()); return '<div class="hint" style="padding:18px">Chargement de l\'inventaire des liasses…</div>'; }
   const E = liasseEtat(), T = E.total, filtre = state.liasseTraitant || '';
-  const noms = Object.keys(E.traitants).sort();
+  const noms = Object.keys(E.traitants).sort(), vueL = state.liasseVue || '';
+  const garde = l=>vueL==='sansliasse' ? l.statut!=='present' : vueL==='sansbord' ? (l.statut==='present' && !l.bord) : true;
   const compte = (o)=>'<span style="color:#1F6E5C;font-weight:600">'+o.present+'</span> / <span style="color:#B42318;font-weight:600">'+o.manquant+'</span>'+(o.serge?' / <span style="color:#8A6400;font-weight:600">'+o.serge+'</span>':'')+' <span class="hint">sur '+o.n+'</span>';
   let html = '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:12px">'
     + '<div><h3 style="margin:0 0 4px">Liasses documentaires — ce qui est rangé et ce qui manque</h3><div class="hint">Un PDF par connaissement, rangé dans LIASSE DOCUMENTAIRE 26-27 (port › traitant › coopérative). Classement par traitant ; le client de chaque camion est déduit des lots d\'usinage. Comparaison avec les camions déchargés dans nos usines.'+(E.inventaire?' Inventaire du '+dateFr(E.inventaire)+' '+String(E.inventaire).slice(11,16)+'.':'')+'</div></div>'
@@ -7869,33 +7877,63 @@ function renderLiassesTab(){
     + '<div class="gros" style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:14px">'
     + '<div><div class="v">'+T.n+'</div><div class="l">camions déchargés</div></div>'
     + '<div><div class="v" style="color:#1F6E5C">'+T.present+'</div><div class="l">liasses présentes</div></div>'
-    + '<div><div class="v" style="color:#B42318">'+T.manquant+'</div><div class="l">manquantes</div></div>'
+    + '<div><div class="v" style="color:#B42318">'+T.manquant+'</div><div class="l">sans liasse</div></div>'
+    + '<div><div class="v" style="color:#B25E00">'+T.sansBord+'</div><div class="l">liasses sans bordereau</div></div>'
     + (T.serge?'<div><div class="v" style="color:#8A6400">'+T.serge+'</div><div class="l">chez Serge seulement</div></div>':'')
     + '<div><div class="v">'+E.orphelins.length+'</div><div class="l">fichiers sans camion</div></div></div>'
+    + '<div class="oc-subtabs" style="margin:0 0 8px">'+[['','Tout'],['sansliasse','Sans liasse ('+T.manquant+')'],['sansbord','Sans bordereau ('+T.sansBord+')']].map(([k,l])=>'<button class="'+((state.liasseVue||'')===k?'active':'')+'" onclick="state.liasseVue=\''+k+'\';render()">'+l+'</button>').join('')+'</div>'
     + '<div class="oc-subtabs" style="margin-top:0"><button class="'+(filtre?'':'active')+'" onclick="state.liasseTraitant=\'\';render()">Tous les traitants</button>'+noms.map(n=>'<button class="'+(filtre===n?'active':'')+'" onclick="state.liasseTraitant=\''+esc(n)+'\';render()">'+esc(n)+'</button>').join('')+'</div>';
   noms.filter(n=>!filtre || n===filtre).forEach(n=>{
     const Tr = E.traitants[n];
-    html += '<div class="panel" style="margin:0 0 14px;padding:14px 18px"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><h3 style="margin:0">'+esc(n)+'</h3><div>'+compte(Tr)+'</div></div>';
-    Object.keys(Tr.coops).sort((x,y)=>x.localeCompare(y,'fr')).forEach(cn=>{
-      const K = Tr.coops[cn], cle = n+'|'+cn, ouvert = (state.liasseOuverts||{})[cle];
-      const pres = K.lignes.filter(l=>l.statut==='present').length, manq = K.lignes.filter(l=>l.statut==='manquant').length, sg = K.lignes.filter(l=>l.statut==='serge').length;
+    const coopsVisibles = Object.keys(Tr.coops).sort((x,y)=>x.localeCompare(y,'fr')).filter(cn=>Tr.coops[cn].lignes.some(garde));
+    if (vueL && !coopsVisibles.length) return;
+    html += '<div class="panel" style="margin:0 0 14px;padding:14px 18px"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><h3 style="margin:0">'+esc(n)+'</h3><div>'+compte(Tr)+(Tr.sansBord?' · <span style="color:#B25E00;font-weight:600">'+Tr.sansBord+'</span> <span class="hint">sans bordereau</span>':'')+'</div></div>';
+    coopsVisibles.forEach(cn=>{
+      const K = Tr.coops[cn], cle = n+'|'+cn, ouvert = (state.liasseOuverts||{})[cle] || !!vueL;
+      const pres = K.lignes.filter(l=>l.statut==='present').length, manq = K.lignes.filter(l=>l.statut==='manquant').length, sg = K.lignes.filter(l=>l.statut==='serge').length, sb = K.lignes.filter(l=>l.statut==='present' && !l.bord).length;
       const clients = Array.from(new Set(K.lignes.map(l=>l.client))).join(', ');
-      html += '<div style="margin:10px 0 0 12px;padding-top:8px;border-top:1px solid var(--border)"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;cursor:pointer" onclick="liasseBasculer(\''+esc(cle).replace(/'/g,"\\'")+'\')"><span>'+(ouvert?'▾':'▸')+' <strong>'+esc(cn)+'</strong> <span class="hint">'+esc(K.usine||'')+' · client : '+esc(clients)+'</span></span><span>'+compte({present:pres,manquant:manq,serge:sg,n:K.lignes.length})+'</span></div>';
+      html += '<div style="margin:10px 0 0 12px;padding-top:8px;border-top:1px solid var(--border)"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;cursor:pointer" onclick="liasseBasculer(\''+esc(cle).replace(/'/g,"\\'")+'\')"><span>'+(ouvert?'▾':'▸')+' <strong>'+esc(cn)+'</strong> <span class="hint">'+esc(K.usine||'')+' · client : '+esc(clients)+'</span></span><span>'+compte({present:pres,manquant:manq,serge:sg,n:K.lignes.length})+(sb?' · <span style="color:#B25E00;font-weight:600">'+sb+'</span> <span class="hint">sans bordereau</span>':'')+'</span></div>';
       if (ouvert){
-        html += '<table class="data-table" style="margin:6px 0 4px 18px;width:auto;min-width:560px"><thead><tr><th>Connaissement</th><th>Client</th><th>Déchargé le</th><th class="num">Poids net (kg)</th><th>Liasse</th><th>Fichier</th></tr></thead><tbody>'
-          + K.lignes.slice().sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))).map(l=>'<tr><td>'+esc(l.cn)+(l.refoulee?' <span class="hint">(refoulé)</span>':'')+'</td><td>'+esc(l.client)+'</td><td>'+esc(dateFr(l.date))+'</td><td class="num">'+fmtNum(l.kg)+'</td><td>'+liassePastille(l.statut)+'</td><td class="hint">'+esc(l.fichiers.map(f=>f.nom+(f.source==='serge'?' (Serge)':'')).join(' ; '))+'</td></tr>').join('')
+        html += (sb ? '<div style="margin:6px 0 0 18px"><button class="btn" style="padding:3px 10px;font-size:12px" onclick="liasseBordMarquerCoop(\''+esc(n).replace(/'/g,"\\'")+'\',\''+esc(cn).replace(/'/g,"\\'")+'\')" title="Les PDF de cette coopérative ont déjà leur bordereau : ne plus les signaler">✔ Tous ont déjà leur bordereau</button></div>' : '')
+          + '<table class="data-table" style="margin:6px 0 4px 18px;width:auto;min-width:560px"><thead><tr><th>Connaissement</th><th>Client</th><th>Déchargé le</th><th class="num">Poids net (kg)</th><th>Liasse</th><th>Bordereau</th><th>Fichier</th></tr></thead><tbody>'
+          + K.lignes.filter(garde).sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))).map(l=>'<tr><td>'+esc(l.cn)+(l.refoulee?' <span class="hint">(refoulé)</span>':'')+'</td><td>'+esc(l.client)+'</td><td>'+esc(dateFr(l.date))+'</td><td class="num">'+fmtNum(l.kg)+'</td><td>'+liassePastille(l.statut)+'</td><td>'+liasseBordCellule(l)+'</td><td class="hint">'+esc(l.fichiers.map(f=>f.nom+(f.source==='serge'?' (Serge)':'')).join(' ; '))+'</td></tr>').join('')
           + '</tbody></table>';
       }
       html += '</div>';
     });
     html += '</div>';
   });
+  if (vueL && !html.split('class="panel"').slice(1).length) html += '<div class="hint" style="padding:12px 4px">'+(vueL==='sansliasse' ? 'Tous les camions ont leur liasse.' : 'Toutes les liasses présentes ont leur bordereau.')+'</div>';
   if (!filtre && E.orphelins.length){
     html += '<div class="panel" style="margin:0 0 14px;padding:14px 18px"><h3 style="margin:0 0 6px">Fichiers rangés sans camion correspondant</h3><div class="hint" style="margin-bottom:8px">Le nom ne contient pas de numéro de connaissement reconnu, ou ce numéro n\'est pas dans les déchargements de la campagne.</div>'
       + '<table class="data-table" style="width:auto;min-width:560px"><thead><tr><th>Dossier</th><th>Fichier</th><th>Modifié le</th></tr></thead><tbody>'
       + E.orphelins.map(f=>'<tr><td>'+esc([f.port,f.dossier_client,f.dossier_coop].filter(Boolean).join(' › '))+'</td><td>'+esc(f.nom)+'</td><td>'+esc(dateFr(f.modifie_le))+'</td></tr>').join('')+'</tbody></table></div>';
   }
   return html;
+}
+function liasseBordCellule(l){
+  if (l.statut!=='present') return '<span class="hint">—</span>';
+  if (l.bord) return '<span style="display:inline-block;padding:2px 9px;border-radius:12px;background:#E6F4EA;color:#1F6E5C;font-size:11.5px;font-weight:600" title="'+esc((l.bord.source==='manuel'?'Marqué à la main':'Ajouté par ORIGEN')+(l.bord.ajoute_le?' le '+dateFr(String(l.bord.ajoute_le).slice(0,10)):''))+'">Ajouté</span> <a href="#" class="hint" onclick="liasseBordMarquer(\''+l.cle+'\',false);return false" title="Remettre « sans bordereau »">retirer</a>';
+  return '<span style="display:inline-block;padding:2px 9px;border-radius:12px;background:#FFF1E0;color:#B25E00;font-size:11.5px;font-weight:600">À ajouter</span> <a href="#" class="hint" onclick="liasseBordMarquer(\''+l.cle+'\',true);return false" title="Le PDF contient déjà son bordereau">déjà fait</a>';
+}
+async function liasseBordMarquer(cle, oui){
+  if (!cle) return;
+  const r = oui ? await supabaseClient.from('liasse_bordereaux').upsert({ connaissement:cle, source:'manuel' }) : await supabaseClient.from('liasse_bordereaux').delete().eq('connaissement', cle);
+  if (r.error){ showToast('Enregistrement impossible : '+r.error.message); return; }
+  state.liasseBordereaux = state.liasseBordereaux || {};
+  if (oui) state.liasseBordereaux[cle] = { connaissement:cle, source:'manuel', ajoute_le:new Date().toISOString() }; else delete state.liasseBordereaux[cle];
+  render();
+}
+async function liasseBordMarquerCoop(traitant, coop){
+  const Tr = liasseEtat().traitants[traitant], K = Tr && Tr.coops[coop]; if (!K) return;
+  const cibles = K.lignes.filter(l=>l.statut==='present' && !l.bord && l.cle);
+  if (!cibles.length) return;
+  if (!confirm('Marquer '+cibles.length+' liasse'+(cibles.length>1?'s':'')+' de '+coop+' comme ayant déjà leur bordereau ?')) return;
+  const r = await supabaseClient.from('liasse_bordereaux').upsert(cibles.map(l=>({ connaissement:l.cle, source:'manuel' })));
+  if (r.error){ showToast('Enregistrement impossible : '+r.error.message); return; }
+  state.liasseBordereaux = state.liasseBordereaux || {};
+  cibles.forEach(l=>{ state.liasseBordereaux[l.cle] = { connaissement:l.cle, source:'manuel', ajoute_le:new Date().toISOString() }; });
+  render();
 }
 // ---- Bordereau de réception ORIGEN ajouté en première page des liasses (PDF) ----
 // Le navigateur ne voit pas OneDrive (et le robot ne peut pas réécrire un PDF de plus de 1 Mo) : on dépose ici les PDF de liasse téléchargés,
@@ -7922,11 +7960,13 @@ async function liasseBordereauxLancer(fichiers){
   const liste = Array.from(fichiers||[]).filter(f=>/\.pdf$/i.test(f.name)); if (!liste.length){ showToast('Dépose des fichiers PDF.'); return; }
   if (state.liasseBordEnCours) return; state.liasseBordEnCours = true;
   const statut = t=>{ const el = document.getElementById('liasseBordStatut'); if (el) el.textContent = t; };
-  const ok = [], ignores = [];
+  const ok = [], ignores = [], avert = [];
   try{
     if (typeof JSZip === 'undefined') throw new Error("la bibliothèque de compression n'a pas pu se charger (connexion internet requise)");
     if (!state.prefCharge) await chargerPrefinancements();
-    const L = await chargerPdfLib(), zip = new JSZip(), vus = new Set();
+    if (!state.liasseCharge) await chargerLiasses();
+    const bords = state.liasseBordereaux || {}, inv = {}; (state.liasseFichiers||[]).filter(x=>x.source!=='serge').forEach(x=>{ const c = liasseCnNorm(x.connaissement||x.nom); if (c) (inv[c] = inv[c]||[]).push(x); });
+    const L = await chargerPdfLib(), zip = new JSZip(), vus = new Set(), pris = [];
     const camp = campagneCourante(), cid = camp ? camp.id : null;
     const parCn = {}; (state.achats||[]).filter(a=>!a.producteur_id && a.connaissement && (!cid || a.campagne_id===cid)).forEach(a=>{ const k = liasseCnNorm(a.connaissement); if (k) parCn[k] = a; });
     for (let i=0; i<liste.length; i++){
@@ -7936,7 +7976,8 @@ async function liasseBordereauxLancer(fichiers){
       if (!a) { ignores.push({ nom:f.name, raison:'camion introuvable dans la campagne en cours' }); continue; }
       if (a.refoulee) { ignores.push({ nom:f.name, raison:'camion refoulé : pas de bordereau' }); continue; }
       if (!(Number(a.poids_net_produit)>0)) { ignores.push({ nom:f.name, raison:'pas encore pesé à l\'usine : pas de bordereau' }); continue; }
-      if (vus.has(f.name.toLowerCase())) { ignores.push({ nom:f.name, raison:'deux fichiers du même nom' }); continue; }
+      if (bords[k]) { ignores.push({ nom:f.name, raison:'doublon : cette liasse a déjà son bordereau'+(bords[k].ajoute_le ? ' (ajouté le '+dateFr(String(bords[k].ajoute_le).slice(0,10))+')' : '')+' — écartée, non reprise dans le ZIP' }); continue; }
+      if (vus.has(k)) { ignores.push({ nom:f.name, raison:'doublon dans ce dépôt : un autre fichier du même camion est déjà traité — écarté' }); continue; }
       const b = bordereauReceptionData(a);
       if (b.manque==='prix') { ignores.push({ nom:f.name, raison:'prix d\'entrée usine de la campagne à renseigner' }); continue; }
       try{
@@ -7946,18 +7987,25 @@ async function liasseBordereauxLancer(fichiers){
         const img = await doc.embedJpg(await liasseBordereauImage(b));
         const page = doc.insertPage(0, [612,792]); page.drawImage(img, { x:0, y:0, width:612, height:792 });
         doc.setKeywords([(mots ? mots+' ' : '')+LIASSE_MARQUE_BORDEREAU]);
-        zip.file(f.name, await doc.save(), { compression:'STORE' }); vus.add(f.name.toLowerCase()); ok.push({ nom:f.name });
+        const sortie = await doc.save(); zip.file(f.name, sortie, { compression:'STORE' }); vus.add(k); ok.push({ nom:f.name }); pris.push({ connaissement:k, nom:f.name, source:'origen', taille_apres:sortie.length });
+        const ex = inv[k]||[]; if (ex.length && !ex.some(x=>x.nom===f.name && Number(x.taille)===f.size)) avert.push({ nom:f.name, raison:'une liasse existe déjà dans le dossier pour ce camion sous un autre nom ou une autre taille : vérifie qu\'il n\'y a pas de doublon' });
       }catch(e){ ignores.push({ nom:f.name, raison:'PDF illisible ou protégé ('+(e && e.message ? e.message : e)+')' }); }
     }
-    if (ok.length) telechargerBlob(await zip.generateAsync({ type:'blob' }), 'Liasses_avec_bordereau_'+new Date().toISOString().slice(0,10)+'.zip');
+    if (ok.length){
+      telechargerBlob(await zip.generateAsync({ type:'blob' }), 'Liasses_avec_bordereau_'+new Date().toISOString().slice(0,10)+'.zip');
+      const r = await supabaseClient.from('liasse_bordereaux').upsert(pris);
+      if (r.error) showToast('ZIP téléchargé, mais le suivi des bordereaux n\'a pas pu être enregistré : '+r.error.message);
+      else { state.liasseBordereaux = state.liasseBordereaux || {}; pris.forEach(x=>{ state.liasseBordereaux[x.connaissement] = Object.assign({ ajoute_le:new Date().toISOString() }, x); }); }
+    }
   }catch(e){ showToast('Échec : '+(e && e.message ? e.message : e)); }
   state.liasseBordEnCours = false; statut('');
-  if (ok.length || ignores.length){ state.modal = { type:'liasseBordRapport', payload:{ ok, ignores } }; render(); }
+  if (ok.length || ignores.length){ state.modal = { type:'liasseBordRapport', payload:{ ok, ignores, avert } }; render(); }
 }
 function renderLiasseBordRapportModal(m){
   const p = m.payload;
   return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>Bordereaux ajoutés aux liasses</h3><div id="modal-fields">'
     + (p.ok.length ? '<p><b style="color:#1F6E5C">'+p.ok.length+' liasse'+(p.ok.length>1?'s':'')+'</b> avec le bordereau en première page, même nom de fichier. Le ZIP vient d\'être téléchargé : remets ces fichiers dans le dossier de la liasse, à la place des anciens.</p>' : '<p><b>Aucun fichier modifié.</b></p>')
+    + ((p.avert||[]).length ? '<p style="margin-top:10px"><b style="color:#B25E00">À vérifier ('+p.avert.length+')</b></p><table class="data-table" style="width:100%"><tbody>'+p.avert.map(x=>'<tr><td>'+esc(x.nom)+'</td><td class="hint">'+esc(x.raison)+'</td></tr>').join('')+'</tbody></table>' : '')
     + (p.ignores.length ? '<p style="margin-top:10px"><b style="color:#B42318">'+p.ignores.length+' laissé'+(p.ignores.length>1?'s':'')+' tel'+(p.ignores.length>1?'s':'')+' quel</b></p><table class="data-table" style="width:100%"><thead><tr><th>Fichier</th><th>Raison</th></tr></thead><tbody>'+p.ignores.map(x=>'<tr><td>'+esc(x.nom)+'</td><td class="hint">'+esc(x.raison)+'</td></tr>').join('')+'</tbody></table>' : '')
     + '</div><div class="actions"><button class="btn btn-primary" onclick="closeModal()">Fermer</button></div></div></div>';
 }
@@ -30229,8 +30277,9 @@ function setSaisieObcFiltre(k){ state.saisieObcFiltre = k; render(); }
 // Section « Saisie OBC » : deux vues — les connaissements à saisir dans OBC, et l'état des liasses documentaires rangées dans OneDrive.
 function renderObcSection(){
   const vue = state.obcVue==='liasses' ? 'liasses' : 'saisie';
+  if (!state.liasseCharge && !state.liasseChargementLance){ state.liasseChargementLance = true; chargerLiasses().then(()=>render()); }   // pour le repère rouge sur l'onglet Liasses
   const barre = '<div class="panel" style="padding:0 18px 4px"><div class="oc-subtabs">'
-    + [['saisie','Connaissements à saisir'],['liasses','Liasses documentaires']].map(([k,l])=>'<button class="'+(vue===k?'active':'')+'" onclick="state.obcVue=\''+k+'\';render()">'+l+'</button>').join('')
+    + [['saisie','Connaissements à saisir'],['liasses','Liasses documentaires']].map(([k,l])=>{ const nA = k==='liasses' ? liasseAlertes() : 0; return '<button class="'+(vue===k?'active':'')+'" onclick="state.obcVue=\''+k+'\';render()">'+l+(nA?' <span style="display:inline-block;min-width:18px;padding:0 6px;border-radius:9px;background:#B42318;color:#fff;font-size:11px;font-weight:700;text-align:center" title="Liasses manquantes + liasses sans bordereau">'+nA+'</span>':'')+'</button>'; }).join('')
     + '</div></div>';
   if (vue==='liasses') return barre + '<div class="panel" style="padding:14px 18px">' + renderLiassesTab() + '</div>';
   return barre + renderSaisieObcTab();
