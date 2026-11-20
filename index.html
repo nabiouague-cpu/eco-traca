@@ -4745,7 +4745,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-20-550';
+const APP_VERSION = '2026-11-20-551';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -7814,6 +7814,9 @@ async function chargerLiasses(){
   const rb = await supabaseClient.from('liasse_bordereaux').select('*');
   if (rb.error) showToast('Impossible de charger le suivi des bordereaux : '+rb.error.message);
   else { state.liasseBordereaux = {}; (rb.data||[]).forEach(x=>{ state.liasseBordereaux[x.connaissement] = x; }); }
+  const rc = await supabaseClient.from('liasse_cachets').select('*');
+  if (rc.error) showToast('Impossible de charger le suivi des cachets : '+rc.error.message);
+  else { state.liasseCachets = {}; (rc.data||[]).forEach(x=>{ state.liasseCachets[x.connaissement] = x; }); }
   state.liasseCharge = true;
 }
 function liasseCnNorm(s){ const m = String(s||'').toUpperCase().match(/(SC\d{6})-(\d{4})-(?:(\d)-)?0*(\d+)[A-Z]?/); return m ? m[1]+'-'+m[2]+'-'+(m[3]||'2')+'-'+m[4] : ''; }
@@ -7822,14 +7825,39 @@ function liasseTraitantLib(t){ const u = String(t||'').toLowerCase(); if (!u) re
 // Un camion qui alimente des lots de deux clients affiche les deux (le plus gros volume d'abord) ; un camion pas encore usiné garde le client de l'achat.
 function liasseClientsParCamion(achats){
   const sites = new Set(); achats.forEach(a=>{ const ex = livrExecutantDe(a); if (ex && ex.cle) sites.add(ex.cle); });
-  const m = {};
+  const m = {}, lotsDe = {};
   sites.forEach(code=>{
     let R = null; try{ R = rdueCalcul(code); }catch(e){ R = null; } if (!R) return;
-    R.lots.forEach(l=>{ const P = R.parLot[l.id], cl = l.client ? clientCanonique(l.client) : ''; if (!P || !cl) return;
-      P.comp.forEach(x=>{ const id = x.c.a.id, o = m[id] = m[id]||{}; o[cl] = (o[cl]||0)+x.kg; }); });
+    R.lots.forEach(l=>{ const P = R.parLot[l.id], cl = l.client ? clientCanonique(l.client) : ''; if (!P) return;
+      P.comp.forEach(x=>{ const id = x.c.a.id; const t = lotsDe[id] = lotsDe[id]||[]; if (t.indexOf(l)<0) t.push(l);
+        if (cl){ const o = m[id] = m[id]||{}; o[cl] = (o[cl]||0)+x.kg; } }); });
   });
   const out = {}; Object.keys(m).forEach(id=>{ out[id] = Object.entries(m[id]).sort((p,q)=>q[1]-p[1]).map(x=>x[0]).join(' / '); });
-  return out;
+  return { clients:out, lots:lotsDe };
+}
+// ---- Cachet RA : le niveau de traçabilité (Ségrégation, Mass Balance, Identité Préservée) vient de la shipping instruction (OT) liée au contrat client ----
+// Ordre de recherche pour un lot : niveau de l'OT (shipping instruction) → niveau du lot → niveau du contrat client RA (s'il est unique). Cachet seulement sur le cacao Rainforest Alliance.
+const LIASSE_CACHETS = { SEG:'SEGREGATED', MB:'MASS BALANCE', IP:'IDENTITY PRESERVED' };
+function liasseNiveauCode(niv){ const t = String(niv||'').trim(); if (!t) return ''; return /mass/i.test(t) ? 'MB' : /identit|pr[ée]serv/i.test(t) ? 'IP' : /s[ée]gr/i.test(t) ? 'SEG' : ''; }
+function liasseLotEstRA(l){ return /^\s*(ra|rainforest)/i.test(String((l && l.type_cacao) || '')); }
+function liasseNiveauLot(lot){
+  const ot = shipOtDuLot(lot.id); let c = ot ? liasseNiveauCode(ot.niveau_tracabilite) : '';
+  if (c) return { code:c, source:'OT '+(ot.numero||'') };
+  c = liasseNiveauCode(lot.niveau_tracabilite); if (c) return { code:c, source:'lot '+(lot.numero||'') };
+  const cle = ccClefClient(lot.client||'');
+  const ks = (state.contratsClients||[]).filter(k=>k.statut!=='annule' && k.statut!=='annulé' && ccClefClient(k.client||'')===cle && (!lot.campagne_id || k.campagne_id===lot.campagne_id) && /^\s*(ra|rainforest)/i.test(String(k.type_cacao||'')));
+  const nv = Array.from(new Set(ks.map(k=>liasseNiveauCode(k.niveau_tracabilite)).filter(Boolean)));
+  return nv.length===1 ? { code:nv[0], source:'contrat '+((ks.find(k=>liasseNiveauCode(k.niveau_tracabilite)===nv[0])||{}).reference||'') } : { code:'', source:'' };
+}
+function liasseCachetPourCamion(lots){
+  if (!lots || !lots.length) return { etat:'nolot', code:'', source:'' };
+  const ra = lots.filter(liasseLotEstRA);
+  if (!ra.length) return { etat:'na', code:'', source:'' };
+  if (ra.length!==lots.length) return { etat:'mixte', code:'', source:'RA et autre type de cacao dans les lots de ce camion' };
+  const nv = lots.map(liasseNiveauLot), codes = Array.from(new Set(nv.map(x=>x.code)));
+  if (codes.length===1 && codes[0]) return { etat:'attendu', code:codes[0], source:nv[0].source };
+  if (codes.length>1 && codes.indexOf('')<0) return { etat:'mixte', code:'', source:'niveaux différents : '+codes.map(c=>LIASSE_CACHETS[c]).join(' / ') };
+  return { etat:'niveau', code:'', source:'' };
 }
 function liasseEtat(){
   const camp = campagneCourante(), cid = camp ? camp.id : null;
@@ -7837,7 +7865,7 @@ function liasseEtat(){
   // Camions refoulés : pas de liasse à attendre (ni manquante, ni comptée) ; leur numéro reste « connu » pour que un éventuel fichier ne passe pas en « sans camion »
   const achats = tous.filter(a=>!a.refoulee);
   const parCn = {}; (state.liasseFichiers||[]).forEach(f=>{ const k = liasseCnNorm(f.connaissement||f.nom); if (!k) return; (parCn[k] = parCn[k]||[]).push(f); });
-  const clientsCamion = liasseClientsParCamion(achats);
+  const infoCamions = liasseClientsParCamion(achats), clientsCamion = infoCamions.clients, cachets = state.liasseCachets || {};
   const bords = state.liasseBordereaux || {};
   const traitants = {}; const vus = new Set(tous.filter(a=>a.refoulee).map(a=>liasseCnNorm(a.connaissement)));
   achats.forEach(a=>{
@@ -7845,20 +7873,21 @@ function liasseEtat(){
     const k = liasseCnNorm(a.connaissement); vus.add(k);
     const fs = parCn[k]||[], nabi = fs.filter(f=>f.source!=='serge'), serge = fs.filter(f=>f.source==='serge');
     const statut = nabi.length ? 'present' : serge.length ? 'serge' : 'manquant';
-    const T = traitants[traitant] = traitants[traitant] || { traitant, coops:{}, n:0, present:0, serge:0, manquant:0, sansBord:0 };
+    const T = traitants[traitant] = traitants[traitant] || { traitant, coops:{}, n:0, present:0, serge:0, manquant:0, sansBord:0, cachetAFaire:0, niveauManque:0 };
     const nomCoop = coop ? coop.nom : (a.cooperative_id||'?');
     const K = T.coops[nomCoop] = T.coops[nomCoop] || { coop:nomCoop, usine: ex ? ex.usine : a.usine_dechargement, lignes:[] };
-    const bord = bords[k] || null;
-    K.lignes.push({ cn:a.connaissement, cle:k, client, date:a.date, kg:Number(a.poids_net_produit)||0, refoulee:!!a.refoulee, statut, bord, fichiers:fs });
+    const bord = bords[k] || null, ca = liasseCachetPourCamion(infoCamions.lots[a.id]), cachetRec = cachets[k] || null;
+    K.lignes.push({ cn:a.connaissement, cle:k, client, date:a.date, kg:Number(a.poids_net_produit)||0, refoulee:!!a.refoulee, statut, bord, fichiers:fs, cachetEtat:ca.etat, cachetCode:ca.code, cachetSource:ca.source, cachetRec });
     T.n++; T[statut]++; if (statut==='present' && !bord) T.sansBord++;
+    if (statut==='present'){ if (ca.etat==='attendu' && !cachetRec) T.cachetAFaire++; else if (ca.etat==='niveau' || ca.etat==='mixte') T.niveauManque++; }
   });
   const orphelins = (state.liasseFichiers||[]).filter(f=>f.source!=='serge' && (!liasseCnNorm(f.connaissement||f.nom) || !vus.has(liasseCnNorm(f.connaissement||f.nom))));
   const inventaire = (state.liasseFichiers||[]).reduce((m,f)=>f.vu_le>m?f.vu_le:m, '');
   const som = c=>Object.values(traitants).reduce((t,x)=>t+x[c],0);
-  return { traitants, orphelins, inventaire, total:{ n:achats.length, present:som('present'), serge:som('serge'), manquant:som('manquant'), sansBord:som('sansBord') } };
+  return { traitants, orphelins, inventaire, total:{ n:achats.length, present:som('present'), serge:som('serge'), manquant:som('manquant'), sansBord:som('sansBord'), cachetAFaire:som('cachetAFaire'), niveauManque:som('niveauManque') } };
 }
 // Nombre de points à traiter (liasses manquantes + liasses présentes sans bordereau), pour le repère sur l'onglet.
-function liasseAlertes(){ try{ if (!state.liasseCharge) return 0; const T = liasseEtat().total; return T.manquant + T.sansBord; }catch(e){ return 0; } }
+function liasseAlertes(){ try{ if (!state.liasseCharge) return 0; const T = liasseEtat().total; return T.manquant + T.sansBord + T.cachetAFaire + T.niveauManque; }catch(e){ return 0; } }
 function liassePastille(statut){
   return statut==='present' ? '<span style="display:inline-block;padding:2px 9px;border-radius:12px;background:#E6F4EA;color:#1F6E5C;font-size:11.5px;font-weight:600">Présent</span>'
     : statut==='serge' ? '<span style="display:inline-block;padding:2px 9px;border-radius:12px;background:#FFF4D6;color:#8A6400;font-size:11.5px;font-weight:600" title="Le PDF est dans le OneDrive de Serge Amouzoun, pas dans la liasse de référence">Chez Serge seulement</span>'
@@ -7869,19 +7898,20 @@ function renderLiassesTab(){
   if (!state.liasseCharge){ chargerLiasses().then(()=>render()); return '<div class="hint" style="padding:18px">Chargement de l\'inventaire des liasses…</div>'; }
   const E = liasseEtat(), T = E.total, filtre = state.liasseTraitant || '';
   const noms = Object.keys(E.traitants).sort(), vueL = state.liasseVue || '';
-  const garde = l=>vueL==='sansliasse' ? l.statut!=='present' : vueL==='sansbord' ? (l.statut==='present' && !l.bord) : true;
+  const garde = l=>vueL==='sansliasse' ? l.statut!=='present' : vueL==='sansbord' ? (l.statut==='present' && !l.bord) : vueL==='sanscachet' ? (l.statut==='present' && ((l.cachetEtat==='attendu' && !l.cachetRec) || l.cachetEtat==='niveau' || l.cachetEtat==='mixte')) : true;
   const compte = (o)=>'<span style="color:#1F6E5C;font-weight:600">'+o.present+'</span> / <span style="color:#B42318;font-weight:600">'+o.manquant+'</span>'+(o.serge?' / <span style="color:#8A6400;font-weight:600">'+o.serge+'</span>':'')+' <span class="hint">sur '+o.n+'</span>';
   let html = '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:12px">'
     + '<div><h3 style="margin:0 0 4px">Liasses documentaires — ce qui est rangé et ce qui manque</h3><div class="hint">Un PDF par connaissement, rangé dans LIASSE DOCUMENTAIRE 26-27 (port › traitant › coopérative). Classement par traitant ; le client de chaque camion est déduit des lots d\'usinage. Comparaison avec les camions déchargés dans nos usines.'+(E.inventaire?' Inventaire du '+dateFr(E.inventaire)+' '+String(E.inventaire).slice(11,16)+'.':'')+'</div></div>'
-    + '<div style="display:flex;gap:8px"><button class="btn" onclick="state.liasseCharge=false;render()">Actualiser</button><button class="btn btn-primary" onclick="liasseExportOuvrir(\'manquantes\')">⬇ Liasses manquantes</button><button class="btn" onclick="liasseExportOuvrir(\'tout\')">⬇ Tout l\'état</button>'+liasseOneDriveBoutons()+'<button class="btn" onclick="liasseBordereauxChoisir()" title="Dépose des PDF de liasse : ORIGEN y ajoute le bordereau de réception en première page">📎 Ajouter les bordereaux</button><input type="file" id="liasseBordFichiers" accept="application/pdf,.pdf" multiple style="display:none" onchange="liasseBordereauxLancer(this.files);this.value=\'\'"></div></div><div class="hint" id="liasseBordStatut" style="margin:-6px 0 8px"></div>'
+    + '<div style="display:flex;gap:8px"><button class="btn" onclick="state.liasseCharge=false;render()">Actualiser</button><button class="btn btn-primary" onclick="liasseExportOuvrir(\'manquantes\')">⬇ Liasses manquantes</button><button class="btn" onclick="liasseExportOuvrir(\'tout\')">⬇ Tout l\'état</button>'+liasseOneDriveBoutons()+'<button class="btn" onclick="liasseBordereauxChoisir()" title="Dépose des PDF de liasse : ORIGEN ajoute le bordereau de réception en première page et le cachet RA (selon le niveau de traçabilité) sur chaque page">📎 Ajouter bordereaux et cachets</button><input type="file" id="liasseBordFichiers" accept="application/pdf,.pdf" multiple style="display:none" onchange="liasseBordereauxLancer(this.files);this.value=\'\'"></div></div><div class="hint" id="liasseBordStatut" style="margin:-6px 0 8px"></div>'
     + '<div class="gros" style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:14px">'
     + '<div><div class="v">'+T.n+'</div><div class="l">camions déchargés</div></div>'
     + '<div><div class="v" style="color:#1F6E5C">'+T.present+'</div><div class="l">liasses présentes</div></div>'
     + '<div><div class="v" style="color:#B42318">'+T.manquant+'</div><div class="l">sans liasse</div></div>'
     + '<div><div class="v" style="color:#B25E00">'+T.sansBord+'</div><div class="l">liasses sans bordereau</div></div>'
+    + '<div><div class="v" style="color:#B25E00">'+(T.cachetAFaire+T.niveauManque)+'</div><div class="l">cachets RA à régler</div></div>'
     + (T.serge?'<div><div class="v" style="color:#8A6400">'+T.serge+'</div><div class="l">chez Serge seulement</div></div>':'')
     + '<div><div class="v">'+E.orphelins.length+'</div><div class="l">fichiers sans camion</div></div></div>'
-    + '<div class="oc-subtabs" style="margin:0 0 8px">'+[['','Tout'],['sansliasse','Sans liasse ('+T.manquant+')'],['sansbord','Sans bordereau ('+T.sansBord+')']].map(([k,l])=>'<button class="'+((state.liasseVue||'')===k?'active':'')+'" onclick="state.liasseVue=\''+k+'\';render()">'+l+'</button>').join('')+'</div>'
+    + '<div class="oc-subtabs" style="margin:0 0 8px">'+[['','Tout'],['sansliasse','Sans liasse ('+T.manquant+')'],['sansbord','Sans bordereau ('+T.sansBord+')'],['sanscachet','Cachet RA à régler ('+(T.cachetAFaire+T.niveauManque)+')']].map(([k,l])=>'<button class="'+((state.liasseVue||'')===k?'active':'')+'" onclick="state.liasseVue=\''+k+'\';render()">'+l+'</button>').join('')+'</div>'
     + '<div class="oc-subtabs" style="margin-top:0"><button class="'+(filtre?'':'active')+'" onclick="state.liasseTraitant=\'\';render()">Tous les traitants</button>'+noms.map(n=>'<button class="'+(filtre===n?'active':'')+'" onclick="state.liasseTraitant=\''+esc(n)+'\';render()">'+esc(n)+'</button>').join('')+'</div>';
   noms.filter(n=>!filtre || n===filtre).forEach(n=>{
     const Tr = E.traitants[n];
@@ -7895,15 +7925,15 @@ function renderLiassesTab(){
       html += '<div style="margin:10px 0 0 12px;padding-top:8px;border-top:1px solid var(--border)"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;cursor:pointer" onclick="liasseBasculer(\''+esc(cle).replace(/'/g,"\\'")+'\')"><span>'+(ouvert?'▾':'▸')+' <strong>'+esc(cn)+'</strong> <span class="hint">'+esc(K.usine||'')+' · client : '+esc(clients)+'</span></span><span>'+compte({present:pres,manquant:manq,serge:sg,n:K.lignes.length})+(sb?' · <span style="color:#B25E00;font-weight:600">'+sb+'</span> <span class="hint">sans bordereau</span>':'')+'</span></div>';
       if (ouvert){
         html += (sb ? '<div style="margin:6px 0 0 18px"><button class="btn" style="padding:3px 10px;font-size:12px" onclick="liasseBordMarquerCoop(\''+esc(n).replace(/'/g,"\\'")+'\',\''+esc(cn).replace(/'/g,"\\'")+'\')" title="Les PDF de cette coopérative ont déjà leur bordereau : ne plus les signaler">✔ Tous ont déjà leur bordereau</button></div>' : '')
-          + '<table class="data-table" style="margin:6px 0 4px 18px;width:auto;min-width:560px"><thead><tr><th>Connaissement</th><th>Client</th><th>Déchargé le</th><th class="num">Poids net (kg)</th><th>Liasse</th><th>Bordereau</th><th>Fichier</th></tr></thead><tbody>'
-          + K.lignes.filter(garde).sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))).map(l=>'<tr><td>'+esc(l.cn)+(l.refoulee?' <span class="hint">(refoulé)</span>':'')+'</td><td>'+esc(l.client)+'</td><td>'+esc(dateFr(l.date))+'</td><td class="num">'+fmtNum(l.kg)+'</td><td>'+liassePastille(l.statut)+'</td><td>'+liasseBordCellule(l)+'</td><td class="hint">'+esc(l.fichiers.map(f=>f.nom+(f.source==='serge'?' (Serge)':'')).join(' ; '))+'</td></tr>').join('')
+          + '<table class="data-table" style="margin:6px 0 4px 18px;width:auto;min-width:560px"><thead><tr><th>Connaissement</th><th>Client</th><th>Déchargé le</th><th class="num">Poids net (kg)</th><th>Liasse</th><th>Bordereau</th><th>Cachet RA</th><th>Fichier</th></tr></thead><tbody>'
+          + K.lignes.filter(garde).sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))).map(l=>'<tr><td>'+esc(l.cn)+(l.refoulee?' <span class="hint">(refoulé)</span>':'')+'</td><td>'+esc(l.client)+'</td><td>'+esc(dateFr(l.date))+'</td><td class="num">'+fmtNum(l.kg)+'</td><td>'+liassePastille(l.statut)+'</td><td>'+liasseBordCellule(l)+'</td><td>'+liasseCachetCellule(l)+'</td><td class="hint">'+esc(l.fichiers.map(f=>f.nom+(f.source==='serge'?' (Serge)':'')).join(' ; '))+'</td></tr>').join('')
           + '</tbody></table>';
       }
       html += '</div>';
     });
     html += '</div>';
   });
-  if (vueL && !html.split('class="panel"').slice(1).length) html += '<div class="hint" style="padding:12px 4px">'+(vueL==='sansliasse' ? 'Tous les camions ont leur liasse.' : 'Toutes les liasses présentes ont leur bordereau.')+'</div>';
+  if (vueL && !html.split('class="panel"').slice(1).length) html += '<div class="hint" style="padding:12px 4px">'+(vueL==='sansliasse' ? 'Tous les camions ont leur liasse.' : vueL==='sanscachet' ? 'Tous les cachets RA sont réglés.' : 'Toutes les liasses présentes ont leur bordereau.')+'</div>';
   if (!filtre && E.orphelins.length){
     html += '<div class="panel" style="margin:0 0 14px;padding:14px 18px"><h3 style="margin:0 0 6px">Fichiers rangés sans camion correspondant</h3><div class="hint" style="margin-bottom:8px">Le nom ne contient pas de numéro de connaissement reconnu, ou ce numéro n\'est pas dans les déchargements de la campagne.</div>'
       + '<table class="data-table" style="width:auto;min-width:560px"><thead><tr><th>Dossier</th><th>Fichier</th><th>Modifié le</th></tr></thead><tbody>'
@@ -7915,6 +7945,26 @@ function liasseBordCellule(l){
   if (l.statut!=='present') return '<span class="hint">—</span>';
   if (l.bord) return '<span style="display:inline-block;padding:2px 9px;border-radius:12px;background:#E6F4EA;color:#1F6E5C;font-size:11.5px;font-weight:600" title="'+esc((l.bord.source==='manuel'?'Marqué à la main':'Ajouté par ORIGEN')+(l.bord.ajoute_le?' le '+dateFr(String(l.bord.ajoute_le).slice(0,10)):''))+'">Ajouté</span> <a href="#" class="hint" onclick="liasseBordMarquer(\''+l.cle+'\',false);return false" title="Remettre « sans bordereau »">retirer</a>';
   return '<span style="display:inline-block;padding:2px 9px;border-radius:12px;background:#FFF1E0;color:#B25E00;font-size:11.5px;font-weight:600">À ajouter</span> <a href="#" class="hint" onclick="liasseBordMarquer(\''+l.cle+'\',true);return false" title="Le PDF contient déjà son bordereau">déjà fait</a>';
+}
+function liasseCachetCellule(l){
+  if (l.statut!=='present') return '<span class="hint">—</span>';
+  const pastille = (txt, fond, col, titre)=>'<span style="display:inline-block;padding:2px 9px;border-radius:12px;background:'+fond+';color:'+col+';font-size:11.5px;font-weight:600" title="'+esc(titre||'')+'">'+esc(txt)+'</span>';
+  const lib = l.cachetCode ? 'RA '+LIASSE_CACHETS[l.cachetCode] : '';
+  if (l.cachetEtat==='na') return '<span class="hint">sans objet</span>';
+  if (l.cachetEtat==='nolot') return '<span class="hint">pas encore usiné</span>';
+  if (l.cachetEtat==='niveau') return pastille('Niveau à renseigner','#FDECEA','#B42318','Aucun niveau de traçabilité sur l\'OT (shipping instruction), le lot ni le contrat client');
+  if (l.cachetEtat==='mixte') return pastille('Niveaux différents','#FDECEA','#B42318',l.cachetSource);
+  if (l.cachetRec && l.cachetRec.cachet===LIASSE_CACHETS[l.cachetCode]) return pastille(lib+' ✔','#E6F4EA','#1F6E5C',(l.cachetRec.source==='manuel'?'Marqué à la main':'Apposé par ORIGEN')+' · niveau : '+l.cachetSource)+' <a href="#" class="hint" onclick="liasseCachetMarquer(\''+l.cle+'\',\''+l.cachetCode+'\',false);return false" title="Remettre « à apposer »">retirer</a>';
+  if (l.cachetRec) return pastille('Autre cachet : '+l.cachetRec.cachet,'#FDECEA','#B42318','Un cachet différent est déjà apposé : à vérifier à la main, ORIGEN ne l\'enlève pas');
+  return pastille('À apposer : '+lib,'#FFF1E0','#B25E00','Niveau lu sur : '+l.cachetSource)+' <a href="#" class="hint" onclick="liasseCachetMarquer(\''+l.cle+'\',\''+l.cachetCode+'\',true);return false" title="Le cachet est déjà sur toutes les pages">déjà fait</a>';
+}
+async function liasseCachetMarquer(cle, code, oui){
+  if (!cle || !LIASSE_CACHETS[code]) return;
+  const r = oui ? await supabaseClient.from('liasse_cachets').upsert({ connaissement:cle, cachet:LIASSE_CACHETS[code], source:'manuel' }) : await supabaseClient.from('liasse_cachets').delete().eq('connaissement', cle);
+  if (r.error){ showToast('Enregistrement impossible : '+r.error.message); return; }
+  state.liasseCachets = state.liasseCachets || {};
+  if (oui) state.liasseCachets[cle] = { connaissement:cle, cachet:LIASSE_CACHETS[code], source:'manuel', ajoute_le:new Date().toISOString() }; else delete state.liasseCachets[cle];
+  render();
 }
 async function liasseBordMarquer(cle, oui){
   if (!cle) return;
@@ -7983,8 +8033,8 @@ function liasseAutoBasculer(){ try{ localStorage.setItem('origen_liasse_auto', l
 function liasseOneDriveBoutons(){
   if (!GRAPH_CLIENT_ID) return '<span class="hint" style="align-self:center">Connexion OneDrive : en cours de mise en place</span>';
   return '<button class="btn" onclick="liasseOneDriveConnecter()">🔗 '+(state.graphCompte ? 'OneDrive : '+esc(state.graphCompte) : 'Connecter OneDrive')+'</button>'
-    + '<button class="btn btn-primary" onclick="liasseBordereauxOneDrive(false)" title="Pour chaque liasse sans bordereau : ORIGEN ajoute le bordereau en première page et remplace le PDF dans OneDrive, même nom">⚡ Ajouter tous les bordereaux</button>'
-    + '<button class="btn" onclick="liasseAutoBasculer()" title="Quand ORIGEN s\'ouvre, il ajoute lui-même les bordereaux manquants (OneDrive doit être connecté)">Automatique : '+(liasseAutoActif() ? 'oui' : 'non')+'</button>';
+    + '<button class="btn btn-primary" onclick="liasseBordereauxOneDrive(false)" title="Pour chaque liasse à compléter : ORIGEN ajoute le bordereau en première page et le cachet RA sur chaque page, et remplace le PDF dans OneDrive, même nom">⚡ Ajouter bordereaux et cachets</button>'
+    + '<button class="btn" onclick="liasseAutoBasculer()" title="Quand ORIGEN s\'ouvre, il ajoute lui-même les bordereaux et cachets manquants (OneDrive doit être connecté)">Automatique : '+(liasseAutoActif() ? 'oui' : 'non')+'</button>';
 }
 // Déclenché à l'ouverture d'ORIGEN quand le mode automatique est activé et que OneDrive est déjà connecté (aucune fenêtre ne s'ouvre).
 async function liasseAutoSiActif(){
@@ -8004,40 +8054,38 @@ async function liasseBordereauxOneDrive(auto){
     const camp = campagneCourante(), cid = camp ? camp.id : null;
     const parCn = {}; (state.achats||[]).filter(a=>!a.producteur_id && a.connaissement && (!cid || a.campagne_id===cid)).forEach(a=>{ const k = liasseCnNorm(a.connaissement); if (k) parCn[k] = a; });
     Object.values(E.traitants).forEach(T=>Object.values(T.coops).forEach(K=>K.lignes.forEach(l=>{
-      if (l.statut!=='present' || l.bord || l.refoulee) return;
+      if (l.statut!=='present' || l.refoulee) return;
+      const P = liassePreparer(l, parCn[l.cle], !!l.bord);
+      if (!P.b && !P.code){ if (P.avert && !auto) avert.push({ nom:l.cn, raison:P.avert }); return; }
       const fs = l.fichiers.filter(f=>f.source!=='serge');
       if (fs.length!==1){ ignores.push({ nom:l.cn, raison: fs.length>1 ? 'plusieurs fichiers pour ce camion dans le dossier : à ranger d\'abord' : 'fichier introuvable' }); return; }
-      cibles.push({ l, f:fs[0], a:parCn[l.cle] });
+      cibles.push({ l, f:fs[0], P });
     })));
-    if (!cibles.length){ if (!auto) showToast('Toutes les liasses présentes ont déjà leur bordereau.', 'success'); return; }
-    if (!auto && !confirm('Ajouter le bordereau en première page de '+cibles.length+' liasse'+(cibles.length>1?'s':'')+' et remplacer ces PDF dans OneDrive (même nom, ancienne version gardée dans l\'historique OneDrive) ?')) return;
+    if (!cibles.length){ if (!auto){ showToast('Rien à ajouter : tous les bordereaux et cachets RA sont en place.', 'success'); if (avert.length){ state.modal = { type:'liasseBordRapport', payload:{ ok:[], ignores:[], avert, mode:'onedrive' } }; render(); } } return; }
+    const nB = cibles.filter(c=>c.P.b).length, nC = cibles.filter(c=>c.P.code).length;
+    if (!auto && !confirm('Mettre à jour '+cibles.length+' liasse'+(cibles.length>1?'s':'')+' dans OneDrive ('+nB+' bordereau'+(nB>1?'x':'')+' à ajouter en première page, '+nC+' cachet'+(nC>1?'s':'')+' RA à apposer sur toutes les pages) ? Même nom de fichier ; l\'ancienne version reste dans l\'historique OneDrive.')) return;
     state.liasseBordEnCours = true;
-    const L = await chargerPdfLib(), ok = [], pris = [];
+    const L = await chargerPdfLib(), ok = [], pris = [], prisC = [];
     for (let i=0; i<cibles.length; i++){
-      const { l, f, a } = cibles[i];
+      const { l, f, P } = cibles[i];
       statut('OneDrive '+(i+1)+' / '+cibles.length+' · '+f.nom);
       try{
-        if (!a || !(Number(a.poids_net_produit)>0)){ ignores.push({ nom:f.nom, raison: !a ? 'camion introuvable dans la campagne' : 'pas encore pesé à l\'usine : pas de bordereau' }); continue; }
-        const b = bordereauReceptionData(a);
-        if (b.manque==='prix'){ ignores.push({ nom:f.nom, raison:'prix d\'entrée usine de la campagne à renseigner' }); continue; }
         const buf = await (await graphFetch('/me/drive/items/'+f.id+'/content')).arrayBuffer();
-        const doc = await L.PDFDocument.load(buf, { ignoreEncryption:true, updateMetadata:false });
-        const mots = doc.getKeywords() || '';
-        if (mots.indexOf(LIASSE_MARQUE_BORDEREAU)>=0){ pris.push({ connaissement:l.cle, nom:f.nom, source:'origen', taille_apres:buf.byteLength }); ignores.push({ nom:f.nom, raison:'bordereau déjà dans le PDF : noté dans le suivi' }); continue; }
-        const img = await doc.embedJpg(await liasseBordereauImage(b));
-        const page = doc.insertPage(0, [612,792]); page.drawImage(img, { x:0, y:0, width:612, height:792 });
-        doc.setKeywords([(mots ? mots+' ' : '')+LIASSE_MARQUE_BORDEREAU]);
-        const sortie = await doc.save();
-        const rep = await graphRemplacer(f.id, sortie);
-        if (rep && rep.size && Number(rep.size)!==sortie.length) throw new Error('la taille du fichier enregistré ne correspond pas');
-        pris.push({ connaissement:l.cle, nom:f.nom, source:'origen', taille_apres:sortie.length }); ok.push({ nom:f.nom });
+        const r = await liasseTraiterPdf(L, buf, P);
+        if (P.raisonBord && P.code) avert.push({ nom:f.nom, raison:'bordereau non ajouté : '+P.raisonBord });
+        if (P.avert) avert.push({ nom:f.nom, raison:P.avert });
+        if (r.autreCachet) avert.push({ nom:f.nom, raison:'un autre cachet est déjà dans ce PDF ('+r.autreCachet+') : laissé tel quel, à vérifier' });
+        if (r.bordDeja) pris.push({ connaissement:l.cle, nom:f.nom, source:'origen', taille_apres:buf.byteLength });
+        if (r.cachetDeja) prisC.push({ connaissement:l.cle, cachet:LIASSE_CACHETS[P.code], nom:f.nom, source:'origen' });
+        if (!r.sortie){ ignores.push({ nom:f.nom, raison:'déjà fait dans le PDF : noté dans le suivi' }); continue; }
+        const rep = await graphRemplacer(f.id, r.sortie);
+        if (rep && rep.size && Number(rep.size)!==r.sortie.length) throw new Error('la taille du fichier enregistré ne correspond pas');
+        if (r.bord) pris.push({ connaissement:l.cle, nom:f.nom, source:'origen', taille_apres:r.sortie.length });
+        if (r.cachet) prisC.push({ connaissement:l.cle, cachet:LIASSE_CACHETS[P.code], nom:f.nom, source:'origen' });
+        ok.push({ nom:f.nom, bord:r.bord, cachet:r.cachet ? P.code : '' });
       }catch(e){ ignores.push({ nom:f.nom, raison:(e && e.message ? e.message : String(e)) }); }
     }
-    if (pris.length){
-      const r = await supabaseClient.from('liasse_bordereaux').upsert(pris);
-      if (r.error) showToast('Bordereaux ajoutés, mais le suivi n\'a pas pu être enregistré : '+r.error.message);
-      else { state.liasseBordereaux = state.liasseBordereaux || {}; pris.forEach(x=>{ state.liasseBordereaux[x.connaissement] = Object.assign({ ajoute_le:new Date().toISOString() }, x); }); }
-    }
+    await liasseEnregistrerSuivi(pris, prisC);
     state.modal = { type:'liasseBordRapport', payload:{ ok, ignores, avert, mode:'onedrive' } };
     if (!auto || ok.length || ignores.length) render();
   }catch(e){ if (!auto) showToast('Échec : '+(e && e.message ? e.message : e)); }
@@ -8064,6 +8112,75 @@ async function liasseBordereauImage(b){
     return await blob.arrayBuffer();
   } finally { document.body.removeChild(cadre); }
 }
+// ---- Cachet RA tracé sur chaque page (pdf-lib) ----
+const LIASSE_MARQUE_CACHET = 'ORIGEN-CACHET-';
+function liasseCachetTracer(L, page, police, code){
+  const label = LIASSE_CACHETS[code]; if (!label) return;
+  const box = page.getCropBox ? page.getCropBox() : page.getMediaBox();
+  const rot = ((page.getRotation().angle % 360) + 360) % 360, w = box.width, h = box.height;
+  const W = (rot===90||rot===270) ? h : w, H = (rot===90||rot===270) ? w : h;
+  const pt = (u,v)=> rot===90 ? { x:box.x+w-v, y:box.y+u } : rot===180 ? { x:box.x+w-u, y:box.y+h-v } : rot===270 ? { x:box.x+v, y:box.y+h-u } : { x:box.x+u, y:box.y+v };
+  const s = Math.max(0.6, Math.min(1.4, Math.min(W,H)/612)), bw = 158*s, bh = 46*s, u0 = W-bw-16*s, v0 = H-bh-16*s;
+  const encre = L.rgb(0.07,0.22,0.62), angle = L.degrees(rot), op = 0.9;
+  const coins = [[u0,v0],[u0+bw,v0],[u0+bw,v0+bh],[u0,v0+bh]].map(c=>pt(c[0],c[1]));
+  for (let i=0;i<4;i++) page.drawLine({ start:coins[i], end:coins[(i+1)%4], thickness:1.3*s, color:encre, opacity:op });
+  const ligne = (txt, taille, dv)=>{ let t = taille; const l1 = police.widthOfTextAtSize(txt, 1), max = bw-12*s; if (l1*t>max) t = max/l1; const tw = l1*t; const o = pt(u0+(bw-tw)/2, v0+dv); page.drawText(txt, { x:o.x, y:o.y, size:t, font:police, color:encre, rotate:angle, opacity:op }); };
+  ligne('RAINFOREST ALLIANCE', 7.5*s, bh-13*s);
+  ligne(label, 13*s, bh/2-5*s);
+  ligne('ECORIGINE SA', 7*s, 6*s);
+}
+// Choisit ce qu'il faut ajouter à une liasse : bordereau (sauf s'il y est déjà) et cachet RA (si le niveau est connu et qu'il n'est pas déjà apposé).
+function liassePreparer(l, a, bordFait){
+  const out = { b:null, code:'', raisonBord:'', avert:'' };
+  if (!bordFait){
+    if (!a) out.raisonBord = 'camion introuvable dans la campagne en cours';
+    else if (a.refoulee) out.raisonBord = 'camion refoulé : pas de bordereau';
+    else if (!(Number(a.poids_net_produit)>0)) out.raisonBord = 'pas encore pesé à l\'usine : pas de bordereau';
+    else { const b = bordereauReceptionData(a); if (b.manque==='prix') out.raisonBord = 'prix d\'entrée usine de la campagne à renseigner'; else out.b = b; }
+  } else out.raisonBord = 'doublon : cette liasse a déjà son bordereau';
+  if (l && l.cachetEtat==='attendu' && !l.cachetRec && !(a && a.refoulee)) out.code = l.cachetCode;
+  else if (l && (l.cachetEtat==='niveau' || l.cachetEtat==='mixte')) out.avert = 'cachet RA non apposé : '+(l.cachetEtat==='mixte' ? (l.cachetSource||'niveaux différents') : 'niveau de traçabilité à renseigner (OT, lot ou contrat client)');
+  return out;
+}
+// Une seule passe sur le PDF : bordereau en première page, puis cachet RA sur CHAQUE page (bordereau compris). Les marqueurs internes (mots-clés du PDF) évitent tout doublon.
+async function liasseTraiterPdf(L, buf, P){
+  const doc = await L.PDFDocument.load(buf, { ignoreEncryption:true, updateMetadata:false });
+  const mots = doc.getKeywords() || '', mCach = (mots.match(/ORIGEN-CACHET-(SEG|MB|IP)/)||[])[1] || '';
+  const r = { sortie:null, bord:false, bordDeja:false, cachet:false, cachetDeja:false, autreCachet:'' };
+  const veutBord = !!P.b, aBord = mots.indexOf(LIASSE_MARQUE_BORDEREAU)>=0;
+  if (veutBord && aBord) r.bordDeja = true;
+  const veutCachet = !!P.code;
+  if (veutCachet && mCach===P.code) r.cachetDeja = true; else if (veutCachet && mCach) r.autreCachet = 'RA '+LIASSE_CACHETS[mCach];
+  const faireBord = veutBord && !aBord, faireCachet = veutCachet && !mCach;
+  if (!faireBord && !faireCachet) return r;
+  const marques = [];
+  if (faireBord){
+    const img = await doc.embedJpg(await liasseBordereauImage(P.b));
+    const page = doc.insertPage(0, [612,792]); page.drawImage(img, { x:0, y:0, width:612, height:792 });
+    marques.push(LIASSE_MARQUE_BORDEREAU); r.bord = true;
+  }
+  const codeDoc = faireCachet ? P.code : mCach;
+  if (codeDoc){
+    const police = await doc.embedFont(L.StandardFonts.HelveticaBold), pages = doc.getPages();
+    if (faireCachet){ pages.forEach(pg=>liasseCachetTracer(L, pg, police, codeDoc)); marques.push(LIASSE_MARQUE_CACHET+codeDoc); r.cachet = true; }
+    else liasseCachetTracer(L, pages[0], police, codeDoc);   // cachet déjà sur les autres pages : on marque seulement la page de bordereau ajoutée
+  }
+  doc.setKeywords([(mots ? mots+' ' : '')+marques.join(' ')]);
+  r.sortie = await doc.save();
+  return r;
+}
+async function liasseEnregistrerSuivi(pris, prisC){
+  if (pris.length){
+    const r = await supabaseClient.from('liasse_bordereaux').upsert(pris);
+    if (r.error) showToast('Le suivi des bordereaux n\'a pas pu être enregistré : '+r.error.message);
+    else { state.liasseBordereaux = state.liasseBordereaux || {}; pris.forEach(x=>{ state.liasseBordereaux[x.connaissement] = Object.assign({ ajoute_le:new Date().toISOString() }, x); }); }
+  }
+  if (prisC.length){
+    const r = await supabaseClient.from('liasse_cachets').upsert(prisC);
+    if (r.error) showToast('Le suivi des cachets n\'a pas pu être enregistré : '+r.error.message);
+    else { state.liasseCachets = state.liasseCachets || {}; prisC.forEach(x=>{ state.liasseCachets[x.connaissement] = Object.assign({ ajoute_le:new Date().toISOString() }, x); }); }
+  }
+}
 async function liasseBordereauxLancer(fichiers){
   const liste = Array.from(fichiers||[]).filter(f=>/\.pdf$/i.test(f.name)); if (!liste.length){ showToast('Dépose des fichiers PDF.'); return; }
   if (state.liasseBordEnCours) return; state.liasseBordEnCours = true;
@@ -8074,7 +8191,8 @@ async function liasseBordereauxLancer(fichiers){
     if (!state.prefCharge) await chargerPrefinancements();
     if (!state.liasseCharge) await chargerLiasses();
     const bords = state.liasseBordereaux || {}, inv = {}; (state.liasseFichiers||[]).filter(x=>x.source!=='serge').forEach(x=>{ const c = liasseCnNorm(x.connaissement||x.nom); if (c) (inv[c] = inv[c]||[]).push(x); });
-    const L = await chargerPdfLib(), zip = new JSZip(), vus = new Set(), pris = [];
+    const E = liasseEtat(), lig = {}; Object.values(E.traitants).forEach(T=>Object.values(T.coops).forEach(K=>K.lignes.forEach(l=>{ lig[l.cle] = l; })));
+    const L = await chargerPdfLib(), zip = new JSZip(), vus = new Set(), pris = [], prisC = [];
     const camp = campagneCourante(), cid = camp ? camp.id : null;
     const parCn = {}; (state.achats||[]).filter(a=>!a.producteur_id && a.connaissement && (!cid || a.campagne_id===cid)).forEach(a=>{ const k = liasseCnNorm(a.connaissement); if (k) parCn[k] = a; });
     for (let i=0; i<liste.length; i++){
@@ -8082,37 +8200,35 @@ async function liasseBordereauxLancer(fichiers){
       const k = liasseCnNorm(f.name), a = k ? parCn[k] : null;
       if (!k) { ignores.push({ nom:f.name, raison:'pas de numéro de connaissement dans le nom' }); continue; }
       if (!a) { ignores.push({ nom:f.name, raison:'camion introuvable dans la campagne en cours' }); continue; }
-      if (a.refoulee) { ignores.push({ nom:f.name, raison:'camion refoulé : pas de bordereau' }); continue; }
-      if (!(Number(a.poids_net_produit)>0)) { ignores.push({ nom:f.name, raison:'pas encore pesé à l\'usine : pas de bordereau' }); continue; }
-      if (bords[k]) { ignores.push({ nom:f.name, raison:'doublon : cette liasse a déjà son bordereau'+(bords[k].ajoute_le ? ' (ajouté le '+dateFr(String(bords[k].ajoute_le).slice(0,10))+')' : '')+' — écartée, non reprise dans le ZIP' }); continue; }
       if (vus.has(k)) { ignores.push({ nom:f.name, raison:'doublon dans ce dépôt : un autre fichier du même camion est déjà traité — écarté' }); continue; }
-      const b = bordereauReceptionData(a);
-      if (b.manque==='prix') { ignores.push({ nom:f.name, raison:'prix d\'entrée usine de la campagne à renseigner' }); continue; }
+      const l = lig[k], P = liassePreparer(l, a, !!bords[k]);
+      if (!P.b && !P.code) { ignores.push({ nom:f.name, raison:(bords[k] ? 'doublon : cette liasse a déjà son bordereau'+(bords[k].ajoute_le ? ' (ajouté le '+dateFr(String(bords[k].ajoute_le).slice(0,10))+')' : '')+' — écartée, non reprise dans le ZIP' : P.raisonBord)+(P.avert ? ' ; '+P.avert : '') }); continue; }
       try{
-        const doc = await L.PDFDocument.load(await f.arrayBuffer(), { ignoreEncryption:true, updateMetadata:false });
-        const mots = doc.getKeywords() || '';
-        if (mots.indexOf(LIASSE_MARQUE_BORDEREAU)>=0) { ignores.push({ nom:f.name, raison:'bordereau déjà ajouté' }); continue; }
-        const img = await doc.embedJpg(await liasseBordereauImage(b));
-        const page = doc.insertPage(0, [612,792]); page.drawImage(img, { x:0, y:0, width:612, height:792 });
-        doc.setKeywords([(mots ? mots+' ' : '')+LIASSE_MARQUE_BORDEREAU]);
-        const sortie = await doc.save(); zip.file(f.name, sortie, { compression:'STORE' }); vus.add(k); ok.push({ nom:f.name }); pris.push({ connaissement:k, nom:f.name, source:'origen', taille_apres:sortie.length });
+        const r = await liasseTraiterPdf(L, await f.arrayBuffer(), P);
+        if (P.raisonBord && P.code && !bords[k]) avert.push({ nom:f.name, raison:'bordereau non ajouté : '+P.raisonBord });
+        if (P.avert) avert.push({ nom:f.name, raison:P.avert });
+        if (r.autreCachet) avert.push({ nom:f.name, raison:'un autre cachet est déjà dans ce PDF ('+r.autreCachet+') : laissé tel quel, à vérifier' });
+        if (bords[k] && P.code && bords[k].source==='origen' && !r.bord){ /* le bordereau est dans le suivi : rien à faire */ }
+        if (r.bordDeja) pris.push({ connaissement:k, nom:f.name, source:'origen', taille_apres:f.size });
+        if (r.cachetDeja) prisC.push({ connaissement:k, cachet:LIASSE_CACHETS[P.code], nom:f.name, source:'origen' });
+        if (!r.sortie){ ignores.push({ nom:f.name, raison:'déjà fait dans le PDF : noté dans le suivi' }); continue; }
+        zip.file(f.name, r.sortie, { compression:'STORE' }); vus.add(k);
+        ok.push({ nom:f.name, bord:r.bord, cachet:r.cachet ? P.code : '' });
+        if (r.bord) pris.push({ connaissement:k, nom:f.name, source:'origen', taille_apres:r.sortie.length });
+        if (r.cachet) prisC.push({ connaissement:k, cachet:LIASSE_CACHETS[P.code], nom:f.name, source:'origen' });
         const ex = inv[k]||[]; if (ex.length && !ex.some(x=>x.nom===f.name && Number(x.taille)===f.size)) avert.push({ nom:f.name, raison:'une liasse existe déjà dans le dossier pour ce camion sous un autre nom ou une autre taille : vérifie qu\'il n\'y a pas de doublon' });
       }catch(e){ ignores.push({ nom:f.name, raison:'PDF illisible ou protégé ('+(e && e.message ? e.message : e)+')' }); }
     }
-    if (ok.length){
-      telechargerBlob(await zip.generateAsync({ type:'blob' }), 'Liasses_avec_bordereau_'+new Date().toISOString().slice(0,10)+'.zip');
-      const r = await supabaseClient.from('liasse_bordereaux').upsert(pris);
-      if (r.error) showToast('ZIP téléchargé, mais le suivi des bordereaux n\'a pas pu être enregistré : '+r.error.message);
-      else { state.liasseBordereaux = state.liasseBordereaux || {}; pris.forEach(x=>{ state.liasseBordereaux[x.connaissement] = Object.assign({ ajoute_le:new Date().toISOString() }, x); }); }
-    }
+    if (ok.length) telechargerBlob(await zip.generateAsync({ type:'blob' }), 'Liasses_mises_a_jour_'+new Date().toISOString().slice(0,10)+'.zip');
+    await liasseEnregistrerSuivi(pris, prisC);
   }catch(e){ showToast('Échec : '+(e && e.message ? e.message : e)); }
   state.liasseBordEnCours = false; statut('');
-  if (ok.length || ignores.length){ state.modal = { type:'liasseBordRapport', payload:{ ok, ignores, avert } }; render(); }
+  if (ok.length || ignores.length || avert.length){ state.modal = { type:'liasseBordRapport', payload:{ ok, ignores, avert } }; render(); }
 }
 function renderLiasseBordRapportModal(m){
-  const p = m.payload;
-  return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>Bordereaux ajoutés aux liasses</h3><div id="modal-fields">'
-    + (p.ok.length ? '<p><b style="color:#1F6E5C">'+p.ok.length+' liasse'+(p.ok.length>1?'s':'')+'</b> avec le bordereau en première page, même nom de fichier. '+(p.mode==='onedrive' ? 'Les PDF ont été remplacés directement dans OneDrive (l\'ancienne version reste dans l\'historique du fichier).' : 'Le ZIP vient d\'être téléchargé : remets ces fichiers dans le dossier de la liasse, à la place des anciens.')+'</p>' : '<p><b>Aucun fichier modifié.</b></p>')
+  const p = m.payload, nB = p.ok.filter(x=>x.bord).length, nC = p.ok.filter(x=>x.cachet).length;
+  return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>Liasses mises à jour</h3><div id="modal-fields">'
+    + (p.ok.length ? '<p><b style="color:#1F6E5C">'+p.ok.length+' liasse'+(p.ok.length>1?'s':'')+'</b> mise'+(p.ok.length>1?'s':'')+' à jour, même nom de fichier : <b>'+nB+'</b> bordereau'+(nB>1?'x':'')+' en première page, <b>'+nC+'</b> cachet'+(nC>1?'s':'')+' RA sur toutes les pages. '+(p.mode==='onedrive' ? 'Les PDF ont été remplacés directement dans OneDrive (l\'ancienne version reste dans l\'historique du fichier).' : 'Le ZIP vient d\'être téléchargé : remets ces fichiers dans le dossier de la liasse, à la place des anciens.')+'</p>' : '<p><b>Aucun fichier modifié.</b></p>')
     + ((p.avert||[]).length ? '<p style="margin-top:10px"><b style="color:#B25E00">À vérifier ('+p.avert.length+')</b></p><table class="data-table" style="width:100%"><tbody>'+p.avert.map(x=>'<tr><td>'+esc(x.nom)+'</td><td class="hint">'+esc(x.raison)+'</td></tr>').join('')+'</tbody></table>' : '')
     + (p.ignores.length ? '<p style="margin-top:10px"><b style="color:#B42318">'+p.ignores.length+' laissé'+(p.ignores.length>1?'s':'')+' tel'+(p.ignores.length>1?'s':'')+' quel</b></p><table class="data-table" style="width:100%"><thead><tr><th>Fichier</th><th>Raison</th></tr></thead><tbody>'+p.ignores.map(x=>'<tr><td>'+esc(x.nom)+'</td><td class="hint">'+esc(x.raison)+'</td></tr>').join('')+'</tbody></table>' : '')
     + '</div><div class="actions"><button class="btn btn-primary" onclick="closeModal()">Fermer</button></div></div></div>';
@@ -30387,7 +30503,7 @@ function renderObcSection(){
   const vue = state.obcVue==='liasses' ? 'liasses' : 'saisie';
   if (!state.liasseCharge && !state.liasseChargementLance){ state.liasseChargementLance = true; chargerLiasses().then(()=>{ render(); liasseAutoSiActif(); }); }   // pour le repère rouge sur l'onglet Liasses ; lance aussi l'ajout automatique si activé
   const barre = '<div class="panel" style="padding:0 18px 4px"><div class="oc-subtabs">'
-    + [['saisie','Connaissements à saisir'],['liasses','Liasses documentaires']].map(([k,l])=>{ const nA = k==='liasses' ? liasseAlertes() : 0; return '<button class="'+(vue===k?'active':'')+'" onclick="state.obcVue=\''+k+'\';render()">'+l+(nA?' <span style="display:inline-block;min-width:18px;padding:0 6px;border-radius:9px;background:#B42318;color:#fff;font-size:11px;font-weight:700;text-align:center" title="Liasses manquantes + liasses sans bordereau">'+nA+'</span>':'')+'</button>'; }).join('')
+    + [['saisie','Connaissements à saisir'],['liasses','Liasses documentaires']].map(([k,l])=>{ const nA = k==='liasses' ? liasseAlertes() : 0; return '<button class="'+(vue===k?'active':'')+'" onclick="state.obcVue=\''+k+'\';render()">'+l+(nA?' <span style="display:inline-block;min-width:18px;padding:0 6px;border-radius:9px;background:#B42318;color:#fff;font-size:11px;font-weight:700;text-align:center" title="Liasses manquantes + liasses sans bordereau + cachets RA à apposer ou niveau à renseigner">'+nA+'</span>':'')+'</button>'; }).join('')
     + '</div></div>';
   if (vue==='liasses') return barre + '<div class="panel" style="padding:14px 18px">' + renderLiassesTab() + '</div>';
   return barre + renderSaisieObcTab();
