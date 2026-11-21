@@ -4243,18 +4243,18 @@ async function presAchatsPdfSaisis(btn, lotN){
     await chargerBibliothequesPdf();
     const campNom = D.camp ? lotsCampagneNom(D.camp) : 'toutes campagnes';
     // Rapport de saisie : on retient ce qui est ACCEPTÉ à l'usine (sacs acceptés, poids net livré de la pesée) ; le connaissement ne sert qu'à la traçabilité.
-    const rapSacs = achatSacsRetenus, rapLiv = achatLivreRetenu;
+    const rapSacs = achatSacsRetenus;   // poids de référence = NET PAYÉ uniquement (jamais le poids accepté / avant réfaction)
     const nb = n=>n>0 ? Math.round(n).toLocaleString('fr-FR') : '—';
     const th = (t,w,al)=>'<th style="box-sizing:border-box;width:'+w+';padding:7px 4px;text-align:'+(al||'center')+';font-weight:700;font-size:9.5px;line-height:1.2">'+t+'</th>';
     const td = (t,al,st)=>'<td style="padding:0 6px;text-align:'+(al||'center')+';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'+(st||'')+'">'+t+'</td>';
     const ligne = (a,i)=>{ const c = coopById(a.cooperative_id), t = D.certifie(a.type_cacao), su = (typeof sachSiteDe==='function') ? sachSiteDe(a.usine_dechargement) : null;
       return '<tr style="height:27px;background:'+(i%2?'#F5F8F7':'#fff')+'">'+td(esc(dateFr(String(a.date||'').slice(0,10))))+td(esc(c?c.nom:''),'left','font-weight:700')+td(esc(String(a.immat_vehicule||'—').replace(/\s*\/\s*/g,' / ')),'center','white-space:normal;overflow:visible;text-overflow:clip;font-size:8.5px;line-height:1.2;word-break:break-word')+td(esc(a.connaissement||''),'center','font-size:9px')
         +td(t?(/^fair|^ft/i.test(a.type_cacao)?'FT':'RA'):'Ord.')+td(esc(a.lieu_origine||'—'))+td(esc(su?su.code:(a.usine_dechargement||'—')))+td(esc(achatClientEffectif(a)||'—'))
-        +td(nb(rapSacs(a)))+td(nb(rapLiv(a)))+td('<b>'+nb(D.netKg(a))+'</b>')+td(esc(a.obc_bordereau_numero||'—'))
+        +td(nb(rapSacs(a)))+td('<b>'+nb(D.netKg(a))+'</b>')+td(esc(a.obc_bordereau_numero||'—'))
         +td('<span style="display:inline-block;padding:2px 10px;border-radius:999px;background:#DDF3E4;color:#14633A;font-weight:800;font-size:8.5px">OK</span>')+'</tr>'; };
-    const tete = '<thead><tr style="background:#0E3B36;color:#fff">'+th('Date','72px')+th('Coopérative','128px','left')+th('Camion / remorque','150px')+th('N° connaissement','124px')+th('Type','36px')+th('Origine','80px')+th('Usine','50px')+th('Client','66px')+th('Sacs','44px')+th('Livré<br>(kg)','60px')+th('Net payé<br>(kg)','66px')+th('Bordereau<br>OBC','100px')+th('Saisie<br>OBC','50px')+'</tr></thead>';
-    const totSacs = L.reduce((s,a)=>s+rapSacs(a),0), totLiv = L.reduce((s,a)=>s+rapLiv(a),0), totNet = L.reduce((s,a)=>s+D.netKg(a),0);
-    const totLigne = '<tr style="height:28px;background:#E6F0EC;font-weight:800;color:#0E3B36;font-size:8.5px"><td colspan="8" style="padding:0 8px;text-align:left">TOTAL · '+L.length+' camion'+(L.length>1?'s':'')+' saisi'+(L.length>1?'s':'')+' dans OBC</td>'+td(nb(totSacs))+td(nb(totLiv))+td(nb(totNet))+td('')+td('')+'</tr>';
+    const tete = '<thead><tr style="background:#0E3B36;color:#fff">'+th('Date','72px')+th('Coopérative','128px','left')+th('Camion / remorque','150px')+th('N° connaissement','124px')+th('Type','36px')+th('Origine','80px')+th('Usine','50px')+th('Client','66px')+th('Sacs','44px')+th('Net payé<br>(kg)','66px')+th('Bordereau<br>OBC','100px')+th('Saisie<br>OBC','50px')+'</tr></thead>';
+    const totSacs = L.reduce((s,a)=>s+rapSacs(a),0), totNet = L.reduce((s,a)=>s+D.netKg(a),0);
+    const totLigne = '<tr style="height:28px;background:#E6F0EC;font-weight:800;color:#0E3B36;font-size:8.5px"><td colspan="8" style="padding:0 8px;text-align:left">TOTAL · '+L.length+' camion'+(L.length>1?'s':'')+' saisi'+(L.length>1?'s':'')+' dans OBC</td>'+td(nb(totSacs))+td(nb(totNet))+td('')+td('')+'</tr>';
     const PAR_PAGE_1 = 18, PAR_PAGE = 22, pages = []; let i0 = 0;
     while (i0 < L.length){ const n = pages.length===0 ? PAR_PAGE_1 : PAR_PAGE; pages.push(L.slice(i0, i0+n)); i0 += n; }
     const dernierePleine = pages[pages.length-1].length >= (pages.length===1 ? PAR_PAGE_1 : PAR_PAGE) - 1;
@@ -4333,7 +4333,7 @@ function renderPresAchats(){
   } else if (tab===3){
     corps += previsionsVueHtml();
   } else {
-    const G3 = '52px minmax(0,1.4fr) minmax(0,1fr) minmax(0,1.5fr) 42px minmax(0,1fr) minmax(0,1.2fr) 62px 56px 76px 84px 74px 168px';
+    const G3 = '52px minmax(0,1.4fr) minmax(0,1fr) minmax(0,1.5fr) 42px minmax(0,1fr) minmax(0,1.2fr) 62px 56px 84px 74px 168px';
     const ok = D.camions.filter(a=>!a.refoulee);
     const sum = f=>ok.reduce((s,a)=>s+f(a),0);
     const nPese = ok.filter(D.pese).length, nAtt = ok.length-nPese;
@@ -4342,8 +4342,8 @@ function renderPresAchats(){
     const cel = (v,st)=>'<div style="text-align:center;'+(st||'')+'overflow:hidden;white-space:nowrap;text-overflow:ellipsis">'+v+'</div>';
     const H = t=>'<div style="text-align:center;line-height:1.25">'+t+'</div>';
     const ent = '<div style="display:grid;grid-template-columns:'+G3+';column-gap:6px;align-items:center;background:rgba(14,59,54,.82);color:#fff;padding:0 14px;height:46px;box-sizing:border-box;font-size:11.5px;font-weight:700">'
-      + ['Date','Coopérative','Camion','N° connaissement','Type','Origine','Usine','Client','Sacs','Livré<br>(kg)','Net payé<br>(kg)','Statut','Saisie<br>OBC'].map(H).join('')+'</div>';
-    const tot = '<div style="display:grid;grid-template-columns:'+G3+';column-gap:6px;align-items:center;background:rgba(230,240,236,.7);color:#0E3B36;padding:0 14px;height:38px;box-sizing:border-box;font-size:12.5px;font-weight:800;border-bottom:2px solid rgba(14,59,54,.6)"><div style="grid-column:1 / span 8">TOTAL · '+ok.length+' camion'+(ok.length>1?'s':'')+' acheté'+(ok.length>1?'s':'')+'</div><div style="text-align:center">'+kg(sum(achatSacsRetenus))+'</div><div style="text-align:center">'+kg(sum(achatLivreRetenu))+'</div><div style="text-align:center">'+kg(sum(D.netKg))+'</div><div></div><div style="text-align:center">'+ok.filter(a=>a.obc_saisi_le).length+' OK · '+ok.filter(a=>!a.obc_saisi_le).length+' ND</div></div>';
+      + ['Date','Coopérative','Camion','N° connaissement','Type','Origine','Usine','Client','Sacs','Net payé<br>(kg)','Statut','Saisie<br>OBC'].map(H).join('')+'</div>';
+    const tot = '<div style="display:grid;grid-template-columns:'+G3+';column-gap:6px;align-items:center;background:rgba(230,240,236,.7);color:#0E3B36;padding:0 14px;height:38px;box-sizing:border-box;font-size:12.5px;font-weight:800;border-bottom:2px solid rgba(14,59,54,.6)"><div style="grid-column:1 / span 8">TOTAL · '+ok.length+' camion'+(ok.length>1?'s':'')+' acheté'+(ok.length>1?'s':'')+'</div><div style="text-align:center">'+kg(sum(achatSacsRetenus))+'</div><div style="text-align:center">'+kg(sum(D.netKg))+'</div><div></div><div style="text-align:center">'+ok.filter(a=>a.obc_saisi_le).length+' OK · '+ok.filter(a=>!a.obc_saisi_le).length+' ND</div></div>';
     const lignes = D.camions.map(a=>{
       const c = coopById(a.cooperative_id), ref = !!a.refoulee, net = D.netKg(a);
       const st = ref ? ['Refoulé','rgba(253,226,223,.85)','#A8281C'] : net>0 ? ['Pesé','rgba(221,243,228,.85)','#14633A'] : ['À peser','rgba(255,241,214,.85)','#6B4600'];
@@ -4354,7 +4354,7 @@ function renderPresAchats(){
       return '<div style="display:grid;grid-template-columns:'+G3+';column-gap:6px;align-items:center;padding:0 14px;height:36px;box-sizing:border-box;border-bottom:1px solid #E3E9E6;font-size:12px;background:'+(ref?'#FBF4F3':'#fff')+';color:'+(ref?'#7A6B69':'#14231F')+'">'
         + cel(esc(dateFr(String(a.date||'').slice(0,10)).slice(0,5)))+cel(esc(c?c.nom:''),'font-weight:700;')+'<div title="'+esc(a.immat_vehicule||'')+'" style="text-align:center;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">'+tir(a.immat_vehicule)+'</div>'+cel(esc(a.connaissement||''))
         + '<div style="text-align:center;font-weight:700;color:'+(t?'#0E3B36':'#5A6865')+'">'+(t?(/^fair|^ft/i.test(a.type_cacao)?'FT':'RA'):'Ord.')+'</div>'+cel(tir(a.lieu_origine))+cel(tir(usine))+'<div style="text-align:center;font-weight:600">'+tir(cl)+'</div>'
-        + '<div style="text-align:center">'+kg(achatSacsRetenus(a))+'</div><div style="text-align:center">'+kg(achatLivreRetenu(a))+'</div><div style="text-align:center;font-weight:800">'+kg(net)+'</div>'
+        + '<div style="text-align:center">'+kg(achatSacsRetenus(a))+'</div><div style="text-align:center;font-weight:800">'+kg(net)+'</div>'
         + '<div style="display:flex;justify-content:center"><span style="font-size:11px;font-weight:700;border-radius:999px;padding:3px 9px;background:'+st[1]+';color:'+st[2]+'">'+st[0]+'</span></div>'
         + (function(){ const so = presSaisieObc(a); return '<div style="display:flex;align-items:center;gap:6px;justify-content:flex-start;overflow:hidden"><span style="flex:none;font-size:11px;font-weight:800;border-radius:999px;padding:3px 10px;background:'+(so.ok?'rgba(221,243,228,.95)':'rgba(255,241,214,.95)')+';color:'+(so.ok?'#14633A':'#6B4600')+'">'+so.code+'</span>'+(so.ok ? '' : '<span title="'+esc(so.motif)+'" style="font-size:11px;color:#6B4600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(so.motif)+'</span>')+'</div>'; })()
         + '</div>';
@@ -4745,7 +4745,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-21-560';
+const APP_VERSION = '2026-11-21-561';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
