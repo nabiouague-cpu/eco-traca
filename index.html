@@ -4745,7 +4745,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-20-559';
+const APP_VERSION = '2026-11-21-560';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -11267,7 +11267,7 @@ async function livraisonsClientsExporter(campagneId, filtre){
   const ENTETE = 'FFC55A11', VERT = 'FFCCFFCC', NOIR = { argb:'FF000000' };
   const bord = { style:'thin', color:NOIR }, cadre = { top:bord, bottom:bord, left:bord, right:bord };
   const NB = '#,##0_ ;[Red]\\-#,##0\\ ';
-  const cols = [['COOPERATIVES',15],['PRODUITS',15.44],['DATE LIVRAISON',14.89],['N° CONNAISSEMENT',22.66],['Immatriculation du véhicule',15.66],['Immatriculation de la remorque',15.66],['N° SACS',13],['POIDS ACCEPTE',15.11],['STATUT DÉCLARATION',19.89]];
+  const cols = [['COOPERATIVES',15],['PRODUITS',15.44],['DATE LIVRAISON',14.89],['N° CONNAISSEMENT',22.66],['Immatriculation du véhicule',15.66],['Immatriculation de la remorque',15.66],['N° SACS',13],['POIDS NET PAYÉ',15.11],['STATUT DÉCLARATION',19.89]];
   const wb = new ExcelJS.Workbook(); wb.creator = 'ORIGEN · ECORIGINE'; wb.created = new Date();
   const noms = new Set(), feuilles = [];
   const nomFeuille = n=>{ let b = String(n).replace(/[\\\/\?\*\[\]:]/g,' ').trim().slice(0,31) || 'Partenaire', k = b, i = 2; while (noms.has(k.toLowerCase())){ k = b.slice(0,28)+' '+i; i++; } noms.add(k.toLowerCase()); return k; };
@@ -11282,7 +11282,7 @@ async function livraisonsClientsExporter(campagneId, filtre){
     cols.forEach((c,i)=>{ const x = h.getCell(i+2); x.value = c[0]; x.font = { name:'Calibri', size:10, bold:true, color:{ argb:'FFFFFFFF' } }; x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:ENTETE } }; x.alignment = { horizontal:'center', vertical:'middle', wrapText:true }; x.border = cadre; });
     const tri = g.achats.slice().sort((x,y)=>String(x.date||'').localeCompare(String(y.date||'')) || String(x.connaissement||'').localeCompare(String(y.connaissement||''), 'fr', { numeric:true }));
     tri.forEach((a,i)=>{
-      const c = coopById(a.cooperative_id), sd = livrStatutDecl(a), acc = Number(a.poids_brut_accepte)||0, sacs = achatSacsRetenus(a);
+      const c = coopById(a.cooperative_id), sd = livrStatutDecl(a), acc = Number(a.poids_net_produit)||0, sacs = achatSacsRetenus(a);   // poids NET PAYÉ (règle : jamais le poids accepté)
       const v = [ c ? c.nom : '', livrProduit(a, niv), dateXl(a.date), a.connaissement||'', a.immat_vehicule||'', a.immat_remorque||'', sacs||null, acc||null, sd.txt ];
       const row = ws.getRow(5+i); if (c && c.nom) fe.coops.add(c.nom);
       v.forEach((val,k)=>{ const x = row.getCell(k+2); x.value = val; x.border = cadre; x.font = { name:'Calibri', size:10 };
@@ -11304,7 +11304,7 @@ function livrRecapCoops(wb, feuilles, st){
   if (!coops.length) return null;
   const ws = wb.addWorksheet('Récap coopératives'); const plusieurs = feuilles.length>1;
   const q = f=>"'"+String(f.ws.name).replace(/'/g,"''")+"'!";
-  const LIM = 2000, entetes = ['COOPERATIVES'].concat(plusieurs ? feuilles.map(f=>f.ws.name+' (kg)') : []).concat(['POIDS ACCEPTE TOTAL (kg)','POIDS ACCEPTE TOTAL (t)','NB LIVRAISONS','DONT PAS ENCORE PESEES']);
+  const LIM = 2000, entetes = ['COOPERATIVES'].concat(plusieurs ? feuilles.map(f=>f.ws.name+' (kg)') : []).concat(['POIDS NET PAYÉ TOTAL (kg)','POIDS NET PAYÉ TOTAL (t)','NB LIVRAISONS','DONT PAS ENCORE PESEES']);
   ws.columns = [{ width:9 }].concat(entetes.map((e,i)=>({ width: i===0 ? 34 : 19 })));
   const font = (b)=>({ name:'Calibri', size:10, bold:!!b });
   const h = ws.getRow(4); h.height = 27.6;
@@ -11340,9 +11340,9 @@ function livrExpDonnees(camp){
   const connus = ccClientsConnus(), cl = new Map(), tr = new Map();
   achats.forEach(a=>{
     const n = achatClientEffectif(a), cle = n ? ccClefClient(n) : '__sans__';
-    const g = cl.get(cle) || { cle, nom: n ? (connus.get(cle)||n) : 'Sans client attribué', n:0, kg:0 }; g.n++; g.kg += Number(a.poids_brut_accepte)||0; cl.set(cle, g);
+    const g = cl.get(cle) || { cle, nom: n ? (connus.get(cle)||n) : 'Sans client attribué', n:0, kg:0 }; g.n++; g.kg += Number(a.poids_net_produit)||0; cl.set(cle, g);
     const e = livrExecutantDe(a);
-    if (e && e.traitant && !/^coops?\s/i.test(String(e.traitant).trim())){ const t = tr.get(e.traitant) || { nom:e.traitant, n:0, kg:0, usines:new Set() }; t.n++; t.kg += Number(a.poids_brut_accepte)||0; t.usines.add(e.usine); tr.set(e.traitant, t); }
+    if (e && e.traitant && !/^coops?\s/i.test(String(e.traitant).trim())){ const t = tr.get(e.traitant) || { nom:e.traitant, n:0, kg:0, usines:new Set() }; t.n++; t.kg += Number(a.poids_net_produit)||0; t.usines.add(e.usine); tr.set(e.traitant, t); }
   });
   return { clients: Array.from(cl.values()).sort((x,y)=>x.nom.localeCompare(y.nom,'fr')), traitants: Array.from(tr.values()).sort((x,y)=>x.nom.localeCompare(y.nom,'fr')) };
 }
@@ -11447,7 +11447,7 @@ async function livraisonsCoopExporter(){
   const ENTETE = 'FFC55A11', VERT = 'FFCCFFCC', NOIR = { argb:'FF000000' };
   const bord = { style:'thin', color:NOIR }, cadre = { top:bord, bottom:bord, left:bord, right:bord };
   const NB = '#,##0_ ;[Red]\\-#,##0\\ ';
-  const cols = [['COOPERATIVES',26],['PRODUITS',15.44],['DATE LIVRAISON',14.89],['N° CONNAISSEMENT',22.66],['Immatriculation du véhicule',15.66],['Immatriculation de la remorque',15.66],['N° SACS',13],['POIDS ACCEPTE',15.11],['POIDS NET PAYÉ',15.11],['STATUT DÉCLARATION',24],['DATE DÉCLARATION',17]];
+  const cols = [['COOPERATIVES',26],['PRODUITS',15.44],['DATE LIVRAISON',14.89],['N° CONNAISSEMENT',22.66],['Immatriculation du véhicule',15.66],['Immatriculation de la remorque',15.66],['N° SACS',13],['POIDS NET PAYÉ',15.11],['STATUT DÉCLARATION',24],['DATE DÉCLARATION',17]];
   const dateXl = iso=>{ const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso||'')); return m ? new Date(Date.UTC(+m[1], +m[2]-1, +m[3])) : null; };
   const wb = new ExcelJS.Workbook(); wb.creator = 'ORIGEN · ECORIGINE'; wb.created = new Date();
   const ws = wb.addWorksheet(coop ? String(coop.nom).replace(/[\\\/\?\*\[\]:]/g,' ').trim().slice(0,31) || 'Livraisons' : 'Livraisons');
@@ -11457,18 +11457,18 @@ async function livraisonsCoopExporter(){
   ws.getCell('B2').value = (coop ? 'Livraisons de '+coop.nom : 'Livraisons de toutes les coopératives')+' · '+campNom+' · '+tri.length+' connaissement'+(tri.length>1?'s':'')+' · édité le '+dateFr(new Date().toISOString().slice(0,10));
   ws.getCell('B2').font = { name:'Calibri', size:10, bold:true };
   tri.forEach((a,i)=>{
-    const sd = livrStatutDecl(a), acc = Number(a.poids_brut_accepte)||0, net = Number(a.poids_net_produit)||0, sacs = achatSacsRetenus(a);
-    const v = [ nomCoop(a), livrProduit(a, nivDe(a)), dateXl(a.date), a.connaissement||'', a.immat_vehicule||'', a.immat_remorque||'', sacs||null, acc||null, net||null, sd.txt, sd.date||'' ];
+    const sd = livrStatutDecl(a), net = Number(a.poids_net_produit)||0, sacs = achatSacsRetenus(a);
+    const v = [ nomCoop(a), livrProduit(a, nivDe(a)), dateXl(a.date), a.connaissement||'', a.immat_vehicule||'', a.immat_remorque||'', sacs||null, net||null, sd.txt, sd.date||'' ];
     const row = ws.getRow(5+i);
     v.forEach((val,k)=>{ const x = row.getCell(k+2); x.value = val; x.border = cadre; x.font = { name:'Calibri', size:10 };
       x.alignment = k===0 ? { horizontal:'left' } : { horizontal:'right', indent:1 };
       if (k===1 || k===2) x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:VERT } };
-      if (k===2) x.numFmt = 'mm-dd-yy'; if (k>=6 && k<=8) x.numFmt = NB; });
+      if (k===2) x.numFmt = 'mm-dd-yy'; if (k>=6 && k<=7) x.numFmt = NB; });
   });
   const fin = 4 + tri.length, tot = ws.getRow(fin+1);
-  [[6],[7],[8]].forEach(([k])=>{ const x = tot.getCell(k+2); x.value = { formula:'SUM('+String.fromCharCode(66+k)+'5:'+String.fromCharCode(66+k)+fin+')' }; x.font = { name:'Calibri', size:10, bold:true }; x.numFmt = NB; x.border = cadre; });
+  [[6],[7]].forEach(([k])=>{ const x = tot.getCell(k+2); x.value = { formula:'SUM('+String.fromCharCode(66+k)+'5:'+String.fromCharCode(66+k)+fin+')' }; x.font = { name:'Calibri', size:10, bold:true }; x.numFmt = NB; x.border = cadre; });
   tot.getCell(2).value = 'TOTAL'; tot.getCell(2).font = { name:'Calibri', size:10, bold:true };
-  ws.autoFilter = { from:{ row:4, column:2 }, to:{ row:fin, column:12 } };
+  ws.autoFilter = { from:{ row:4, column:2 }, to:{ row:fin, column:11 } };
   ws.views = [{ state:'frozen', ySplit:4 }];
   await qcTelechargerClasseur(wb, 'Livraisons_'+(coop ? String(coop.nom) : 'toutes_cooperatives').replace(/[^A-Za-z0-9]+/g,'_')+'_'+String(campNom).replace(/[^A-Za-z0-9]+/g,'_')+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
   showToast('Livraisons téléchargées : '+tri.length+' connaissement'+(tri.length>1?'s':'')+(coop ? ' ('+coop.nom+')' : ' (toutes les coopératives)')+'.', 'success');
