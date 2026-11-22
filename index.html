@@ -4768,7 +4768,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-22-565';
+const APP_VERSION = '2026-11-22-566';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -6656,7 +6656,7 @@ async function supprimerTracage(){
     'Supprimer ce traçage de volume ?\n\n'
     + 'Cette action retire les '+producteurs.length+' achat(s) producteur(s) enregistrés ('+fmtKg(tr.volumeKg)+')'
     + (conn ? ' et le connaissement '+conn.numero+' qui lui est lié' : '')+', pour pouvoir tout reproduire.\n\n'
-    + 'La fiche Excel déjà téléchargée n\'est pas concernée.',
+    + 'La fiche de traçabilité générée (fichier + enregistrement) est supprimée avec le traçage.',
     async () => {
       try{
         if (conn){
@@ -6669,8 +6669,13 @@ async function supprimerTracage(){
           if (error) throw error;
           state.achats = state.achats.filter(x=>!ids.includes(x.id));
         }
+        // Le fichier de traçabilité généré pour ce traçage ne doit pas rester orphelin en base : on le supprime
+        // (fichier dans le stockage + lignes demande_fichiers + ligne fiches_tracabilite_generees), comme on le
+        // fait déjà pour « Annuler la dernière étape ».
+        await ocFicheStockeeSupprimer(tr);
+        if (tr.ficheGenerationId) await supabaseClient.from('fiches_tracabilite_generees').delete().eq('id', tr.ficheGenerationId);
         ocTracageSauver(null);
-        showToast('Traçage de volume supprimé — il peut être reproduit.', 'success');
+        showToast('Traçage de volume supprimé, fiche de traçabilité effacée — il peut être reproduit.', 'success');
         render();
       }catch(e){ showToast('Échec de la suppression : '+e.message); }
     }
@@ -13916,7 +13921,7 @@ function lotsModalsHtml(){
   if (m.type==='ocDossier'){
     const pl = m.payload, c = coopById(pl.coopId), D = ocDossierDonnees(pl.coopId, pl.cle);
     const nP = (state.producteurs||[]).filter(p=>p.cooperative_id===pl.coopId && p.farm_id).length;
-    const nTT = ocTvCandidats(pl.coopId).length;
+    const nTT = ocTvCandidats(pl.coopId).length + extATracerListe().filter(e=>e.coop && e.coop.id===pl.coopId).length;
     let corps;
     if (!D) corps = '<div class="hint">Aucun connaissement au format CCC-année-saison-numéro pour cette coopérative.</div>';
     else {
@@ -14531,9 +14536,11 @@ function ocTvConnaissementPrecedent(coopId, campagneId, avantIso, codeActuel){
   });
   return meilleur;
 }
-function ocTvIntervalleAchats(coopId, campagneId, iso, codeActuel){
+// Calcul pur (sans lire l'état) à partir d'un « précédent » déjà connu : { iso, debutApprox } ou null. Partagé par
+// ocTvIntervalleAchats (lecture réelle dans state.achats) et par l'aperçu de « Tracer tous les volumes », qui doit
+// pouvoir enchaîner plusieurs connaissements PAS ENCORE enregistrés comme s'ils l'étaient déjà (chaîne simulée).
+function ocTvIntervalleAchatsDepuis(iso, prec){
   const dateFin = ocTvJourDecale(iso, -ocTvEntierAleatoire(1,3));
-  const prec = ocTvConnaissementPrecedent(coopId, campagneId, iso, codeActuel);
   let dateDebut;
   if (prec){
     // La continuité fixe un POINT DE REPÈRE (décalé de l'écart entre les deux connaissements), mais la date de
@@ -14549,6 +14556,9 @@ function ocTvIntervalleAchats(coopId, campagneId, iso, codeActuel){
   }
   if (dateDebut>=dateFin) dateDebut = ocTvJourDecale(dateFin, -1);
   return { dateDebut, dateFin };
+}
+function ocTvIntervalleAchats(coopId, campagneId, iso, codeActuel){
+  return ocTvIntervalleAchatsDepuis(iso, ocTvConnaissementPrecedent(coopId, campagneId, iso, codeActuel));
 }
 function ocTvPrefillOrigine(v, coopId){
   const iso = saigicDateIso(v.date_connaissement) || new Date().toISOString().slice(0,10);
@@ -17245,6 +17255,11 @@ async function ocRefaireOk(P){
       const { error } = await supabaseClient.from('achats_tracage_archive').insert(arch.slice(i,i+200));
       if (error) throw new Error('sauvegarde impossible, rien n\'a été supprimé : '+error.message);
     }
+    // Les fiches de traçabilité déjà générées pour ces achats ne doivent pas rester orphelines en base : on
+    // relève d'abord les fiches concernées (fichier + enregistrement), avant de supprimer les achats qui en
+    // portent la trace — même règle que pour « Supprimer ce traçage » et « Annuler la dernière étape ».
+    const fichesASupprimer = new Map();
+    P.plan.forEach(x=>x.lignes.forEach(a=>{ if (a.fiche_generation_id) fichesASupprimer.set(a.fiche_generation_id, { coopId:x.coopId, ficheGenerationId:a.fiche_generation_id }); }));
     const ids = P.plan.reduce((t,x)=>t.concat(x.lignes.map(a=>a.id)),[]);
     for (let i=0;i<ids.length;i+=100){
       const { error } = await supabaseClient.from('achats').delete().in('id', ids.slice(i,i+100));
@@ -17252,6 +17267,14 @@ async function ocRefaireOk(P){
     }
     const idSet = new Set(ids);
     state.achats = (state.achats||[]).filter(a=>!idSet.has(a.id));
+    if (fichesASupprimer.size){
+      for (const tr of fichesASupprimer.values()) await ocFicheStockeeSupprimer(tr);
+      const genIds = Array.from(fichesASupprimer.keys());
+      for (let i=0;i<genIds.length;i+=100){
+        const { error } = await supabaseClient.from('fiches_tracabilite_generees').delete().in('id', genIds.slice(i,i+100));
+        if (error) console.warn('Ligne fiches_tracabilite_generees non supprimée :', error.message);
+      }
+    }
     const coopIds = P.plan.map(x=>x.coopId);
     const rs = await supabaseClient.from('tracabilite_simulee').delete().in('cooperative_id', coopIds);
     if (!rs.error) state.tracaSim = (state.tracaSim||[]).filter(r=>coopIds.indexOf(r.cooperative_id)<0);
@@ -17676,20 +17699,46 @@ async function ocTracerCoeur(coopId, campagneId, volumeKg, nbSacs, nbProd, dateD
 // potentiel restant des producteurs se mettent à jour correctement d'un camion à l'autre, exactement comme s'ils
 // avaient été tracés un par un à la main. L'attribution du format (normal / Cargill) se choisit une seule fois à
 // la fin, pour tout ce qui a été tracé — jamais devinée automatiquement (voir ocFormatFicheChoisir). =====
+// La liste inclut aussi les camions livrés chez un traitant (Awahus...) mais dont le cacao repart vers le MÊME
+// client final que ce qu'on livre nous-mêmes (voir extATracerListe) : pour la coopérative, c'est un vrai
+// traçage, pas une simple simulation (règle de Nabi : "si j'ai envoyé ces déchargements-là, tu les prends en
+// compte aussi, puisque ça va partir chez l'autre partenaire"). Ces lignes « externes » sont tracées via la
+// simulation déjà enregistrée (ocExtTracerCamion/ocAppliquerSimCamion) : le nombre de producteurs n'y est pas
+// un choix libre, donc il n'est pas proposé/éditable comme pour les connaissements chez nous.
 function ocTracerToutLignes(coopId){
-  const items = ocTvCandidats(coopId).slice().sort((a,b)=>String(a.iso||'').localeCompare(String(b.iso||'')));
+  const directs = ocTvCandidats(coopId).map(it=>Object.assign({ externe:false }, it));
+  const externes = extATracerListe().filter(e=>e.coop && e.coop.id===coopId).map(e=>({
+    cle:'ext:'+e.x.id, code:e.x.code, kg:Math.round(Number(e.x.kg)||0), sacs:Math.round(Number(e.x.nombre_sacs)||0),
+    iso:String(e.x.date||'').slice(0,10), vu:null, achat:null, ext:e.x, externe:true
+  }));
+  const items = directs.concat(externes).sort((a,b)=>String(a.iso||'').localeCompare(String(b.iso||'')));
+  // Chaîne simulée (voir ocTvIntervalleAchatsDepuis) : chaque ligne de CETTE liste sert de « précédent » à la
+  // suivante, même si rien n'est encore enregistré — c'est ce qui permet d'afficher et de FIGER tout de suite
+  // l'intervalle de dates qui sera vraiment utilisé au traçage (plus de nouveau tirage surprise à l'exécution).
+  let precVirtuel = null;
   return items.map(it=>{
     const pf = ocTvPrefillItem(it, coopId);
+    const iso = it.iso || new Date().toISOString().slice(0,10);
+    const campagneId = (it.ext && it.ext.campagne_id) || pf.campagneId || ((state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : '');
+    const precReel = campagneId ? ocTvConnaissementPrecedent(coopId, campagneId, iso, it.code) : null;
+    const prec = (precVirtuel && (!precReel || precVirtuel.iso>=precReel.iso)) ? precVirtuel : precReel;
+    const iv = ocTvIntervalleAchatsDepuis(iso, prec);
+    precVirtuel = { iso, debutApprox: iv.dateDebut };
     const volumeKg = Math.round(Number(pf.volume))||0;
-    const an = pf.campagneId ? ocTvAnalyseProd(coopId, pf.campagneId, volumeKg) : null;
     let nbPropose = '', blocage = '';
-    if (!(volumeKg>0)) blocage = 'volume inconnu pour ce connaissement';
-    else if (!pf.campagneId) blocage = 'campagne inconnue pour cette date';
-    else if (!an) blocage = 'coopérative ou campagne invalide';
-    else if (an.aucun) blocage = 'plus aucun producteur avec de la marge';
-    else if (volumeKg > an.capTot) blocage = 'capacité restante insuffisante ('+fmtKg(an.capTot)+')';
-    else nbPropose = Math.min(an.besoin, an.nElig);
-    return { cle:it.cle, code:it.code, iso:it.iso, kg:it.kg, sacs:it.sacs, campagneId:pf.campagneId,
+    if (it.externe){
+      // rien à proposer : ocAppliquerSimCamion utilise la répartition déjà simulée, pas un nombre choisi ici
+    } else {
+      const an = campagneId ? ocTvAnalyseProd(coopId, campagneId, volumeKg) : null;
+      if (!(volumeKg>0)) blocage = 'volume inconnu pour ce connaissement';
+      else if (!campagneId) blocage = 'campagne inconnue pour cette date';
+      else if (!an) blocage = 'coopérative ou campagne invalide';
+      else if (an.aucun) blocage = 'plus aucun producteur avec de la marge';
+      else if (volumeKg > an.capTot) blocage = 'capacité restante insuffisante ('+fmtKg(an.capTot)+')';
+      else nbPropose = Math.min(an.besoin, an.nElig);
+    }
+    return { cle:it.cle, code:it.code, iso:it.iso, kg:it.kg, sacs:it.sacs, campagneId, externe: !!it.externe,
+      dateDebut: iv.dateDebut, dateFin: iv.dateFin,
       nbProd: nbPropose, valide:false, statut:'attente', blocage:blocage, erreur:'', margeApres:null, nbProdUtilise:null };
   });
 }
@@ -17710,7 +17759,7 @@ function ocTracerToutBasculer(cle){
 }
 function ocTracerToutNb(cle, val){
   const pl = state.modal && state.modal.type==='ocTracerTout' ? state.modal.payload : null; if (!pl) return;
-  const l = pl.lignes.find(x=>x.cle===cle); if (!l || l.statut==='trace') return;
+  const l = pl.lignes.find(x=>x.cle===cle); if (!l || l.statut==='trace' || l.externe) return;
   const n = Math.round(Number(val));
   if (Number.isInteger(n) && n>0) l.nbProd = n;
 }
@@ -17719,17 +17768,28 @@ async function ocTracerToutLancer(){
   const aTracer = pl.lignes.filter(l=>l.valide && !l.blocage && l.statut!=='trace');
   if (!aTracer.length){ showToast('Valide au moins un connaissement avant de lancer le traçage.'); return; }
   const totalKg = aTracer.reduce((s,l)=>s+(Number(l.kg)||0),0);
-  askConfirm('Tracer '+aTracer.length+' connaissement'+(aTracer.length>1?'s':'')+' en un seul coup ('+fmtKg(totalKg)+' au total) ?\n\nChacun est traité dans l\'ordre chronologique — répartition sur les producteurs, fiche de traçabilité, achats enregistrés et fiche rangée — exactement comme un traçage fait un par un. Le choix du format (normal / Cargill) se fera une seule fois à la fin, pour tout ce qui aura été tracé.', async ()=>{
+  askConfirm('Tracer '+aTracer.length+' connaissement'+(aTracer.length>1?'s':'')+' en un seul coup ('+fmtKg(totalKg)+' au total) ?\n\nChacun est traité dans l\'ordre chronologique — répartition sur les producteurs, fiche de traçabilité, achats enregistrés et fiche rangée — exactement comme un traçage fait un par un. Les intervalles de dates affichés ci-dessus sont ceux qui seront vraiment utilisés (aucun nouveau tirage à l\'exécution). Le choix du format (normal / Cargill) se fera une seule fois à la fin, pour tout ce qui aura été tracé.', async ()=>{
     pl.enCours = true; render();
     let ok = 0, ko = 0; const tracesOk = [];
     for (const ligne of aTracer){
+      if (ligne.externe){
+        // Camion livré chez un traitant (même client final) : on réutilise le mécanisme déjà en place
+        // (simulation enregistrée → vrai traçage), pas de producteurs à choisir ici.
+        let r; try{ r = await ocExtTracerCamion(pl.coopId, ligne.code); }catch(e){ r = { ko:(e && e.message) ? e.message : String(e) }; }
+        if (!r || !r.ok){ ligne.statut = 'erreur'; ligne.erreur = (r && r.ko) || 'échec du traçage chez le traitant'; ko++; render(); continue; }
+        ligne.statut = 'trace'; ligne.nbProdUtilise = r.nProd;
+        if (ligne.campagneId){ const elig = ocProducteursEligibles(pl.coopId, ligne.campagneId, 'principale'); ligne.margeApres = elig.reduce((s,e)=>s+Math.floor(e.remaining), 0); }
+        tracesOk.push({ coopId: pl.coopId, code: ligne.code });
+        ok++; render(); continue;
+      }
       const it = ocTvItemParCle(pl.coopId, ligne.cle);
       if (!it){ ligne.statut = 'erreur'; ligne.erreur = 'connaissement introuvable (déjà traité ailleurs ?)'; ko++; render(); continue; }
-      // Recalcule la fenêtre de dates à cet instant précis : elle tient alors compte, par continuité, de tous les
-      // connaissements déjà tracés plus haut dans cette même boucle (leurs achats existent déjà dans state.achats).
-      const pf = ocTvPrefillItem(it, pl.coopId);
-      const campagneId = pf.campagneId;
-      const volumeKg = Math.round(Number(pf.volume))||0, nbSacs = Math.round(Number(pf.sacs))||0;
+      // Le volume, les sacs et surtout l'intervalle de dates sont ceux déjà figés et affichés dans l'aperçu
+      // (ocTracerToutLignes) : on ne les recalcule pas ici, pour que ce qui a été validé par Nabi soit
+      // exactement ce qui est écrit. Seule l'analyse des producteurs disponibles est refaite à cet instant,
+      // car elle dépend de ce qui vient d'être tracé plus haut dans cette même boucle.
+      const campagneId = ligne.campagneId;
+      const volumeKg = Math.round(Number(ligne.kg))||0, nbSacs = Math.round(Number(ligne.sacs))||0;
       if (!campagneId){ ligne.statut = 'erreur'; ligne.erreur = 'campagne inconnue pour cette date'; ko++; render(); continue; }
       if (!(volumeKg>0) || !(nbSacs>0)){ ligne.statut = 'erreur'; ligne.erreur = 'volume ou nombre de sacs manquant'; ko++; render(); continue; }
       const an = ocTvAnalyseProd(pl.coopId, campagneId, volumeKg);
@@ -17737,9 +17797,9 @@ async function ocTracerToutLancer(){
       if (volumeKg>an.capTot){ ligne.statut = 'erreur'; ligne.erreur = 'capacité restante insuffisante ('+fmtKg(an.capTot)+')'; ko++; render(); continue; }
       const mini = Math.min(an.besoin, an.nElig);
       const nbProd = Math.max(mini, Math.round(Number(ligne.nbProd))||mini);
-      const r = await ocTracerCoeur(pl.coopId, campagneId, volumeKg, nbSacs, nbProd, pf.dateDebut, pf.dateFin, it, 'direct', pl.coopId, null);
+      const r = await ocTracerCoeur(pl.coopId, campagneId, volumeKg, nbSacs, nbProd, ligne.dateDebut, ligne.dateFin, it, 'direct', pl.coopId, null);
       if (!r.ok){ ligne.statut = 'erreur'; ligne.erreur = r.error; ko++; render(); continue; }
-      ligne.statut = 'trace'; ligne.nbProdUtilise = r.nbUtilises; ligne.dateDebut = pf.dateDebut; ligne.dateFin = pf.dateFin;
+      ligne.statut = 'trace'; ligne.nbProdUtilise = r.nbUtilises;
       { const elig = ocProducteursEligibles(pl.coopId, campagneId, 'principale'); ligne.margeApres = elig.reduce((s,e)=>s+Math.floor(e.remaining), 0); }
       tracesOk.push({ coopId: pl.coopId, code: it.code });
       ok++; render();
@@ -17756,21 +17816,37 @@ function ocTracerToutModalHtml(){
   const nValide = pl.lignes.filter(l=>l.valide).length;
   const nTrace = pl.lignes.filter(l=>l.statut==='trace').length;
   const nErreur = pl.lignes.filter(l=>l.statut==='erreur').length;
+  // Volume de base de la coopérative (sa capacité de production, pas seulement ce qu'elle a déjà livré) et ce
+  // qui a déjà été acheté/tracé toutes périodes confondues — Nabi veut voir ces deux chiffres avant de valider.
+  const st = coopStats(pl.coopId);
+  // Marge restante en direct (ce qu'il reste à acheter chez les producteurs), recalculée à chaque rendu : elle
+  // bouge au fil des lignes déjà tracées dans cette même session, campagne par campagne.
+  const campagnesVues = Array.from(new Set(pl.lignes.map(l=>l.campagneId).filter(Boolean)));
+  const margeParCampagne = campagnesVues.map(cid=>{
+    const elig = ocProducteursEligibles(pl.coopId, cid, 'principale');
+    const camp = (state.campagnes||[]).find(x=>x.id===cid);
+    return { nom: camp ? (camp.nom||camp.id) : cid, marge: elig.reduce((s,e)=>s+Math.floor(e.remaining), 0) };
+  });
   const ligneHtml = l=>{
     const peutValider = l.statut!=='trace' && !l.blocage && !pl.enCours;
     const statutHtml = l.statut==='trace' ? '<span class="badge ok">✔ Tracé'+(l.margeApres!=null ? ' · potentiel restant '+fmtKg(l.margeApres) : '')+'</span>'
       : l.statut==='erreur' ? '<span class="badge warn" title="'+esc(l.erreur||'')+'">✖ '+esc(l.erreur||'échec')+'</span>'
       : l.blocage ? '<span class="hint" style="margin:0;color:#b9770e" title="'+esc(l.blocage)+'">⚠ '+esc(l.blocage)+'</span>'
       : (l.valide ? '<span class="badge info">À tracer</span>' : '<span class="hint" style="margin:0">en attente</span>');
+    const intervalleHtml = (l.dateDebut && l.dateFin) ? (esc(dateFr(l.dateDebut)||l.dateDebut)+' → '+esc(dateFr(l.dateFin)||l.dateFin)) : '<span class="hint" style="margin:0">—</span>';
     return '<tr'+(l.statut==='trace' ? ' style="background:#F2F8F4"' : (l.statut==='erreur' ? ' style="background:#FDF2F0"' : ''))+'>'
-      + '<td><b>'+esc(l.code)+'</b></td><td>'+esc(dateFr(l.iso)||l.iso||'')+'</td><td class="num">'+fmtKg(l.kg)+'</td><td class="num">'+fmtNum(l.sacs)+'</td>'
-      + '<td class="num">'+(peutValider ? '<input type="number" min="1" step="1" style="width:64px" value="'+esc(l.nbProd||'')+'" onchange="ocTracerToutNb(\''+escJs(l.cle)+'\', this.value)">' : fmtNum(l.nbProdUtilise!=null ? l.nbProdUtilise : (l.nbProd||0)))+'</td>'
+      + '<td><b>'+esc(l.code)+'</b>'+(l.externe ? ' <span class="hint" style="margin:0" title="Camion livré chez le traitant, repart chez le même client final">⇄ chez le traitant</span>' : '')+'</td>'
+      + '<td>'+esc(dateFr(l.iso)||l.iso||'')+'</td><td class="num">'+fmtKg(l.kg)+'</td><td class="num">'+fmtNum(l.sacs)+'</td>'
+      + '<td style="white-space:nowrap">'+intervalleHtml+'</td>'
+      + '<td class="num">'+(l.externe ? '<span class="hint" style="margin:0" title="Répartition déjà simulée pour ce camion">simulée</span>' : (peutValider ? '<input type="number" min="1" step="1" style="width:64px" value="'+esc(l.nbProd||'')+'" onchange="ocTracerToutNb(\''+escJs(l.cle)+'\', this.value)">' : fmtNum(l.nbProdUtilise!=null ? l.nbProdUtilise : (l.nbProd||0))))+'</td>'
       + '<td>'+statutHtml+'</td>'
       + '<td>'+(peutValider ? '<button type="button" class="btn'+(l.valide?' btn-primary':' btn-ghost')+' btn-compact" onclick="ocTracerToutBasculer(\''+escJs(l.cle)+'\')">'+(l.valide?'✓ Validé':'Valider')+'</button>' : '')+'</td></tr>';
   };
   return '<div class="modal-overlay" onclick="if(event.target===this)ocTracerToutFermer()"><div class="modal xl"><h3>⚡ Tracer tous les volumes — '+esc(c ? c.nom : pl.coopId)+'</h3>'
-    + '<div class="hint" style="margin-bottom:10px">Valide un à un les connaissements à tracer (ajuste le nombre de producteurs si besoin), puis lance le traçage groupé : chacun est traité dans l\'ordre chronologique, avec la même répartition, les mêmes règles de dates (continuité + aléatoire) et le même rangement des fiches qu\'un traçage fait à la main. Le format de téléchargement (normal / Cargill) se choisit une seule fois à la fin, pour tout ce qui a été tracé.</div>'
-    + (pl.lignes.length ? '<div id="modal-fields"><div class="achats-defile" style="max-height:52vh;overflow:auto"><table class="tbl-fiches tbl-dense"><thead><tr><th>Connaissement</th><th>Date</th><th class="num">Poids</th><th class="num">Sacs</th><th class="num">Producteurs</th><th>Statut</th><th></th></tr></thead><tbody>'
+    + '<div class="hint" style="margin:0 0 10px;display:block">Potentiel de base de la coopérative : <b>'+fmtKg(st.potentiel)+'</b> · déjà acheté/tracé (toutes périodes) : <b>'+fmtKg(st.achete)+'</b>'
+      + (margeParCampagne.length ? ' · marge restante chez les producteurs : '+margeParCampagne.map(m=>'<b>'+fmtKg(m.marge)+'</b> ('+esc(m.nom)+')').join(', ') : '')+'</div>'
+    + '<div class="hint" style="margin-bottom:10px">Valide un à un les connaissements à tracer (ajuste le nombre de producteurs si besoin), puis lance le traçage groupé : chacun est traité dans l\'ordre chronologique, avec la même répartition, les mêmes règles de dates (continuité + aléatoire, déjà calculées et figées ci-dessous) et le même rangement des fiches qu\'un traçage fait à la main. Les lignes « ⇄ chez le traitant » sont des déchargements vers un traitant (ex. Awahus) dont le cacao repart chez le même client final que le nôtre : elles sont incluses pour que leurs fiches partent chez ce même client. Le format de téléchargement (normal / Cargill) se choisit une seule fois à la fin, pour tout ce qui a été tracé.</div>'
+    + (pl.lignes.length ? '<div id="modal-fields"><div class="achats-defile" style="max-height:52vh;overflow:auto"><table class="tbl-fiches tbl-dense"><thead><tr><th>Connaissement</th><th>Date</th><th class="num">Poids</th><th class="num">Sacs</th><th>Intervalle d\'achats</th><th class="num">Producteurs</th><th>Statut</th><th></th></tr></thead><tbody>'
         + pl.lignes.map(ligneHtml).join('') + '</tbody></table></div></div>'
       : '<p class="hint">Aucun connaissement en attente de traçage pour cette coopérative.</p>')
     + '<div class="actions">'
