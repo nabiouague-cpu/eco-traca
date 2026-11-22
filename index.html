@@ -4768,7 +4768,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-22-566';
+const APP_VERSION = '2026-11-22-567';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -13922,6 +13922,12 @@ function lotsModalsHtml(){
     const pl = m.payload, c = coopById(pl.coopId), D = ocDossierDonnees(pl.coopId, pl.cle);
     const nP = (state.producteurs||[]).filter(p=>p.cooperative_id===pl.coopId && p.farm_id).length;
     const nTT = ocTvCandidats(pl.coopId).length + extATracerListe().filter(e=>e.coop && e.coop.id===pl.coopId).length;
+    // Compteur indépendant du format CCC-année-saison-numéro (contrairement à D, basé sur ocSimGroupes) : il
+    // vaut pour TOUTE coopérative ayant au moins un achat producteur tracé, quel que soit le format de son
+    // connaissement ou la série actuellement affichée — c'est lui qui commande le bouton « Refaire de zéro »
+    // ci-dessous, pour que ce bouton existe pour toutes les coopératives, pas seulement celles qui ont une
+    // série CCC reconnue.
+    const nTraceCoop = ocRefaireCodesTousCoop(pl.coopId).length;
     let corps;
     if (!D) corps = '<div class="hint">Aucun connaissement au format CCC-année-saison-numéro pour cette coopérative.</div>';
     else {
@@ -13944,7 +13950,7 @@ function lotsModalsHtml(){
       + '<div class="hint" style="margin-bottom:8px">'+esc(c && c.ccc_num ? 'N° CCC '+c.ccc_num+' · ' : '')+fmtNum(nP)+' producteur(s) dans ORIGEN. <b>Rien n\'est modifié ici</b> : les traçabilités déjà faites restent telles quelles tant que tu ne demandes pas de les refaire.'
       + (D && D.groupes.length>1 ? ' Série : <select onchange="ocDossierSerie(this.value)">'+D.groupes.map(g=>'<option value="'+esc(g.cle)+'"'+(g.cle===D.g.cle?' selected':'')+'>'+esc(g.cle)+'</option>').join('')+'</select>' : '')+'</div>'
       + '<div id="modal-fields">'+corps+'</div>'
-      + '<div class="actions">'+(nTT>0 ? '<button class="btn btn-primary" onclick="ocOuvrirTracerTout(\''+escJs(pl.coopId)+'\')" title="Ouvre la liste de tous les connaissements encore à tracer pour cette coopérative : valide le nombre de producteurs de chacun un à un, puis trace tout en un seul coup">⚡ Tracer tous les volumes ('+nTT+')</button>' : '')+'<button class="btn" onclick="ocDossierApercu()" title="Simule toute la série depuis le n° 1, comme si rien n\'avait été tracé, pour voir ce que donnerait la traçabilité refaite (aperçu, rien n\'est enregistré tant que tu ne cliques pas sur Enregistrer)">🧮 Aperçu : refaire toute la traçabilité de zéro</button>'+(D && D.lignes.some(l=>l.nous && l.st==='simule') ? '<button class="btn btn-primary" onclick="ocDossierAppliquer(\''+escJs(pl.coopId)+'\')" title="Transforme en vrai traçage tous les camions chez nous qui n\'existent que dans la simulation">✅ Appliquer la simulation aux camions chez nous</button>' : '')+(D && D.nTrace>0 ? '<button class="btn btn-primary" onclick="ocDossierTelechargerTout(\''+escJs(pl.coopId)+'\',\''+escJs(D.g.cle)+'\')" title="Télécharge en un clic les fiches de tous les camions déjà tracés de cette série ('+D.nTrace+'), au format choisi (normal / Cargill / les deux) — appliqué à toute la sélection.">⬇ Tout télécharger ('+D.nTrace+')</button>' : '')+(D && D.nTrace>0 ? '<button class="btn" style="color:#a33;border-color:#e3b3b3" onclick="ocRefaireDossier()" title="Retire les traçages déjà faits de cette série (après sauvegarde) pour les retracer avec la simulation">♻ Refaire de zéro (retirer les '+D.nTrace+' traçage'+(D.nTrace>1?'s':'')+')</button>' : '')+'<button class="btn" onclick="closeModal()">Fermer</button></div></div></div>';
+      + '<div class="actions">'+(nTT>0 ? '<button class="btn btn-primary" onclick="ocOuvrirTracerTout(\''+escJs(pl.coopId)+'\')" title="Ouvre la liste de tous les connaissements encore à tracer pour cette coopérative : valide le nombre de producteurs de chacun un à un, puis trace tout en un seul coup">⚡ Tracer tous les volumes ('+nTT+')</button>' : '')+'<button class="btn" onclick="ocDossierApercu()" title="Simule toute la série depuis le n° 1, comme si rien n\'avait été tracé, pour voir ce que donnerait la traçabilité refaite (aperçu, rien n\'est enregistré tant que tu ne cliques pas sur Enregistrer)">🧮 Aperçu : refaire toute la traçabilité de zéro</button>'+(D && D.lignes.some(l=>l.nous && l.st==='simule') ? '<button class="btn btn-primary" onclick="ocDossierAppliquer(\''+escJs(pl.coopId)+'\')" title="Transforme en vrai traçage tous les camions chez nous qui n\'existent que dans la simulation">✅ Appliquer la simulation aux camions chez nous</button>' : '')+(D && D.nTrace>0 ? '<button class="btn btn-primary" onclick="ocDossierTelechargerTout(\''+escJs(pl.coopId)+'\',\''+escJs(D.g.cle)+'\')" title="Télécharge en un clic les fiches de tous les camions déjà tracés de cette série ('+D.nTrace+'), au format choisi (normal / Cargill / les deux) — appliqué à toute la sélection.">⬇ Tout télécharger ('+D.nTrace+')</button>' : '')+(nTraceCoop>0 ? '<button class="btn" style="color:#a33;border-color:#e3b3b3" onclick="ocRefaireToutCoop(\''+escJs(pl.coopId)+'\')" title="Retire TOUS les traçages déjà faits pour cette coopérative, toutes séries et tous formats de connaissement confondus (après sauvegarde), pour tout retracer avec la simulation">♻ Refaire toute la traçabilité de zéro ('+nTraceCoop+')</button>' : '')+'<button class="btn" onclick="closeModal()">Fermer</button></div></div></div>';
   }
   if (m.type==='ocSim'){
     const pl = m.payload, R = pl.res, coops = ocSimCoops(), c = coopById(pl.coopId), groupes = ocSimGroupes(pl.coopId);
@@ -17228,6 +17234,27 @@ function ocRefaireCodes(coopId, cle, seulAwa){
   const gs = ocSimGroupes(coopId).filter(g=>!cle || g.cle===cle), codes = [];
   gs.forEach(g=>{ const D = ocDossierDonnees(coopId, g.cle); if (D) D.lignes.forEach(l=>{ if (l.nous && l.st==='trace' && (!seulAwa || l.awa)) codes.push(l.code); }); });
   return codes;
+}
+// Tous les connaissements tracés d'une coopérative, lus directement sur les achats producteurs — sans passer
+// par ocSimGroupes/ocDossierDonnees (qui n'attrapent qu'un connaissement au format CCC-année-saison-numéro).
+// C'est volontaire : certaines coopératives tracent avec des connaissements qui ne sont pas dans ce format
+// (ou ne sont rattachées à aucune série reconnue), et le bouton « Refaire de zéro » doit exister pour elles
+// aussi. ocRefairePlan/ocRefaireDemander/ocRefaireOk n'ont de toute façon jamais besoin du format CCC : ils
+// ne font que retrouver, sauvegarder puis supprimer les achats producteurs dont le connaissement est dans la
+// liste de codes donnée.
+function ocRefaireCodesTousCoop(coopId){
+  const vus = new Set(), codes = [];
+  (state.achats||[]).forEach(a=>{
+    if (a.producteur_id && a.cooperative_id===coopId && a.connaissement){
+      const k = String(a.connaissement).trim();
+      if (k && !vus.has(k)){ vus.add(k); codes.push(k); }
+    }
+  });
+  return codes;
+}
+function ocRefaireToutCoop(coopId){
+  const nom = (coopById(coopId)||{}).nom || coopId;
+  ocRefaireDemander([{ coopId, codes: ocRefaireCodesTousCoop(coopId) }], 'Refaire de zéro TOUTE la traçabilité de '+nom+' (toutes séries et tous connaissements confondus) ?');
 }
 function ocRefairePlan(items){
   const plan = items.map(it=>{ const set = new Set(it.codes);
