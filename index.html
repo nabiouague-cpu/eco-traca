@@ -4768,7 +4768,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-22-568';
+const APP_VERSION = '2026-11-22-569';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -24798,6 +24798,10 @@ function renderCoopCard(c){
       + (c.statut==='Certifiée' ? '<div><span>Date de fin de licence :</span> '+esc(c.date_fin_licence||'—')+'</div>' : '')
       + (c.statut==='Certifiée' ? '<div><span>Volume certificat :</span> '+(c.volume_certificat?fmtKg(c.volume_certificat):'—')+'</div>' : '')
       + '</div>'
+      + (c.defo_geojson_path || c.defo_registre_path ? '<div class="hint" style="margin-bottom:8px">Base finale (analyse déforestation)'+(c.defo_base_maj_le?' — mise à jour le '+esc(dateFr(String(c.defo_base_maj_le).slice(0,10))):'')+' : '
+          + (c.defo_geojson_path ? '<a style="cursor:pointer;color:var(--accent);margin-right:10px" onclick="carteTelecharger(\''+escJs(c.defo_geojson_path)+'\')">📍 Géolocalisation</a>' : '')
+          + (c.defo_registre_path ? '<a style="cursor:pointer;color:var(--accent)" onclick="carteTelecharger(\''+escJs(c.defo_registre_path)+'\')">📋 Registre</a>' : '')
+          + '</div>' : '')
       + '<div class="hint" style="margin-bottom:8px;">Producteurs de cette coopérative</div>'
       + '<div class="achat-list">'
       + (list.length===0 ? '<div class="achat-item"><span class="hint">Aucun producteur importé pour le moment.</span></div>' :
@@ -24943,6 +24947,7 @@ async function chargerDefo(){
     if (error) throw error;
     const avant = {}; (state.defo||[]).forEach(x=>{ avant[x.id] = x.statut; });
     state.defo = (data || []).map(defoLienCoherent); state.defoIndispo = false;
+    try { await defoSyncBaseCooperatives(); } catch(e){}
     try { const ra = await supabaseClient.from('defo_actions_nabi').select('*').order('created_at',{ ascending:false }).limit(3000); if (!ra.error) state.defoActions = ra.data||[]; } catch(e){}
     try { const rd = await supabaseClient.from('defo_discussion').select('analyse_id').eq('role','assistant').limit(8000); if (!rd.error) state.defoDiscAn = new Set((rd.data||[]).map(x=>x.analyse_id)); } catch(e){}
     try { defoChaineAuto(); } catch(e){}
@@ -25082,6 +25087,30 @@ function defoMajListe(){
   el.innerHTML = defoLignesHtml(tri, liste.find(x=>x.id===state.defoSel) || null);
   const f = document.querySelector('.defo-ms-cherche'); if (f && f.value) defoDossierFiltre(f.value);
   const t = document.getElementById('defo-det-action'), sel = liste.find(x=>x.id===state.defoSel); if (t && sel) t.innerHTML = defoActionHtml(sel, true);
+}
+// Référence, sur la fiche de chaque coopérative, à sa dernière base finale produite (géolocalisation +
+// registre) — indépendamment de l'ajout ou non de cette base à la base consolidée ECORIGINE
+// (entrees.ajouter_base) : Nabi veut pouvoir produire une base finale propre à une coopérative sans qu'elle
+// rejoigne forcément la base commune, tout en gardant son registre et sa géolocalisation disponibles sur sa
+// fiche. Tourne à chaque chargement du module déforestation, en comparant la dernière base finale terminée
+// de chaque coopérative à ce que sa fiche porte déjà (defo_base_analyse_id) : rattrape aussi bien une base
+// finale produite pendant que l'onglet n'était pas ouvert qu'une qui vient de se terminer.
+async function defoSyncBaseCooperatives(){
+  const parCoop = {};
+  (state.defo||[]).forEach(x=>{
+    if (x.etape!=='base_finale' || x.statut!=='terminee' || !x.cooperative_id) return;
+    const prec = parCoop[x.cooperative_id];
+    if (!prec || String(x.created_at) > String(prec.created_at)) parCoop[x.cooperative_id] = x;
+  });
+  const majs = [];
+  Object.keys(parCoop).forEach(coopId=>{
+    const x = parCoop[coopId], c = coopById(coopId); if (!c || c.defo_base_analyse_id===x.id) return;
+    const geo = (x.fichiers||[]).find(f=>f.type==='base_geojson'), reg = (x.fichiers||[]).find(f=>f.type==='base_registre');
+    const champs = { defo_geojson_path:geo?geo.path:null, defo_geojson_nom:geo?geo.nom:null, defo_registre_path:reg?reg.path:null, defo_registre_nom:reg?reg.nom:null, defo_base_analyse_id:x.id, defo_base_maj_le:x.created_at };
+    Object.assign(c, champs);
+    majs.push(supabaseClient.from('cooperatives').update(champs).eq('id', coopId));
+  });
+  if (majs.length) await Promise.all(majs);
 }
 async function defoNoter(prepId, analyseId, action, nom){
   if (!prepId) return;
