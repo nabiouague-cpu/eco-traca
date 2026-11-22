@@ -3545,6 +3545,29 @@ function lienFicheCopier(quoi){
   navigator.clipboard.writeText(texte).then(()=>showToast((quoi==='lien'?'Lien copié':'Message copié')+' — colle-le dans WhatsApp ou ton email.', 'success'))
     .catch(()=>showToast('Copie impossible : sélectionne le lien et copie-le (Ctrl+C).'));
 }
+// ---- Lien de consultation (sans portail) : synthèse en lecture seule du questionnaire de légalité EUDR, pour un partenaire comme ECOM ----
+function ouvrirLienQuestionnaire(){ state.modal = {type:'lienQuestionnaire', payload:{client:'ECOM', lien:''}}; render(); }
+function lienQuestionnaireClientMaj(v){ state.modal.payload.client = v; state.modal.payload.lien = ''; }
+async function lienQuestionnaireGenerer(){
+  const pl = state.modal.payload;
+  const client = String(fv('lienq_client')||'').trim();
+  const a = new Uint8Array(24); crypto.getRandomValues(a);
+  const token = Array.from(a).map(x=>x.toString(16).padStart(2,'0')).join('');
+  const { error } = await supabaseClient.from('questionnaire_liens').insert({ token, client, libelle: 'Lien consultation questionnaire EUDR'+(client?' '+client:'') });
+  if (error){ showToast('Échec de création du lien : '+error.message); return; }
+  pl.client = client;
+  pl.lien = location.href.replace(/[^\/]*([?#].*)?$/, '') + 'consultation.html?t=' + token;
+  render();
+}
+function lienQuestionnaireMessage(pl){
+  return "Bonjour,\n\nVoici le lien de consultation de la synthèse du questionnaire de légalité EUDR mené auprès des producteurs des coopératives "+(pl.client||'concernées')+" (consentement, identité, droit d'utilisation des terres, intrants, points d'attention). Les chiffres sont calculés en direct depuis ORIGEN ; aucune donnée nominative n'y figure.\n\n"+pl.lien+"\n\nCordialement,\nECORIGINE";
+}
+function lienQuestionnaireCopier(quoi){
+  const pl = state.modal.payload;
+  const texte = quoi==='lien' ? pl.lien : lienQuestionnaireMessage(pl);
+  navigator.clipboard.writeText(texte).then(()=>showToast((quoi==='lien'?'Lien copié':'Message copié')+' — colle-le dans WhatsApp ou ton email.', 'success'))
+    .catch(()=>showToast('Copie impossible : sélectionne le lien et copie-le (Ctrl+C).'));
+}
 function ouvrirAjoutCooperative(){
   state.modal = {type:'ajoutCooperative', payload:{}};
   // La liste des clients connus (et leur contact enregistré) vient des données "Lots & export" --
@@ -28509,6 +28532,7 @@ function renderCooperativesTab(){
     html += ocRechercheCoopHtml('coops');
     html += '<div class="controls">'
       + '<button class="btn" onclick="ouvrirLienFiche()" title="Pour une coopérative sans portail : elle remplit sa fiche via un lien, elle est créée dans ORIGEN et son contrat peut être généré.">🔗 Lien de fiche (sans portail)</button>'
+      + '<button class="btn" onclick="ouvrirLienQuestionnaire()" title="Lien en lecture seule, sans compte, pour qu\'un partenaire (ex : ECOM) consulte la synthèse du questionnaire de légalité EUDR calculée en direct depuis ORIGEN.">🔗 Lien de consultation (questionnaire EUDR)</button>'
       + '<button class="btn" onclick="basculerCompteReboursAwahus()">⏳ Compte à rebours</button>'
       + '<button class="btn" onclick="certLireTout()" title="Lit les certificats déposés dans le stockage et en extrait la date de fin de licence des coopératives qui n\'en ont pas.">📄 Lire les certificats (dates)</button>'
       + '<button class="btn btn-primary" onclick="ouvrirAjoutCooperative()">+ Ajouter une coopérative</button>'
@@ -32183,6 +32207,20 @@ function _renderBrut(){
       + (pl.fichiers.length>0 ? '<div style="margin-top:8px;">' + pl.fichiers.map((f,i)=>'<div class="achat-item"><span>📎 '+esc(f.name)+'</span><button type="button" class="btn-danger-text" onclick="retirerFichierEnvoi('+i+')">Retirer</button></div>').join('') + '</div>' : '')
       + '</div>'
       + '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Annuler</button><button type="button" class="btn btn-primary" onclick="envoyerDocumentsCoop()">Envoyer</button></div>'
+      + '</div></div>';
+  }
+
+  if (state.modal && state.modal.type==='lienQuestionnaire'){
+    const pl = state.modal.payload;
+    html += '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
+      + '<h3>Lien de consultation — questionnaire de légalité EUDR</h3>'
+      + '<div class="hint" style="margin-bottom:12px;">Lien en lecture seule, sans compte ni portail : la page affiche la synthèse (consentement, identité, droit d\'utilisation des terres, intrants, points d\'attention) calculée en direct depuis ORIGEN, sans aucune donnée nominative. Le lien reste valable 90 jours.</div>'
+      + '<div id="modal-fields"><label class="field">Client (ex : ECOM)<input type="text" name="lienq_client" value="'+esc(pl.client||'')+'" oninput="lienQuestionnaireClientMaj(this.value)"></label></div>'
+      + (pl.lien
+          ? '<div class="field"><label>Lien à envoyer</label><input type="text" readonly value="'+esc(pl.lien)+'" onclick="this.select()"></div>'
+            + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;"><button type="button" class="btn" onclick="lienQuestionnaireCopier(\'lien\')">Copier le lien</button><button type="button" class="btn btn-primary" onclick="lienQuestionnaireCopier(\'message\')">Copier le message complet</button></div>'
+          : '')
+      + '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Fermer</button>'+(pl.lien?'':'<button type="button" class="btn btn-primary" onclick="lienQuestionnaireGenerer()">Créer le lien</button>')+'</div>'
       + '</div></div>';
   }
 

@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Synthèse questionnaire EUDR — ECORIGINE</title>
+<style>
+:root{--ink:#2b2b29;--soft:#6b6b66;--line:#dfe6dc;--bg:#f6f7f4;--card:#ffffff;--green:#2e4a29;--green2:#42693c;--gold:#ce9b1e;--terra:#a6552e;--err:#b3261e}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.wrap{max-width:860px;margin:0 auto;padding:28px 16px 60px}
+.topbar{display:flex;align-items:center;gap:12px;margin-bottom:6px}
+.topbar img{height:40px}
+h1{font-size:21px;margin:0;color:var(--green)}
+.sub{color:var(--soft);margin:2px 0 24px;font-size:14px}
+.msg{padding:14px 16px;border-radius:10px;margin:0 0 16px;font-size:14px}
+.err{background:#fdecea;color:var(--err)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:0 0 18px}
+.card h2{font-size:15px;margin:0 0 14px;color:var(--green);text-transform:uppercase;letter-spacing:.03em}
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+@media (max-width:640px){.tiles{grid-template-columns:repeat(2,1fr)}}
+.tile{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:14px 12px;text-align:center}
+.tile b{display:block;font-size:24px;color:var(--green2);line-height:1.2}
+.tile span{font-size:12px;color:var(--soft)}
+.bar-row{display:flex;align-items:center;gap:10px;margin:8px 0;font-size:13.5px}
+.bar-label{flex:0 0 190px;color:var(--ink)}
+.bar-track{flex:1;background:var(--bg);border-radius:6px;height:16px;overflow:hidden;border:1px solid var(--line)}
+.bar-fill{height:100%;border-radius:6px 0 0 6px}
+.bar-val{flex:0 0 52px;text-align:right;color:var(--soft);font-size:12.5px}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th,td{padding:7px 8px;text-align:right;border-bottom:1px solid var(--line)}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--soft);font-weight:600;font-size:12px;text-transform:uppercase}
+.note{font-size:12.5px;color:var(--soft);margin-top:10px;line-height:1.5}
+.attn{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed var(--line);font-size:13.5px}
+.attn:last-child{border-bottom:none}
+.attn b{color:var(--terra)}
+footer{margin-top:26px;color:var(--soft);font-size:12px;text-align:center;line-height:1.6}
+.hid{display:none}
+</style></head><body><div class="wrap">
+<div class="topbar"><h1 id="titre">Synthèse — Questionnaire de légalité EUDR</h1></div>
+<p class="sub" id="sub">Chargement…</p>
+<div id="etat"></div>
+<div id="contenu" class="hid">
+
+<div class="card">
+<h2>Consentement et couverture</h2>
+<div class="tiles">
+  <div class="tile"><b id="t-approches">—</b><span>Producteurs approchés</span></div>
+  <div class="tile"><b id="t-consentants">—</b><span>Entretiens complets</span></div>
+  <div class="tile"><b id="t-refus">—</b><span>Consentements refusés</span></div>
+  <div class="tile"><b id="t-taux">—</b><span>Taux de consentement</span></div>
+</div>
+<p class="note">Un refus de consentement clôt l'entretien sans recueil de données : seules l'identité du producteur et la coopérative sont alors enregistrées.</p>
+</div>
+
+<div class="card">
+<h2>Répartition par coopérative</h2>
+<table>
+<thead><tr><th>Coopérative</th><th>Approchés</th><th>Entretiens complets</th><th>Refus</th><th>Taux</th></tr></thead>
+<tbody id="tbl-coop"></tbody>
+</table>
+</div>
+
+<div class="card">
+<h2>Identité des producteurs (entretiens complets)</h2>
+<div id="bars-identite"></div>
+</div>
+
+<div class="card">
+<h2>Droit d'utilisation des terres</h2>
+<div id="bars-terres"></div>
+<p class="note" id="note-repart"></p>
+</div>
+
+<div class="card">
+<h2>Approvisionnement en intrants</h2>
+<div id="bars-environnement"></div>
+</div>
+
+<div class="card">
+<h2>Points d'attention identifiés</h2>
+<div id="liste-attention"></div>
+</div>
+
+<footer id="pied"></footer>
+</div>
+</div>
+<script>
+const FN='https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/questionnaire-consultation';
+const T=new URLSearchParams(location.search).get('t')||'';
+const etat=document.getElementById('etat'), contenu=document.getElementById('contenu'), sub=document.getElementById('sub');
+function msg(t,c){etat.innerHTML='<div class="msg '+c+'"></div>';etat.firstChild.textContent=t}
+function fmtPct(v){return (Math.round(v*10)/10).toLocaleString('fr-FR',{minimumFractionDigits:0,maximumFractionDigits:1})+' %'}
+function bar(container,label,val,color){
+  const row=document.createElement('div');row.className='bar-row';
+  row.innerHTML='<div class="bar-label"></div><div class="bar-track"><div class="bar-fill" style="width:'+Math.max(0,Math.min(100,val))+'%;background:'+color+'"></div></div><div class="bar-val"></div>';
+  row.children[0].textContent=label;
+  row.children[2].textContent=fmtPct(val);
+  container.appendChild(row);
+}
+(async()=>{
+  try{
+    const r=await fetch(FN+'?t='+encodeURIComponent(T));
+    const j=await r.json();
+    if(!j.ok){ sub.textContent=''; msg(j.error||'Lien invalide.','err'); return }
+    const s=j.synthese;
+    sub.textContent=(j.client?('Partenaire : '+j.client+' — '):'')+'Modèle de questionnaire : légalité EUDR (Cargill, campagne 2026)';
+    document.getElementById('t-approches').textContent=s.consentement.approches;
+    document.getElementById('t-consentants').textContent=s.consentement.consentants;
+    document.getElementById('t-refus').textContent=s.consentement.refus;
+    document.getElementById('t-taux').textContent=fmtPct(s.consentement.taux_consentement_pct);
+
+    const tb=document.getElementById('tbl-coop');
+    s.par_cooperative.forEach(c=>{
+      const taux=c.approches?Math.round((c.consentants/c.approches)*1000)/10:0;
+      const tr=document.createElement('tr');
+      tr.innerHTML='<td></td><td></td><td></td><td></td><td></td>';
+      tr.children[0].textContent=c.coop;
+      tr.children[1].textContent=c.approches;
+      tr.children[2].textContent=c.consentants;
+      tr.children[3].textContent=c.refus;
+      tr.children[4].textContent=fmtPct(taux);
+      tb.appendChild(tr);
+    });
+
+    const bi=document.getElementById('bars-identite');
+    bar(bi,'Téléphone renseigné',s.identite.telephone_renseigne,'#42693c');
+    bar(bi,"Pièce d'identité : néant",s.identite.neant,'#a6552e');
+    bar(bi,'Pièce d\'identité : CNI',s.identite.cni,'#2e4a29');
+    bar(bi,'Pièce d\'identité : carte consulaire',s.identite.carte_consulaire,'#ce9b1e');
+    bar(bi,'N° de carte CCC renseigné',s.identite.ccc_renseigne,'#6b6b66');
+
+    const bt=document.getElementById('bars-terres');
+    bar(bt,'Propriétaires de leur parcelle',s.droit_terres.proprietaires_pct,'#2e4a29');
+    bar(bt,'Travailleurs sans contrat écrit',s.droit_terres.travailleurs_pct,'#a6552e');
+    const rp=s.droit_terres.repartition_proprietaires;
+    document.getElementById('note-repart').textContent='Parmi les propriétaires : '+fmtPct(rp.terrien)+' propriétaires terriens, '+fmtPct(rp.location_achat)+' par location/achat, '+fmtPct(rp.don)+' par don.';
+
+    const be=document.getElementById('bars-environnement');
+    bar(be,'Fournisseur d\'intrants : coopérative',s.environnement.fournisseur_intrants.cooperative,'#2e4a29');
+    bar(be,'Fournisseur d\'intrants : CCC',s.environnement.fournisseur_intrants.ccc,'#ce9b1e');
+    bar(be,'Fournisseur d\'intrants : particulier',s.environnement.fournisseur_intrants.particulier,'#a6552e');
+
+    const la=document.getElementById('liste-attention');
+    const pa=s.points_attention;
+    const items=[
+      ['Consentements refusés',pa.consentement_refuse],
+      ['Absence de document d\'acquisition de la parcelle',pa.sans_document_acquisition],
+      ['Travailleurs sans contrat écrit',pa.travailleurs_sans_contrat_ecrit],
+      ['Litiges fonciers déclarés',pa.litiges_fonciers],
+      ['Risque sur l’élimination des emballages d’intrants',pa.elimination_emballages_a_risque],
+    ];
+    items.forEach(([label,val])=>{
+      const d=document.createElement('div');d.className='attn';
+      d.innerHTML='<span></span><b></b>';
+      d.children[0].textContent=label; d.children[1].textContent=val;
+      la.appendChild(d);
+    });
+
+    document.getElementById('pied').textContent='Synthèse générée automatiquement depuis ORIGEN le '+new Date(j.genere_le).toLocaleString('fr-FR',{dateStyle:'long',timeStyle:'short'})+'. Document de synthèse agrégée — aucune donnée nominative. ECORIGINE SA.';
+    contenu.classList.remove('hid'); sub.style.display='';
+  }catch(e){ sub.textContent=''; msg('Connexion impossible. Réessayez dans un instant.','err') }
+})();
+</script></div></body></html>
