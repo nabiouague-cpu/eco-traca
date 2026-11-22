@@ -4768,7 +4768,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-22-567';
+const APP_VERSION = '2026-11-22-568';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -25043,6 +25043,8 @@ function defoDossierDetailHtml(x){
       + '<div class="hint" style="margin:2px 0 0">Dossier du '+esc(dateFr(String(x.created_at).slice(0,10)))+' · '+((x.entrees||[]).length)+' fichier(s) · <i class="pastille" style="background:'+L.col+'"></i><b>'+esc(L.txt)+' ('+L.n+'/6)</b></div><div id="defo-det-action" style="font-size:13px;margin-top:3px">'+defoActionHtml(x, true)+'</div></div>'
       + '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'+(x.statut==='erreur'&&x.erreur?'<span class="hint" style="color:#c0392b;margin:0">'+esc(x.erreur)+'</span>':'')
       + (x.statut==='demandee' ? '<button class="btn-ghost btn-compact" onclick="defoAnnuler(\''+idj+'\')">Annuler</button>' : '')
+      + (defoPeutNettoyer(x.id) ? '<button class="btn-ghost btn-compact" style="color:#9a6700" onclick="defoNettoyerStockage(\''+idj+'\')" title="Supprime les fichiers et étapes intermédiaires (polygones et registre déposés, CSV de Whisp, aperçus, nettoyages) ; garde uniquement la base finale et le rapport">🧹 Nettoyer le stockage</button>' : '')
+      + (defoPeutSupprimerRapport(x.id) ? '<button class="btn-ghost btn-compact" style="color:#a33" onclick="defoSupprimerRapport(\''+idj+'\')" title="Retire seulement le rapport d\'analyse du stockage ; la base finale n\'est pas touchée">🗑 Supprimer le rapport</button>' : '')
       + (['annulee','terminee','erreur'].includes(x.statut) ? '<button class="btn-ghost btn-compact" style="color:#c0392b" onclick="defoSupprimer(\''+idj+'\')">🗑 Supprimer ce dossier</button>' : '')+'</div></div>'
       + '<div class="defo-det-corps">' + defoChaineBandeau(x, geo) + defoFilHtml(x) + '</div>';
 }
@@ -25509,6 +25511,72 @@ async function defoSupprimerOk(id){
   const chemins = [x].concat(enfants).concat(planLies).concat(analysesLiees).concat(enfantsA).reduce((acc,z)=>acc.concat(defoChemins(z)), []);
   if (chemins.length){ try { await supabaseClient.storage.from('documents-coop').remove(chemins); } catch(e){} }
   state.defo = state.defo.filter(z=>!ids.includes(z.id)); showToast('Supprimé.', 'success'); render();
+}
+// ----- Nettoyage du stockage d'une coopérative, une fois sa base finale produite -----
+// Repère, pour le dossier (ligne « preparation ») prepId, toute la chaîne liée (whisp, plan, analyses, et
+// leurs enfants nettoyage/base_finale, exactement comme defoSupprimerOk), puis isole ce qu'il faut GARDER :
+// - la dernière ligne « base_finale » terminée (ses fichiers base_geojson/base_registre/base_methode : la base
+//   finale elle-même, à ne jamais toucher ici) ;
+// - la dernière ligne « analyse » terminée qui porte un fichier de type 'rapport' (le rapport à conserver).
+// Tout le reste de la chaîne (whisp, plan, nettoyages, anciennes analyses/bases finales non conservées, et les
+// fichiers d'entrée/sortie intermédiaires de la ligne preparation elle-même) est ce que supprime defoNettoyerStockage.
+function defoElementsASupprimer(prepId){
+  const prep = (state.defo||[]).find(z=>z.id===prepId && (z.etape||'preparation')==='preparation'); if (!prep) return null;
+  const tout = state.defo||[];
+  const whispLies = tout.filter(z=>z.etape==='whisp' && z.entrees && z.entrees.prep_id===prepId);
+  const planLies = tout.filter(z=>z.etape==='plan' && z.entrees && z.entrees.prep_id===prepId);
+  const analysesLiees = tout.filter(z=>z.etape==='analyse' && z.entrees && z.entrees.prep_id===prepId);
+  const idsA = analysesLiees.map(z=>z.id);
+  const enfantsA = tout.filter(z=>z.entrees && !Array.isArray(z.entrees) && idsA.includes(z.entrees.analyse_id));
+  const finaleGarder = enfantsA.filter(z=>z.etape==='base_finale' && z.statut==='terminee').sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)))[0] || null;
+  const analyseGarder = analysesLiees.filter(z=>z.statut==='terminee' && (z.fichiers||[]).some(f=>f.type==='rapport')).sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)))[0] || null;
+  const aGarderIds = new Set([finaleGarder?finaleGarder.id:null, analyseGarder?analyseGarder.id:null].filter(Boolean));
+  const aSupprimer = [].concat(whispLies, planLies, enfantsA.filter(z=>!aGarderIds.has(z.id)), analysesLiees.filter(z=>!aGarderIds.has(z.id)));
+  return { prep, aSupprimer, finaleGarder, analyseGarder };
+}
+function defoPeutNettoyer(prepId){ const d = defoElementsASupprimer(prepId); return !!(d && d.finaleGarder); }
+async function defoNettoyerStockage(prepId){
+  const d = defoElementsASupprimer(prepId);
+  if (!d || !d.finaleGarder){ showToast('Pas de base finale produite pour cette coopérative : rien à nettoyer.'); return; }
+  const { prep, aSupprimer, analyseGarder } = d;
+  if (aSupprimer.some(z=>z.statut==='demandee'||z.statut==='en_cours')){ showToast('Une étape est encore en cours sur ce dossier : attends qu\'elle se termine avant de nettoyer.'); return; }
+  askConfirm('Nettoyer le stockage de '+(prep.cooperative_nom||'cette coopérative')+' ?\n\n'
+    + 'Supprime '+aSupprimer.length+' étape'+(aSupprimer.length>1?'s':'')+' intermédiaire'+(aSupprimer.length>1?'s':'')+' et leurs fichiers (polygones et registre déposés, CSV de Whisp, aperçus, nettoyages, anciennes tentatives).\n'
+    + '• La base finale (GeoJSON + registre + méthode de rendement) est conservée, inchangée.\n'
+    + '• Le rapport d\'analyse est conservé, inchangé.\n'
+    + '• La base consolidée ECORIGINE n\'est pas concernée.', async ()=>{
+    try{
+      let chemins = aSupprimer.reduce((acc,z)=>acc.concat(defoChemins(z)), []).concat(defoChemins(prep));
+      if (analyseGarder) chemins = chemins.concat((analyseGarder.fichiers||[]).filter(f=>f.type!=='rapport' && f.path).map(f=>f.path));
+      const idsSup = aSupprimer.map(z=>z.id);
+      if (idsSup.length){ const r = await supabaseClient.from('analyses_defo').delete().in('id', idsSup); if (r.error) throw r.error; }
+      const majs = [ supabaseClient.from('analyses_defo').update({ fichiers:[] }).eq('id', prep.id) ];
+      if (analyseGarder) majs.push(supabaseClient.from('analyses_defo').update({ fichiers:(analyseGarder.fichiers||[]).filter(f=>f.type==='rapport') }).eq('id', analyseGarder.id));
+      const rm = await Promise.all(majs); const majErr = rm.find(r=>r&&r.error); if (majErr) throw majErr.error;
+      if (chemins.length){ try{ await supabaseClient.storage.from('documents-coop').remove(chemins); }catch(e){} }
+      state.defo = (state.defo||[]).filter(z=>!idsSup.includes(z.id)).map(z=>{
+        if (z.id===prep.id) return Object.assign({}, z, { fichiers:[] });
+        if (analyseGarder && z.id===analyseGarder.id) return Object.assign({}, z, { fichiers:(z.fichiers||[]).filter(f=>f.type==='rapport') });
+        return z;
+      });
+      showToast('Stockage nettoyé : base finale et rapport conservés, le reste a été supprimé.', 'success'); render();
+    }catch(e){ showToast('Échec du nettoyage : '+(e&&e.message?e.message:e)); }
+  });
+}
+function defoPeutSupprimerRapport(prepId){ const d = defoElementsASupprimer(prepId); return !!(d && d.analyseGarder); }
+async function defoSupprimerRapport(prepId){
+  const d = defoElementsASupprimer(prepId);
+  if (!d || !d.analyseGarder){ showToast('Aucun rapport à supprimer pour cette coopérative.'); return; }
+  const { prep, analyseGarder } = d, f = (analyseGarder.fichiers||[]).find(x=>x.type==='rapport');
+  askConfirm('Supprimer le rapport d\'analyse de '+(prep.cooperative_nom||'cette coopérative')+' ?\n\nLa base finale (GeoJSON + registre + méthode de rendement) n\'est pas touchée : seul le rapport Excel est retiré du stockage.', async ()=>{
+    try{
+      const nf = (analyseGarder.fichiers||[]).filter(x=>x.type!=='rapport');
+      const r = await supabaseClient.from('analyses_defo').update({ fichiers:nf }).eq('id', analyseGarder.id); if (r.error) throw r.error;
+      if (f && f.path){ try{ await supabaseClient.storage.from('documents-coop').remove([f.path]); }catch(e){} }
+      state.defo = (state.defo||[]).map(z=>z.id===analyseGarder.id ? Object.assign({}, z, { fichiers:nf }) : z);
+      showToast('Rapport supprimé.', 'success'); render();
+    }catch(e){ showToast('Échec : '+(e&&e.message?e.message:e)); }
+  });
 }
 // ----- Comparer deux versions (V1 / V2) d'une même coopérative -----
 function ouvrirDefoCompare(){ openModal('defoCompare', { nom:'' }); }
