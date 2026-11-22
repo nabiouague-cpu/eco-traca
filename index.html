@@ -4768,7 +4768,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-22-574';
+const APP_VERSION = '2026-11-22-575';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5363,12 +5363,17 @@ async function creerDemandeBaseDonnees(coopId, fichiers){
     };
     const { error } = await supabaseClient.from('demandes').insert(demandeObj);
     if (error){ showToast("Fichiers déposés, mais la création de la demande a échoué : "+error.message); return; }
-    try{
-      const { error: errEmail } = await supabaseClient.functions.invoke('email-nouvelle-demande', { body: { demande_id: newId } });
-      if (errEmail) showToast("Fichiers déposés, mais l'envoi de l'email a échoué : "+(await detailErreurEmail(errEmail))+". Utilisez « ✉ Relancer » pour réessayer.", 'error');
-      else showToast('Fichiers déposés et coopérative notifiée par email.', 'success');
-    }catch(eEmail){
-      showToast("Fichiers déposés, mais l'envoi de l'email a échoué : "+eEmail.message+". Utilisez « ✉ Relancer » pour réessayer.", 'error');
+    const emailsCoop = [coop.email1, coop.email2, coop.email3].map(e=>String(e||'').trim()).filter(Boolean);
+    if (!emailsCoop.length){
+      showToast('Fichiers déposés (coopérative non notifiée : aucune adresse email enregistrée dans sa fiche). Ajoute-en une puis utilise « ✉ Relancer » si besoin.', 'success');
+    } else {
+      try{
+        const { error: errEmail } = await supabaseClient.functions.invoke('email-nouvelle-demande', { body: { demande_id: newId } });
+        if (errEmail) showToast("Fichiers déposés, mais l'envoi de l'email a échoué : "+(await detailErreurEmail(errEmail))+". Utilisez « ✉ Relancer » pour réessayer.", 'error');
+        else showToast('Fichiers déposés et coopérative notifiée par email.', 'success');
+      }catch(eEmail){
+        showToast("Fichiers déposés, mais l'envoi de l'email a échoué : "+eEmail.message+". Utilisez « ✉ Relancer » pour réessayer.", 'error');
+      }
     }
     await refreshDemandesTab();
   }catch(e){
