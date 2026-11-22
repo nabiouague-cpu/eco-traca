@@ -4768,7 +4768,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-22-569';
+const APP_VERSION = '2026-11-22-570';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -15106,7 +15106,7 @@ function renderBaseDonneesTab(){
       + (acheteurs.length>0 ? '</optgroup>' : '');
   }
 
-  let html = '<div class="panel"><div class="panel-head"><h2>Déposer les données d\'une coopérative</h2></div>'
+  let html = '<div class="panel"><div class="panel-head" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><h2>Déposer les données d\'une coopérative</h2><button class="btn" onclick="ouvrirBddGroupe()">📦 Dépôt groupé</button></div>'
     + '<div style="padding:18px;">'
     + '<p class="hint" style="margin-bottom:14px;">Le registre des membres et les données de géolocalisation transmis à la coopérative pour la campagne 2026-2027 (analyse déforestation et conformité déjà menée par ECORIGINE). Seules les coopératives déjà inscrites sur la plateforme apparaissent dans la liste — pas de création de fiche depuis cet écran. Pour un acheteur privé, ses coopératives fournisseurs apparaissent regroupées avec lui.</p>'
     + '<label class="field">Coopérative<select name="basedonnees_coop_id" onchange="state.baseDonneesCoopSelected=this.value">'
@@ -25414,6 +25414,135 @@ async function dgLancer(){
   const sansReg = ok.filter(x=>!x.source).map(x=>x.nom), nbRempl = ok.filter(x=>x.remplace).length;
   showToast(ok.length+' analyse'+(ok.length>1?'s':'')+' lancée'+(ok.length>1?'s':'')+(nbRempl?' ('+nbRempl+' ancienne'+(nbRempl>1?'s':'')+' remplacée'+(nbRempl>1?'s':'')+')':'')+(sansReg.length?' ('+sansReg.length+' sans registre : '+sansReg.join(', ')+')':'')+(ko.length?' · '+ko.length+' en échec : '+ko.join(' ; '):'')+'. Laisse ORIGEN ouvert : tout s\'enchaîne jusqu\'au résultat.', ko.length?'error':'success');
 }
+// ----- Dépôt groupé — Base de données coopératives (registre + géolocalisation déjà finalisés, PAS une
+// analyse à lancer : contrairement au dépôt groupé de l'onglet « Analyse déforestation » ci-dessus, qui
+// prépare des fichiers bruts pour les faire analyser, celui-ci dépose directement les fichiers de sortie
+// d'une analyse déjà terminée (ou fournis tels quels) dans coop_database_files, coopérative par coopérative,
+// exactement comme le ferait un dépôt un par un avec uploadBaseDonneesFichiers, mais pour plusieurs
+// coopératives en une fois. Réutilise la reconnaissance de coopérative par nom de fichier (dgCoopDeFichier)
+// déjà écrite pour ce dépôt groupé. L'import vers la liste des producteurs n'est volontairement pas
+// automatique ici (traiterFichierRegistreExcel ne permet qu'un seul import en attente de confirmation à la
+// fois) : il reste à faire coopérative par coopérative via « Importer vers producteurs », déjà présent dans
+// le tableau en dessous.
+function bdgType(nom){
+  if (/\.(xlsx|xlsm)$/i.test(nom)) return 'registre';
+  if (/\.(geojson|json)$/i.test(nom)) return 'geolocalisation';
+  return null;
+}
+function ouvrirBddGroupe(){ window._bdg = { groupes:[], inconnus:[] }; openModal('bddGroupe', {}); }
+async function bdgLire(input){
+  const fl = Array.from((input||{}).files||[]), ent = [];
+  const zone = document.getElementById('bdg-liste'); if (zone) zone.innerHTML = '<p class="hint">Lecture des fichiers…</p>';
+  const ajouter = (nom, chemin, blob)=>{
+    if (/(^|\/)(__MACOSX|\.)|(^|\/)~\$|Thumbs\.db$|\.DS_Store$/i.test(chemin)) return;
+    const t = bdgType(nom); if (!t) return;
+    ent.push({ nom, chemin, dossiers:chemin.split('/').filter(Boolean).slice(0,-1), blob, taille:blob.size, type:t });
+  };
+  try{
+    for (const f of fl){
+      const rel = f.webkitRelativePath || f.name;
+      if (/\.zip$/i.test(f.name) && typeof JSZip!=='undefined'){
+        let z = null; try { z = await JSZip.loadAsync(f); } catch(e){ z = null; }
+        if (z){ for (const n of Object.keys(z.files)){ if (z.files[n].dir) continue; ajouter(n.split('/').pop(), f.name.replace(/\.zip$/i,'')+'/'+n, await z.files[n].async('blob')); } continue; }
+      }
+      ajouter(f.name, rel, f);
+    }
+  }catch(e){ if (zone) zone.innerHTML = '<p class="hint" style="color:#c0392b">Lecture impossible : '+esc((e&&e.message)||e)+'</p>'; return; }
+  const G = new Map(), inconnus = [];
+  const poser = (f, coop)=>{ const k = coop ? 'c:'+coop.id : null; if (!k){ inconnus.push(f); return; } if (!G.has(k)) G.set(k, { coop, nom:coop.nom, files:[], inclure:true }); G.get(k).files.push(f); };
+  const sans = [];
+  ent.forEach(f=>{ const c = dgCoopDeFichier(f); if (c) poser(f, c); else sans.push(f); });
+  sans.forEach(f=>{
+    const d = f.dossiers.join('/'), memes = new Set(); G.forEach((g,k)=>{ if (d && g.files.some(x=>x.dossiers.join('/')===d)) memes.add(k); });
+    if (memes.size===1) G.get(Array.from(memes)[0]).files.push(f); else inconnus.push(f);
+  });
+  const groupes = Array.from(G.values()).sort((a,b)=>String(a.nom).localeCompare(String(b.nom),'fr'));
+  window._bdg = { groupes, inconnus };
+  bdgRendre();
+}
+function bdgRendre(){
+  const zone = document.getElementById('bdg-liste'), D = window._bdg; if (!zone || !D) return;
+  const coops = '<datalist id="bdg-coops">'+[...state.cooperatives].sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr')).map(c=>'<option value="'+esc(c.nom)+'"></option>').join('')+'</datalist>';
+  if (!D.groupes.length && !D.inconnus.length){ zone.innerHTML = coops+'<p class="hint">Choisis un ZIP (ou plusieurs fichiers) : ORIGEN reconnaît chaque coopérative au nom des fichiers.</p>'; return; }
+  let h = coops;
+  D.groupes.forEach((g,i)=>{
+    const reg = g.files.filter(f=>f.type==='registre').sort((a,b)=>b.taille-a.taille), geo = g.files.filter(f=>f.type==='geolocalisation').sort((a,b)=>b.taille-a.taille);
+    const dejaRaw = g.coop ? (state.coopDatabaseFiles||[]).filter(x=>x.cooperative_id===g.coop.id) : [];
+    const dejaReg = dejaRaw.find(x=>x.type==='registre'), dejaGeo = dejaRaw.find(x=>x.type==='geolocalisation');
+    h += '<div style="border:1px solid var(--line,#d9d9d9);border-radius:8px;padding:8px 10px;margin:0 0 8px">'
+      + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><input type="checkbox" '+(g.inclure?'checked':'')+' onchange="window._bdg.groupes['+i+'].inclure=this.checked">'
+      + '<input type="text" list="bdg-coops" value="'+esc(g.nom)+'" style="flex:1 1 200px;font-weight:700" onchange="bdgNom('+i+',this.value)">'
+      + '</div>'
+      + (g.coop ? '' : '<div class="hint" style="margin:2px 0;color:#9a6700">Coopérative inconnue d\'ORIGEN : ce groupe sera ignoré au lancement, attribue-lui une coopérative.</div>')
+      + '<div style="font-size:13px;margin:4px 0">'
+      + (reg.length ? '📒 registre : '+esc(reg[0].nom)+(dejaReg?' <span class="hint" style="margin:0">(remplace celui déjà déposé)</span>':'')+(reg.length>1?' <span style="color:#9a6700">('+reg.length+' registres : le plus gros est utilisé)</span>':'') : '<span class="hint">— aucun registre</span>')
+      + '<br>' + (geo.length ? '📍 géolocalisation : '+esc(geo[0].nom)+(dejaGeo?' <span class="hint" style="margin:0">(remplace celle déjà déposée)</span>':'')+(geo.length>1?' <span style="color:#9a6700">('+geo.length+' fichiers : le plus gros est utilisé)</span>':'') : '<span class="hint">— aucune géolocalisation</span>')
+      + '</div>'
+      + '<div style="font-size:12px;color:#555">'+g.files.map((f,j)=>esc(f.nom)+' — '+(f.type==='registre'?'📒 registre':'📍 géolocalisation')+' <a href="#" onclick="bdgRetirer('+i+','+j+');return false" title="Retirer de cette coopérative">✕</a>').join('<br>')+'</div></div>';
+  });
+  if (D.inconnus.length){
+    h += '<div style="border:1px dashed #f0b429;background:#fff7e6;border-radius:8px;padding:8px 10px;margin:0 0 8px"><b>Fichiers non reconnus ('+D.inconnus.length+')</b> <span class="hint" style="margin:0">(aucune coopérative d\'ORIGEN dans leur nom ni dans leur dossier)</span>'
+      + '<div style="font-size:12px;margin:6px 0">'+D.inconnus.map((f,j)=>'<label style="display:block"><input type="checkbox" checked data-bdgi="'+j+'"> '+esc(f.chemin)+' — '+(f.type==='registre'?'📒 registre':'📍 géolocalisation')+'</label>').join('')+'</div>'
+      + '<div style="display:flex;gap:8px;flex-wrap:wrap"><input type="text" id="bdg-attrib" list="bdg-coops" placeholder="Coopérative" style="flex:1 1 200px"><button type="button" class="btn" onclick="bdgAttribuer()">Attribuer les fichiers cochés</button></div></div>';
+  }
+  zone.innerHTML = h;
+}
+function bdgGroupe(coop, nom){
+  const D = window._bdg; let g = D.groupes.find(x=>coop ? (x.coop && x.coop.id===coop.id) : (!x.coop && String(x.nom).toLowerCase()===String(nom).toLowerCase()));
+  if (!g){ g = { coop:coop||null, nom:coop?coop.nom:nom, files:[], inclure:true }; D.groupes.push(g); }
+  return g;
+}
+function bdgNom(i, v){
+  const D = window._bdg, g = D.groupes[i]; v = String(v||'').trim(); if (!g || !v) return;
+  const coop = carteCoopParNom(v), autre = D.groupes.find((x,k)=>k!==i && (coop ? (x.coop && x.coop.id===coop.id) : (!x.coop && String(x.nom).toLowerCase()===v.toLowerCase())));
+  if (autre){ autre.files = autre.files.concat(g.files); D.groupes.splice(i,1); }
+  else { g.coop = coop||null; g.nom = coop?coop.nom:v; }
+  bdgRendre();
+}
+function bdgRetirer(i, j){ const D = window._bdg, g = D.groupes[i]; if (!g) return; D.inconnus.push(g.files.splice(j,1)[0]); if (!g.files.length) D.groupes.splice(i,1); bdgRendre(); }
+function bdgAttribuer(){
+  const D = window._bdg, v = ((document.getElementById('bdg-attrib')||{}).value||'').trim(); if (!v){ showToast('Indique la coopérative.'); return; }
+  const cases = Array.from(document.querySelectorAll('[data-bdgi]')).filter(c=>c.checked).map(c=>Number(c.getAttribute('data-bdgi')));
+  if (!cases.length){ showToast('Coche au moins un fichier.'); return; }
+  const g = bdgGroupe(carteCoopParNom(v), v); const pris = cases.map(k=>D.inconnus[k]);
+  g.files = g.files.concat(pris); D.inconnus = D.inconnus.filter((_,k)=>!cases.includes(k)); bdgRendre();
+}
+async function bdgLancerGroupe(g){
+  if (!g.coop) throw new Error('coopérative non reconnue');
+  const coopId = g.coop.id;
+  const reg = g.files.filter(f=>f.type==='registre').sort((a,b)=>b.taille-a.taille)[0];
+  const geo = g.files.filter(f=>f.type==='geolocalisation').sort((a,b)=>b.taille-a.taille)[0];
+  if (!reg && !geo) throw new Error('aucun fichier exploitable');
+  const fichiersEnvoyes = [];
+  for (const item of [reg?{type:'registre',f:reg}:null, geo?{type:'geolocalisation',f:geo}:null].filter(Boolean)){
+    const path = coopId + '/database/' + item.type + '_' + assainirNomFichier(item.f.nom);
+    const up = await supabaseClient.storage.from('documents-coop').upload(path, item.f.blob, { upsert:true }); if (up.error) throw up.error;
+    const r = await supabaseClient.from('coop_database_files').upsert({ id:'bdd_'+coopId+'_'+item.type, cooperative_id:coopId, type:item.type, path, nom:item.f.nom, campagne:'2026-2027', uploaded_at:new Date().toISOString() });
+    if (r.error) throw r.error;
+    fichiersEnvoyes.push({ type:item.type, file:new File([item.f.blob], item.f.nom) });
+  }
+  await creerDemandeBaseDonnees(coopId, fichiersEnvoyes);
+  return { nom:g.coop.nom, reg:!!reg, geo:!!geo };
+}
+async function bdgLancer(){
+  const D = window._bdg; if (!D) return;
+  const L = D.groupes.filter(g=>g.inclure && g.coop && g.files.length); if (!L.length){ showToast('Rien à envoyer : coche au moins une coopérative reconnue.'); return; }
+  if (D.inconnus.length && !confirm(D.inconnus.length+' fichier(s) non reconnu(s) seront laissés de côté. Continuer ?')) return;
+  const btn = document.getElementById('bdg-lancer'); const ok = [], ko = [];
+  for (let i=0; i<L.length; i++){
+    if (btn){ btn.disabled = true; btn.textContent = 'Envoi '+(i+1)+' / '+L.length+'…'; }
+    try { ok.push(await bdgLancerGroupe(L[i])); } catch(e){ ko.push(L[i].nom+' : '+((e&&e.message)||e)); }
+  }
+  closeModal(); await refreshBaseDonnees();
+  showToast(ok.length+' coopérative'+(ok.length>1?'s':'')+' mise'+(ok.length>1?'s':'')+' à jour'+(ko.length?' · '+ko.length+' en échec : '+ko.join(' ; '):'')+'. Pense ensuite à cliquer « Importer vers producteurs » pour celles qui en ont besoin.', ko.length?'error':'success'); render();
+}
+function bddModalGroupeHtml(){
+  return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:760px"><h3>Dépôt groupé — base de données coopératives</h3><div id="modal-fields">'
+    + '<p class="hint" style="margin:0 0 8px">Dépose le registre et la géolocalisation déjà finalisés (issus d\'une analyse déforestation terminée) de plusieurs coopératives en une fois. ORIGEN reconnaît chaque coopérative au nom des fichiers, les dépose dans sa base de données et crée la notification pour la campagne 2026-2027 — comme le dépôt un par un ci-dessus, mais pour toutes en même temps. L\'import vers la liste des producteurs reste à faire ensuite, coopérative par coopérative, avec « Importer vers producteurs » dans le tableau du bas.</p>'
+    + '<label class="field">Fichiers <input type="file" id="bdg-fichiers" multiple accept=".zip,.xlsx,.xlsm,.geojson,.json" onchange="bdgLire(this)"></label>'
+    + '<div id="bdg-liste" style="max-height:48vh;overflow:auto;margin-top:8px"><p class="hint">Choisis un ZIP (ou plusieurs fichiers) : ORIGEN reconnaît chaque coopérative au nom des fichiers.</p></div>'
+    + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" id="bdg-lancer" onclick="bdgLancer()">Envoyer</button></div></div></div>';
+}
 function defoModalGroupeHtml(){
   return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:760px"><h3>Dépôt groupé de coopératives</h3><div id="modal-fields">'
     + '<p class="hint" style="margin:0 0 8px">Dépose un <b>ZIP</b> (ou choisis plusieurs fichiers) contenant les polygones de plusieurs coopératives, avec ou sans leur registre. ORIGEN reconnaît chaque coopérative au nom des fichiers (ou du dossier), retrouve son registre (dans le dépôt, sinon le dernier déposé dans ORIGEN) et lance une analyse par coopérative. Rien n\'est supprimé : tu verras ensuite les problèmes, coopérative par coopérative. Un .rar doit d\'abord être converti en .zip.</p>'
@@ -25423,7 +25552,8 @@ function defoModalGroupeHtml(){
 }
 
 function defoModalsHtml(){
-  const m = state.modal; if (m && m.type==='defoGroupe') return defoModalGroupeHtml();
+  const m = state.modal; if (m && m.type==='bddGroupe') return bddModalGroupeHtml();
+  if (m && m.type==='defoGroupe') return defoModalGroupeHtml();
   if (m && m.type==='defoAnalyse') return defoModalAnalyseHtml();
   if (m && m.type==='defoFinale') return defoModalFinaleHtml();
   if (m && m.type==='defoGuide') return defoGuideModalHtml();
