@@ -160,6 +160,9 @@
   .swv{position:relative;overflow:hidden;}
   .swv-fond{position:absolute;inset:0;display:flex;align-items:center;padding:0 22px;font-weight:700;font-size:13.5px;color:#fff;opacity:0;pointer-events:none;}
   .swv-contenu{position:relative;background:var(--surface);touch-action:pan-y;}
+  /* ---- Transition entre ecrans (Phase 3) : voir render() dans le JS ---- */
+  .app-sortant{opacity:1;transform:translateY(0) scale(1);transition:opacity .22s ease,transform .22s ease;}
+  .app-sortant.app-sortant-anim{opacity:0;transform:translateY(-8px) scale(.99);}
   .btn-valider:disabled,.btn-rejeter:disabled{opacity:.45;cursor:not-allowed;}
   .btn-rejet-confirm.btn-primary{background:var(--danger);border-color:var(--danger);color:#fff;}
   .btn-rejet-confirm.btn-primary:hover{opacity:.92;}
@@ -4707,10 +4710,34 @@ function ocVerrouillerFond(){
 function render(){
   _idxStamp++;
   const s = capturerSaisies();
+  // Phase 3 : transition douce entre deux ecrans. Juste avant de reconstruire #app (qui remplace tout
+  // son innerHTML d'un coup, sans animation possible sur ce qui disparait), on clone l'ecran ACTUEL tel
+  // qu'il est encore a l'instant T, on le fige en position fixe exactement par-dessus lui-meme, puis on
+  // le laisse s'estomper pendant que le nouvel ecran (deja construit dessous) apparait normalement via
+  // sa propre entree (.anim-entree, juste en dessous). Seulement sur une vraie navigation (animEntree),
+  // jamais sur un simple re-rendu (saisie, rafraichissement de donnees...) qui doit rester instantane.
+  const ancienApp = document.getElementById('app');
+  let sortant = null;
+  if (state.animEntree && ancienApp && ancienApp.firstElementChild && !(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches)){
+    try{
+      const r = ancienApp.getBoundingClientRect();
+      if (r.width>0 && r.height>0){
+        sortant = ancienApp.cloneNode(true);
+        sortant.removeAttribute('id');
+        sortant.className = 'app-sortant';
+        sortant.style.cssText = 'position:fixed;top:'+r.top+'px;left:'+r.left+'px;width:'+r.width+'px;height:'+r.height+'px;overflow:hidden;z-index:9999;pointer-events:none;margin:0;background:var(--bg);';
+        document.body.appendChild(sortant);
+      }
+    }catch(e){ sortant = null; } // la transition est un bonus visuel : jamais bloquant pour la navigation elle-meme
+  }
   _renderBrut();
   const app = document.getElementById('app');
   if (app) app.dataset.ctx = contexteEcran();
   restaurerSaisies(s);
+  if (sortant){
+    requestAnimationFrame(()=>{ sortant.classList.add('app-sortant-anim'); });
+    setTimeout(()=>{ if (sortant && sortant.parentNode) sortant.parentNode.removeChild(sortant); }, 320);
+  }
   // Entree animee des blocs et compteurs du cockpit, uniquement a l'arrivee sur un onglet (pas a chaque
   // clic, qui redessine aussi l'ecran) -- sinon l'animation rejouerait sans cesse.
   if (state.animEntree){
@@ -4854,7 +4881,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-22-584';
+const APP_VERSION = '2026-11-22-585';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
