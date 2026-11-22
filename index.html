@@ -4768,7 +4768,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-22-563';
+const APP_VERSION = '2026-11-22-564';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -14496,11 +14496,13 @@ async function saigicTracerSurAutre(vuId){
 }
 // ---- Intervalle d'achats proposé pour un connaissement (fiche de traçabilité) ----
 // Règles de Nabi : la date de fin tombe 1 à 3 jours avant le connaissement (jamais le jour même) ; la date de
-// début, par défaut (premier connaissement de la série), 15 à 20 jours avant. Pour les suivants, la continuité
-// se règle sur l'ÉCART ENTRE LES DATES DES CONNAISSEMENTS (pas sur les dates d'achats déjà tirées au hasard) :
-// deux camions partis le même jour (écart nul) héritent du même point de départ, donc des mêmes achats
-// potentiels ; un écart de N jours avance le point de départ de N jours. Ainsi la fenêtre glisse en continu
-// sans jamais forcer deux camions du même jour sur des plages disjointes.
+// début, par défaut (premier connaissement de la série), 15 à 20 jours avant -- TOUJOURS un nombre aléatoire,
+// jamais une valeur figée. Pour les suivants, la continuité se règle sur l'ÉCART ENTRE LES DATES DES
+// CONNAISSEMENTS (pas sur les dates d'achats déjà tirées au hasard) : deux camions partis le même jour
+// (écart nul) visent le même repère, donc des fenêtres voisines ; un écart de N jours avance ce repère de
+// N jours. Mais le repère n'est qu'un CENTRE : la date de début tirée reste chaque fois aléatoire autour de
+// lui (jamais une copie du connaissement précédent), pour que deux camions du même jour n'aient jamais
+// exactement la même fenêtre, tout en restant cohérents entre eux.
 function ocTvJourDecale(iso, n){ const d = new Date(iso+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()+n); return d.toISOString().slice(0,10); }
 function ocTvEntierAleatoire(min, max){ return min + Math.floor(Math.random()*(max-min+1)); }
 function ocTvEcartJours(iso1, iso2){ return Math.round((Date.parse(iso1+'T00:00:00Z')-Date.parse(iso2+'T00:00:00Z'))/86400000); }
@@ -14533,12 +14535,14 @@ function ocTvIntervalleAchats(coopId, campagneId, iso, codeActuel){
   const prec = ocTvConnaissementPrecedent(coopId, campagneId, iso, codeActuel);
   let dateDebut;
   if (prec){
-    const ecart = Math.max(0, ocTvEcartJours(iso, prec.iso));   // 0 si même jour : même point de départ, pas de décalage
-    dateDebut = ocTvJourDecale(prec.debutApprox, ecart);
-    const longueur = ocTvEcartJours(dateFin, dateDebut);
-    // Garde-fou : après plusieurs connaissements enchaînés, on évite que la fenêtre dérive trop (trop courte ou trop longue).
-    if (longueur>25) dateDebut = ocTvJourDecale(dateFin, -ocTvEntierAleatoire(18,22));
-    else if (longueur<8) dateDebut = ocTvJourDecale(dateFin, -ocTvEntierAleatoire(10,14));
+    // La continuité fixe un POINT DE REPÈRE (décalé de l'écart entre les deux connaissements), mais la date de
+    // début reste un nombre aléatoire tiré autour de ce repère -- jamais une copie figée du connaissement
+    // précédent : deux camions du même jour ont donc des fenêtres voisines, pas identiques.
+    const ecart = Math.max(0, ocTvEcartJours(iso, prec.iso));   // 0 si même jour : même repère, pas de décalage
+    const offsetPrec = Math.max(1, ocTvEcartJours(prec.iso, prec.debutApprox));   // nb de jours avant prec.iso où ses achats ont commencé
+    const base = Math.max(8, Math.min(25, offsetPrec + ecart));
+    const decalage = ocTvEntierAleatoire(Math.max(8, base-2), Math.min(25, base+2));   // aléatoire, recentré sur la continuité
+    dateDebut = ocTvJourDecale(iso, -decalage);
   } else {
     dateDebut = ocTvJourDecale(iso, -ocTvEntierAleatoire(15,20));
   }
