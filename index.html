@@ -6231,8 +6231,8 @@ function fichesDeCoop(coopId){
     .slice().sort((a,b)=>String(dateAjoutStockage(b)).localeCompare(String(dateAjoutStockage(a))));   // la plus recente d'abord (date d'ajout au stockage)
 }
 // Télécharge en un clic les fiches de TOUS les connaissements tracés de cette coopérative (toutes séries confondues),
-// au format choisi (normal / Cargill / les deux) — le format Cargill n'étant retenu que pour les lots réellement
-// destinés à Cargill, qu'ils viennent d'une autre coopérative (ex. Sitapa affecté à Cargill) ou non.
+// au format choisi (normal / Cargill / les deux) — appliqué sans distinction à toute la sélection : c'est Nabi
+// qui décide, au moment de constituer le dossier de conformité RDUE pour un client, quels connaissements en font partie.
 function ocFichesTousCoop(coopId){
   const fiches = (fichesDeCoop(coopId)||[]).filter(f=>f.connaissement);
   if (!fiches.length){ showToast('Aucune fiche de traçabilité avec connaissement pour cette coopérative.'); return; }
@@ -13938,7 +13938,7 @@ function lotsModalsHtml(){
       + '<div class="hint" style="margin-bottom:8px">'+esc(c && c.ccc_num ? 'N° CCC '+c.ccc_num+' · ' : '')+fmtNum(nP)+' producteur(s) dans ORIGEN. <b>Rien n\'est modifié ici</b> : les traçabilités déjà faites restent telles quelles tant que tu ne demandes pas de les refaire.'
       + (D && D.groupes.length>1 ? ' Série : <select onchange="ocDossierSerie(this.value)">'+D.groupes.map(g=>'<option value="'+esc(g.cle)+'"'+(g.cle===D.g.cle?' selected':'')+'>'+esc(g.cle)+'</option>').join('')+'</select>' : '')+'</div>'
       + '<div id="modal-fields">'+corps+'</div>'
-      + '<div class="actions"><button class="btn" onclick="ocDossierApercu()" title="Simule toute la série depuis le n° 1, comme si rien n\'avait été tracé, pour voir ce que donnerait la traçabilité refaite (aperçu, rien n\'est enregistré tant que tu ne cliques pas sur Enregistrer)">🧮 Aperçu : refaire toute la traçabilité de zéro</button>'+(D && D.lignes.some(l=>l.nous && l.st==='simule') ? '<button class="btn btn-primary" onclick="ocDossierAppliquer(\''+escJs(pl.coopId)+'\')" title="Transforme en vrai traçage tous les camions chez nous qui n\'existent que dans la simulation">✅ Appliquer la simulation aux camions chez nous</button>' : '')+(D && D.nTrace>0 ? '<button class="btn btn-primary" onclick="ocDossierTelechargerTout(\''+escJs(pl.coopId)+'\',\''+escJs(D.g.cle)+'\')" title="Télécharge en un clic les fiches de tous les camions déjà tracés de cette série ('+D.nTrace+'), au format choisi (normal / Cargill / les deux). Le format Cargill n\'est retenu que pour les camions réellement destinés à Cargill.">⬇ Tout télécharger ('+D.nTrace+')</button>' : '')+(D && D.nTrace>0 ? '<button class="btn" style="color:#a33;border-color:#e3b3b3" onclick="ocRefaireDossier()" title="Retire les traçages déjà faits de cette série (après sauvegarde) pour les retracer avec la simulation">♻ Refaire de zéro (retirer les '+D.nTrace+' traçage'+(D.nTrace>1?'s':'')+')</button>' : '')+'<button class="btn" onclick="closeModal()">Fermer</button></div></div></div>';
+      + '<div class="actions"><button class="btn" onclick="ocDossierApercu()" title="Simule toute la série depuis le n° 1, comme si rien n\'avait été tracé, pour voir ce que donnerait la traçabilité refaite (aperçu, rien n\'est enregistré tant que tu ne cliques pas sur Enregistrer)">🧮 Aperçu : refaire toute la traçabilité de zéro</button>'+(D && D.lignes.some(l=>l.nous && l.st==='simule') ? '<button class="btn btn-primary" onclick="ocDossierAppliquer(\''+escJs(pl.coopId)+'\')" title="Transforme en vrai traçage tous les camions chez nous qui n\'existent que dans la simulation">✅ Appliquer la simulation aux camions chez nous</button>' : '')+(D && D.nTrace>0 ? '<button class="btn btn-primary" onclick="ocDossierTelechargerTout(\''+escJs(pl.coopId)+'\',\''+escJs(D.g.cle)+'\')" title="Télécharge en un clic les fiches de tous les camions déjà tracés de cette série ('+D.nTrace+'), au format choisi (normal / Cargill / les deux) — appliqué à toute la sélection.">⬇ Tout télécharger ('+D.nTrace+')</button>' : '')+(D && D.nTrace>0 ? '<button class="btn" style="color:#a33;border-color:#e3b3b3" onclick="ocRefaireDossier()" title="Retire les traçages déjà faits de cette série (après sauvegarde) pour les retracer avec la simulation">♻ Refaire de zéro (retirer les '+D.nTrace+' traçage'+(D.nTrace>1?'s':'')+')</button>' : '')+'<button class="btn" onclick="closeModal()">Fermer</button></div></div></div>';
   }
   if (m.type==='ocSim'){
     const pl = m.payload, R = pl.res, coops = ocSimCoops(), c = coopById(pl.coopId), groupes = ocSimGroupes(pl.coopId);
@@ -16462,34 +16462,28 @@ function ocFormatFicheProposer(items, fiche){
 }
 function ocFormatFicheFermer(){ const pl = state.modal && state.modal.payload, r = pl && pl.retour; if (r){ state.modal = r; render(); } else closeModal(); }
 async function ocFormatFicheChoisir(choix){
+  // L'attribution client (quel connaissement/lot part au format Cargill, ACT, Touton, etc.) reste TOUJOURS
+  // une décision de Nabi, jamais devinée par ORIGEN à partir d'un champ « client » du camion : le format
+  // choisi ici (normal / cargill / deux) s'applique donc sans filtrage à tous les éléments de la sélection.
   const pl = state.modal && state.modal.type==='ocFormatFiche' ? state.modal.payload : null; if (!pl || !pl.items.length) return;
-  const faits = [], ko = [], horsCargill = [];
-  // Téléchargement groupé (plusieurs connaissements, ex. « tout télécharger » d'une coopérative/série) :
-  // le format Cargill ne s'applique qu'aux lots effectivement destinés à Cargill (client du camion = Cargill,
-  // y compris un lot d'une autre coopérative — ex. Sitapa — vendu/affecté à Cargill). Les lots destinés à
-  // un autre client (Touton, ACT, ...) ne reçoivent que le format normal, même si « Cargill » ou « Les deux »
-  // a été choisi pour le lot. Un téléchargement d'un SEUL connaissement garde l'ancien comportement (choix manuel direct).
+  const faits = [], ko = [];
   try{
     const z = pl.items.length>1 ? new JSZip() : null; let un = null;
     for (const it of pl.items){
-      const estCargill = pl.items.length===1 || ocCargillEstCamion(it.coopId, it.code);
-      if (choix==='cargill' && !estCargill){ horsCargill.push(it.code); continue; }
       try{
         if (choix!=='cargill'){ const f = (pl.items.length===1 && pl.fiche) || await ocFicheNormaleConstruire(it.coopId, it.code); if (z) z.file(f.nomFichier, f.blob); else un = f; faits.push(it.code); }
-        if (choix!=='normal' && estCargill){ const g = await ocConstruireFicheCargill(it.coopId, it.code); if (z) z.file(g.nomFichier, g.blob); else { if (un) ocTelechargerBlob(un.blob, un.nomFichier); un = g; } if (choix==='cargill') faits.push(it.code); }
+        if (choix!=='normal'){ const g = await ocConstruireFicheCargill(it.coopId, it.code); if (z) z.file(g.nomFichier, g.blob); else { if (un) ocTelechargerBlob(un.blob, un.nomFichier); un = g; } if (choix==='cargill') faits.push(it.code); }
       }catch(e){ ko.push(it.code+' : '+(e && e.message ? e.message : e)); }
     }
     if (z){ if (faits.length) ocTelechargerBlob(await z.generateAsync({ type:'blob' }), 'Fiches_tracabilite_'+new Date().toISOString().slice(0,10)+'.zip'); }
     else if (un) ocTelechargerBlob(un.blob, un.nomFichier);
   }catch(e){ ko.push(e && e.message ? e.message : String(e)); }
-  showToast((faits.length ? faits.length+' camion(s) : fiche(s) prête(s)' : 'Aucune fiche')
-    + (horsCargill.length ? ' · '+horsCargill.length+' non destiné(s) à Cargill, ignoré(s) pour ce format ('+horsCargill.slice(0,6).join(', ')+(horsCargill.length>6?'…':'')+')' : '')
-    + (ko.length ? ' · '+ko.join(' ; ') : '')+'.', ko.length ? 'error' : 'success');
+  showToast((faits.length ? faits.length+' camion(s) : fiche(s) prête(s)' : 'Aucune fiche')+(ko.length ? ' · '+ko.join(' ; ') : '')+'.', ko.length ? 'error' : 'success');
   ocFormatFicheFermer();
 }
 // Bouton « ⬇ Tout télécharger » du dossier de traçabilité (une série d'une coopérative) : propose le choix de
-// format (normal / Cargill / les deux) pour TOUS les camions déjà tracés de cette série en un seul clic — le
-// format Cargill n'étant retenu que pour les camions réellement destinés à Cargill (cf. ocFormatFicheChoisir).
+// format (normal / Cargill / les deux) pour TOUS les camions déjà tracés de cette série en un seul clic,
+// appliqué sans distinction à la sélection (cf. ocFormatFicheChoisir : l'attribution client reste manuelle).
 function ocDossierTelechargerTout(coopId, cle){
   const D = ocDossierDonnees(coopId, cle); if (!D) return;
   const items = D.lignes.filter(l=>l.nous && l.st==='trace').map(l=>({ coopId, code:l.code }));
