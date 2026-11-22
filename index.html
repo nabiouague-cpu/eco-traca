@@ -14494,13 +14494,43 @@ async function saigicTracerSurAutre(vuId){
   }
   { const kA = saigicCoopDeCode(v); openModal('tracerVolumeDirecte', Object.assign({ mode:'transfert', coopId:'', origCoopId:kA?kA.id:'', srcCle:'vu:'+v.id }, ocTvPrefillOrigine(v))); }
 }
-function ocTvPrefillOrigine(v){
-  const iso = saigicDateIso(v.date_connaissement);
+// ---- Intervalle d'achats proposé pour un connaissement (fiche de traçabilité) ----
+// Règles de Nabi : la date de fin tombe 1 à 3 jours avant le connaissement (jamais le jour même) et la date de
+// début 15 à 20 jours avant. Les achats étant une continuité, quand un achat plus récent existe déjà pour cette
+// coopérative (même campagne), la date de début repart du lendemain de ce dernier achat plutôt que de l'offset
+// fixe, pour que les intervalles successifs s'enchaînent sans trou ni chevauchement à corriger à la main.
+function ocTvJourDecale(iso, n){ const d = new Date(iso+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()+n); return d.toISOString().slice(0,10); }
+function ocTvEntierAleatoire(min, max){ return min + Math.floor(Math.random()*(max-min+1)); }
+// Date d'achat la plus récente déjà enregistrée pour cette coopérative (même campagne si connue), strictement
+// avant la date donnée : point d'ancrage de la continuité avec le connaissement précédent.
+function ocTvDerniereDateAchat(coopId, campagneId, avantIso){
+  let max = '';
+  (state.achats||[]).forEach(a=>{
+    if (!coopId || a.cooperative_id!==coopId || !a.producteur_id || !a.date) return;
+    if (campagneId && a.campagne_id && a.campagne_id!==campagneId) return;
+    const d = String(a.date).slice(0,10);
+    if (avantIso && d>=avantIso) return;
+    if (d>max) max = d;
+  });
+  return max || null;
+}
+function ocTvIntervalleAchats(coopId, campagneId, iso){
+  let dateFin = ocTvJourDecale(iso, -ocTvEntierAleatoire(1,3));
+  let dateDebut = ocTvJourDecale(iso, -ocTvEntierAleatoire(15,20));
+  const dernier = ocTvDerniereDateAchat(coopId, campagneId, iso);
+  if (dernier){
+    const suite = ocTvJourDecale(dernier, 1);
+    dateDebut = suite<dateFin ? suite : ocTvJourDecale(dateFin, -1);   // le précédent va trop loin : intervalle minimal cohérent
+  }
+  if (dateDebut>=dateFin) dateDebut = ocTvJourDecale(dateFin, -1);
+  return { dateDebut, dateFin };
+}
+function ocTvPrefillOrigine(v, coopId){
+  const iso = saigicDateIso(v.date_connaissement) || new Date().toISOString().slice(0,10);
   const camp = (state.campagnes||[]).find(c=>c.date_debut && c.date_fin && String(c.date_debut)<=iso && iso<=String(c.date_fin));
-  const fin = iso || new Date().toISOString().slice(0,10);
-  const d0 = new Date(fin+'T00:00:00Z'); d0.setUTCDate(d0.getUTCDate()-10);
-  return { campagneId: camp ? camp.id : ((state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : ''),
-    volume: Math.round(Number(v.poids_net)||0) || '', sacs: Math.round(Number(v.nb_sacs)||0) || '', dateDebut: d0.toISOString().slice(0,10), dateFin: fin, code: v.code_connaissement };
+  const campagneId = camp ? camp.id : ((state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : '');
+  const iv = ocTvIntervalleAchats(coopId, campagneId, iso);
+  return { campagneId, volume: Math.round(Number(v.poids_net)||0) || '', sacs: Math.round(Number(v.nb_sacs)||0) || '', dateDebut: iv.dateDebut, dateFin: iv.dateFin, code: v.code_connaissement };
 }
 // ===== « Tracer un volume » : choix de la coopérative, puis de son connaissement ; le formulaire se remplit tout seul. =====
 // Connaissements proposés pour une coopérative : ceux vus sur le SAIGIC et en attente de traçage + ses achats « connaissement »
@@ -14520,13 +14550,13 @@ function ocTvCandidats(coopId){
   return res.sort((x,y)=>String(y.iso||'').localeCompare(String(x.iso||''))).slice(0,60);
 }
 function ocTvItemParCle(coopId, cle){ return cle ? ocTvCandidats(coopId).find(x=>x.cle===cle) || null : null; }
-function ocTvPrefillItem(it){
-  if (it.vu) return ocTvPrefillOrigine(it.vu);
+function ocTvPrefillItem(it, coopId){
+  if (it.vu) return ocTvPrefillOrigine(it.vu, coopId);
   const iso = it.iso || new Date().toISOString().slice(0,10);
   const camp = it.achat && it.achat.campagne_id ? (state.campagnes||[]).find(c=>c.id===it.achat.campagne_id) : (state.campagnes||[]).find(c=>c.date_debut && c.date_fin && String(c.date_debut)<=iso && iso<=String(c.date_fin));
-  const d0 = new Date(iso+'T00:00:00Z'); d0.setUTCDate(d0.getUTCDate()-10);
-  return { campagneId: camp ? camp.id : ((state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : ''),
-    volume: it.kg || '', sacs: it.sacs || '', dateDebut: d0.toISOString().slice(0,10), dateFin: iso, code: it.code };
+  const campagneId = camp ? camp.id : ((state.campagneFilter && state.campagneFilter!=='all') ? state.campagneFilter : '');
+  const iv = ocTvIntervalleAchats(coopId, campagneId, iso);
+  return { campagneId, volume: it.kg || '', sacs: it.sacs || '', dateDebut: iv.dateDebut, dateFin: iv.dateFin, code: it.code };
 }
 function ocTvCoopSource(pl){ return pl.mode==='direct' ? pl.coopId : pl.origCoopId; }
 function ocTvLibelleItem(it){ return it.code+' · '+(it.kg>0 ? fmtKg(it.kg) : 'volume non lu')+(it.sacs>0 ? ' · '+fmtNum(it.sacs)+' sacs' : '')+' · '+esc(dateFr(it.iso)||it.iso||''); }
@@ -14566,9 +14596,10 @@ function ocTvRedessiner(){
 }
 // Choisit (ou garde) le connaissement de la coopérative source et remplit le formulaire quand il change.
 function ocTvAjusterSource(pl, precedent){
-  const items = ocTvCandidats(ocTvCoopSource(pl));
+  const coopSrc = ocTvCoopSource(pl);
+  const items = ocTvCandidats(coopSrc);
   const garde = items.find(x=>x.cle===pl.srcCle), it = garde || items[0];
-  if (it){ if (!garde) Object.assign(pl, ocTvPrefillItem(it)); pl.srcCle = it.cle; }
+  if (it){ if (!garde) Object.assign(pl, ocTvPrefillItem(it, coopSrc)); pl.srcCle = it.cle; }
   else if (pl.srcCle || precedent){ Object.assign(pl, { srcCle:'', code:'', volume:'', sacs:'' }); }
 }
 function ocTvChoisirCoop(coopId){
@@ -14583,8 +14614,9 @@ function ocTvChoisirOrigCoop(coopId){
 function ocTvChoisirSrc(cle){
   const pl = state.modal && state.modal.payload; if (!pl) return;
   ocTvLireFormulaire(pl);
-  const it = ocTvItemParCle(ocTvCoopSource(pl), cle);
-  if (it) Object.assign(pl, ocTvPrefillItem(it), { srcCle:it.cle });
+  const coopSrc = ocTvCoopSource(pl);
+  const it = ocTvItemParCle(coopSrc, cle);
+  if (it) Object.assign(pl, ocTvPrefillItem(it, coopSrc), { srcCle:it.cle });
   else Object.assign(pl, { srcCle:'', code:'', volume:'', sacs:'' });
   ocTvRedessiner();
 }
@@ -17226,7 +17258,7 @@ async function ocAppliquerSimCamion(coopId, code){
   }
   if (!it) return { ko:'ce connaissement n\'est plus à tracer' };
   const cs = ocSimAnalyseCode(code); if (!cs) return { ko:'numéro de connaissement non reconnu' };
-  const pf = ocTvPrefillItem(it), campagneId = (it.ext && it.ext.campagne_id) || pf.campagneId || (state.campagneFilter && state.campagneFilter!=='all' ? state.campagneFilter : '');
+  const pf = ocTvPrefillItem(it, coopId), campagneId = (it.ext && it.ext.campagne_id) || pf.campagneId || (state.campagneFilter && state.campagneFilter!=='all' ? state.campagneFilter : '');
   if (!campagneId) return { ko:'campagne non reconnue' };
   const row = (state.tracaSim||[]).find(r=>r.cooperative_id===coopId && r.serie===cs.cle && r.seq===cs.seq && (r.campagne_id||'')===campagneId);
   if (!row) return { ko:'pas de simulation enregistrée pour ce camion' };
@@ -17347,7 +17379,7 @@ function extATracerHtml(){
 async function ocDossierTracer(coopId, code){
   const it = ocTvCandidats(coopId).find(x=>x.code===code);
   if (!it){ showToast('Ce connaissement n\'est plus à tracer.'); return; }
-  const pf = ocTvPrefillItem(it);
+  const pf = ocTvPrefillItem(it, coopId);
   try{
     const r = await ocSimCombler(coopId, pf.campagneId, code, { kg:it.kg, iso:it.iso }, 35);
     if (r.raison==='sans-producteur') showToast('Cette coopérative n\'a pas encore de producteurs dans ORIGEN : pas de simulation possible.');
