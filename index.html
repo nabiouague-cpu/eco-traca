@@ -1937,6 +1937,15 @@
   .wrap.anim-entree > *:nth-child(2){animation-delay:.05s} .wrap.anim-entree > *:nth-child(3){animation-delay:.1s} .wrap.anim-entree > *:nth-child(4){animation-delay:.15s} .wrap.anim-entree > *:nth-child(5){animation-delay:.2s} .wrap.anim-entree > *:nth-child(n+6){animation-delay:.25s}
   .wrap.anim-entree .ckpt-tuile{animation:dsRise .5s var(--ease) both;}
   .wrap.anim-entree .ckpt-tuile:nth-child(2){animation-delay:.06s} .wrap.anim-entree .ckpt-tuile:nth-child(3){animation-delay:.12s} .wrap.anim-entree .ckpt-tuile:nth-child(4){animation-delay:.18s} .wrap.anim-entree .ckpt-tuile:nth-child(5){animation-delay:.24s}
+  /* Meme entree douce, etendue aux tuiles de stats genriques (.cards .card) hors cockpit. */
+  .wrap.anim-entree .cards .card{animation:dsRise .45s var(--ease) both;}
+  .wrap.anim-entree .cards .card:nth-child(2){animation-delay:.05s} .wrap.anim-entree .cards .card:nth-child(3){animation-delay:.1s} .wrap.anim-entree .cards .card:nth-child(4){animation-delay:.15s} .wrap.anim-entree .cards .card:nth-child(n+5){animation-delay:.2s}
+  /* ---- Graphiques (sparklines) : la ligne se trace, puis l'aire et le point apparaissent ---- */
+  .ckpt-spark .spark-ligne{transition:stroke-dashoffset .9s cubic-bezier(.16,1,.3,1);}
+  .ckpt-spark .spark-aire{opacity:0;transition:opacity .6s ease .35s;}
+  .ckpt-spark.vu .spark-aire{opacity:1;}
+  .ckpt-spark .spark-pt{opacity:0;transform-origin:center;transform:scale(0);transition:opacity .3s ease .6s,transform .35s var(--ease) .6s;}
+  .ckpt-spark.vu .spark-pt{opacity:1;transform:scale(1);}
   /* ---- Notifications enrichies ---- */
   .toast{position:relative;overflow:hidden;align-items:center;}
   .toast-ic{flex:none;width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;background:currentColor;}
@@ -4624,6 +4633,29 @@ function ocAnimerCompteurs(){
   }
   requestAnimationFrame(pas);
 }
+// Anime le dessin des sparklines (ocSparkline) a l'arrivee sur l'ecran : la ligne se trace,
+// l'aire et le point final apparaissent ensuite. Ne joue qu'une fois par arrivee (meme logique
+// que ocAnimerCompteurs, appelee juste a cote dans render()).
+function ocAnimerGraphiques(){
+  const reduit = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  document.querySelectorAll('.ckpt-spark').forEach(svg=>{
+    const ligne = svg.querySelector('.spark-ligne');
+    if (!ligne){ return; }
+    if (reduit){ svg.classList.add('vu'); return; }
+    try{
+      const long = ligne.getTotalLength();
+      ligne.style.transition = 'none';
+      ligne.style.strokeDasharray = long;
+      ligne.style.strokeDashoffset = long;
+      ligne.getBoundingClientRect(); // force le reflow avant de relancer la transition
+      ligne.style.transition = '';
+      requestAnimationFrame(()=>{
+        svg.classList.add('vu');
+        ligne.style.strokeDashoffset = '0';
+      });
+    }catch(e){ svg.classList.add('vu'); }
+  });
+}
 function ocVerrouillerFond(){
   try{
     const app = document.getElementById('app');
@@ -4664,6 +4696,7 @@ function render(){
     const w = app && app.querySelector('.wrap');
     if (w){ w.classList.add('anim-entree'); setTimeout(()=>{ w.classList.remove('anim-entree'); }, 1200); }
     ocAnimerCompteurs();
+    ocAnimerGraphiques();
   }
   // Fenetre ouverte : le fond ne defile plus (souris, clavier, tactile) -- seule la fenetre defile.
   ocVerrouillerFond();
@@ -4799,7 +4832,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-22-578';
+const APP_VERSION = '2026-11-22-579';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -31958,8 +31991,8 @@ function ocSparkline(valeurs, w, h){
   const last = pts[pts.length-1];
   return '<svg class="ckpt-spark" viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="none" aria-hidden="true">'
     + '<defs><linearGradient id="ckptG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1F6E5C" stop-opacity=".28"/><stop offset="1" stop-color="#1F6E5C" stop-opacity="0"/></linearGradient></defs>'
-    + '<path d="'+aire+'" fill="url(#ckptG)"/><path d="'+d+'" fill="none" stroke="#1F6E5C" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>'
-    + '<circle cx="'+last[0].toFixed(1)+'" cy="'+last[1].toFixed(1)+'" r="2.6" fill="#1F6E5C"/></svg>';
+    + '<path class="spark-aire" d="'+aire+'" fill="url(#ckptG)"/><path class="spark-ligne" d="'+d+'" fill="none" stroke="#1F6E5C" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>'
+    + '<circle class="spark-pt" cx="'+last[0].toFixed(1)+'" cy="'+last[1].toFixed(1)+'" r="2.6" fill="#1F6E5C"/></svg>';
 }
 function ocCockpitHtml(o){
   const conn = o.connAchetes;
@@ -32112,6 +32145,7 @@ function openCoopDashboard(coopId){
   state.coopDashboardId = coopId;
   state.coopFilter = coopId;
   state.conformiteCoopFilter = coopId;
+  state.animEntree = true;
   render();
 }
 function closeCoopDashboard(){ state.coopDashboardId = null; render(); }
@@ -32153,16 +32187,16 @@ function renderCoopDashboard(){
     + '</div>';
 
   html += '<div class="cards">'
-    + '<div class="card"><div class="label">Producteurs</div><div class="value">'+fmtNum(stats.count)+'</div></div>'
-    + '<div class="card"><div class="label">Potentiel total</div><div class="value">'+fmtKg(stats.potentiel)+'</div></div>'
-    + '<div class="card"><div class="label">Net déclaré (traçabilité)</div><div class="value">'+fmtKg(stats.achete)+(stats.pct!=null?' <span style="font-size:13px;color:var(--ink-soft);">('+stats.pct.toFixed(0)+'%)</span>':'')+'</div></div>'
-    + '<div class="card'+(nAlert>0?' alert':'')+'"><div class="label">Producteurs en alerte</div><div class="value">'+fmtNum(nAlert)+'</div></div>'
+    + '<div class="card"><div class="label">Producteurs</div><div class="value" data-n="'+stats.count+'">'+fmtNum(stats.count)+'</div></div>'
+    + '<div class="card"><div class="label">Potentiel total</div><div class="value" data-n="'+Math.round(stats.potentiel)+'">'+fmtKg(stats.potentiel)+'</div></div>'
+    + '<div class="card"><div class="label">Net déclaré (traçabilité)</div><div class="value" data-n="'+Math.round(stats.achete)+'">'+fmtKg(stats.achete)+(stats.pct!=null?' <span style="font-size:13px;color:var(--ink-soft);">('+stats.pct.toFixed(0)+'%)</span>':'')+'</div></div>'
+    + '<div class="card'+(nAlert>0?' alert':'')+'"><div class="label">Producteurs en alerte</div><div class="value" data-n="'+nAlert+'">'+fmtNum(nAlert)+'</div></div>'
     + '</div>';
   html += '<div class="cards">'
-    + '<div class="card" title="Volume acheté par ECORIGINE = poids net payé à l\'usine"><div class="label">Volume acheté (net payé)</div><div class="value">'+(stats.netProduit>0?fmtKg(stats.netProduit):'—')+'</div>'+(stats.netProduitPending>0?'<div class="hint" style="margin-top:4px;color:var(--warn);">'+stats.netProduitPending+' connaissement(s) en attente de pesée usine</div>':'')+'</div>'
-    + '<div class="card'+(missing.length>0?' alert':'')+'" style="cursor:pointer;" onclick="goToTabForCoop(\'conformite\')"><div class="label">Documents manquants</div><div class="value">'+fmtNum(missing.length)+'/'+DOCS_REQUIS.length+'</div></div>'
-    + '<div class="card'+(nOuvertes>0?' alert':'')+'" style="cursor:pointer;" onclick="goToTabForCoop(\'conformite\')"><div class="label">Non-conformités ouvertes</div><div class="value">'+fmtNum(nOuvertes)+'</div></div>'
-    + '<div class="card'+(gapsCount>0?' alert':'')+'" style="cursor:pointer;" onclick="goToTabForCoop(\'conformite\')"><div class="label">Données manquantes</div><div class="value">'+fmtNum(gapsCount)+'</div></div>'
+    + '<div class="card" title="Volume acheté par ECORIGINE = poids net payé à l\'usine"><div class="label">Volume acheté (net payé)</div><div class="value"'+(stats.netProduit>0?' data-n="'+Math.round(stats.netProduit)+'"':'')+'>'+(stats.netProduit>0?fmtKg(stats.netProduit):'—')+'</div>'+(stats.netProduitPending>0?'<div class="hint" style="margin-top:4px;color:var(--warn);">'+stats.netProduitPending+' connaissement(s) en attente de pesée usine</div>':'')+'</div>'
+    + '<div class="card'+(missing.length>0?' alert':'')+'" style="cursor:pointer;" onclick="goToTabForCoop(\'conformite\')"><div class="label">Documents manquants</div><div class="value" data-n="'+missing.length+'">'+fmtNum(missing.length)+'/'+DOCS_REQUIS.length+'</div></div>'
+    + '<div class="card'+(nOuvertes>0?' alert':'')+'" style="cursor:pointer;" onclick="goToTabForCoop(\'conformite\')"><div class="label">Non-conformités ouvertes</div><div class="value" data-n="'+nOuvertes+'">'+fmtNum(nOuvertes)+'</div></div>'
+    + '<div class="card'+(gapsCount>0?' alert':'')+'" style="cursor:pointer;" onclick="goToTabForCoop(\'conformite\')"><div class="label">Données manquantes</div><div class="value" data-n="'+gapsCount+'">'+fmtNum(gapsCount)+'</div></div>'
     + '</div>';
 
   html += '<div class="panel"><div class="panel-head"><h2>Producteurs ('+fmtNum(rows.length)+')</h2>'+sectionToggleHtml('coopdash-prod-'+coop.id, rows.length)+'</div>';
