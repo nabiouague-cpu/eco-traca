@@ -4768,7 +4768,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-22-564';
+const APP_VERSION = '2026-11-22-565';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -13916,6 +13916,7 @@ function lotsModalsHtml(){
   if (m.type==='ocDossier'){
     const pl = m.payload, c = coopById(pl.coopId), D = ocDossierDonnees(pl.coopId, pl.cle);
     const nP = (state.producteurs||[]).filter(p=>p.cooperative_id===pl.coopId && p.farm_id).length;
+    const nTT = ocTvCandidats(pl.coopId).length;
     let corps;
     if (!D) corps = '<div class="hint">Aucun connaissement au format CCC-année-saison-numéro pour cette coopérative.</div>';
     else {
@@ -13938,7 +13939,7 @@ function lotsModalsHtml(){
       + '<div class="hint" style="margin-bottom:8px">'+esc(c && c.ccc_num ? 'N° CCC '+c.ccc_num+' · ' : '')+fmtNum(nP)+' producteur(s) dans ORIGEN. <b>Rien n\'est modifié ici</b> : les traçabilités déjà faites restent telles quelles tant que tu ne demandes pas de les refaire.'
       + (D && D.groupes.length>1 ? ' Série : <select onchange="ocDossierSerie(this.value)">'+D.groupes.map(g=>'<option value="'+esc(g.cle)+'"'+(g.cle===D.g.cle?' selected':'')+'>'+esc(g.cle)+'</option>').join('')+'</select>' : '')+'</div>'
       + '<div id="modal-fields">'+corps+'</div>'
-      + '<div class="actions"><button class="btn" onclick="ocDossierApercu()" title="Simule toute la série depuis le n° 1, comme si rien n\'avait été tracé, pour voir ce que donnerait la traçabilité refaite (aperçu, rien n\'est enregistré tant que tu ne cliques pas sur Enregistrer)">🧮 Aperçu : refaire toute la traçabilité de zéro</button>'+(D && D.lignes.some(l=>l.nous && l.st==='simule') ? '<button class="btn btn-primary" onclick="ocDossierAppliquer(\''+escJs(pl.coopId)+'\')" title="Transforme en vrai traçage tous les camions chez nous qui n\'existent que dans la simulation">✅ Appliquer la simulation aux camions chez nous</button>' : '')+(D && D.nTrace>0 ? '<button class="btn btn-primary" onclick="ocDossierTelechargerTout(\''+escJs(pl.coopId)+'\',\''+escJs(D.g.cle)+'\')" title="Télécharge en un clic les fiches de tous les camions déjà tracés de cette série ('+D.nTrace+'), au format choisi (normal / Cargill / les deux) — appliqué à toute la sélection.">⬇ Tout télécharger ('+D.nTrace+')</button>' : '')+(D && D.nTrace>0 ? '<button class="btn" style="color:#a33;border-color:#e3b3b3" onclick="ocRefaireDossier()" title="Retire les traçages déjà faits de cette série (après sauvegarde) pour les retracer avec la simulation">♻ Refaire de zéro (retirer les '+D.nTrace+' traçage'+(D.nTrace>1?'s':'')+')</button>' : '')+'<button class="btn" onclick="closeModal()">Fermer</button></div></div></div>';
+      + '<div class="actions">'+(nTT>0 ? '<button class="btn btn-primary" onclick="ocOuvrirTracerTout(\''+escJs(pl.coopId)+'\')" title="Ouvre la liste de tous les connaissements encore à tracer pour cette coopérative : valide le nombre de producteurs de chacun un à un, puis trace tout en un seul coup">⚡ Tracer tous les volumes ('+nTT+')</button>' : '')+'<button class="btn" onclick="ocDossierApercu()" title="Simule toute la série depuis le n° 1, comme si rien n\'avait été tracé, pour voir ce que donnerait la traçabilité refaite (aperçu, rien n\'est enregistré tant que tu ne cliques pas sur Enregistrer)">🧮 Aperçu : refaire toute la traçabilité de zéro</button>'+(D && D.lignes.some(l=>l.nous && l.st==='simule') ? '<button class="btn btn-primary" onclick="ocDossierAppliquer(\''+escJs(pl.coopId)+'\')" title="Transforme en vrai traçage tous les camions chez nous qui n\'existent que dans la simulation">✅ Appliquer la simulation aux camions chez nous</button>' : '')+(D && D.nTrace>0 ? '<button class="btn btn-primary" onclick="ocDossierTelechargerTout(\''+escJs(pl.coopId)+'\',\''+escJs(D.g.cle)+'\')" title="Télécharge en un clic les fiches de tous les camions déjà tracés de cette série ('+D.nTrace+'), au format choisi (normal / Cargill / les deux) — appliqué à toute la sélection.">⬇ Tout télécharger ('+D.nTrace+')</button>' : '')+(D && D.nTrace>0 ? '<button class="btn" style="color:#a33;border-color:#e3b3b3" onclick="ocRefaireDossier()" title="Retire les traçages déjà faits de cette série (après sauvegarde) pour les retracer avec la simulation">♻ Refaire de zéro (retirer les '+D.nTrace+' traçage'+(D.nTrace>1?'s':'')+')</button>' : '')+'<button class="btn" onclick="closeModal()">Fermer</button></div></div></div>';
   }
   if (m.type==='ocSim'){
     const pl = m.payload, R = pl.res, coops = ocSimCoops(), c = coopById(pl.coopId), groupes = ocSimGroupes(pl.coopId);
@@ -17567,75 +17568,13 @@ async function submitTracerVolumeDirecte(){
 
   _ocTracerVolumeEnCours = true;
   try{
-    const eligibles = ocProducteursEligibles(coopId, campagneId, 'principale');
-    const dejaTeste = _tvTest && _tvTest.cle===ocTvCle(coopId, campagneId, volumeKg, nbSacs, nbProd, dateDebut, dateFin) ? _tvTest : null;   // le tirage testé est celui qui est généré
-    const resultat = dejaTeste ? dejaTeste.res : ocAllouerVolume(eligibles, volumeKg, nbProd);
-    if (resultat.error){ showToast(resultat.error); return; }
-    const sacsArr = dejaTeste ? dejaTeste.sacsArr : ocRepartirSacs(resultat.allocations, nbSacs);
-    const datesArr = dejaTeste ? dejaTeste.datesArr : resultat.allocations.map(()=>ocDateAleatoireDansIntervalle(dateDebut, dateFin));
-    _tvTest = null;
-
-    // 1) on construit d'abord la fiche : si elle echoue, rien n'est enregistre en base
     const coopSrc = pl.mode==='direct' ? coopId : (val('tv_orig_coop') || pl.origCoopId || '');
     const itSrc = ocTvItemParCle(coopSrc, val('tv_src') || pl.srcCle);
-    const coopFiche = coopById(coopId);
-    const sigleConn = itSrc ? String((itSrc.vu && itSrc.vu.fournisseur_saigic) || (itSrc.achat && itSrc.achat.fournisseur_saigic) || '').trim() : '';
-    const entete = { fournisseur: sigleConn || (coopFiche ? (coopFiche.nom_complet || coopFiche.nom || '') : ''), ville: coopFiche ? (coopFiche.ville || coopFiche.siege_social || '') : '',
-      dateConnaissement: itSrc && itSrc.iso ? dateFr(itSrc.iso) : '', numero: itSrc ? itSrc.code : '', coopFichier: coopSrc || coopId };
-    let fiche;
-    try{ fiche = await ocConstruireFicheTracabiliteDirecte(resultat.allocations, sacsArr, datesArr, coopId, campagneId, entete); }
-    catch(e){ showToast('Erreur lors de la génération de la fiche : '+e.message); return; }
-
-    // 2) un vrai achat par producteur (producteur_id = farm_id) pour le suivi du plafond
-    const genId_ = genId('gen');
-    const lignes = resultat.allocations.map((a,i)=>({
-      id: genId('a'),
-      cooperative_id: coopId,
-      producteur_id: a.p.farm_id,
-      date: datesArr[i],
-      quantite_kg: a.kg,
-      nombre_sacs: sacsArr[i],
-      connaissement: '',
-      type_cacao: '',
-      campagne_id: campagneId,
-      periode: 'principale',
-      fiche_generation_id: genId_,
-    }));
-    // La base exige que la fiche existe avant les achats qui s'y rattachent (clé étrangère achats.fiche_generation_id).
-    { const uid = state.session && state.session.user ? state.session.user.id : null;
-      const { error: errFiche } = await supabaseClient.from('fiches_tracabilite_generees').insert({ id:genId_, cooperative_id:coopId, campagne_id:campagneId, periode:'principale', date_debut:dateDebut, date_fin:dateFin,
-        volume_total_kg:volumeKg, nombre_sacs_total:nbSacs, nombre_producteurs_demande:nbProd, nombre_producteurs_utilises:resultat.nbUtilises, created_by:uid });
-      if (errFiche){ console.warn('Fiche non enregistrée en base :', errFiche.message); lignes.forEach(l=>{ l.fiche_generation_id = null; }); } }
-    const { error } = await supabaseClient.from('achats').insert(lignes);
-    if (error){
-      await supabaseClient.from('fiches_tracabilite_generees').delete().eq('id', genId_);   // pas de fiche « fantome » sans achats
-      showToast("Échec de l'enregistrement des achats : "+error.message); return;
-    }
-    lignes.forEach(l=>state.achats.push(l));
-
-    // 2 bis) la fiche est rangee dans le dossier « Fiches de tracabilite » de la cooperative (meme sans demande ni documents de conformite)
-    const rangee = await ocStockerFicheGeneree(fiche, coopId, genId_, entete.numero || '');
-
-    // 3) ce tracage devient la chaine en cours de l'onglet Tracage de volume : l'etape suivante
-    //    (connaissement de A transpose vers B) sera pre-remplie avec cette cooperative et ce volume.
-    const trNouveau = { coopId, campagneId, ficheGenerationId: genId_, volumeKg, nbSacs, dateDebut, dateFin,
-      achatIds: lignes.map(l=>l.id), creeLe: new Date().toISOString(), connaissement: null, ticketFait: false };
-    if (pl.mode==='direct') trNouveau.mode = 'direct';
-    if (rangee && rangee.path) trNouveau.fichePath = rangee.path;
-    const origVu = pl.mode==='direct' ? null : (itSrc && itSrc.vu);
-    if (pl.mode!=='direct' && itSrc) trNouveau.origine = { vuId: itSrc.vu ? itSrc.vu.id : null, code:itSrc.code, coopId: coopSrc || null };
-    ocTracageSauver(trNouveau);
-    if (origVu){
-      await supabaseClient.from('saigic_connaissements_vus').update({ trace_le:new Date().toISOString() }).eq('id', origVu.id);
-      state.saigicATracer = (state.saigicATracer||[]).filter(x=>x.id!==origVu.id);
-    }
-    // Traçage lancé depuis un connaissement vu sur le SAIGIC : on le rattache tout de suite (aucun document généré).
-    if (pl.mode==='direct' && itSrc){
-      if (itSrc.vu) await ocTracageLierConnaissementSaigic(trNouveau, itSrc.vu);
-      else if (itSrc.achat) await ocTracageLierAchat(trNouveau, itSrc.achat);
-      // Ce camion est maintenant tracé pour de bon : sa ligne de simulation (s'il y en avait une) disparaît pour ne pas compter deux fois.
-      { const cs = ocSimAnalyseCode(itSrc.code); if (cs) await ocSimSupprimer(coopId, campagneId, cs.cle, cs.seq); }
-    }
+    const dejaTeste = _tvTest && _tvTest.cle===ocTvCle(coopId, campagneId, volumeKg, nbSacs, nbProd, dateDebut, dateFin) ? _tvTest : null;   // le tirage testé est celui qui est généré
+    _tvTest = null;
+    const r = await ocTracerCoeur(coopId, campagneId, volumeKg, nbSacs, nbProd, dateDebut, dateFin, itSrc, pl.mode, coopSrc, dejaTeste);
+    if (!r.ok){ showToast(r.error); return; }
+    const { fiche, rangee, entete } = r, resultat = { nbUtilises: r.nbUtilises };
     const retour = pl.retour || null;
     if (!retour){ if (state.tab!=='tracage') state.tab = 'tracage'; state.tracageSous = 'tracer'; }
 
@@ -17651,6 +17590,194 @@ async function submitTracerVolumeDirecte(){
   } finally {
     _ocTracerVolumeEnCours = false;
   }
+}
+
+// Cœur partagé de « Tracer un volume » pour UN connaissement : répartition sur les producteurs, génération de la
+// fiche, enregistrement des achats, rangement de la fiche dans le dossier, sauvegarde du traçage et rattachement
+// du connaissement (via le SAIGIC ou un achat déjà présent). Utilisé par submitTracerVolumeDirecte (un par un,
+// mode « direct » ou « transfert ») et par ocTracerToutLancer (« Tracer tous les volumes », toujours en mode
+// « direct »). Les validations (capacité restante, nombre minimum de producteurs...) restent à la charge de
+// l'appelant : cette fonction part du principe qu'elles ont déjà été faites et se contente d'écrire.
+async function ocTracerCoeur(coopId, campagneId, volumeKg, nbSacs, nbProd, dateDebut, dateFin, itSrc, mode, coopSrc, dejaTeste){
+  const eligibles = ocProducteursEligibles(coopId, campagneId, 'principale');
+  const resultat = dejaTeste ? dejaTeste.res : ocAllouerVolume(eligibles, volumeKg, nbProd);
+  if (resultat.error) return { ok:false, error: resultat.error };
+  const sacsArr = dejaTeste ? dejaTeste.sacsArr : ocRepartirSacs(resultat.allocations, nbSacs);
+  const datesArr = dejaTeste ? dejaTeste.datesArr : resultat.allocations.map(()=>ocDateAleatoireDansIntervalle(dateDebut, dateFin));
+
+  // 1) on construit d'abord la fiche : si elle echoue, rien n'est enregistre en base
+  const coopFiche = coopById(coopId);
+  const sigleConn = itSrc ? String((itSrc.vu && itSrc.vu.fournisseur_saigic) || (itSrc.achat && itSrc.achat.fournisseur_saigic) || '').trim() : '';
+  const entete = { fournisseur: sigleConn || (coopFiche ? (coopFiche.nom_complet || coopFiche.nom || '') : ''), ville: coopFiche ? (coopFiche.ville || coopFiche.siege_social || '') : '',
+    dateConnaissement: itSrc && itSrc.iso ? dateFr(itSrc.iso) : '', numero: itSrc ? itSrc.code : '', coopFichier: coopSrc || coopId };
+  let fiche;
+  try{ fiche = await ocConstruireFicheTracabiliteDirecte(resultat.allocations, sacsArr, datesArr, coopId, campagneId, entete); }
+  catch(e){ return { ok:false, error: 'Erreur lors de la génération de la fiche : '+e.message }; }
+
+  // 2) un vrai achat par producteur (producteur_id = farm_id) pour le suivi du plafond
+  const genId_ = genId('gen');
+  const lignes = resultat.allocations.map((a,i)=>({
+    id: genId('a'),
+    cooperative_id: coopId,
+    producteur_id: a.p.farm_id,
+    date: datesArr[i],
+    quantite_kg: a.kg,
+    nombre_sacs: sacsArr[i],
+    connaissement: '',
+    type_cacao: '',
+    campagne_id: campagneId,
+    periode: 'principale',
+    fiche_generation_id: genId_,
+  }));
+  // La base exige que la fiche existe avant les achats qui s'y rattachent (clé étrangère achats.fiche_generation_id).
+  { const uid = state.session && state.session.user ? state.session.user.id : null;
+    const { error: errFiche } = await supabaseClient.from('fiches_tracabilite_generees').insert({ id:genId_, cooperative_id:coopId, campagne_id:campagneId, periode:'principale', date_debut:dateDebut, date_fin:dateFin,
+      volume_total_kg:volumeKg, nombre_sacs_total:nbSacs, nombre_producteurs_demande:nbProd, nombre_producteurs_utilises:resultat.nbUtilises, created_by:uid });
+    if (errFiche){ console.warn('Fiche non enregistrée en base :', errFiche.message); lignes.forEach(l=>{ l.fiche_generation_id = null; }); } }
+  const { error } = await supabaseClient.from('achats').insert(lignes);
+  if (error){
+    await supabaseClient.from('fiches_tracabilite_generees').delete().eq('id', genId_);   // pas de fiche « fantome » sans achats
+    return { ok:false, error: "Échec de l'enregistrement des achats : "+error.message };
+  }
+  lignes.forEach(l=>state.achats.push(l));
+
+  // 2 bis) la fiche est rangee dans le dossier « Fiches de tracabilite » de la cooperative (meme sans demande ni documents de conformite)
+  const rangee = await ocStockerFicheGeneree(fiche, coopId, genId_, entete.numero || '');
+
+  // 3) ce tracage devient la chaine en cours de l'onglet Tracage de volume : l'etape suivante
+  //    (connaissement de A transpose vers B) sera pre-remplie avec cette cooperative et ce volume.
+  const trNouveau = { coopId, campagneId, ficheGenerationId: genId_, volumeKg, nbSacs, dateDebut, dateFin,
+    achatIds: lignes.map(l=>l.id), creeLe: new Date().toISOString(), connaissement: null, ticketFait: false };
+  if (mode==='direct') trNouveau.mode = 'direct';
+  if (rangee && rangee.path) trNouveau.fichePath = rangee.path;
+  const origVu = mode==='direct' ? null : (itSrc && itSrc.vu);
+  if (mode!=='direct' && itSrc) trNouveau.origine = { vuId: itSrc.vu ? itSrc.vu.id : null, code:itSrc.code, coopId: coopSrc || null };
+  ocTracageSauver(trNouveau);
+  if (origVu){
+    await supabaseClient.from('saigic_connaissements_vus').update({ trace_le:new Date().toISOString() }).eq('id', origVu.id);
+    state.saigicATracer = (state.saigicATracer||[]).filter(x=>x.id!==origVu.id);
+  }
+  // Traçage lancé depuis un connaissement vu sur le SAIGIC : on le rattache tout de suite (aucun document généré).
+  // C'est ce rattachement qui écrit le numéro de connaissement sur les achats producteurs (il était vide jusque-là) :
+  // sans lui, ni la continuité des dates (ocTvConnaissementPrecedent) ni la sortie de la liste « à tracer »
+  // (ocTvCandidats) ne reconnaîtraient ce camion comme déjà traité.
+  if (mode==='direct' && itSrc){
+    if (itSrc.vu) await ocTracageLierConnaissementSaigic(trNouveau, itSrc.vu);
+    else if (itSrc.achat) await ocTracageLierAchat(trNouveau, itSrc.achat);
+    // Ce camion est maintenant tracé pour de bon : sa ligne de simulation (s'il y en avait une) disparaît pour ne pas compter deux fois.
+    { const cs = ocSimAnalyseCode(itSrc.code); if (cs) await ocSimSupprimer(coopId, campagneId, cs.cle, cs.seq); }
+  }
+  return { ok:true, nbUtilises: resultat.nbUtilises, fiche, rangee, entete };
+}
+
+// ===== « Tracer tous les volumes » : la liste de tous les connaissements encore à tracer pour une coopérative,
+// un nombre de producteurs proposé par ligne, une validation ligne par ligne, puis un traçage groupé en un seul
+// coup — dans l'ordre chronologique, pour que la continuité des dates d'achats (voir ocTvIntervalleAchats) et le
+// potentiel restant des producteurs se mettent à jour correctement d'un camion à l'autre, exactement comme s'ils
+// avaient été tracés un par un à la main. L'attribution du format (normal / Cargill) se choisit une seule fois à
+// la fin, pour tout ce qui a été tracé — jamais devinée automatiquement (voir ocFormatFicheChoisir). =====
+function ocTracerToutLignes(coopId){
+  const items = ocTvCandidats(coopId).slice().sort((a,b)=>String(a.iso||'').localeCompare(String(b.iso||'')));
+  return items.map(it=>{
+    const pf = ocTvPrefillItem(it, coopId);
+    const volumeKg = Math.round(Number(pf.volume))||0;
+    const an = pf.campagneId ? ocTvAnalyseProd(coopId, pf.campagneId, volumeKg) : null;
+    let nbPropose = '', blocage = '';
+    if (!(volumeKg>0)) blocage = 'volume inconnu pour ce connaissement';
+    else if (!pf.campagneId) blocage = 'campagne inconnue pour cette date';
+    else if (!an) blocage = 'coopérative ou campagne invalide';
+    else if (an.aucun) blocage = 'plus aucun producteur avec de la marge';
+    else if (volumeKg > an.capTot) blocage = 'capacité restante insuffisante ('+fmtKg(an.capTot)+')';
+    else nbPropose = Math.min(an.besoin, an.nElig);
+    return { cle:it.cle, code:it.code, iso:it.iso, kg:it.kg, sacs:it.sacs, campagneId:pf.campagneId,
+      nbProd: nbPropose, valide:false, statut:'attente', blocage:blocage, erreur:'', margeApres:null, nbProdUtilise:null };
+  });
+}
+function ocOuvrirTracerTout(coopId){
+  if (!coopId) return;
+  state.modal = { type:'ocTracerTout', payload:{ coopId, enCours:false, lignes: ocTracerToutLignes(coopId) } };
+  render();
+}
+function ocTracerToutFermer(){
+  const pl = state.modal && state.modal.type==='ocTracerTout' ? state.modal.payload : null;
+  if (pl && pl.enCours){ showToast('Traçage groupé en cours : patiente jusqu\'à la fin.'); return; }
+  closeModal();
+}
+function ocTracerToutBasculer(cle){
+  const pl = state.modal && state.modal.type==='ocTracerTout' ? state.modal.payload : null; if (!pl || pl.enCours) return;
+  const l = pl.lignes.find(x=>x.cle===cle); if (!l || l.statut==='trace' || l.blocage) return;
+  l.valide = !l.valide; render();
+}
+function ocTracerToutNb(cle, val){
+  const pl = state.modal && state.modal.type==='ocTracerTout' ? state.modal.payload : null; if (!pl) return;
+  const l = pl.lignes.find(x=>x.cle===cle); if (!l || l.statut==='trace') return;
+  const n = Math.round(Number(val));
+  if (Number.isInteger(n) && n>0) l.nbProd = n;
+}
+async function ocTracerToutLancer(){
+  const pl = state.modal && state.modal.type==='ocTracerTout' ? state.modal.payload : null; if (!pl || pl.enCours) return;
+  const aTracer = pl.lignes.filter(l=>l.valide && !l.blocage && l.statut!=='trace');
+  if (!aTracer.length){ showToast('Valide au moins un connaissement avant de lancer le traçage.'); return; }
+  const totalKg = aTracer.reduce((s,l)=>s+(Number(l.kg)||0),0);
+  askConfirm('Tracer '+aTracer.length+' connaissement'+(aTracer.length>1?'s':'')+' en un seul coup ('+fmtKg(totalKg)+' au total) ?\n\nChacun est traité dans l\'ordre chronologique — répartition sur les producteurs, fiche de traçabilité, achats enregistrés et fiche rangée — exactement comme un traçage fait un par un. Le choix du format (normal / Cargill) se fera une seule fois à la fin, pour tout ce qui aura été tracé.', async ()=>{
+    pl.enCours = true; render();
+    let ok = 0, ko = 0; const tracesOk = [];
+    for (const ligne of aTracer){
+      const it = ocTvItemParCle(pl.coopId, ligne.cle);
+      if (!it){ ligne.statut = 'erreur'; ligne.erreur = 'connaissement introuvable (déjà traité ailleurs ?)'; ko++; render(); continue; }
+      // Recalcule la fenêtre de dates à cet instant précis : elle tient alors compte, par continuité, de tous les
+      // connaissements déjà tracés plus haut dans cette même boucle (leurs achats existent déjà dans state.achats).
+      const pf = ocTvPrefillItem(it, pl.coopId);
+      const campagneId = pf.campagneId;
+      const volumeKg = Math.round(Number(pf.volume))||0, nbSacs = Math.round(Number(pf.sacs))||0;
+      if (!campagneId){ ligne.statut = 'erreur'; ligne.erreur = 'campagne inconnue pour cette date'; ko++; render(); continue; }
+      if (!(volumeKg>0) || !(nbSacs>0)){ ligne.statut = 'erreur'; ligne.erreur = 'volume ou nombre de sacs manquant'; ko++; render(); continue; }
+      const an = ocTvAnalyseProd(pl.coopId, campagneId, volumeKg);
+      if (!an || an.aucun){ ligne.statut = 'erreur'; ligne.erreur = 'plus aucun producteur avec de la marge'; ko++; render(); continue; }
+      if (volumeKg>an.capTot){ ligne.statut = 'erreur'; ligne.erreur = 'capacité restante insuffisante ('+fmtKg(an.capTot)+')'; ko++; render(); continue; }
+      const mini = Math.min(an.besoin, an.nElig);
+      const nbProd = Math.max(mini, Math.round(Number(ligne.nbProd))||mini);
+      const r = await ocTracerCoeur(pl.coopId, campagneId, volumeKg, nbSacs, nbProd, pf.dateDebut, pf.dateFin, it, 'direct', pl.coopId, null);
+      if (!r.ok){ ligne.statut = 'erreur'; ligne.erreur = r.error; ko++; render(); continue; }
+      ligne.statut = 'trace'; ligne.nbProdUtilise = r.nbUtilises; ligne.dateDebut = pf.dateDebut; ligne.dateFin = pf.dateFin;
+      { const elig = ocProducteursEligibles(pl.coopId, campagneId, 'principale'); ligne.margeApres = elig.reduce((s,e)=>s+Math.floor(e.remaining), 0); }
+      tracesOk.push({ coopId: pl.coopId, code: it.code });
+      ok++; render();
+    }
+    pl.enCours = false;
+    showToast(ok+' connaissement(s) tracé(s)'+(ko?' · '+ko+' échec(s)':'')+'.', (ko && !ok) ? 'error' : 'success');
+    if (tracesOk.length) ocFormatFicheProposer(tracesOk, null);   // le format (normal / Cargill) se choisit une seule fois pour tout ce qui a été tracé
+    else render();
+  });
+}
+function ocTracerToutModalHtml(){
+  const m = state.modal; if (!m || m.type!=='ocTracerTout') return '';
+  const pl = m.payload, c = coopById(pl.coopId);
+  const nValide = pl.lignes.filter(l=>l.valide).length;
+  const nTrace = pl.lignes.filter(l=>l.statut==='trace').length;
+  const nErreur = pl.lignes.filter(l=>l.statut==='erreur').length;
+  const ligneHtml = l=>{
+    const peutValider = l.statut!=='trace' && !l.blocage && !pl.enCours;
+    const statutHtml = l.statut==='trace' ? '<span class="badge ok">✔ Tracé'+(l.margeApres!=null ? ' · potentiel restant '+fmtKg(l.margeApres) : '')+'</span>'
+      : l.statut==='erreur' ? '<span class="badge warn" title="'+esc(l.erreur||'')+'">✖ '+esc(l.erreur||'échec')+'</span>'
+      : l.blocage ? '<span class="hint" style="margin:0;color:#b9770e" title="'+esc(l.blocage)+'">⚠ '+esc(l.blocage)+'</span>'
+      : (l.valide ? '<span class="badge info">À tracer</span>' : '<span class="hint" style="margin:0">en attente</span>');
+    return '<tr'+(l.statut==='trace' ? ' style="background:#F2F8F4"' : (l.statut==='erreur' ? ' style="background:#FDF2F0"' : ''))+'>'
+      + '<td><b>'+esc(l.code)+'</b></td><td>'+esc(dateFr(l.iso)||l.iso||'')+'</td><td class="num">'+fmtKg(l.kg)+'</td><td class="num">'+fmtNum(l.sacs)+'</td>'
+      + '<td class="num">'+(peutValider ? '<input type="number" min="1" step="1" style="width:64px" value="'+esc(l.nbProd||'')+'" onchange="ocTracerToutNb(\''+escJs(l.cle)+'\', this.value)">' : fmtNum(l.nbProdUtilise!=null ? l.nbProdUtilise : (l.nbProd||0)))+'</td>'
+      + '<td>'+statutHtml+'</td>'
+      + '<td>'+(peutValider ? '<button type="button" class="btn'+(l.valide?' btn-primary':' btn-ghost')+' btn-compact" onclick="ocTracerToutBasculer(\''+escJs(l.cle)+'\')">'+(l.valide?'✓ Validé':'Valider')+'</button>' : '')+'</td></tr>';
+  };
+  return '<div class="modal-overlay" onclick="if(event.target===this)ocTracerToutFermer()"><div class="modal xl"><h3>⚡ Tracer tous les volumes — '+esc(c ? c.nom : pl.coopId)+'</h3>'
+    + '<div class="hint" style="margin-bottom:10px">Valide un à un les connaissements à tracer (ajuste le nombre de producteurs si besoin), puis lance le traçage groupé : chacun est traité dans l\'ordre chronologique, avec la même répartition, les mêmes règles de dates (continuité + aléatoire) et le même rangement des fiches qu\'un traçage fait à la main. Le format de téléchargement (normal / Cargill) se choisit une seule fois à la fin, pour tout ce qui a été tracé.</div>'
+    + (pl.lignes.length ? '<div id="modal-fields"><div class="achats-defile" style="max-height:52vh;overflow:auto"><table class="tbl-fiches tbl-dense"><thead><tr><th>Connaissement</th><th>Date</th><th class="num">Poids</th><th class="num">Sacs</th><th class="num">Producteurs</th><th>Statut</th><th></th></tr></thead><tbody>'
+        + pl.lignes.map(ligneHtml).join('') + '</tbody></table></div></div>'
+      : '<p class="hint">Aucun connaissement en attente de traçage pour cette coopérative.</p>')
+    + '<div class="actions">'
+    + '<span class="hint" style="margin:0 auto 0 0">'+nValide+' validé(s) sur '+pl.lignes.length+(nTrace?' · '+nTrace+' tracé(s)':'')+(nErreur?' · '+nErreur+' échec(s)':'')+'</span>'
+    + '<button type="button" class="btn btn-primary"'+((nValide && !pl.enCours) ? '' : ' disabled')+' onclick="ocTracerToutLancer()">'+(pl.enCours ? 'Traçage en cours…' : '⚡ Tracer tout ('+nValide+')')+'</button>'
+    + '<button type="button" class="btn"'+(pl.enCours ? ' disabled' : '')+' onclick="ocTracerToutFermer()">Fermer</button>'
+    + '</div></div></div>';
 }
 
 function computeRows(coopImposee){
@@ -31817,6 +31944,7 @@ function _renderBrut(){
   html += carteModalsHtml();
   html += defoModalsHtml();
   html += lotsModalsHtml();   // lots d'usinage / lots d'export / conteneurs
+  html += ocTracerToutModalHtml();   // tracer tous les volumes d'une coopérative en un seul coup
   if (state.modal && state.modal.type==='cooperative'){
     const c = state.modal.payload || {};
     const certificatFichier = (state.docCheck||[]).find(d=>d.cooperative_id===c.id && d.doc==='Certificat' && d.disponible && d.fichier_path);
