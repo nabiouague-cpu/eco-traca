@@ -4768,7 +4768,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-22-573';
+const APP_VERSION = '2026-11-22-574';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -25236,6 +25236,35 @@ function dgType(nom){
   if (/\.(kml|kmz|gpx|geojson|json|zip)$/i.test(nom)) return 'poly';
   return null;
 }
+// Décompression .rar côté navigateur (dépôts groupés) : bibliothèque chargée à la demande, une seule fois.
+let _unrarChargement = null;
+async function chargerUnrar(){
+  if (!_unrarChargement){
+    _unrarChargement = (async () => {
+      const base = 'https://cdn.jsdelivr.net/npm/node-unrar-js@2.0.2';
+      const [lib, wasmResp] = await Promise.all([
+        import(base+'/+esm'),
+        fetch(base+'/dist/js/unrar.wasm')
+      ]);
+      if (!wasmResp.ok) throw new Error('bibliothèque de décompression RAR indisponible (connexion internet requise)');
+      const wasmBinary = await wasmResp.arrayBuffer();
+      return { lib, wasmBinary };
+    })().catch(e=>{ _unrarChargement = null; throw e; });
+  }
+  return _unrarChargement;
+}
+async function extraireRar(file){
+  const { lib, wasmBinary } = await chargerUnrar();
+  const data = await file.arrayBuffer();
+  const extractor = await lib.createExtractorFromData({ data, wasmBinary });
+  const { files } = extractor.extract();
+  const sortie = [];
+  for (const f of files){
+    if (!f.fileHeader || f.fileHeader.flags.directory || !f.extraction) continue;
+    sortie.push({ chemin:f.fileHeader.name, blob:new Blob([f.extraction]) });
+  }
+  return sortie;
+}
 function dgRegistreOrigen(coop){
   if (!coop) return null;
   const L = (state.defo||[]).filter(z=>z.etape==='plan' && z.entrees && z.entrees.gmr && z.entrees.gmr.path && (z.cooperative_id===coop.id || String(z.cooperative_nom||'').trim().toLowerCase()===String(coop.nom||'').trim().toLowerCase()))
@@ -25278,6 +25307,11 @@ async function dgLire(input){
   try {
     for (const f of fl){
       const rel = f.webkitRelativePath || f.name;
+      if (/\.rar$/i.test(f.name)){
+        try { const extraits = await extraireRar(f); for (const s of extraits) ajouter(s.chemin.split('/').pop(), f.name.replace(/\.rar$/i,'')+'/'+s.chemin, s.blob); }
+        catch(e){ ign.push(f.name+' (RAR non décompressé : '+((e&&e.message)||e)+')'); }
+        continue;
+      }
       if (/\.zip$/i.test(f.name) && typeof JSZip!=='undefined'){
         let z = null; try { z = await JSZip.loadAsync(f); } catch(e){ z = null; }
         if (z){
@@ -25441,7 +25475,11 @@ async function bdgLire(input){
   try{
     for (const f of fl){
       const rel = f.webkitRelativePath || f.name;
-      if (/\.rar$/i.test(f.name)){ if (rars.length<12) rars.push(f.name); continue; }
+      if (/\.rar$/i.test(f.name)){
+        try { const extraits = await extraireRar(f); for (const s of extraits) ajouter(s.chemin.split('/').pop(), f.name.replace(/\.rar$/i,'')+'/'+s.chemin, s.blob); }
+        catch(e){ if (rars.length<12) rars.push(f.name+' ('+((e&&e.message)||e)+')'); }
+        continue;
+      }
       if (/\.zip$/i.test(f.name) && typeof JSZip!=='undefined'){
         let z = null; try { z = await JSZip.loadAsync(f); } catch(e){ z = null; }
         if (z){ for (const n of Object.keys(z.files)){ if (z.files[n].dir) continue; ajouter(n.split('/').pop(), f.name.replace(/\.zip$/i,'')+'/'+n, await z.files[n].async('blob')); } continue; }
@@ -25464,7 +25502,7 @@ async function bdgLire(input){
 function bdgRendre(){
   const zone = document.getElementById('bdg-liste'), D = window._bdg; if (!zone || !D) return;
   const coops = '<datalist id="bdg-coops">'+[...state.cooperatives].sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr')).map(c=>'<option value="'+esc(c.nom)+'"></option>').join('')+'</datalist>';
-  const rarMsg = (D.rars && D.rars.length) ? '<p class="hint" style="color:#9a6700">ORIGEN ne peut pas lire les fichiers .rar ('+D.rars.map(n=>esc(n)).join(', ')+') : décompresse-le d\'abord (WinRAR, 7-Zip, Archive Utility…) puis dépose le dossier obtenu, ou reconvertis-le en .zip.</p>' : '';
+  const rarMsg = (D.rars && D.rars.length) ? '<p class="hint" style="color:#9a6700">Échec de décompression : '+D.rars.map(n=>esc(n)).join(', ')+'. Réessaie, ou dépose-le en .zip (ou le dossier déjà décompressé).</p>' : '';
   if (!D.groupes.length && !D.inconnus.length){
     let msg;
     if (D.vusTotal && D.rars && D.rars.length===D.vusTotal){
@@ -25552,18 +25590,18 @@ async function bdgLancer(){
 }
 function bddModalGroupeHtml(){
   return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:760px"><h3>Dépôt groupé — base de données coopératives</h3><div id="modal-fields">'
-    + '<p class="hint" style="margin:0 0 8px">Dépose le registre et la géolocalisation déjà finalisés (issus d\'une analyse déforestation terminée) de plusieurs coopératives en une fois. ORIGEN reconnaît chaque coopérative au nom des fichiers, les dépose dans sa base de données et crée la notification pour la campagne 2026-2027 — comme le dépôt un par un ci-dessus, mais pour toutes en même temps. L\'import vers la liste des producteurs reste à faire ensuite, coopérative par coopérative, avec « Importer vers producteurs » dans le tableau du bas. Un .rar doit d\'abord être converti en .zip.</p>'
+    + '<p class="hint" style="margin:0 0 8px">Dépose le registre et la géolocalisation déjà finalisés (issus d\'une analyse déforestation terminée) de plusieurs coopératives en une fois. ORIGEN reconnaît chaque coopérative au nom des fichiers, les dépose dans sa base de données et crée la notification pour la campagne 2026-2027 — comme le dépôt un par un ci-dessus, mais pour toutes en même temps. L\'import vers la liste des producteurs reste à faire ensuite, coopérative par coopérative, avec « Importer vers producteurs » dans le tableau du bas. Un .rar est aussi décompressé automatiquement.</p>'
     + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">'
     + '<label class="field">Dossier <span class="hint" style="margin:0">(sélectionne un dossier entier, pas besoin de zipper)</span><input type="file" id="bdg-dossier" webkitdirectory multiple onchange="bdgLire(this)"></label>'
-    + '<label class="field">Ou fichiers / ZIP <span class="hint" style="margin:0">(si tu préfères choisir les fichiers un par un, ou déposer un .zip)</span><input type="file" id="bdg-fichiers" multiple accept=".zip,.xlsx,.xlsm,.geojson,.json" onchange="bdgLire(this)"></label>'
+    + '<label class="field">Ou fichiers / ZIP <span class="hint" style="margin:0">(si tu préfères choisir les fichiers un par un, ou déposer un .zip/.rar)</span><input type="file" id="bdg-fichiers" multiple accept=".zip,.rar,.xlsx,.xlsm,.geojson,.json" onchange="bdgLire(this)"></label>'
     + '</div>'
     + '<div id="bdg-liste" style="max-height:48vh;overflow:auto;margin-top:8px"><p class="hint">Choisis un dossier entier, un ZIP, ou plusieurs fichiers : ORIGEN reconnaît chaque coopérative au nom des fichiers.</p></div>'
     + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" id="bdg-lancer" onclick="bdgLancer()">Envoyer</button></div></div></div>';
 }
 function defoModalGroupeHtml(){
   return '<div class="modal-overlay sans-anim" onclick="if(event.target===this){closeModal();}"><div class="modal sans-anim" style="max-width:760px"><h3>Dépôt groupé de coopératives</h3><div id="modal-fields">'
-    + '<p class="hint" style="margin:0 0 8px">Dépose un <b>ZIP</b> (ou choisis plusieurs fichiers) contenant les polygones de plusieurs coopératives, avec ou sans leur registre. ORIGEN reconnaît chaque coopérative au nom des fichiers (ou du dossier), retrouve son registre (dans le dépôt, sinon le dernier déposé dans ORIGEN) et lance une analyse par coopérative. Rien n\'est supprimé : tu verras ensuite les problèmes, coopérative par coopérative. Un .rar doit d\'abord être converti en .zip.</p>'
-    + '<label class="field">Fichiers <input type="file" id="dg-fichiers" multiple accept=".zip,.geojson,.json,.kml,.kmz,.gpx,.xlsx,.xlsm,.shp,.shx,.dbf,.prj,.csv" onchange="dgLire(this)"></label>'
+    + '<p class="hint" style="margin:0 0 8px">Dépose un <b>ZIP</b> (ou choisis plusieurs fichiers) contenant les polygones de plusieurs coopératives, avec ou sans leur registre. ORIGEN reconnaît chaque coopérative au nom des fichiers (ou du dossier), retrouve son registre (dans le dépôt, sinon le dernier déposé dans ORIGEN) et lance une analyse par coopérative. Rien n\'est supprimé : tu verras ensuite les problèmes, coopérative par coopérative. Un .rar est aussi décompressé automatiquement.</p>'
+    + '<label class="field">Fichiers <input type="file" id="dg-fichiers" multiple accept=".zip,.rar,.geojson,.json,.kml,.kmz,.gpx,.xlsx,.xlsm,.shp,.shx,.dbf,.prj,.csv" onchange="dgLire(this)"></label>'
     + '<div id="dg-liste" style="max-height:48vh;overflow:auto;margin-top:8px"><p class="hint">Choisis un ZIP (ou plusieurs fichiers) : ORIGEN reconnaît chaque coopérative au nom des fichiers.</p></div>'
     + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" id="dg-lancer" onclick="dgLancer()">Lancer les analyses</button></div></div></div>';
 }
