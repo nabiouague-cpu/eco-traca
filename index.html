@@ -4768,7 +4768,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-22-571';
+const APP_VERSION = '2026-11-22-572';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -25431,11 +25431,11 @@ function bdgType(nom){
 }
 function ouvrirBddGroupe(){ window._bdg = { groupes:[], inconnus:[] }; openModal('bddGroupe', {}); }
 async function bdgLire(input){
-  const fl = Array.from((input||{}).files||[]), ent = [];
+  const fl = Array.from((input||{}).files||[]), ent = [], vusIgnores = [];
   const zone = document.getElementById('bdg-liste'); if (zone) zone.innerHTML = '<p class="hint">Lecture des fichiers…</p>';
   const ajouter = (nom, chemin, blob)=>{
     if (/(^|\/)(__MACOSX|\.)|(^|\/)~\$|Thumbs\.db$|\.DS_Store$/i.test(chemin)) return;
-    const t = bdgType(nom); if (!t) return;
+    const t = bdgType(nom); if (!t){ if (vusIgnores.length<12) vusIgnores.push(nom); return; }
     ent.push({ nom, chemin, dossiers:chemin.split('/').filter(Boolean).slice(0,-1), blob, taille:blob.size, type:t });
   };
   try{
@@ -25457,13 +25457,23 @@ async function bdgLire(input){
     if (memes.size===1) G.get(Array.from(memes)[0]).files.push(f); else inconnus.push(f);
   });
   const groupes = Array.from(G.values()).sort((a,b)=>String(a.nom).localeCompare(String(b.nom),'fr'));
-  window._bdg = { groupes, inconnus };
+  window._bdg = { groupes, inconnus, vusTotal: fl.length, vusIgnores };
   bdgRendre();
 }
 function bdgRendre(){
   const zone = document.getElementById('bdg-liste'), D = window._bdg; if (!zone || !D) return;
   const coops = '<datalist id="bdg-coops">'+[...state.cooperatives].sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||''),'fr')).map(c=>'<option value="'+esc(c.nom)+'"></option>').join('')+'</datalist>';
-  if (!D.groupes.length && !D.inconnus.length){ zone.innerHTML = coops+'<p class="hint">Choisis un dossier entier, un ZIP, ou plusieurs fichiers : ORIGEN reconnaît chaque coopérative au nom des fichiers.</p>'; return; }
+  if (!D.groupes.length && !D.inconnus.length){
+    let msg;
+    if (D.vusTotal){
+      msg = '<p class="hint" style="color:#9a6700">'+D.vusTotal+' fichier'+(D.vusTotal>1?'s':'')+' vu'+(D.vusTotal>1?'s':'')+' dans ce dossier, mais aucun n\'est un registre (.xlsx/.xlsm) ni une géolocalisation (.geojson) reconnu par ORIGEN'
+        + (D.vusIgnores && D.vusIgnores.length ? ' : '+D.vusIgnores.map(n=>esc(n)).join(', ')+(D.vusTotal>D.vusIgnores.length?'…':'') : '')
+        + '.</p>';
+    } else {
+      msg = '<p class="hint">Choisis un dossier entier, un ZIP, ou plusieurs fichiers : ORIGEN reconnaît chaque coopérative au nom des fichiers.</p>';
+    }
+    zone.innerHTML = coops+msg; return;
+  }
   let h = coops;
   D.groupes.forEach((g,i)=>{
     const reg = g.files.filter(f=>f.type==='registre').sort((a,b)=>b.taille-a.taille), geo = g.files.filter(f=>f.type==='geolocalisation').sort((a,b)=>b.taille-a.taille);
