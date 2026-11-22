@@ -165,10 +165,12 @@
 
   .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px;}
   .cards.cinq{grid-template-columns:repeat(5,1fr);}
-  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;transition:transform .12s ease-out,box-shadow .12s ease-out;will-change:transform;}
   .card .label{font-size:12px;color:var(--ink-soft);margin-bottom:6px;}
   .card .value{font-family:var(--mono);font-size:22px;font-weight:500;}
   .card.alert .value{color:var(--danger);}
+  /* Effet 3D (inclinaison vers le curseur) pose par JS via la classe ci-dessous : voir ocInstallerTilt3D(). */
+  .tilt-3d{box-shadow:0 14px 28px -12px rgba(15,35,32,.22);}
 
   .panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:20px;}
   .panel-head{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid var(--border);flex-wrap:wrap;gap:8px;}
@@ -1807,7 +1809,7 @@
   .rech-vide{padding:26px 12px;text-align:center;color:var(--ink-faint);}
   /* ---- Cockpit du tableau de bord ---- */
   .ckpt{display:grid;grid-template-columns:repeat(6,1fr);gap:14px;margin-bottom:22px;}
-  .ckpt-tuile{position:relative;background:var(--surface);border:1px solid #E6EAE8;border-radius:14px;padding:16px 18px 14px;box-shadow:var(--shadow-sm);min-width:0;display:flex;flex-direction:column;gap:6px;transition:box-shadow .2s,transform .2s;}
+  .ckpt-tuile{position:relative;background:var(--surface);border:1px solid #E6EAE8;border-radius:14px;padding:16px 18px 14px;box-shadow:var(--shadow-sm);min-width:0;display:flex;flex-direction:column;gap:6px;transition:box-shadow .12s ease-out,transform .12s ease-out;will-change:transform;}
   .ckpt-tuile:hover{box-shadow:var(--shadow-md);transform:translateY(-1px);}
   .ckpt-large{grid-column:span 2;}
   .ckpt .k{font-size:11px;text-transform:uppercase;letter-spacing:.07em;font-weight:600;color:var(--ink-faint);}
@@ -4832,7 +4834,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-22-580';
+const APP_VERSION = '2026-11-22-581';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -6638,6 +6640,38 @@ function ocAllerProducteur(id){
     if (e.target.closest && (e.target.closest('.tb-notif')||e.target.closest('.tb-user'))) return;
     ocFermerSurcouches(); render();
   });
+})();
+// Effet 3D (inclinaison vers le curseur) sur les tuiles chiffrees (.cards .card, .ckpt-tuile) : la tuile
+// s'incline legerement vers le pointeur, comme une carte physique qu'on fait pivoter dans la main.
+// Delegue sur tout le document (installe une seule fois) car le contenu est entierement redessine a
+// chaque render() -- des ecouteurs poses tuile par tuile seraient perdus a chaque redessin.
+(function(){
+  if (window._ocTilt3DInstallee) return; window._ocTilt3DInstallee = true;
+  const SELECTEUR_TILT = '.cards .card, .ckpt-tuile';
+  const AMPLITUDE_DEG = 7;
+  let tuileActive = null;
+  function reduitMouvement(){ return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches; }
+  function remettreAPlat(el){ el.style.transform = ''; el.classList.remove('tilt-3d'); }
+  document.addEventListener('pointermove', e=>{
+    if (e.pointerType==='touch' || reduitMouvement()) return;
+    const el = e.target.closest ? e.target.closest(SELECTEUR_TILT) : null;
+    if (!el){
+      if (tuileActive) { remettreAPlat(tuileActive); tuileActive = null; }
+      return;
+    }
+    if (tuileActive && tuileActive!==el) remettreAPlat(tuileActive);
+    tuileActive = el;
+    const r = el.getBoundingClientRect();
+    const px = (e.clientX - r.left) / r.width;
+    const py = (e.clientY - r.top) / r.height;
+    const ry = (px - 0.5) * 2 * AMPLITUDE_DEG;
+    const rx = (0.5 - py) * 2 * AMPLITUDE_DEG;
+    el.classList.add('tilt-3d');
+    el.style.transform = 'perspective(700px) rotateX('+rx.toFixed(2)+'deg) rotateY('+ry.toFixed(2)+'deg) translateZ(4px)';
+  });
+  document.addEventListener('pointerleave', e=>{
+    if (tuileActive){ remettreAPlat(tuileActive); tuileActive = null; }
+  }, true);
 })();
 // ---- Barre laterale v2 ----
 const SIDEBAR_GROUPES = [
