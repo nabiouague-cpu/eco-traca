@@ -4881,7 +4881,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-23-588';
+const APP_VERSION = '2026-11-23-589';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -15174,6 +15174,93 @@ function renderDossierRdue(){
     + noms.map((t,i)=>'<div class="pt '+(i+1<et?'fait':(i+1===et?'encours':'attente'))+'" onclick="rdueEtape('+(i+1)+')"><b>'+(i+1<et?'✓':(i+1))+'</b>'+esc(t)+'</div>').join('<div class="pl"></div>')+'</div></div>';
   return h + (et===1 ? rdueEtape1(clients) : et===2 ? rdueEtape2() : et===3 ? rdueEtape3() : rdueEtape4());
 }
+// ---- Dossier par traitant : qui livre à quel client final (ACT, Cargill, ...), via quel traitant, coopérative par coopérative ----
+// Vue de lecture seule pour préparer le dossier de conformité RDUE : aucune écriture en base, aucun téléchargement automatique — c'est l'utilisateur
+// qui lance les téléchargements (fiches de traçabilité, liasses documentaires) depuis les écrans existants. S'appuie sur les données déjà en place :
+// - l'affiliation traitant <-> coopérative (ocPartenairesGroupes : table traitant_cooperatives + sites_usinage) ;
+// - nos propres déchargements (achats) pour le client que NOUS servons (le plus souvent ACT) ;
+// - le fichier renvoyé par le traitant pour ses propres achats (connaissements_externes, colonne « Client final ») : ex. ce qu'Awahus achète en
+//   propre et revend à Cargill, que nous n'achetons pas chez eux, mais qu'on veut quand même voir rangé ici, à côté du reste.
+let _dotrCache = null;
+function dossierTraitantCalcul(){
+  const cle = [(state.achats||[]).length, (state.connExt||[]).length, (state.traitantCoops||[]).length, (state.sitesUsinage||[]).length, (state.tracaSim||[]).length, (state.cooperatives||[]).length].join('|');
+  if (_dotrCache && _dotrCache.cle===cle) return _dotrCache.res;
+  const achatsUtiles = (state.achats||[]).filter(a=>!a.producteur_id && !a.refoulee && a.connaissement && a.usine_dechargement);
+  const infoCamions = liasseClientsParCamion(achatsUtiles), clientsCamion = infoCamions.clients;
+  const tracesParCoop = new Map();
+  (state.achats||[]).forEach(a=>{ if (a.producteur_id && a.connaissement){ if (!tracesParCoop.has(a.cooperative_id)) tracesParCoop.set(a.cooperative_id, new Set()); tracesParCoop.get(a.cooperative_id).add(String(a.connaissement).trim()); } });
+  const simeParCoop = new Map();
+  (state.tracaSim||[]).forEach(r=>{ if (!simeParCoop.has(r.cooperative_id)) simeParCoop.set(r.cooperative_id, new Set()); simeParCoop.get(r.cooperative_id).add(r.serie+'-'+r.seq); });
+  const achatsParCoop = new Map();
+  achatsUtiles.forEach(a=>{ if (!achatsParCoop.has(a.cooperative_id)) achatsParCoop.set(a.cooperative_id, []); achatsParCoop.get(a.cooperative_id).push(a); });
+  const res = ocPartenairesGroupes().map(g=>{
+    const T = { traitant:g.cle, clients:{}, n:0, nTrace:0, nSimule:0, nATracer:0, kg:0 };
+    const ajoute = (client, coopNom, ligne)=>{
+      const C = T.clients[client] = T.clients[client] || { client, coops:{}, n:0, nTrace:0, nSimule:0, nATracer:0, kg:0 };
+      const K = C.coops[coopNom] = C.coops[coopNom] || { coop:coopNom, lignes:[], n:0, nTrace:0, nSimule:0, nATracer:0, kg:0 };
+      K.lignes.push(ligne);
+      [C,K].forEach(o=>{ o.n++; o.kg += ligne.kg; if (ligne.statut==='trace') o.nTrace++; else if (ligne.statut==='simule') o.nSimule++; else o.nATracer++; });
+    };
+    Array.from(g.coops.keys()).forEach(coopId=>{
+      const coop = coopById(coopId), coopNom = coop ? coop.nom : coopId;
+      (achatsParCoop.get(coopId)||[]).forEach(a=>{
+        const client = clientsCamion[a.id] || achatClientEffectif(a) || 'Client non indiqué';
+        const trace = (tracesParCoop.get(coopId)||new Set()).has(String(a.connaissement).trim());
+        ajoute(client, coopNom, { cn:a.connaissement, date:a.date, kg:Number(a.poids_net_produit)||0, statut: trace ? 'trace' : 'atracer', source:'nous' });
+      });
+      (state.connExt||[]).filter(x=>x.cooperative_id===coopId && x.code).forEach(x=>{
+        const client = String(x.client_final||'').trim() || 'Client non indiqué';
+        const c = ocSimAnalyseCode(x.code);
+        const trace = (tracesParCoop.get(coopId)||new Set()).has(String(x.code).trim());
+        const simule = !trace && !!c && (simeParCoop.get(coopId)||new Set()).has(c.cle+'-'+c.seq);
+        ajoute(client, coopNom, { cn:x.code, date:x.date, kg:Number(x.kg)||0, statut: trace ? 'trace' : (simule ? 'simule' : 'atracer'), source:'traitant' });
+      });
+    });
+    const clients = Object.values(T.clients);
+    T.n = clients.reduce((s,C)=>s+C.n,0); T.kg = clients.reduce((s,C)=>s+C.kg,0);
+    T.nTrace = clients.reduce((s,C)=>s+C.nTrace,0); T.nSimule = clients.reduce((s,C)=>s+C.nSimule,0); T.nATracer = clients.reduce((s,C)=>s+C.nATracer,0);
+    return T;
+  }).filter(T=>T.n>0).sort((a,b)=>a.traitant.localeCompare(b.traitant,'fr'));
+  _dotrCache = { cle, res }; return res;
+}
+function dotrBasculer(cle){ state.dotrOuverts = state.dotrOuverts || {}; state.dotrOuverts[cle] = !state.dotrOuverts[cle]; render(); }
+function dotrPastilleEtat(st){
+  return st==='trace' ? '<span style="display:inline-block;padding:2px 9px;border-radius:12px;background:#E6F4EA;color:#1F6E5C;font-size:11.5px;font-weight:600">Tracé</span>'
+    : st==='simule' ? '<span style="display:inline-block;padding:2px 9px;border-radius:12px;background:#E0F0FF;color:#0B5FA8;font-size:11.5px;font-weight:600">Simulé</span>'
+    : '<span style="display:inline-block;padding:2px 9px;border-radius:12px;background:#FDE8E8;color:#B42318;font-size:11.5px;font-weight:600">À tracer</span>';
+}
+function dotrCompte(o){
+  return '<span style="color:#1F6E5C;font-weight:600">'+o.nTrace+'</span> tracé(s)'+(o.nSimule?' · <span style="color:#0B5FA8;font-weight:600">'+o.nSimule+'</span> simulé(s)':'')+' · <span style="color:#B42318;font-weight:600">'+o.nATracer+'</span> à tracer <span class="hint">sur '+o.n+' · '+fmtKg(o.kg)+'</span>';
+}
+function renderDossierTraitant(){
+  const data = dossierTraitantCalcul();
+  if (!data.length) return '<div class="panel"><div class="hint" style="padding:12px 0">Aucune livraison rattachée à un traitant pour le moment.</div></div>';
+  const filtre = state.dotrTraitant || '', noms = data.map(t=>t.traitant);
+  let html = '<div class="panel" style="margin-bottom:14px"><h3 style="margin:0 0 4px">Dossier de traçabilité par traitant</h3>'
+    + '<div class="hint">Les coopératives livrées, groupées par traitant puis par client final (ACT, Cargill, …), avec leur état de traçabilité. Vue de lecture : rien n\'est téléchargé ni modifié ici — les fiches de traçabilité et les liasses documentaires se téléchargent depuis les Dossiers de traçabilité et les Liasses documentaires.</div></div>'
+    + '<div class="oc-subtabs" style="margin:0 0 12px"><button class="'+(filtre?'':'active')+'" onclick="state.dotrTraitant=\'\';render()">Tous les traitants</button>'
+    + noms.map(n=>'<button class="'+(filtre===n?'active':'')+'" onclick="state.dotrTraitant=\''+escJs(n)+'\';render()">'+esc(n)+'</button>').join('')+'</div>';
+  data.filter(T=>!filtre || T.traitant===filtre).forEach(T=>{
+    html += '<div class="panel" style="margin:0 0 14px;padding:14px 18px"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><h3 style="margin:0">'+esc(T.traitant)+'</h3><div>'+dotrCompte(T)+'</div></div>';
+    Object.keys(T.clients).sort((a,b)=>a.localeCompare(b,'fr')).forEach(cn=>{
+      const C = T.clients[cn];
+      html += '<div style="margin:10px 0 0 12px;padding-top:8px;border-top:1px solid var(--border)"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><span><b>'+esc(cn)+'</b></span><span>'+dotrCompte(C)+'</span></div>';
+      Object.keys(C.coops).sort((a,b)=>a.localeCompare(b,'fr')).forEach(coopNom=>{
+        const K = C.coops[coopNom], cle2 = T.traitant+'|'+cn+'|'+coopNom, ouvert = !!(state.dotrOuverts||{})[cle2];
+        html += '<div style="margin:8px 0 0 16px"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;cursor:pointer" onclick="dotrBasculer(\''+escJs(cle2)+'\')"><span>'+(ouvert?'▾':'▸')+' '+esc(coopNom)+'</span><span>'+dotrCompte(K)+'</span></div>';
+        if (ouvert){
+          html += '<table class="data-table" style="margin:6px 0 4px 18px;width:auto;min-width:420px"><thead><tr><th>Connaissement</th><th>Déchargé le</th><th class="num">Poids net (kg)</th><th>État</th></tr></thead><tbody>'
+            + K.lignes.slice().sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))).map(l=>'<tr><td>'+esc(l.cn)+'</td><td>'+esc(dateFr(l.date))+'</td><td class="num">'+fmtNum(l.kg)+'</td><td>'+dotrPastilleEtat(l.statut)+'</td></tr>').join('')
+            + '</tbody></table>';
+        }
+        html += '</div>';
+      });
+      html += '</div>';
+    });
+    html += '</div>';
+  });
+  return html;
+}
 // Onglet « Traçage de volume » : un seul endroit pour les dossiers par coopérative, les volumes à tracer, les coopératives à classer et la chaîne de traçage.
 // Chaque rubrique s'ouvre en un clic et se referme en recliquant dessus.
 function ocTracageSousDefaut(){ return ocTracageCourant() ? 'tracer' : 'dossiers'; }
@@ -15181,15 +15268,21 @@ function ocTracageSousActif(){ return state.tracageSous===undefined ? ocTracageS
 function ocTracageSous(k){ state.tracageSous = (ocTracageSousActif()===k) ? '' : k; render(); }
 function ocAllerTracage(k){ state.tracageMode = 'simple'; ocFermerSurcouches(); state.recherche = null; state.coopDashboardId = null; state.tab = 'tracage'; state.tracageSous = k; state.animEntree = true; render(); }
 function ocTracageMode(k){ state.tracageMode = k; render(); }
+function ocModeOngletsHtml(actif){
+  return '<div class="oc-subtabs" style="margin:10px 0 4px"><button class="'+(actif==='simple'?'active':'')+'" onclick="ocTracageMode(\'simple\')">Traçage de volume</button><button class="'+(actif==='rdue'?'active':'')+'" onclick="ocTracageMode(\'rdue\')">📋 Dossier de conformité RDUE</button><button class="'+(actif==='traitant'?'active':'')+'" onclick="ocTracageMode(\'traitant\')">🗂️ Dossier par traitant</button></div>';
+}
 function renderTracageTab(){
   if (state.tracageMode==='rdue'){
-    return '<div class="panel" style="padding-bottom:6px"><div class="panel-head"><div><h2>Traçage &amp; dossier RDUE</h2></div></div><div class="oc-subtabs" style="margin:10px 0 4px"><button onclick="ocTracageMode(\'simple\')">Traçage de volume</button><button class="active" onclick="ocTracageMode(\'rdue\')">📋 Dossier de conformité RDUE</button></div></div>' + renderDossierRdue();
+    return '<div class="panel" style="padding-bottom:6px"><div class="panel-head"><div><h2>Traçage &amp; dossier RDUE</h2></div></div>' + ocModeOngletsHtml('rdue') + '</div>' + renderDossierRdue();
+  }
+  if (state.tracageMode==='traitant'){
+    return '<div class="panel" style="padding-bottom:6px"><div class="panel-head"><div><h2>Traçage &amp; dossier RDUE</h2></div></div>' + ocModeOngletsHtml('traitant') + '</div>' + renderDossierTraitant();
   }
   const actif = ocTracageSousActif(), tr = ocTracageCourant();
   const nDoss = ocDossiersTotalATracer(), nVus = saigicATracerListe().length + extATracerListe().length, nCl = coopsAClasser().length;
   const onglets = [['dossiers','📁 Dossiers de traçabilité', nDoss], ['atracer','📦 Volumes à tracer', nVus], ['classer','🆕 Coopératives à classer', nCl], ['tracer','⛓ Tracer un volume'+(tr ? ' (en cours)' : ''), 0]];
   let html = ocUrgenceHtml() + '<div class="panel" style="padding-bottom:6px"><div class="panel-head"><div><h2>Traçage &amp; dossier RDUE</h2><p style="margin:2px 0 0;color:var(--ink-soft);font-size:13px">Tout ce qui concerne la traçabilité au même endroit. Clique sur une rubrique pour l\'ouvrir, reclique dessus pour la refermer.</p></div></div>'
-    + '<div class="oc-subtabs" style="margin:10px 0 4px"><button class="active" onclick="ocTracageMode(\'simple\')">Traçage de volume</button><button onclick="ocTracageMode(\'rdue\')">📋 Dossier de conformité RDUE</button></div>'
+    + ocModeOngletsHtml('simple')
     + '<div class="oc-subtabs" style="margin:10px 0 4px">'
     + onglets.map(([id,l,n])=>'<button class="'+(actif===id?'active':'')+'" onclick="ocTracageSous(\''+id+'\')">'+l+(n>0 ? ' <span class="oc-pastille">'+n+'</span>' : '')+'</button>').join('')
     + '</div></div>';
