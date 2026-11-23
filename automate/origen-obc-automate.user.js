@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.55
+// @version      0.4.56
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.55';
+  const VERSION = '0.4.56';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -1122,7 +1122,10 @@
     fixerCampagne(e);
     await listeStable(q('#txtpesee_brousse_idAdd'));
     await setSelectTexte(q('#txtpesee_brousse_idAdd'), lot.pesee.code, 'Pesée brousse');
-    await dormir(1500);
+    // Après le choix de la pesée, OBC résout le fournisseur du bordereau à partir d'elle (pas de champ Fournisseur
+    // direct sur ce formulaire) : 1,5 s ne suffisait pas toujours (23/11/2026, « fournisseur du bordereau introuvable »
+    // sur SC082296-2026-2-8, alors que deux connaissements voisins de la même coopérative venaient de réussir).
+    await dormir(3000);
     setInput(q('#txtbordereau_reception_dateAdd'), isoDate(b.date)); setInput(q('#txtbordereau_reception_numeroAdd'), b.numero);
     setInput(q('#txtbordereau_reception_pu_commoditeAdd'), num(b.pu_commodite)); setInput(q('#txtbordereau_reception_retenue_pu_bicAdd'), num(b.pu_bic));
     setInput(q('#txtbordereau_reception_retenue_pu_mandatAdd'), '0'); setInput(q('#txtbordereau_reception_retenue_pu_miseencompteAdd'), '0');
