@@ -4881,7 +4881,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-23-592';
+const APP_VERSION = '2026-11-23-593';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -18155,7 +18155,11 @@ function ocTracerToutRefaireIntervalle(cle){
 async function ocTracerToutLancer(){
   const pl = state.modal && state.modal.type==='ocTracerTout' ? state.modal.payload : null; if (!pl || pl.enCours) return;
   const aTracer = pl.lignes.filter(l=>l.valide && !l.blocage && l.statut!=='trace');
-  if (!aTracer.length){ showToast('Valide au moins un connaissement avant de lancer le traçage.'); return; }
+  if (!aTracer.length){
+    const dejaTout = pl.lignes.some(l=>l.valide) && pl.lignes.filter(l=>l.valide).every(l=>l.statut==='trace');
+    showToast(dejaTout ? 'Tout ce qui a été validé est déjà tracé.' : 'Valide au moins un connaissement avant de lancer le traçage.');
+    return;
+  }
   const totalKg = aTracer.reduce((s,l)=>s+(Number(l.kg)||0),0);
   askConfirm('Tracer '+aTracer.length+' connaissement'+(aTracer.length>1?'s':'')+' en un seul coup ('+fmtKg(totalKg)+' au total) ?\n\nChacun est traité dans l\'ordre chronologique — répartition sur les producteurs, fiche de traçabilité, achats enregistrés et fiche rangée — exactement comme un traçage fait un par un. Les intervalles de dates affichés ci-dessus sont ceux qui seront vraiment utilisés (aucun nouveau tirage à l\'exécution). Le choix du format (normal / Cargill) se fera une seule fois à la fin, pour tout ce qui aura été tracé.', async ()=>{
     pl.enCours = true; render();
@@ -18205,6 +18209,11 @@ function ocTracerToutModalHtml(){
   const nValide = pl.lignes.filter(l=>l.valide).length;
   const nTrace = pl.lignes.filter(l=>l.statut==='trace').length;
   const nErreur = pl.lignes.filter(l=>l.statut==='erreur').length;
+  // Ce qui reste VRAIMENT à tracer si on clique sur « Tracer tout » maintenant : les lignes déjà tracées restent
+  // « validées » (l.valide ne redescend jamais à false une fois le camion tracé), donc nValide à lui seul ne dit pas
+  // si le bouton a encore quelque chose à faire. Même filtre que ocTracerToutLancer, pour que le bouton (son
+  // compteur et le fait qu'il soit cliquable) corresponde exactement à ce qui va effectivement se passer.
+  const nATracer = pl.lignes.filter(l=>l.valide && !l.blocage && l.statut!=='trace').length;
   // Volume de base de la coopérative (sa capacité de production, pas seulement ce qu'elle a déjà livré) et ce
   // qui a déjà été acheté/tracé toutes périodes confondues — Nabi veut voir ces deux chiffres avant de valider.
   const st = coopStats(pl.coopId);
@@ -18257,7 +18266,7 @@ function ocTracerToutModalHtml(){
       : '<p class="hint">Aucun connaissement en attente de traçage pour cette coopérative.</p>')
     + '<div class="actions">'
     + '<span class="hint" style="margin:0 auto 0 0">'+nValide+' validé(s) sur '+pl.lignes.length+(nTrace?' · '+nTrace+' tracé(s)':'')+(nErreur?' · '+nErreur+' échec(s)':'')+'</span>'
-    + '<button type="button" class="btn btn-primary"'+((nValide && !pl.enCours) ? '' : ' disabled')+' onclick="ocTracerToutLancer()">'+(pl.enCours ? 'Traçage en cours…' : '⚡ Tracer tout ('+nValide+')')+'</button>'
+    + '<button type="button" class="btn btn-primary"'+((nATracer && !pl.enCours) ? '' : ' disabled')+' onclick="ocTracerToutLancer()">'+(pl.enCours ? 'Traçage en cours…' : '⚡ Tracer tout ('+nATracer+')')+'</button>'
     + '<button type="button" class="btn"'+(pl.enCours ? ' disabled' : '')+' onclick="ocTracerToutFermer()">Fermer</button>'
     + '</div></div></div>';
 }
