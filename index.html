@@ -4881,7 +4881,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-23-589';
+const APP_VERSION = '2026-11-23-590';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -15187,6 +15187,18 @@ function dossierTraitantCalcul(){
   if (_dotrCache && _dotrCache.cle===cle) return _dotrCache.res;
   const achatsUtiles = (state.achats||[]).filter(a=>!a.producteur_id && !a.refoulee && a.connaissement && a.usine_dechargement);
   const infoCamions = liasseClientsParCamion(achatsUtiles), clientsCamion = infoCamions.clients;
+  // Dernier maillon de la chaîne : à quel(s) lot(s) de transit (OT) ce camion a-t-il fini par contribuer ?
+  // achat -> lots_usinage_achats (lot d'usinage) -> lots_export_usinage (OT). N'existe que pour nos propres achats
+  // (un camion acheté directement par le traitant pour son propre client, ex. Cargill via Awahus, ne passe jamais par nos lots.)
+  const lotsParAchat = new Map();
+  (state.lotsUsinageAchats||[]).forEach(x=>{ if (!lotsParAchat.has(x.achat_id)) lotsParAchat.set(x.achat_id, []); lotsParAchat.get(x.achat_id).push(x.lot_id); });
+  const otsParLot = new Map();
+  (state.lotsExportUsinage||[]).forEach(x=>{ if (!otsParLot.has(x.lot_usinage_id)) otsParLot.set(x.lot_usinage_id, []); otsParLot.get(x.lot_usinage_id).push(x.lot_export_id); });
+  const otsDeAchat = (achatId)=>{
+    const lotIds = Array.from(new Set(lotsParAchat.get(achatId)||[]));
+    const otIds = new Set(); lotIds.forEach(lid=>(otsParLot.get(lid)||[]).forEach(oid=>otIds.add(oid)));
+    return Array.from(otIds).map(lotExportParId).filter(Boolean);
+  };
   const tracesParCoop = new Map();
   (state.achats||[]).forEach(a=>{ if (a.producteur_id && a.connaissement){ if (!tracesParCoop.has(a.cooperative_id)) tracesParCoop.set(a.cooperative_id, new Set()); tracesParCoop.get(a.cooperative_id).add(String(a.connaissement).trim()); } });
   const simeParCoop = new Map();
@@ -15206,14 +15218,14 @@ function dossierTraitantCalcul(){
       (achatsParCoop.get(coopId)||[]).forEach(a=>{
         const client = clientsCamion[a.id] || achatClientEffectif(a) || 'Client non indiqué';
         const trace = (tracesParCoop.get(coopId)||new Set()).has(String(a.connaissement).trim());
-        ajoute(client, coopNom, { cn:a.connaissement, date:a.date, kg:Number(a.poids_net_produit)||0, statut: trace ? 'trace' : 'atracer', source:'nous' });
+        ajoute(client, coopNom, { cn:a.connaissement, date:a.date, kg:Number(a.poids_net_produit)||0, statut: trace ? 'trace' : 'atracer', source:'nous', ots:otsDeAchat(a.id) });
       });
       (state.connExt||[]).filter(x=>x.cooperative_id===coopId && x.code).forEach(x=>{
         const client = String(x.client_final||'').trim() || 'Client non indiqué';
         const c = ocSimAnalyseCode(x.code);
         const trace = (tracesParCoop.get(coopId)||new Set()).has(String(x.code).trim());
         const simule = !trace && !!c && (simeParCoop.get(coopId)||new Set()).has(c.cle+'-'+c.seq);
-        ajoute(client, coopNom, { cn:x.code, date:x.date, kg:Number(x.kg)||0, statut: trace ? 'trace' : (simule ? 'simule' : 'atracer'), source:'traitant' });
+        ajoute(client, coopNom, { cn:x.code, date:x.date, kg:Number(x.kg)||0, statut: trace ? 'trace' : (simule ? 'simule' : 'atracer'), source:'traitant', ots:[] });
       });
     });
     const clients = Object.values(T.clients);
@@ -15232,12 +15244,19 @@ function dotrPastilleEtat(st){
 function dotrCompte(o){
   return '<span style="color:#1F6E5C;font-weight:600">'+o.nTrace+'</span> tracé(s)'+(o.nSimule?' · <span style="color:#0B5FA8;font-weight:600">'+o.nSimule+'</span> simulé(s)':'')+' · <span style="color:#B42318;font-weight:600">'+o.nATracer+'</span> à tracer <span class="hint">sur '+o.n+' · '+fmtKg(o.kg)+'</span>';
 }
+// Lien vers l'OT (lot de transit) atteint par ce connaissement : clic -> chaîne de traçabilité déjà existante (module Shipping),
+// qui remonte déjà de l'OT jusqu'aux producteurs. Un camion acheté en propre par le traitant (source:'traitant') n'a pas d'OT
+// chez nous : le cacao ne passe jamais par nos lots d'usinage.
+function dotrOtsHtml(ots){
+  if (!ots || !ots.length) return '<span class="hint">—</span>';
+  return ots.map(o=>'<a href="#" onclick="lotsVoirChaine(\''+escJs(o.id)+'\');return false">'+esc(o.numero||o.id)+(o.client?' · '+esc(o.client):'')+'</a>').join(', ');
+}
 function renderDossierTraitant(){
   const data = dossierTraitantCalcul();
   if (!data.length) return '<div class="panel"><div class="hint" style="padding:12px 0">Aucune livraison rattachée à un traitant pour le moment.</div></div>';
   const filtre = state.dotrTraitant || '', noms = data.map(t=>t.traitant);
   let html = '<div class="panel" style="margin-bottom:14px"><h3 style="margin:0 0 4px">Dossier de traçabilité par traitant</h3>'
-    + '<div class="hint">Les coopératives livrées, groupées par traitant puis par client final (ACT, Cargill, …), avec leur état de traçabilité. Vue de lecture : rien n\'est téléchargé ni modifié ici — les fiches de traçabilité et les liasses documentaires se téléchargent depuis les Dossiers de traçabilité et les Liasses documentaires.</div></div>'
+    + '<div class="hint">Les coopératives livrées, groupées par traitant puis par client final (ACT, Cargill, …), avec leur état de traçabilité et, dernier maillon, le lot de transit (OT) où chaque connaissement a fini. Vue de lecture : rien n\'est téléchargé ni modifié ici — les fiches de traçabilité et les liasses documentaires se téléchargent depuis les Dossiers de traçabilité et les Liasses documentaires, et un clic sur un OT ouvre sa chaîne de traçabilité complète (lots → livraisons → coopératives → producteurs).</div></div>'
     + '<div class="oc-subtabs" style="margin:0 0 12px"><button class="'+(filtre?'':'active')+'" onclick="state.dotrTraitant=\'\';render()">Tous les traitants</button>'
     + noms.map(n=>'<button class="'+(filtre===n?'active':'')+'" onclick="state.dotrTraitant=\''+escJs(n)+'\';render()">'+esc(n)+'</button>').join('')+'</div>';
   data.filter(T=>!filtre || T.traitant===filtre).forEach(T=>{
@@ -15249,8 +15268,8 @@ function renderDossierTraitant(){
         const K = C.coops[coopNom], cle2 = T.traitant+'|'+cn+'|'+coopNom, ouvert = !!(state.dotrOuverts||{})[cle2];
         html += '<div style="margin:8px 0 0 16px"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;cursor:pointer" onclick="dotrBasculer(\''+escJs(cle2)+'\')"><span>'+(ouvert?'▾':'▸')+' '+esc(coopNom)+'</span><span>'+dotrCompte(K)+'</span></div>';
         if (ouvert){
-          html += '<table class="data-table" style="margin:6px 0 4px 18px;width:auto;min-width:420px"><thead><tr><th>Connaissement</th><th>Déchargé le</th><th class="num">Poids net (kg)</th><th>État</th></tr></thead><tbody>'
-            + K.lignes.slice().sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))).map(l=>'<tr><td>'+esc(l.cn)+'</td><td>'+esc(dateFr(l.date))+'</td><td class="num">'+fmtNum(l.kg)+'</td><td>'+dotrPastilleEtat(l.statut)+'</td></tr>').join('')
+          html += '<table class="data-table" style="margin:6px 0 4px 18px;width:auto;min-width:420px"><thead><tr><th>Connaissement</th><th>Déchargé le</th><th class="num">Poids net (kg)</th><th>État</th><th>Lot de transit (OT)</th></tr></thead><tbody>'
+            + K.lignes.slice().sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))).map(l=>'<tr><td>'+esc(l.cn)+'</td><td>'+esc(dateFr(l.date))+'</td><td class="num">'+fmtNum(l.kg)+'</td><td>'+dotrPastilleEtat(l.statut)+'</td><td>'+dotrOtsHtml(l.ots)+'</td></tr>').join('')
             + '</tbody></table>';
         }
         html += '</div>';
