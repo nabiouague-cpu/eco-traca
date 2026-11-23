@@ -4886,7 +4886,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-23-603';
+const APP_VERSION = '2026-11-23-604';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -15389,42 +15389,39 @@ function renderDossierTraitant(){
 }
 // Onglet « Traçage de volume » : un seul endroit pour les dossiers par coopérative, les volumes à tracer, les coopératives à classer et la chaîne de traçage.
 // Chaque rubrique s'ouvre en un clic et se referme en recliquant dessus.
-function ocTracageSousDefaut(){ return ocTracageCourant() ? 'tracer' : 'dossiers'; }
+function ocTracageSousDefaut(){ return 'dossiers'; }
 function ocTracageSousActif(){ return state.tracageSous===undefined ? ocTracageSousDefaut() : state.tracageSous; }
 function ocTracageSous(k){ state.tracageSous = (ocTracageSousActif()===k) ? '' : k; render(); }
-function ocAllerTracage(k){ state.tracageMode = 'simple'; ocFermerSurcouches(); state.recherche = null; state.coopDashboardId = null; state.tracerActionVu = null; state.tab = 'tracage'; state.tracageSous = k; state.animEntree = true; render(); }
+function ocAllerTracage(k){ state.tracageMode = 'simple'; ocFermerSurcouches(); state.recherche = null; state.coopDashboardId = null; state.tracerActionVu = null; state.tab = 'tracage'; state.tracageSous = (k==='atracer'||k==='tracer') ? 'dossiers' : k; state.animEntree = true; render(); }
 function ocTracageMode(k){ state.tracageMode = k; render(); }
-// Suite en 4 étapes, dans l'ordre : 1 Qui trace ? · 2 Tracer · 3 Dossiers · 4 Dossier RDUE.
+// Suite en 3 étapes, dans l'ordre : 1 Qui trace ? · 2 Tracer · 3 Dossier RDUE.
 // « À classer » retiré du fil (Nabi ne s'en sert pas) : coopsAClasser/coopClasser/coopsAClasserHtml restent
 // définies, juste plus affichées — si une coopérative avait vraiment besoin d'être classée, elle resterait
 // visible par ses connaissements sans bouton « Tracer » (badge « À classer ↑ » dans la liste de l'étape 2).
-// « À tracer » n'est plus une étape à part non plus : sa liste groupée par coopérative (ocATracerGroupesHtml)
-// vit maintenant DANS l'étape « Tracer », comme point de départ unique — cliquer « Tracer » sur une ligne ouvre
-// l'écran de choix (ocTracerChoixHtml) avec les 4 méthodes existantes, au lieu des 4 chemins séparés d'avant
-// (bouton Dashboard, bouton SAIGIC, modale Dossier, « Tracer tout »).
-// « Par traitant » reste accessible (ancien mode à part, lecture seule), mais compte comme l'étape 3 dans le fil.
+// « À tracer » (liste groupée par coopérative) et l'écran de choix à 4 méthodes (ocTracerChoixHtml/ocATracerGroupesHtml)
+// ne sont plus affichés non plus : l'étape « Dossiers » (renommée « Tracer ») montre déjà, par coopérative/traitant,
+// ce qui reste à tracer, avec un bouton « Ouvrir le dossier » pour tracer ligne par ligne — un seul point d'entrée.
+// Ces fonctions restent définies, juste plus appelées depuis le fil (même logique que pour « À classer »).
 function ocEtapeActive(){
-  if (state.tracageMode==='rdue') return 4;
-  if (state.tracageMode==='traitant') return 3;
-  const m = { 'qui-trace':1, tracer:2, dossiers:3 };
-  return m[ocTracageSousActif()] || 3;
+  if (state.tracageMode==='rdue') return 3;
+  const m = { 'qui-trace':1, dossiers:2 };
+  return m[ocTracageSousActif()] || 2;
 }
 function ocEtapeAller(n){
   ocFermerSurcouches(); state.recherche = null; state.coopDashboardId = null; state.tracerActionVu = null;
-  const map = { 1:'qui-trace', 2:'tracer', 3:'dossiers' };
-  if (n===4) state.tracageMode = 'rdue';
+  const map = { 1:'qui-trace', 2:'dossiers' };
+  if (n===3) state.tracageMode = 'rdue';
   else { state.tracageMode = 'simple'; state.tracageSous = map[n]; }
   render();
 }
 function ocEtapeStepperHtml(){
-  const actif = ocEtapeActive(), tr = ocTracageCourant();
+  const actif = ocEtapeActive();
   const nQui = ocPartenairesGroupes().filter(g=>g.mode==='a_decider').length;
-  const nVus = saigicATracerListe().length + extATracerListe().length;
+  const nATr = ocDossiersTotalATracer();
   const etapes = [
     [1, '1 · Qui trace ?', nQui],
-    [2, '2 · Tracer'+(tr ? ' (en cours)' : ''), nVus],
-    [3, '3 · Dossiers', 0],
-    [4, '4 · 📋 Dossier RDUE', 0]
+    [2, '2 · Tracer', nATr],
+    [3, '3 · 📋 Dossier RDUE', 0]
   ];
   return '<div class="oc-etapes">'
     + etapes.map(([n,l,c])=>'<button class="'+(actif===n?'active':'')+'" onclick="ocEtapeAller('+n+')">'+l+(c>0 ? ' <span class="oc-pastille">'+c+'</span>' : '')+'</button>').join('')
@@ -15460,27 +15457,15 @@ function renderTracageTab(){
   if (state.tracageMode==='rdue'){
     return '<div class="panel" style="padding-bottom:6px"><div class="panel-head"><div><h2>Traçage &amp; dossier RDUE</h2></div></div>' + ocEtapeStepperHtml() + '</div>' + renderDossierRdue();
   }
-  if (state.tracageMode==='traitant'){
-    return '<div class="panel" style="padding-bottom:6px"><div class="panel-head"><div><h2>Traçage &amp; dossier RDUE</h2></div></div>' + ocEtapeStepperHtml()
-      + '<div class="hint" style="margin:8px 0 0"><button class="btn-ghost btn-compact" onclick="ocEtapeAller(3)">← Revenir aux dossiers par client</button></div></div>' + renderDossierTraitant();
-  }
   const actif = ocTracageSousActif();
-  let html = ocUrgenceHtml() + '<div class="panel" style="padding-bottom:6px"><div class="panel-head"><div><h2>Traçage &amp; dossier RDUE</h2><p style="margin:2px 0 0;color:var(--ink-soft);font-size:13px">Une suite en 4 étapes, dans l\'ordre : qui trace, le traçage (ce qu\'il y a à tracer puis comment le tracer), les dossiers par client, puis le dossier de conformité RDUE.</p></div></div>'
+  let html = ocUrgenceHtml() + '<div class="panel" style="padding-bottom:6px"><div class="panel-head"><div><h2>Traçage &amp; dossier RDUE</h2><p style="margin:2px 0 0;color:var(--ink-soft);font-size:13px">Une suite en 3 étapes, dans l\'ordre : qui trace, le traçage (dossiers par traitant, ce qu\'il reste à tracer), puis le dossier de conformité RDUE.</p></div></div>'
     + ocEtapeStepperHtml()
     + '</div>';
   if (actif==='qui-trace') html += '<div class="panel">' + ocPartenairesHtml() + '</div>';
-  else if (actif==='dossiers') html += renderDossiersTab();
-  else if (actif==='tracer'){
-    if (state.tracerActionVu) html += ocTracerChoixHtml();
-    else {
-      const h = ocATracerGroupesHtml();
-      const importBtn = '<label class="btn" style="cursor:pointer" title="Fichier « Demande de connaissements » renvoyé par un traitant (un onglet par coopérative) : à importer une seule fois — tous ses déchargements, même sur plusieurs sites, se regroupent ensuite automatiquement ici sous la coopérative">📥 Importer le fichier des correspondants<input type="file" accept=".xlsx,.xls" style="display:none" onchange="connExtImporter(this)"></label>'
-        + (state.connExt && state.connExt.length ? ' <span class="hint">'+state.connExt.length+' connaissement(s) de traitants importé(s)</span>' : '');
-      html += '<div class="panel"><div style="margin-bottom:10px">'+importBtn+'</div>'+(h || '<div class="hint" style="padding:6px 0">Aucun volume à tracer pour le moment. 🎉</div>')+'</div>';
-    }
+  else {
+    html += renderDossiersTab();
     if (ocTracageCourant()) html += renderTracageEtapes();   // suivi d'un traçage déjà lancé (connaissement + ticket de pesée)
   }
-  else html += renderDossiersTab();
   return html;
 }
 function renderTracageEtapes(){
