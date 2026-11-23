@@ -4881,7 +4881,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-23-597';
+const APP_VERSION = '2026-11-23-598';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -15385,33 +15385,34 @@ function ocTracageSousActif(){ return state.tracageSous===undefined ? ocTracageS
 function ocTracageSous(k){ state.tracageSous = (ocTracageSousActif()===k) ? '' : k; render(); }
 function ocAllerTracage(k){ state.tracageMode = 'simple'; ocFermerSurcouches(); state.recherche = null; state.coopDashboardId = null; state.tab = 'tracage'; state.tracageSous = k; state.animEntree = true; render(); }
 function ocTracageMode(k){ state.tracageMode = k; render(); }
-// Suite en 6 étapes, dans l'ordre : 1 Qui trace ? · 2 À classer · 3 À tracer · 4 Tracer · 5 Dossiers · 6 Dossier RDUE.
-// « Par traitant » reste accessible (ancien mode à part), mais compte comme l'étape 5 dans le fil.
+// Suite en 5 étapes, dans l'ordre : 1 Qui trace ? · 2 À tracer · 3 Tracer · 4 Dossiers · 5 Dossier RDUE.
+// « À classer » retiré du fil (Nabi ne s'en sert pas) : coopsAClasser/coopClasser/coopsAClasserHtml restent
+// définies, juste plus affichées — si une coopérative avait vraiment besoin d'être classée, elle resterait
+// visible par ses connaissements sans bouton « Tracer » (badge « À classer ↑ » dans la liste de l'étape 2).
+// « Par traitant » reste accessible (ancien mode à part), mais compte comme l'étape 4 dans le fil.
 function ocEtapeActive(){
-  if (state.tracageMode==='rdue') return 6;
-  if (state.tracageMode==='traitant') return 5;
-  const m = { 'qui-trace':1, classer:2, atracer:3, tracer:4, dossiers:5 };
-  return m[ocTracageSousActif()] || 5;
+  if (state.tracageMode==='rdue') return 5;
+  if (state.tracageMode==='traitant') return 4;
+  const m = { 'qui-trace':1, atracer:2, tracer:3, dossiers:4 };
+  return m[ocTracageSousActif()] || 4;
 }
 function ocEtapeAller(n){
   ocFermerSurcouches(); state.recherche = null; state.coopDashboardId = null;
-  const map = { 1:'qui-trace', 2:'classer', 3:'atracer', 4:'tracer', 5:'dossiers' };
-  if (n===6) state.tracageMode = 'rdue';
+  const map = { 1:'qui-trace', 2:'atracer', 3:'tracer', 4:'dossiers' };
+  if (n===5) state.tracageMode = 'rdue';
   else { state.tracageMode = 'simple'; state.tracageSous = map[n]; }
   render();
 }
 function ocEtapeStepperHtml(){
   const actif = ocEtapeActive(), tr = ocTracageCourant();
   const nQui = ocPartenairesGroupes().filter(g=>g.mode==='a_decider').length;
-  const nCl = coopsAClasser().length;
   const nVus = saigicATracerListe().length + extATracerListe().length;
   const etapes = [
     [1, '1 · Qui trace ?', nQui],
-    [2, '2 · À classer', nCl],
-    [3, '3 · À tracer', nVus],
-    [4, '4 · Tracer'+(tr ? ' (en cours)' : ''), 0],
-    [5, '5 · Dossiers', 0],
-    [6, '6 · 📋 Dossier RDUE', 0]
+    [2, '2 · À tracer', nVus],
+    [3, '3 · Tracer'+(tr ? ' (en cours)' : ''), 0],
+    [4, '4 · Dossiers', 0],
+    [5, '5 · 📋 Dossier RDUE', 0]
   ];
   return '<div class="oc-subtabs" style="margin:10px 0 4px">'
     + etapes.map(([n,l,c])=>'<button class="'+(actif===n?'active':'')+'" onclick="ocEtapeAller('+n+')">'+l+(c>0 ? ' <span class="oc-pastille">'+c+'</span>' : '')+'</button>').join('')
@@ -15423,10 +15424,10 @@ function renderTracageTab(){
   }
   if (state.tracageMode==='traitant'){
     return '<div class="panel" style="padding-bottom:6px"><div class="panel-head"><div><h2>Traçage &amp; dossier RDUE</h2></div></div>' + ocEtapeStepperHtml()
-      + '<div class="hint" style="margin:8px 0 0"><button class="btn-ghost btn-compact" onclick="ocEtapeAller(5)">← Revenir aux dossiers par client</button></div></div>' + renderDossierTraitant();
+      + '<div class="hint" style="margin:8px 0 0"><button class="btn-ghost btn-compact" onclick="ocEtapeAller(4)">← Revenir aux dossiers par client</button></div></div>' + renderDossierTraitant();
   }
   const actif = ocTracageSousActif();
-  let html = ocUrgenceHtml() + '<div class="panel" style="padding-bottom:6px"><div class="panel-head"><div><h2>Traçage &amp; dossier RDUE</h2><p style="margin:2px 0 0;color:var(--ink-soft);font-size:13px">Une suite en 6 étapes, dans l\'ordre : qui trace, ce qu\'il reste à classer, à tracer, en train d\'être tracé, les dossiers par client, puis le dossier de conformité RDUE.</p></div></div>'
+  let html = ocUrgenceHtml() + '<div class="panel" style="padding-bottom:6px"><div class="panel-head"><div><h2>Traçage &amp; dossier RDUE</h2><p style="margin:2px 0 0;color:var(--ink-soft);font-size:13px">Une suite en 5 étapes, dans l\'ordre : qui trace, ce qu\'il y a à tracer, en train d\'être tracé, les dossiers par client, puis le dossier de conformité RDUE.</p></div></div>'
     + ocEtapeStepperHtml()
     + '</div>';
   if (actif==='qui-trace') html += '<div class="panel">' + ocPartenairesHtml() + '</div>';
@@ -15437,7 +15438,6 @@ function renderTracageTab(){
       + (state.connExt && state.connExt.length ? ' <span class="hint">'+state.connExt.length+' connaissement(s) de traitants importé(s)</span>' : '');
     html += '<div class="panel"><div style="margin-bottom:10px">'+importBtn+'</div>'+(h || '<div class="hint" style="padding:6px 0">Aucun volume à tracer pour le moment. 🎉</div>')+'</div>';
   }
-  else if (actif==='classer'){ const h = coopsAClasserHtml(); html += '<div class="panel">'+(h || '<div class="hint" style="padding:6px 0">Aucune coopérative à classer.</div>')+'</div>'; }
   else if (actif==='tracer') html += renderTracageEtapes();
   else html += renderDossiersTab();
   return html;
@@ -32880,7 +32880,7 @@ function _renderBrut(){
     + ocRechercheHtml();
 
   html += '<div class="wrap">';
-  html += connBanniereHtml() + coopClasserBanniereHtml();
+  html += connBanniereHtml(); // bannière « coopératives à classer » retirée : Nabi n'utilise pas ce classement manuel (coopClasserBanniereHtml reste définie, juste plus appelée)
 
   if (window.self !== window.top){
     html += '<div class="error-banner" style="align-items:flex-start;background:#3D2115;color:#FBEEDA;border-color:#9A6512;">'
