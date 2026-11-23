@@ -4881,7 +4881,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-23-595';
+const APP_VERSION = '2026-11-23-596';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -15293,28 +15293,56 @@ function ocTracageSousActif(){ return state.tracageSous===undefined ? ocTracageS
 function ocTracageSous(k){ state.tracageSous = (ocTracageSousActif()===k) ? '' : k; render(); }
 function ocAllerTracage(k){ state.tracageMode = 'simple'; ocFermerSurcouches(); state.recherche = null; state.coopDashboardId = null; state.tab = 'tracage'; state.tracageSous = k; state.animEntree = true; render(); }
 function ocTracageMode(k){ state.tracageMode = k; render(); }
-function ocModeOngletsHtml(actif){
-  return '<div class="oc-subtabs" style="margin:10px 0 4px"><button class="'+(actif==='simple'?'active':'')+'" onclick="ocTracageMode(\'simple\')">Traçage de volume</button><button class="'+(actif==='rdue'?'active':'')+'" onclick="ocTracageMode(\'rdue\')">📋 Dossier de conformité RDUE</button><button class="'+(actif==='traitant'?'active':'')+'" onclick="ocTracageMode(\'traitant\')">🗂️ Dossier par traitant</button></div>';
+// Suite en 6 étapes, dans l'ordre : 1 Qui trace ? · 2 À classer · 3 À tracer · 4 Tracer · 5 Dossiers · 6 Dossier RDUE.
+// « Par traitant » reste accessible (ancien mode à part), mais compte comme l'étape 5 dans le fil.
+function ocEtapeActive(){
+  if (state.tracageMode==='rdue') return 6;
+  if (state.tracageMode==='traitant') return 5;
+  const m = { 'qui-trace':1, classer:2, atracer:3, tracer:4, dossiers:5 };
+  return m[ocTracageSousActif()] || 5;
+}
+function ocEtapeAller(n){
+  ocFermerSurcouches(); state.recherche = null; state.coopDashboardId = null;
+  const map = { 1:'qui-trace', 2:'classer', 3:'atracer', 4:'tracer', 5:'dossiers' };
+  if (n===6) state.tracageMode = 'rdue';
+  else { state.tracageMode = 'simple'; state.tracageSous = map[n]; }
+  render();
+}
+function ocEtapeStepperHtml(){
+  const actif = ocEtapeActive(), tr = ocTracageCourant();
+  const nQui = ocPartenairesGroupes().filter(g=>g.mode==='a_decider').length;
+  const nCl = coopsAClasser().length;
+  const nVus = saigicATracerListe().length + extATracerListe().length;
+  const etapes = [
+    [1, '1 · Qui trace ?', nQui],
+    [2, '2 · À classer', nCl],
+    [3, '3 · À tracer', nVus],
+    [4, '4 · Tracer'+(tr ? ' (en cours)' : ''), 0],
+    [5, '5 · Dossiers', 0],
+    [6, '6 · 📋 Dossier RDUE', 0]
+  ];
+  return '<div class="oc-subtabs" style="margin:10px 0 4px">'
+    + etapes.map(([n,l,c])=>'<button class="'+(actif===n?'active':'')+'" onclick="ocEtapeAller('+n+')">'+l+(c>0 ? ' <span class="oc-pastille">'+c+'</span>' : '')+'</button>').join('')
+    + '</div>';
 }
 function renderTracageTab(){
   if (state.tracageMode==='rdue'){
-    return '<div class="panel" style="padding-bottom:6px"><div class="panel-head"><div><h2>Traçage &amp; dossier RDUE</h2></div></div>' + ocModeOngletsHtml('rdue') + '</div>' + renderDossierRdue();
+    return '<div class="panel" style="padding-bottom:6px"><div class="panel-head"><div><h2>Traçage &amp; dossier RDUE</h2></div></div>' + ocEtapeStepperHtml() + '</div>' + renderDossierRdue();
   }
   if (state.tracageMode==='traitant'){
-    return '<div class="panel" style="padding-bottom:6px"><div class="panel-head"><div><h2>Traçage &amp; dossier RDUE</h2></div></div>' + ocModeOngletsHtml('traitant') + '</div>' + renderDossierTraitant();
+    return '<div class="panel" style="padding-bottom:6px"><div class="panel-head"><div><h2>Traçage &amp; dossier RDUE</h2></div></div>' + ocEtapeStepperHtml()
+      + '<div class="hint" style="margin:8px 0 0"><button class="btn-ghost btn-compact" onclick="ocEtapeAller(5)">← Revenir aux dossiers par client</button></div></div>' + renderDossierTraitant();
   }
-  const actif = ocTracageSousActif(), tr = ocTracageCourant();
-  const nDoss = ocDossiersTotalATracer(), nVus = saigicATracerListe().length + extATracerListe().length, nCl = coopsAClasser().length;
-  const onglets = [['dossiers','📁 Dossiers de traçabilité', nDoss], ['atracer','📦 Volumes à tracer', nVus], ['classer','🆕 Coopératives à classer', nCl], ['tracer','⛓ Tracer un volume'+(tr ? ' (en cours)' : ''), 0]];
-  let html = ocUrgenceHtml() + '<div class="panel" style="padding-bottom:6px"><div class="panel-head"><div><h2>Traçage &amp; dossier RDUE</h2><p style="margin:2px 0 0;color:var(--ink-soft);font-size:13px">Tout ce qui concerne la traçabilité au même endroit. Clique sur une rubrique pour l\'ouvrir, reclique dessus pour la refermer.</p></div></div>'
-    + ocModeOngletsHtml('simple')
-    + '<div class="oc-subtabs" style="margin:10px 0 4px">'
-    + onglets.map(([id,l,n])=>'<button class="'+(actif===id?'active':'')+'" onclick="ocTracageSous(\''+id+'\')">'+l+(n>0 ? ' <span class="oc-pastille">'+n+'</span>' : '')+'</button>').join('')
-    + '</div></div>';
-  if (actif==='dossiers') html += renderDossiersTab();
+  const actif = ocTracageSousActif();
+  let html = ocUrgenceHtml() + '<div class="panel" style="padding-bottom:6px"><div class="panel-head"><div><h2>Traçage &amp; dossier RDUE</h2><p style="margin:2px 0 0;color:var(--ink-soft);font-size:13px">Une suite en 6 étapes, dans l\'ordre : qui trace, ce qu\'il reste à classer, à tracer, en train d\'être tracé, les dossiers par client, puis le dossier de conformité RDUE.</p></div></div>'
+    + ocEtapeStepperHtml()
+    + '</div>';
+  if (actif==='qui-trace') html += '<div class="panel">' + ocPartenairesHtml() + '</div>';
+  else if (actif==='dossiers') html += renderDossiersTab();
   else if (actif==='atracer'){ const h = saigicATracerHtml(true) + extATracerHtml(); html += '<div class="panel">'+(h || '<div class="hint" style="padding:6px 0">Aucun volume à tracer pour le moment. 🎉</div>')+'</div>'; }
   else if (actif==='classer'){ const h = coopsAClasserHtml(); html += '<div class="panel">'+(h || '<div class="hint" style="padding:6px 0">Aucune coopérative à classer.</div>')+'</div>'; }
   else if (actif==='tracer') html += renderTracageEtapes();
+  else html += renderDossiersTab();
   return html;
 }
 function renderTracageEtapes(){
@@ -17528,12 +17556,13 @@ function renderDossiersTab(){
   const vue = filtre==='atracer' ? A.filter(x=>x.nATracer>0) : A;
   const puce = (n, lib, couleur)=>'<div class="doss-puce"><div style="font-size:22px;font-weight:700;line-height:1.1;color:'+couleur+'">'+fmtNum(n)+'</div><div class="hint" style="margin:0">'+lib+'</div></div>';
   let html = '<div class="panel"><div class="panel-head"><div><h2>📁 Dossiers de traçabilité</h2>'
-    + '<p style="margin:2px 0 0;color:var(--ink-soft);font-size:13px;max-width:800px">Un dossier par coopérative : tous les n° de sa série (1 à N), ce qui est tracé, simulé (livré ailleurs ou pas encore tracé) ou à tracer. « Tracer avec la simulation » simule d\'abord les numéros précédents pour adapter le tracé à ce qu\'il reste. Ce qui s\'applique à une coopérative vaut pour toutes : une coopérative qui livre chez nous peut aussi livrer ailleurs puis revenir.</p></div>'
+    + '<p style="margin:2px 0 0;color:var(--ink-soft);font-size:13px;max-width:800px">Un dossier par coopérative : tous les n° de sa série (1 à N), ce qui est tracé, simulé (livré ailleurs ou pas encore tracé) ou à tracer. « Tracer avec la simulation » simule d\'abord les numéros précédents pour adapter le tracé à ce qu\'il reste. Ce qui s\'applique à une coopérative vaut pour toutes : une coopérative qui livre chez nous peut aussi livrer ailleurs puis revenir.</p>'
+    + '<div style="margin:8px 0 0;display:inline-flex;gap:4px"><button class="btn btn-primary btn-compact" disabled>Par client</button><button class="btn btn-compact" onclick="ocTracageMode(\'traitant\')" title="Les mêmes dossiers, groupés par traitant plutôt que par client">Par traitant</button></div></div>'
     + '<div class="trc-actions"><label class="btn" style="cursor:pointer" title="Fichier « Demande de connaissements » renvoyé par un traitant (un onglet par coopérative) : les connaissements déchargés chez lui entrent dans la simulation avec leur vrai poids, et la simulation de chaque coopérative concernée est refaite et enregistrée">📥 Importer les connaissements d\'un traitant<input type="file" accept=".xlsx,.xls" style="display:none" onchange="connExtImporter(this)"></label>'
     + (state.connExt && state.connExt.length ? '<span class="hint" style="align-self:center">'+state.connExt.length+' connaissement(s) de traitants importé(s)</span>' : '')
     + '<button class="btn" title="Simule, camion par camion, la traçabilité d\'une coopérative en tenant compte des connaissements livrés ailleurs (numéros manquants)" onclick="ocSimOuvrir()">🧮 Simulation libre</button>'
     + (A.some(x=>x.awahusSeul && x.nTrace>0) ? '<button class="btn" style="color:#a33;border-color:#e3b3b3" title="Retire les anciens traçages des connaissements déchargés chez Awahus (après sauvegarde) pour tout retracer avec la simulation" onclick="ocRefaireToutAwahus()">♻ Tout refaire de zéro (Awahus)</button>' : '')
-    + '</div></div><div class="doss-corps">' + ocPartenairesHtml()
+    + '</div></div><div class="doss-corps">'
     + '<div style="margin:2px 0 8px;font-weight:700;font-size:14px;color:#14402a">🟢 À tracer par nous</div>'
     + '<div style="display:flex;gap:10px;flex-wrap:wrap;margin:0 0 12px">'
     + puce(A.length, 'coopérative'+(A.length>1?'s':''), 'var(--ink)') + puce(tot('nNous'), 'connaissements chez nous', 'var(--ink)') + puce(tot('nTrace'), 'tracés', '#1e8449') + puce(tot('nSimule'), 'simulés', '#1F4E8C') + puce(nA, 'à tracer', nA ? '#b36b00' : '#1e8449') + '</div>'
