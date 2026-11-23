@@ -4881,7 +4881,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-23-587';
+const APP_VERSION = '2026-11-23-588';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -18099,6 +18099,13 @@ function ocTracerToutModalHtml(){
   const resteActuel = Math.max(0, st.potentiel-st.achete), resteApresValidation = Math.max(0, resteActuel-kgValide);
   const pctApresValidation = st.potentiel>0 ? Math.min(100, (st.achete+kgValide)/st.potentiel*100) : null;
   const coulReste = pctApresValidation==null ? {fond:'#F2F8F4',texte:'#1F6E5C'} : pctApresValidation>=POT_DANGER ? {fond:'#FDECEA',texte:'#B42318'} : pctApresValidation>=POT_ALERTE ? {fond:'#FFF1E0',texte:'#B25E00'} : {fond:'#F2F8F4',texte:'#1F6E5C'};
+  // Ordre d'affichage demandé par Nabi : les connaissements restent du plus ancien au plus récent (déjà l'ordre
+  // de pl.lignes, fixé une fois pour toutes par ocTracerToutLignes), mais un connaissement qui vient d'être tracé
+  // descend en bas de la liste pour laisser les autres, encore à traiter, en haut. Tri stable (ne réordonne pas
+  // entre eux les connaissements d'un même groupe « tracé » / « pas encore tracé ») et purement visuel : pl.lignes
+  // lui-même n'est jamais réordonné, donc ocTracerToutBasculer/ocTracerToutNb/ocTracerToutLancer (qui retrouvent
+  // toujours leur ligne par .cle, jamais par position) ne sont pas affectés.
+  const lignesAffichees = pl.lignes.slice().sort((a,b)=>(a.statut==='trace'?1:0)-(b.statut==='trace'?1:0));
   const ligneHtml = l=>{
     const peutValider = l.statut!=='trace' && !l.blocage && !pl.enCours;
     const statutHtml = l.statut==='trace' ? '<span class="badge ok">✔ Tracé'+(l.margeApres!=null ? ' · potentiel restant '+fmtKg(l.margeApres) : '')+'</span>'
@@ -18121,7 +18128,7 @@ function ocTracerToutModalHtml(){
       + (margeParCampagne.length ? ' · marge restante chez les producteurs : '+margeParCampagne.map(m=>'<b>'+fmtKg(m.marge)+'</b> ('+esc(m.nom)+')').join(', ') : '')+'</div>'
     + '<div class="hint" style="margin-bottom:10px">Valide un à un les connaissements à tracer (ajuste le nombre de producteurs si besoin), puis lance le traçage groupé : chacun est traité dans l\'ordre chronologique, avec la même répartition, les mêmes règles de dates (continuité + aléatoire, déjà calculées et figées ci-dessous) et le même rangement des fiches qu\'un traçage fait à la main. Les lignes « ⇄ chez le traitant » sont des déchargements vers un traitant (ex. Awahus) dont le cacao repart chez le même client final que le nôtre : elles sont incluses pour que leurs fiches partent chez ce même client. Le format de téléchargement (normal / Cargill) se choisit une seule fois à la fin, pour tout ce qui a été tracé.</div>'
     + (pl.lignes.length ? '<div id="modal-fields"><div class="achats-defile" style="max-height:52vh;overflow:auto"><table class="tbl-fiches tbl-dense"><thead><tr><th>Connaissement</th><th>Date</th><th class="num">Poids</th><th class="num">Sacs</th><th>Intervalle d\'achats</th><th class="num">Producteurs</th><th>Statut</th><th></th></tr></thead><tbody>'
-        + pl.lignes.map(ligneHtml).join('') + '</tbody></table></div></div>'
+        + lignesAffichees.map(ligneHtml).join('') + '</tbody></table></div></div>'
       : '<p class="hint">Aucun connaissement en attente de traçage pour cette coopérative.</p>')
     + '<div class="actions">'
     + '<span class="hint" style="margin:0 auto 0 0">'+nValide+' validé(s) sur '+pl.lignes.length+(nTrace?' · '+nTrace+' tracé(s)':'')+(nErreur?' · '+nErreur+' échec(s)':'')+'</span>'
