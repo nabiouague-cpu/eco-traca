@@ -224,6 +224,9 @@
   .coop-nouvelles-separateur{border-top:2px solid var(--accent-line);margin:6px 0 18px;}
   .coop-card{background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;margin-bottom:12px;transition:transform .12s ease-out,box-shadow .12s ease-out;will-change:transform;}
   .coop-card:last-child{margin-bottom:0;}
+  /* Ligne de choix simple (fenêtres « lequel choisir ? ») : pas d'inclinaison 3D au survol, juste un fond qui change — volontairement plus calme qu'une .coop-card. */
+  .cx-item{background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;cursor:pointer;word-break:break-word;transition:background .1s ease-out,border-color .1s ease-out;}
+  .cx-item:hover{background:var(--accent-soft);border-color:var(--accent);}
   .coop-card.unverified{border-color:var(--warn-line);}
   .coop-card.coop-trouvee{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-line);transition:box-shadow .3s;}
   .panel.coop-trouvee{box-shadow:0 0 0 3px var(--accent-line);transition:box-shadow .3s;}
@@ -4886,7 +4889,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-23-606';
+const APP_VERSION = '2026-11-23-607';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -14187,12 +14190,16 @@ function lotsModalsHtml(){
     // coopérative doit être tracée sur une AUTRE coopérative ? Une fois choisi, le formulaire « Tracer un
     // volume » (mode transfert, déjà existant) s'ouvre avec la coopérative d'origine et ce connaissement prêts.
     const pl = m.payload, c = coopById(pl.coopId), items = ocTvCandidats(pl.coopId);
-    return '<div class="modal-overlay" onclick="if(event.target===this)ocDossierOuvrir(\''+escJs(pl.coopId)+'\')"><div class="modal">'
+    // Pas de .coop-card ici : cette classe porte l'effet d'inclinaison 3D au survol (voulu sur les tuiles
+    // du tableau de bord), qui « fait trop bouger » une liste de lignes serrées — on utilise .cx-item,
+    // un simple survol de fond. Défilement vertical seulement à partir de 3 éléments, jamais horizontal.
+    const scroll = items.length>=3 ? 'max-height:52vh;overflow-y:auto;overflow-x:hidden;padding-right:4px' : '';
+    return '<div class="modal-overlay" onclick="if(event.target===this)ocDossierOuvrir(\''+escJs(pl.coopId)+'\')"><div class="modal wide" style="overflow-x:hidden">'
       + '<h3>↔ Tracer sur une autre coopérative — '+esc(c ? c.nom : pl.coopId)+'</h3>'
       + '<p class="hint" style="margin:0 0 12px">Quel connaissement de '+esc(c ? c.nom : 'cette coopérative')+' veux-tu rattacher au potentiel d\'une autre coopérative ?</p>'
       + (items.length
-          ? '<div style="display:flex;flex-direction:column;gap:8px;max-height:50vh;overflow:auto">'
-            + items.map(it=>'<div class="coop-card" style="cursor:pointer" onclick="ocDossierTracerAutreValider(\''+escJs(pl.coopId)+'\',\''+escJs(it.cle)+'\')"><b>'+esc(it.code)+'</b> · '+(it.kg>0?fmtKg(it.kg):'volume non lu')+(it.sacs>0?' · '+fmtNum(it.sacs)+' sacs':'')+' · '+esc(dateFr(it.iso)||it.iso||'')+'</div>').join('')
+          ? '<div style="display:flex;flex-direction:column;gap:8px;'+scroll+'">'
+            + items.map(it=>'<div class="cx-item" onclick="ocDossierTracerAutreValider(\''+escJs(pl.coopId)+'\',\''+escJs(it.cle)+'\')"><b>'+esc(it.code)+'</b> · '+(it.kg>0?fmtKg(it.kg):'volume non lu')+(it.sacs>0?' · '+fmtNum(it.sacs)+' sacs':'')+' · '+esc(dateFr(it.iso)||it.iso||'')+'</div>').join('')
             + '</div>'
           : '<div class="hint">Aucun connaissement en attente pour cette coopérative.</div>')
       + '<div class="actions"><button class="btn" onclick="ocDossierOuvrir(\''+escJs(pl.coopId)+'\')">Annuler</button></div></div></div>';
