@@ -201,6 +201,39 @@
   .maj-b{background:#fff;width:100%;border-radius:20px 20px 0 0;padding:20px 18px calc(18px + env(safe-area-inset-bottom,0px));max-height:85%;overflow:auto;box-shadow:0 -6px 30px #0004}
   .maj-b h3{margin:0 0 4px;font-size:18px;color:var(--teal)} .maj-b ul{margin:10px 0 12px;padding-left:20px;font-size:14px} .maj-b li{margin:3px 0} .maj-b .btn{width:100%;margin-top:8px}
   .toast{position:fixed;z-index:2000;left:12px;right:12px;bottom:90px;background:var(--teal);color:#fff;border-radius:12px;padding:11px 14px;font-size:14px;display:none;text-align:center}
+
+  /* ---- Entrée animée à l'arrivée sur un écran (même esprit que ORIGEN) ---- */
+  @keyframes trRise3D{from{opacity:0;transform:perspective(900px) rotateX(-16deg) translateY(10px)}to{opacity:1;transform:perspective(900px) rotateX(0deg) translateY(0)}}
+  .ecran.anim-entree .carte,.ecran.anim-entree .prod,.ecran.anim-entree .coop-it,.ecran.anim-entree .li,.ecran.anim-entree .hero,.ecran.anim-entree .fini,.ecran.anim-entree .avert,.ecran.anim-entree .attente{animation:trRise3D .42s cubic-bezier(.2,.8,.2,1) both;transform-origin:50% 100%}
+  .ecran.anim-entree .hero{animation-duration:.5s}
+  .ecran.anim-entree .defile{animation:trRise3D .36s cubic-bezier(.2,.8,.2,1) both}
+  .ecran.anim-entree .carte:nth-of-type(2),.ecran.anim-entree .prod:nth-of-type(2),.ecran.anim-entree .coop-it:nth-of-type(2),.ecran.anim-entree .li:nth-of-type(2){animation-delay:.04s}
+  .ecran.anim-entree .carte:nth-of-type(3),.ecran.anim-entree .prod:nth-of-type(3),.ecran.anim-entree .coop-it:nth-of-type(3),.ecran.anim-entree .li:nth-of-type(3){animation-delay:.08s}
+  .ecran.anim-entree .carte:nth-of-type(4),.ecran.anim-entree .prod:nth-of-type(4),.ecran.anim-entree .coop-it:nth-of-type(4),.ecran.anim-entree .li:nth-of-type(4){animation-delay:.12s}
+  .ecran.anim-entree .carte:nth-of-type(n+5),.ecran.anim-entree .prod:nth-of-type(n+5),.ecran.anim-entree .coop-it:nth-of-type(n+5),.ecran.anim-entree .li:nth-of-type(n+5){animation-delay:.16s}
+  @media (prefers-reduced-motion:reduce){ .ecran.anim-entree *{animation:none!important} }
+
+  /* ---- Transition en fondu entre écrans (l'écran quitté reste visible pendant qu'il s'efface) ---- */
+  .ecran.sortante{display:block!important;z-index:1;opacity:1;transform:none;transition:opacity .2s ease,transform .2s ease;pointer-events:none}
+  .ecran.sortante.s-anim{opacity:0;transform:translateY(-6px) scale(.99)}
+  .ecran.actif{z-index:2}
+  @media (prefers-reduced-motion:reduce){ .ecran.sortante{transition:none;display:none!important} }
+
+  /* ---- Pression tactile « en relief » sur les tuiles (équivalent du survol 3D sur ordinateur) ---- */
+  .carte,.prod,.coop-it,.li,.chip.sec{transition:transform .12s ease-out,box-shadow .12s ease-out;will-change:transform}
+  .carte:active,.prod:active,.coop-it:active,.li:active,.chip.sec:active{transform:perspective(700px) rotateX(3deg) scale(.976);box-shadow:0 2px 6px rgba(10,42,38,.1)}
+  @media (prefers-reduced-motion:reduce){ .carte:active,.prod:active,.coop-it:active,.li:active,.chip.sec:active{transform:none} }
+
+  /* ---- Carte de connexion : entrée en glissant, comme sur le portail ---- */
+  @keyframes lgCardIn{from{opacity:0;transform:perspective(900px) rotateX(-10deg) translateY(26px)}to{opacity:1;transform:perspective(900px) rotateX(0deg) translateY(0)}}
+  #connexion.actif .lg-carte{animation:lgCardIn .6s cubic-bezier(.2,.8,.2,1) both}
+  @media (prefers-reduced-motion:reduce){ #connexion.actif .lg-carte{animation:none} }
+
+  /* ---- Glisser pour agir, sur « Mes tracés » (envoyer/exporter à droite, supprimer à gauche) ---- */
+  .swv{position:relative;overflow:hidden;border-radius:18px;margin:0 0 12px}
+  .swv .carte{margin:0;border-radius:18px}
+  .swv-fond{position:absolute;inset:0;border-radius:18px;display:flex;align-items:center;padding:0 20px;font-weight:700;font-size:13.5px;color:#fff;opacity:0;pointer-events:none}
+  .swv-contenu{position:relative;touch-action:pan-y}
 </style>
 </head>
 <body>
@@ -268,7 +301,7 @@
 <script src="https://cdn.jsdelivr.net/npm/pmtiles@3.2.1/dist/pmtiles.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/protomaps-leaflet@5.1.0/dist/protomaps-leaflet.js"></script>
 <script>
-const APP_VERSION = '2026-11-04-app24';
+const APP_VERSION = '2026-11-23-app25';
 const SB_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SB_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 const ECO_ZOOM_MIN = 8;      // les parcelles de la base se voient dès ce niveau de zoom
@@ -567,6 +600,15 @@ async function rendreCoops(){
 const TITRES = { accueil:null, nouveau:'Nouveau producteur', carte:null, couches:'Zone et couches', traces:'Mes tracés', coops:'Mes coopératives', import:'Importer un registre' };
 function aller(e, push){
   if (push) S.pile.push(S.ecran); else S.pile = [];
+  const reduitMouv = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const ancien = document.querySelector('.ecran.actif');
+  // Fondu de sortie : l'écran quitté reste visible un court instant pendant qu'il s'efface,
+  // au lieu de disparaître d'un coup -- sauf la carte, déjà gérée par sa propre classe juste après.
+  if (ancien && ancien.id !== 'e-carte' && ancien.id !== 'e-'+e && !reduitMouv){
+    ancien.classList.add('sortante');
+    requestAnimationFrame(()=>{ ancien.classList.add('s-anim'); });
+    setTimeout(()=>{ ancien.classList.remove('sortante','s-anim'); }, 230);
+  }
   S.ecran = e;
   document.querySelectorAll('.ecran').forEach(x=>x.classList.toggle('actif', x.id==='e-'+e));
   const principal = ['accueil','couches','traces'].includes(e);
@@ -577,8 +619,12 @@ function aller(e, push){
   document.querySelector('header').style.display = (e==='carte' && S.styleCarte!=='classique') ? 'none' : '';
   let t = TITRES[e]; if (e==='accueil') t = S.coop ? S.coop.nom : 'ORIGEN'; if (e==='carte') t = S.prod ? S.prod.nom : 'Tracé';
   $('h-t').textContent = t || 'ORIGEN';
+  // Entrée animée en 3D des tuiles du nouvel écran (sauf la carte, qui n'a pas de tuiles).
+  const cible = e!=='carte' ? $('e-'+e) : null;
+  if (cible && !reduitMouv){ cible.classList.remove('anim-entree'); void cible.offsetWidth; cible.classList.add('anim-entree'); setTimeout(()=>{ cible.classList.remove('anim-entree'); }, 900); }
   if (e==='accueil') rendreAccueil(); if (e==='couches') rendreCouches(); if (e==='traces') rendreTraces(); if (e==='nouveau') rendreNouveau(); if (e==='coops') rendreCoops(); if (e==='import') rendreImport();
   if (e==='carte'){ initCarte(); S.menuCouches = false; setTimeout(()=>{ S.map.invalidateSize(); rendreFeuille(); majCouchesMap(); majBandeau(); majPrec(); }, 60); }
+  ocInstallerSwipeTraces();
 }
 function retour(){ if (S.ecran==='carte' && (S.pts.length||S.marche||S.verif) && !confirm('Abandonner ce tracé ?')) return; if (S.ecran==='carte') resetTrace(); const e = S.pile.pop() || 'accueil'; S.pile = []; aller(e); }
 $('h-retour').onclick = retour;
@@ -1633,11 +1679,11 @@ function rendreTraces(){
   let h = S.coops.length>1 ? '<div class="defile" style="margin-bottom:8px"><button class="chip '+(!S.filtreCoop?'on':'')+'" data-fc="">Toutes</button>'+S.coops.map(k=>'<button class="chip '+(S.filtreCoop===k.id?'on':'')+'" data-fc="'+esc(k.id)+'">'+esc(k.nom)+'</button>').join('')+'</div>' : '';
   h += '<div class="rang" style="margin-bottom:10px"><button class="btn sm" id="b-sync">'+IC.sync+'Envoyer au bureau</button><button class="btn sm" id="b-exp" '+(l.length?'':'disabled')+'>'+IC.telecharger+'Tout exporter</button></div>';
   if (!l.length) h += '<div class="carte"><p class="mut petit">Aucun mapping pour le moment. Choisis un producteur à l’accueil.</p></div>';
-  h += l.map(t=>'<div class="carte"><div class="rang" style="justify-content:space-between"><b>'+esc(t.producteur_nom||'—')+'</b><span class="st '+(t.statut==='envoye'?'g':'')+'">'+(t.statut==='envoye'?'Envoyé':'En attente')+'</span></div>'
+  h += l.map(t=>'<div class="swv" data-swv-droite="exporterTraceSwipe" data-swv-gauche="supprimerTraceSwipe" data-swv-id="'+esc(t.id)+'"><div class="swv-fond"><span class="swv-txt"></span></div><div class="swv-contenu"><div class="carte"><div class="rang" style="justify-content:space-between"><b>'+esc(t.producteur_nom||'—')+'</b><span class="st '+(t.statut==='envoye'?'g':'')+'">'+(t.statut==='envoye'?'Envoyé':'En attente')+'</span></div>'
     + '<p class="mut petit">'+fmt(t.surface_ha,2)+' ha · '+esc(t.code_parcelle||'')+(S.coops.length>1&&nomCoop(t.cooperative_id)?' · '+esc(nomCoop(t.cooperative_id)):'')+(t.nouveau?' · nouveau producteur':'')+(t.precision_moy_m!=null?' · ±'+Math.round(t.precision_moy_m)+' m':'')+' · '+esc(new Date(t.releve_le).toLocaleString('fr-FR'))+'</p>'
     + (t.alertes&&t.alertes.length ? t.alertes.map(a=>'<div class="alerte orange">'+esc(a)+'</div>').join('') : '')
     + (t.erreur ? '<div class="alerte rouge">Envoi impossible : '+esc(t.erreur)+'</div>' : '')
-    + '<div class="rang" style="margin-top:6px"><button class="btn sm" data-x="'+t.id+'">'+IC.telecharger+'GeoJSON</button><button class="btn sm" data-d="'+t.id+'">'+IC.corbeille+'Supprimer</button></div></div>').join('');
+    + '<div class="rang" style="margin-top:6px"><button class="btn sm" data-x="'+t.id+'">'+IC.telecharger+'GeoJSON</button><button class="btn sm" data-d="'+t.id+'">'+IC.corbeille+'Supprimer</button></div></div></div></div>').join('');
   c.innerHTML = h;
   c.querySelectorAll('[data-fc]').forEach(b=>b.onclick = ()=>{ S.filtreCoop = b.dataset.fc || null; rendreTraces(); });
   $('b-sync').onclick = synchroniser; $('b-exp').onclick = ()=>telecharger('mes_traces.geojson',{ type:'FeatureCollection', features:S.traces.map(t=>t.geojson) });
@@ -1645,6 +1691,58 @@ function rendreTraces(){
   c.querySelectorAll('[data-d]').forEach(b=>b.onclick = async ()=>{ const t = S.traces.find(x=>x.id===b.dataset.d); if (!t) return; if (t.statut==='en_attente' && !confirm('Ce mapping n’est pas encore envoyé. Le supprimer quand même ?')) return; await trDel(t.id); S.traces = await trAll(); majAttente(); rendreTraces(); });
 }
 function telecharger(nom, objet){ const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(objet)],{ type:'application/geo+json' })); a.download = nom; document.body.appendChild(a); a.click(); a.remove(); }
+/* ---------- glisser pour agir sur « Mes tracés » : exporter (droite) / supprimer (gauche) ---------- */
+async function exporterTraceSwipe(id){ const t = S.traces.find(x=>x.id===id); if (t) telecharger('trace_'+(t.code_parcelle||t.id)+'.geojson', t.geojson); return true; }
+async function supprimerTraceSwipe(id){
+  const t = S.traces.find(x=>x.id===id); if (!t) return false;
+  if (t.statut==='en_attente' && !confirm('Ce mapping n’est pas encore envoyé. Le supprimer quand même ?')) return false;
+  await trDel(t.id); S.traces = await trAll(); majAttente(); rendreTraces(); return true;
+}
+function ocInstallerSwipeTraces(){
+  if (window._ocSwipeTracesInstallee) return; window._ocSwipeTracesInstallee = true;
+  const zone = $('e-traces'); if (!zone) return;
+  const SEUIL = 90;
+  let a = null;
+  const remettre = (contenu, fond)=>{ contenu.style.transition = 'transform .18s ease'; contenu.style.transform = 'translateX(0)'; if (fond){ fond.style.opacity = 0; } setTimeout(()=>{ contenu.style.transition = ''; }, 200); };
+  zone.addEventListener('pointerdown', e=>{
+    if (e.pointerType==='touch' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    if (e.target.closest('button,a,input,textarea,select')) return;
+    const contenu = e.target.closest('.swv-contenu'); if (!contenu) return;
+    const wrap = contenu.closest('.swv'); if (!wrap) return;
+    a = { wrap, contenu, fond: wrap.querySelector('.swv-fond'), txt: wrap.querySelector('.swv-txt'), x0:e.clientX, dx:0, bouge:false, id:wrap.dataset.swvId };
+  });
+  zone.addEventListener('pointermove', e=>{
+    if (!a) return;
+    const dx = e.clientX - a.x0;
+    if (Math.abs(dx) > 4) a.bouge = true;
+    if (!a.bouge) return;
+    a.dx = dx;
+    a.contenu.style.transform = 'translateX('+dx+'px)';
+    const droite = dx > 0, peut = droite ? !!a.wrap.dataset.swvDroite : !!a.wrap.dataset.swvGauche;
+    if (!peut){ a.fond.style.opacity = 0; return; }
+    const atteint = Math.abs(dx) > SEUIL;
+    a.fond.style.opacity = Math.min(1, Math.abs(dx)/SEUIL);
+    a.fond.style.background = droite ? 'var(--vert)' : 'var(--rouge)';
+    a.fond.style.justifyContent = droite ? 'flex-start' : 'flex-end';
+    a.txt.textContent = droite ? (atteint ? '⇪ Exporter' : '') : (atteint ? 'Supprimer ✕' : '');
+  });
+  const fin = async e=>{
+    if (!a) return; const { wrap, contenu, fond, dx, bouge, id } = a; a = null;
+    if (!bouge) return;
+    if (Math.abs(dx) <= SEUIL){ remettre(contenu, fond); return; }
+    if (dx > 0){
+      const fn = wrap.dataset.swvDroite;
+      if (fn && window[fn]){ await window[fn](id); }
+      remettre(contenu, fond);
+    } else {
+      const fn = wrap.dataset.swvGauche;
+      const ok = fn && window[fn] ? await window[fn](id) : false;
+      if (!ok) remettre(contenu, fond);
+    }
+  };
+  zone.addEventListener('pointerup', fin);
+  zone.addEventListener('pointercancel', fin);
+}
 
 majReseau();
 demarrer();
