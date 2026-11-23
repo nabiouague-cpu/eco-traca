@@ -4881,7 +4881,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-23-591';
+const APP_VERSION = '2026-11-23-592';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -18115,7 +18115,7 @@ function ocTracerToutLignes(coopId){
       else nbPropose = Math.min(an.besoin, an.nElig);
     }
     return { cle:it.cle, code:it.code, iso:it.iso, kg:it.kg, sacs:it.sacs, campagneId, externe: !!it.externe,
-      dateDebut: iv.dateDebut, dateFin: iv.dateFin,
+      dateDebut: iv.dateDebut, dateFin: iv.dateFin, prec,
       nbProd: nbPropose, valide:false, statut:'attente', blocage:blocage, erreur:'', margeApres:null, nbProdUtilise:null };
   });
 }
@@ -18139,6 +18139,18 @@ function ocTracerToutNb(cle, val){
   const l = pl.lignes.find(x=>x.cle===cle); if (!l || l.statut==='trace' || l.externe) return;
   const n = Math.round(Number(val));
   if (Number.isInteger(n) && n>0) l.nbProd = n;
+}
+// Tire un nouvel intervalle de dates d'achat pour CETTE ligne seulement, si celui proposé ne convient pas à Nabi
+// (ex. dates trop proches ou trop loin d'un autre repère qu'il connaît). On réutilise le même « précédent » que
+// celui déjà figé pour cette ligne (continuité avec le connaissement qui la précède inchangée) : les autres lignes
+// ne sont donc jamais affectées par ce nouveau tirage, pile ce qu'on veut pour un ajustement ligne par ligne.
+function ocTracerToutRefaireIntervalle(cle){
+  const pl = state.modal && state.modal.type==='ocTracerTout' ? state.modal.payload : null; if (!pl || pl.enCours) return;
+  const l = pl.lignes.find(x=>x.cle===cle); if (!l || l.statut==='trace') return;
+  const iso = l.iso || new Date().toISOString().slice(0,10);
+  const iv = ocTvIntervalleAchatsDepuis(iso, l.prec);
+  l.dateDebut = iv.dateDebut; l.dateFin = iv.dateFin;
+  render();
 }
 async function ocTracerToutLancer(){
   const pl = state.modal && state.modal.type==='ocTracerTout' ? state.modal.payload : null; if (!pl || pl.enCours) return;
@@ -18225,10 +18237,11 @@ function ocTracerToutModalHtml(){
       : l.blocage ? '<span class="hint" style="margin:0;color:#b9770e" title="'+esc(l.blocage)+'">⚠ '+esc(l.blocage)+'</span>'
       : (l.valide ? '<span class="badge info">À tracer</span>' : '<span class="hint" style="margin:0">en attente</span>');
     const intervalleHtml = (l.dateDebut && l.dateFin) ? (esc(dateFr(l.dateDebut)||l.dateDebut)+' → '+esc(dateFr(l.dateFin)||l.dateFin)) : '<span class="hint" style="margin:0">—</span>';
+    const refaireHtml = (l.statut!=='trace' && !pl.enCours) ? ' <button type="button" class="btn btn-ghost btn-compact" title="Cet intervalle ne convient pas ? Tire-en un autre pour ce connaissement" onclick="ocTracerToutRefaireIntervalle(\''+escJs(l.cle)+'\')">🔄 Refaire</button>' : '';
     return '<tr'+(l.statut==='trace' ? ' style="background:#F2F8F4"' : (l.statut==='erreur' ? ' style="background:#FDF2F0"' : ''))+'>'
       + '<td><b>'+esc(l.code)+'</b>'+(l.externe ? ' <span class="hint" style="margin:0" title="Camion livré chez le traitant, repart chez le même client final">⇄ chez le traitant</span>' : '')+'</td>'
       + '<td>'+esc(dateFr(l.iso)||l.iso||'')+'</td><td class="num">'+fmtKg(l.kg)+'</td><td class="num">'+fmtNum(l.sacs)+'</td>'
-      + '<td style="white-space:nowrap">'+intervalleHtml+'</td>'
+      + '<td style="white-space:nowrap">'+intervalleHtml+refaireHtml+'</td>'
       + '<td class="num">'+(l.externe ? '<span class="hint" style="margin:0" title="Répartition déjà simulée pour ce camion">simulée</span>' : (peutValider ? '<input type="number" min="1" step="1" style="width:64px" value="'+esc(l.nbProd||'')+'" onchange="ocTracerToutNb(\''+escJs(l.cle)+'\', this.value)">' : fmtNum(l.nbProdUtilise!=null ? l.nbProdUtilise : (l.nbProd||0))))+'</td>'
       + '<td>'+statutHtml+'</td>'
       + '<td>'+(peutValider ? '<button type="button" class="btn'+(l.valide?' btn-primary':' btn-ghost')+' btn-compact" onclick="ocTracerToutBasculer(\''+escJs(l.cle)+'\')">'+(l.valide?'✓ Validé':'Valider')+'</button>' : '')+'</td></tr>';
