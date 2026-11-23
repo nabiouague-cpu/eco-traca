@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.54
+// @version      0.4.55
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.54';
+  const VERSION = '0.4.55';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -387,12 +387,14 @@
     // On réapplique donc dans l'ordre du formulaire, en attendant que chaque liste soit rechargée, puis on recommence tant que quelque chose a bougé.
     let manques = [];
     rafraichirListes(form);
-    for (let passe = 0; passe < 4; passe++) {
+    // 6 passes (au lieu de 4) et une attente un peu plus longue par liste : certaines listes en cascade d'OBC (ex. gros traitant
+    // rattaché) mettent plus de temps à se recharger que les autres, et 4 passes / 5 s ne suffisaient pas toujours (23/11/2026).
+    for (let passe = 0; passe < 6; passe++) {
       await dormir(passe === 0 ? (ms || 800) : 600); manques = []; let modifie = false;
       for (const el of [...form.querySelectorAll('select[data-origen-val]')]) {
         const v = el.dataset.origenVal; if (el.value === v) continue;
         let ok = setSelect(el, v);
-        if (!ok) { await attendre(() => [...el.options].some((o) => o.value === v), 5000, 300); ok = setSelect(el, v); }
+        if (!ok) { await attendre(() => [...el.options].some((o) => o.value === v), 9000, 300); ok = setSelect(el, v); }
         modifie = true; await dormir(1200); // laisse OBC recharger les listes qui dépendent de celle-ci
         if (!ok) manques.push(el.id);
       }
@@ -741,7 +743,10 @@
     await listeStable(q('#txtid_fournisseurAdd'));
     if (!setSelect(q('#txtid_fournisseurAdd'), e.ids.fournisseur_id)) throw new Error('Coopérative (id ' + e.ids.fournisseur_id + ') introuvable dans la liste du producteur');
     setInput(q('#txtproducteur_date_adhesionAdd'), isoDate(lot.connaissement.date));
-    setSelect(q('#txtcommodite_idAdd0'), '2'); setInput(q('#txtproducteur_parcelle_codeAdd0'), 'P001');
+    // Commodité de la parcelle : comme les autres listes d'OBC, elle ne porte ses options qu'une fois chargée.
+    // La fixer tout de suite échouait silencieusement si la liste n'était pas encore prête (OBC refusait ensuite l'enregistrement : « Veuillez sélectionner une commodité »).
+    { const cmP = q('#txtcommodite_idAdd0'); if (cmP) { await listeStable(cmP); if (!setSelect(cmP, '2')) { await attendre(() => [...cmP.options].some((o) => o.value === '2'), 5000, 300); setSelect(cmP, '2'); } } }
+    setInput(q('#txtproducteur_parcelle_codeAdd0'), 'P001');
     setInput(q('#txtparcelle_superficie_totaleAdd0'), '1'); setInput(q('#txtparcelle_superficie_commoditeAdd0'), '1'); setInput(q('#txtparcelle_production_potentielleAdd0'), '1000');
     const manques = await reappliquer(f); if (manques.length) throw new Error('Liste non prise en compte par OBC : ' + manques.join(', '));
     e.note = 'Producteur ' + p.nom + ' ' + p.prenoms + (p.pca ? ' (PCA de la coopérative).' : p.chauffeur ? ' (PCA non renseigné : nom du chauffeur).' : p.fictif ? ' (nom neutre : ni PCA ni producteur dans ORIGEN).' : '.'); return 'rempli';
