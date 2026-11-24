@@ -4887,7 +4887,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-24-623';
+const APP_VERSION = '2026-11-24-626';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8470,6 +8470,23 @@ async function liasseEnregistrerSuivi(pris, prisC){
     if (r.error) showToast('Le suivi des cachets n\'a pas pu être enregistré : '+r.error.message);
     else { state.liasseCachets = state.liasseCachets || {}; prisC.forEach(x=>{ state.liasseCachets[x.connaissement] = Object.assign({ ajoute_le:new Date().toISOString() }, x); }); }
   }
+}
+// ---- Dossier de conformité (RDUE) à transmettre au client : retire la page de bordereau de réception
+// qu'ORIGEN a lui-même insérée en première page de la liasse (cf. liasseTraiterPdf, marqueur interne
+// LIASSE_MARQUE_BORDEREAU) -- Nabi veut ce bordereau dans sa copie de travail OneDrive, jamais dans la
+// liasse envoyée au client (24/11/2026). Détection fiable par le mot-clé interne du PDF plutôt que par
+// le contenu : les liasses sont des scans sans texte, illisibles autrement.
+async function retirerBordereauLiasse(blob){
+  try{
+    const buf = new Uint8Array(await blob.arrayBuffer());
+    const L = await chargerPdfLib();
+    const doc = await L.PDFDocument.load(buf, { ignoreEncryption:true, updateMetadata:false });
+    const mots = doc.getKeywords() || '';
+    if (mots.indexOf(LIASSE_MARQUE_BORDEREAU)<0 || doc.getPageCount()<=1) return { donnees:blob, retire:false };
+    doc.removePage(0);
+    const sortie = await doc.save();
+    return { donnees:new Blob([sortie], { type:'application/pdf' }), retire:true };   // Blob, pas Uint8Array : preparerFichierPourZip appelle .arrayBuffer() dessus
+  }catch(e){ return { donnees:blob, retire:false }; }   // PDF protégé, illisible... : la liasse part telle quelle plutôt que d'échouer
 }
 async function liasseBordereauxLancer(fichiers){
   const liste = Array.from(fichiers||[]).filter(f=>/\.pdf$/i.test(f.name)); if (!liste.length){ showToast('Dépose des fichiers PDF.'); return; }
@@ -15508,7 +15525,7 @@ async function rdueTelechargerTout(client, formatFiche){
     const cnsParCoop = {};
     R.cams.forEach(c=>{ const cid = c.a.cooperative_id, k = liasseCnNorm(c.a.connaissement); if (cid && k) (cnsParCoop[cid]=cnsParCoop[cid]||[]).push(k); });
 
-    let nGeo=0, nLia=0, nFic=0, koGeo=0, koLia=0, koFic=0, nRap=0, koRap=0, nRec=0, koRec=0;
+    let nGeo=0, nLia=0, nBordRetire=0, nFic=0, koGeo=0, koLia=0, koFic=0, nRap=0, koRap=0, nRec=0, koRec=0;
 
     // Connexion OneDrive seulement si des liasses documentaires sont effectivement concernées.
     let graphOk = false;
@@ -15568,10 +15585,13 @@ async function rdueTelechargerTout(client, formatFiche){
             if (!fs.length){ koLia++; continue; }
             for (const f of fs){
               try{
-                const blob = await (await graphFetch('/me/drive/items/'+f.id+'/content')).blob();
+                let blob = await (await graphFetch('/me/drive/items/'+f.id+'/content')).blob();
                 let name = f.nom || (k+'.pdf');
                 if (vusLia.has(name)){ const p=name.split('.'),ext=p.length>1?'.'+p.pop():''; name = p.join('.')+'_'+Math.random().toString(36).slice(2,7)+ext; }
                 vusLia.add(name);
+                // Dossier transmis au client : on retire la page de bordereau de réception si ORIGEN
+                // l'a insérée dans cette liasse (copie de travail OneDrive seulement, jamais chez le client).
+                if (/\.pdf$/i.test(name)){ const rb = await retirerBordereauLiasse(blob); if (rb.retire){ blob = rb.donnees; nBordRetire++; } }
                 const prep = await preparerFichierPourZip(name, blob, alleger);
                 zip.file(dossierCoop+'/2 - Liasses documentaires/'+name, prep.donnees, optionsCompressionZip(name)); nLia++;
               }catch(e){ koLia++; }
@@ -15663,7 +15683,7 @@ async function rdueTelechargerTout(client, formatFiche){
 
     const manques = [koGeo?koGeo+' géoloc/registre':'', koLia?koLia+' liasse(s)':'', koFic?koFic+' fiche(s)':'', koRap?koRap+' rapport(s)':'', koRec?koRec+' récapitulatif(s)':''].filter(Boolean).join(', ');
     const libFormat = formatFiche==='cargill' ? ' (fiches au format Cargill)' : formatFiche==='deux' ? ' (fiches aux deux formats)' : '';
-    showToast('Dossier '+client+' téléchargé'+libFormat+' : '+coops.length+' coopérative'+(coops.length>1?'s':'')+', '+nRec+' récapitulatif(s), '+nGeo+' géoloc/registre, '+nLia+' liasse(s), '+nFic+' fiche(s), '+nRap+' rapport'+(nRap>1?'s':'')+" d'usinage"+(manques ? ' · manquant : '+manques : '')+'.', manques ? undefined : 'success');
+    showToast('Dossier '+client+' téléchargé'+libFormat+' : '+coops.length+' coopérative'+(coops.length>1?'s':'')+', '+nRec+' récapitulatif(s), '+nGeo+' géoloc/registre, '+nLia+' liasse(s)'+(nBordRetire ? ' (bordereau de réception retiré sur '+nBordRetire+')' : '')+', '+nFic+' fiche(s), '+nRap+' rapport'+(nRap>1?'s':'')+" d'usinage"+(manques ? ' · manquant : '+manques : '')+'.', manques ? undefined : 'success');
   }catch(e){ showToast('Échec du téléchargement : '+(e && e.message ? e.message : e)); }
   if (btn) btn.disabled = false;
   render();
