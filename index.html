@@ -9187,15 +9187,19 @@ async function finEtatTraitantDonnees(traitant, silencieux){
 }
 // Prime RA due sur UN déchargement (poids net payé à l'usine), jamais sur un lot ; 0 si le cacao n'est pas RA ou si le camion est refoulé.
 function finPrimeDue(a, tauxRA){ return (a.type_cacao==='RA' && !a.refoulee) ? Math.round((Number(a.poids_net_produit)||0)*tauxRA) : 0; }
+// Prix du cacao payé à la coopérative sur UN déchargement (poids net payé), jamais sur un lot ; 0 si le camion est refoulé.
+function finCacaoDu(a, prixEntree){ return !a.refoulee ? Math.round((Number(a.poids_net_produit)||0)*prixEntree) : 0; }
 // Ajoute au classeur les feuilles « Paiement traitant » et « Rapprochement ».
 function finEtatTraitantFeuilles(wb, d){
   const { traitant, f, prix, campNom, codes, lots } = d;
   const ENTETE = 'FFC55A11', JAUNE = 'FFFFF2CC', BLEU = { argb:'FF0000FF' }, NOIR = { argb:'FF000000' };
   const bord = { style:'thin', color:NOIR }, cadre = { top:bord, bottom:bord, left:bord, right:bord };
   const NB = '#,##0', NB3 = '#,##0.000', F = o=>Object.assign({ name:'Calibri', size:10 }, o||{});
-  const tauxRA = Number(prix.prime_ra_fcfa_kg)||0;
+  const tauxRA = Number(prix.prime_ra_fcfa_kg)||0, prixEntree = Number(prix.prix_entree_usine_fcfa_kg)||0;
+  const viaTraitant = f.prix_entree_usine_via_traitant !== false;
   const achatsT = finAchatsCampagne().filter(a=>{ const u = String(a.usine_dechargement||'').trim().toUpperCase(); return Array.from(codes).some(k=>k && u.indexOf(String(k).toUpperCase())===0); });
   const primeTotal = achatsT.reduce((s,a)=>s+finPrimeDue(a, tauxRA),0);
+  const cacaoTotal = achatsT.reduce((s,a)=>s+finCacaoDu(a, prixEntree),0);
   const ws = wb.addWorksheet('Paiement traitant');
   ws.columns = [{ width:2 },{ width:5 },{ width:12 },{ width:9 },{ width:11 },{ width:16 },{ width:17 },{ width:17 },{ width:19 },{ width:16 },{ width:16 },{ width:18 },{ width:12 },{ width:14 }];
   const ent = (row, libs)=>{ const h = ws.getRow(row); h.height = 30; libs.forEach((x,i)=>{ const q = h.getCell(i+2); q.value = x; q.font = F({ bold:true, color:{ argb:'FFFFFFFF' } }); q.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:ENTETE } }; q.alignment = { horizontal:'center', vertical:'middle', wrapText:true }; q.border = cadre; }); };
@@ -9206,14 +9210,14 @@ function finEtatTraitantFeuilles(wb, d){
   ws.mergeCells('B4:C4');
   let r = 5; const P = {};
   CTR_PRIX_CHAMPS.forEach(([k,lib])=>{ ws.mergeCells('B'+r+':C'+r); ws.getCell('B'+r).value = lib; ws.getCell('D'+r).value = prix[k]; ws.getCell('D'+r).numFmt = NB3; ws.getCell('D'+r).font = F({ color:BLEU }); ['B','C','D'].forEach(l=>{ ws.getCell(l+r).border = cadre; if (l!=='D') ws.getCell(l+r).font = F(); }); P[k] = r; r++; });
-  ws.mergeCells('B'+r+':C'+r); ws.getCell('B'+r).value = 'Payable au traitant (hors prime RA, voir plus bas)'; ws.getCell('D'+r).value = { formula:'D'+P.prix_entree_usine_fcfa_kg+'+D'+P.commission_traitant_fcfa_kg }; const rT = r; r++;
+  ws.mergeCells('B'+r+':C'+r); ws.getCell('B'+r).value = viaTraitant ? 'Payable au traitant (hors prime RA, voir plus bas)' : 'Payable au traitant (hors prime RA et hors entrée usine — payée directement aux coopératives)'; ws.getCell('D'+r).value = { formula: viaTraitant ? ('D'+P.prix_entree_usine_fcfa_kg+'+D'+P.commission_traitant_fcfa_kg) : ('D'+P.commission_traitant_fcfa_kg) }; const rT = r; r++;
   ws.mergeCells('B'+r+':C'+r); ws.getCell('B'+r).value = 'Prix total (traitant + prestataire)'; ws.getCell('D'+r).value = { formula:'D'+rT+'+D'+P.frais_usinage_fcfa_kg+'+D'+P.frais_divers_fcfa_kg }; const rTot = r; r++;
   [rT, rTot].forEach(x=>['B','C','D'].forEach(l=>{ const q = ws.getCell(l+x); q.border = cadre; q.font = F({ bold:true }); q.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:JAUNE } }; if (l==='D') q.numFmt = NB3; }));
   // Bloc B : lots (entrée usine, commission, usinage, frais divers — jamais la prime RA : voir Bloc C)
   r += 1;
   const H = ['N°','N° LOT','TYPE','CLIENT','POIDS SORTI USINE (kg)','ENTRÉE USINE (FCFA)','COMMISSION TRAITANT (FCFA)','PAYABLE AU TRAITANT (FCFA)','USINAGE (FCFA)','FRAIS DIVERS (FCFA)','TOTAL LOT (FCFA)','DATE TRANSFERT','ÉCHÉANCE (J+7 ouvrés)'];
   ent(r, H); const hdr = r; r++; const r1 = r;
-  const pe = '$D$'+P.prix_entree_usine_fcfa_kg, pc = '$D$'+P.commission_traitant_fcfa_kg, pu = '$D$'+P.frais_usinage_fcfa_kg, pd = '$D$'+P.frais_divers_fcfa_kg;
+  const pe = viaTraitant ? ('$D$'+P.prix_entree_usine_fcfa_kg) : '0', pc = '$D$'+P.commission_traitant_fcfa_kg, pu = '$D$'+P.frais_usinage_fcfa_kg, pd = '$D$'+P.frais_divers_fcfa_kg;
   lots.forEach((l,i)=>{
     const row = ws.getRow(r);
     const v = [i+1, String(l.numero||''), l.type_cacao||'', l.client||'', finLotPoidsSortie(l)||null,
@@ -9235,27 +9239,27 @@ function finEtatTraitantFeuilles(wb, d){
   syn.forEach(([lib,val],i)=>{ ws.mergeCells('B'+r+':D'+r); ws.getCell('B'+r).value = lib; ws.getCell('E'+r).value = val; ws.getCell('E'+r).numFmt = NB; ['B','C','D','E'].forEach(l=>{ const q = ws.getCell(l+r); q.border = cadre; q.font = F({ bold: i===2 || i===5 }); if (i===2 || i===5) q.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:JAUNE } }; }); r++; });
   ws.views = [{ state:'frozen', ySplit:hdr }];
   ws.pageSetup = { orientation:'landscape', fitToPage:true, fitToWidth:1, fitToHeight:0 };
-  // Feuille 2 : rapprochement déchargé (coopératives, dont prime RA due) ↔ produit (lots)
-  const w2 = wb.addWorksheet('Rapprochement');
-  w2.columns = [{ width:2 },{ width:5 },{ width:30 },{ width:16 },{ width:16 },{ width:16 },{ width:12 },{ width:44 },{ width:18 }];
+  // Feuille 2 : paiement coopératives (prix cacao + prime RA, sur le poids net déchargé) + rapprochement déchargé ↔ lots produits
+  const w2 = wb.addWorksheet('Paiement coopératives');
+  w2.columns = [{ width:2 },{ width:5 },{ width:30 },{ width:16 },{ width:16 },{ width:16 },{ width:16 },{ width:18 },{ width:16 },{ width:12 },{ width:44 }];
   const ent2 = (row, libs)=>{ const h = w2.getRow(row); h.height = 30; libs.forEach((x,i)=>{ const q = h.getCell(i+2); q.value = x; q.font = F({ bold:true, color:{ argb:'FFFFFFFF' } }); q.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:ENTETE } }; q.alignment = { horizontal:'center', vertical:'middle', wrapText:true }; q.border = cadre; }); };
   const liens = (state.lotsUsinageAchats||[]).filter(x=>lots.some(l=>l.id===x.lot_id));
   const kgDecharge = achatsT.reduce((s,a)=>s+(Number(a.poids_net_produit)||0),0), kgLots = lots.reduce((s,l)=>s+finLotPoidsSortie(l),0);
-  w2.getCell('B1').value = 'RAPPROCHEMENT — CACAO DÉCHARGÉ PAR LES COOPÉRATIVES ↔ LOTS PRODUITS CHEZ '+String(traitant).toUpperCase(); w2.getCell('B1').font = F({ size:13, bold:true, color:{ argb:ENTETE } });
-  w2.getCell('B2').value = 'Campagne '+campNom+' · Poids déchargé = poids net payé à l\'usine (pesée) · Poids produit = poids sorti usine des lots · Prime RA = poids déchargé × taux (jamais le poids des lots)'; w2.getCell('B2').font = F({ italic:true, color:{ argb:'FF595959' } });
+  w2.getCell('B1').value = 'PAIEMENT DES COOPÉRATIVES — '+String(traitant).toUpperCase(); w2.getCell('B1').font = F({ size:13, bold:true, color:{ argb:ENTETE } });
+  w2.getCell('B2').value = 'Campagne '+campNom+' · Prix cacao et prime RA : poids net déchargé par la coopérative (jamais le poids des lots) · Poids en lots / écart : rapprochement avec les lots produits'; w2.getCell('B2').font = F({ italic:true, color:{ argb:'FF595959' } });
   let q = 4;
-  const bloc = [['Poids net déchargé par les coopératives (kg)', kgDecharge], ['Poids sorti usine en lots (kg)', { formula:'\'Paiement traitant\'!F'+rTl }], ['Écart : en cours d\'usinage + freinte (kg)', { formula:'D4-D5' }], ['Écart (%)', { formula:'IF(D4>0,D6/D4,"")' }], ['Nombre de connaissements déchargés', achatsT.length], ['Nombre de lots produits', lots.length], ['Lots rattachés à leurs connaissements', liens.length ? new Set(liens.map(x=>x.lot_id)).size : 0], ['Prime Rainforest Alliance due (FCFA)', primeTotal]];
-  bloc.forEach(([lib,val],i)=>{ w2.mergeCells('B'+q+':C'+q); w2.getCell('B'+q).value = lib; w2.getCell('D'+q).value = val; w2.getCell('D'+q).numFmt = i===3 ? '0.0%' : NB; ['B','C','D'].forEach(l=>{ const x = w2.getCell(l+q); x.border = cadre; x.font = F({ bold: i===2 || i===7 }); if (i===2 || i===7) x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:JAUNE } }; }); q++; });
+  const bloc = [['Poids net déchargé par les coopératives (kg)', kgDecharge], ['Prix cacao payé aux coopératives (FCFA)', cacaoTotal], ['Prime Rainforest Alliance due (FCFA)', primeTotal], ['Total payé aux coopératives (FCFA)', { formula:'D5+D6' }], ['Poids sorti usine en lots (kg)', { formula:'\'Paiement traitant\'!F'+rTl }], ['Écart : en cours d\'usinage + freinte (kg)', { formula:'D4-D8' }], ['Écart (%)', { formula:'IF(D4>0,D9/D4,"")' }], ['Nombre de connaissements déchargés', achatsT.length], ['Nombre de lots produits', lots.length], ['Lots rattachés à leurs connaissements', liens.length ? new Set(liens.map(x=>x.lot_id)).size : 0]];
+  bloc.forEach(([lib,val],i)=>{ w2.mergeCells('B'+q+':C'+q); w2.getCell('B'+q).value = lib; w2.getCell('D'+q).value = val; w2.getCell('D'+q).numFmt = i===6 ? '0.0%' : NB; ['B','C','D'].forEach(l=>{ const x = w2.getCell(l+q); x.border = cadre; x.font = F({ bold: i===3 || i===5 }); if (i===3 || i===5) x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:JAUNE } }; }); q++; });
   q += 1;
-  ent2(q, ['N°','COOPÉRATIVE','CONNAISSEMENTS','POIDS DÉCHARGÉ (kg)','POIDS EN LOTS (kg)','ÉCART (kg)','LOTS RATTACHÉS','PRIME RA DUE (FCFA)']); q++;
-  const parCoop = {}; achatsT.forEach(a=>{ const k = a.cooperative_id; (parCoop[k] = parCoop[k] || { n:0, kg:0, kgLots:0, lots:new Set(), prime:0 }); parCoop[k].n++; parCoop[k].kg += Number(a.poids_net_produit)||0; parCoop[k].prime += finPrimeDue(a, tauxRA); liens.filter(x=>x.achat_id===a.id).forEach(x=>{ parCoop[k].kgLots += Number(x.poids_kg)||0; const l = lots.find(y=>y.id===x.lot_id); if (l) parCoop[k].lots.add(String(l.numero)); }); });
+  ent2(q, ['N°','COOPÉRATIVE','CONNAISSEMENTS','POIDS NET DÉCHARGÉ (kg)','PRIX CACAO (FCFA)','PRIME RA DUE (FCFA)','TOTAL PAYÉ À LA COOPÉRATIVE (FCFA)','POIDS EN LOTS (kg)','ÉCART (kg)','LOTS RATTACHÉS']); q++;
+  const parCoop = {}; achatsT.forEach(a=>{ const k = a.cooperative_id; (parCoop[k] = parCoop[k] || { n:0, kg:0, kgLots:0, lots:new Set(), prime:0, cacao:0 }); parCoop[k].n++; parCoop[k].kg += Number(a.poids_net_produit)||0; parCoop[k].prime += finPrimeDue(a, tauxRA); parCoop[k].cacao += finCacaoDu(a, prixEntree); liens.filter(x=>x.achat_id===a.id).forEach(x=>{ parCoop[k].kgLots += Number(x.poids_kg)||0; const l = lots.find(y=>y.id===x.lot_id); if (l) parCoop[k].lots.add(String(l.numero)); }); });
   const q1 = q;
   Object.keys(parCoop).map(k=>({ k, co:coopById(k), d:parCoop[k] })).sort((x,y)=>String(x.co?x.co.nom:'').localeCompare(String(y.co?y.co.nom:''),'fr')).forEach((o,i)=>{
-    const row = w2.getRow(q), v = [i+1, o.co ? o.co.nom : o.k, o.d.n, o.d.kg, o.d.kgLots||null, { formula:'E'+q+'-F'+q }, Array.from(o.d.lots).sort().join(', '), o.d.prime||0];
-    v.forEach((x,k)=>{ const c = row.getCell(k+2); c.value = x; c.border = cadre; c.font = F(); c.alignment = { horizontal: k===1 || k===6 ? 'left' : 'right' }; if ((k>=2 && k<=5) || k===7) c.numFmt = NB; }); q++;
+    const row = w2.getRow(q), v = [i+1, o.co ? o.co.nom : o.k, o.d.n, o.d.kg, o.d.cacao||0, o.d.prime||0, { formula:'F'+q+'+G'+q }, o.d.kgLots||null, { formula:'E'+q+'-I'+q }, Array.from(o.d.lots).sort().join(', ')];
+    v.forEach((x,k)=>{ const c = row.getCell(k+2); c.value = x; c.border = cadre; c.font = F(k===6 ? { bold:true } : {}); c.alignment = { horizontal: k===1 || k===9 ? 'left' : 'right' }; if (k>=2 && k<=8) c.numFmt = NB; }); q++;
   });
-  const t2 = w2.getRow(q); t2.getCell(3).value = 'TOTAL'; ['D','E','F','G','I'].forEach(l=>{ t2.getCell(l).value = { formula:'SUM('+l+q1+':'+l+(q-1)+')' }; t2.getCell(l).numFmt = NB; });
-  for (let k=2;k<=9;k++){ const c = t2.getCell(k); c.border = cadre; c.font = F({ bold:true }); c.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:JAUNE } }; }
+  const t2 = w2.getRow(q); t2.getCell(3).value = 'TOTAL'; ['D','E','F','G','H','I','J'].forEach(l=>{ t2.getCell(l).value = { formula:'SUM('+l+q1+':'+l+(q-1)+')' }; t2.getCell(l).numFmt = NB; });
+  for (let k=2;k<=11;k++){ const c = t2.getCell(k); c.border = cadre; c.font = F({ bold:true }); c.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:JAUNE } }; }
   q += 2;
   ent2(q, ['N°','N° LOT','POIDS SORTI USINE (kg)','POIDS DÉCHARGÉ RATTACHÉ (kg)','FREINTE (kg)','FREINTE (%)','CONNAISSEMENTS RATTACHÉS']); q++;
   lots.forEach((l,i)=>{
@@ -9645,6 +9649,7 @@ function ctrOuvrir(t){
 function ctrLire(nom){
   const f = { nom }; CTR_FICHE_CHAMPS.forEach(k=>{ f[k] = String(fv('ct_'+k)||'').trim() || null; });
   CTR_PRIX_CHAMPS.forEach(([k])=>{ const v = Number(String(fv('ct_'+k)||'').replace(/\s/g,'').replace(',', '.')); f[k] = v>0 ? v : null; });
+  { const el = document.querySelector('#modal-fields [name="ct_vt"]'); f.prix_entree_usine_via_traitant = el ? !!el.checked : true; }
   f.type_partie = fvRadio('ct_type_partie') || 'societe';
   const sites = ctrSitesDe(nom).filter(s=>{ const el = document.querySelector('#modal-fields [name="ct_site_'+s.code+'"]'); return el && el.checked; });
   return { f, o:{ nom, sites, qte:fv('ct_qte'), loco:String(fv('ct_loco')).replace(',', '.'), sac:String(fv('ct_sac')).replace(',', '.'), dateLimite:fv('ct_limite'), dateSign:fv('ct_sign') } };
@@ -9726,8 +9731,9 @@ function renderCtrModal(m){
     + '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:0 12px">'
     + CTR_PRIX_CHAMPS.map(([k,lib])=>'<label class="field">'+lib+'<input type="text" name="ct_'+k+'" value="'+esc(f[k]!==null && f[k]!==undefined ? String(f[k]).replace('.', ',') : '')+'" placeholder="0,000"></label>').join('')
     + '<label class="field">Prestataire d\'usinage (payé à part)<input type="text" name="ct_prestataire_usinage" value="'+esc(f.prestataire_usinage||'')+'" placeholder="ex. IPSC"></label>'
-    + '<div class="hint" style="align-self:end;padding-bottom:10px">Payable au traitant = entrée usine + commission (sur le poids sorti usine de chaque lot) · Total = + usinage + frais divers. La prime Rainforest Alliance est à part : elle se paye sur le poids net déchargé par les coopératives, jamais sur le poids des lots produits.</div>'
     + '</div>'
+    + '<label style="display:flex;align-items:center;gap:8px;margin:8px 0"><input type="checkbox" name="ct_vt"'+(f.prix_entree_usine_via_traitant===false?'':' checked')+'> Le prix entrée usine est payé au traitant (il règle lui-même les coopératives) — décoche si ECORIGINE paye les coopératives directement et que le traitant/prestataire n\'est payé que pour l\'usinage et les frais divers (ex. SICOCOA)</label>'
+    + '<div class="hint" style="margin:0 0 10px">Payable au traitant = (entrée usine si coché) + commission, sur le poids sorti usine de chaque lot · Total = + usinage + frais divers. La prime Rainforest Alliance est toujours à part : elle se paye sur le poids net déchargé par les coopératives, jamais sur le poids des lots produits — tout comme le prix du cacao payé aux coopératives (feuille « Paiement coopératives »), que le prix entrée usine passe ou non par le traitant.</div>'
     + '</div><div class="actions"><button class="btn" onclick="closeModal()">Fermer</button><button class="btn" onclick="ctrEnregistrerFiche(\''+esc(nom).replace(/'/g,"\\'")+'\')">Enregistrer la fiche</button><button class="btn btn-primary" onclick="ctrTelecharger(\''+esc(nom).replace(/'/g,"\\'")+'\', this)">Générer le contrat (Word)</button></div></div></div>';
 }
 
@@ -12888,79 +12894,135 @@ function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds, Rflat){
   const milliers = n=>String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
   const etiq = t=>suvCourt(t.coop)+' ('+t.conn+')';
   const put = (ws, r, c, v, o)=>{ o = o||{}; const x = ws.getCell(r,c); x.value = v; x.font = o.color ? Object.assign({}, o.b ? FB : FN, { color:o.color }) : (o.b ? FB : FN); if (o.fmt) x.numFmt = o.fmt; if (o.al) x.alignment = o.al; if (o.fill) x.fill = o.fill; if (o.box) x.border = cadre; return x; };
-  // Première feuille du classeur (« le premier rapport ») : le tableau simple habituel (déchargements ↔
-  // lots produits, niveau fabrication) pour CE dossier, repris aux mêmes couleurs et à la même logique
-  // d'agencement que le modèle d'usinage fourni par l'usinier (classeur « Rapport d'usinage » type Cargill,
-  // feuille « Retraité ») : bandeau d'en-tête vert pâle filant sur tout le tableau (camions à gauche, lots
-  // à droite), colonne tampon étroite noircie entre les deux blocs pour les séparer visuellement, total en
-  // rouge gras juste sous l'en-tête.
-  const VERT_MODELE = fond('FFD9F2D0'), NOIR = fond('FF000000'), ROUGE = { argb:'FFFF0000' };
-  if (Rflat){
-    const fs = wb.addWorksheet('Tableau simple', { views:[{ state:'frozen', ySplit:3 }], pageSetup:{ fitToPage:true, fitToWidth:1, fitToHeight:0, orientation:'landscape' } });
-    RDUE_ENTETE_FAB.forEach((h,k)=>put(fs,3,k+1,h||'',{ b:true, fill:VERT_MODELE, al:CTR, box:true }));
-    fs.getRow(3).height = 32;
-    const lignesF = rdueLignes(Rflat,'fab'); let rf = 7;
-    put(fs,5,1,'TOTAL',{ b:true }); put(fs,5,7,'',{ fill:NOIR }); put(fs,6,7,'',{ fill:NOIR });
-    lignesF.forEach(l=>{
-      l.forEach((v,i)=>{ put(fs,rf,i+1,(i===6)?'':((v===null||v===undefined||v==='')?'':v),{ al:CTR, fmt:[4,5,9].includes(i)?NUM:undefined, box:i!==6, fill:i===6?NOIR:undefined }); });
-      rf++;
+  // Première feuille du classeur (« le premier rapport ») : le tableau simple (déchargements <-> lots
+  // produits, niveau fabrication), aux mêmes couleurs et à la même logique d'agencement que le modèle
+  // d'usinage fourni par l'usinier (classeur « Rapport d'usinage » type Cargill, feuille « Retraité ») :
+  // bandeau d'en-tête vert pâle, colonne tampon noircie en continu entre camions et lots, cadre en gras
+  // (sans quadrillage interne) autour de chaque groupe de date de production, total en rouge gras.
+  // Construite à partir des MÊMES séances que RECAP LOTS et les feuilles de détail ci-dessous (M, issu de
+  // suvBatir) -- jamais d'un calcul séparé -- pour que ce premier tableau corresponde toujours aux autres
+  // feuilles. Seule la colonne des lots est restreinte au périmètre du dossier (scopeIds) quand il est
+  // fourni ; les camions et les queues de lot montrent la séance entière, exactement comme sur les feuilles
+  // de séance (une séance gardée l'est en entier, jamais coupée en deux).
+  const VERT_MODELE = fond('FFD9F2D0'), NOIR = fond('FF000000'), ROUGE = { argb:'FFFF0000' }, QUEUE_FONT_TS = { argb:'FFE36C0A' };
+  const epais = { style:'thick', color:{ argb:'FF000000' } };
+  {
+    const dansPerimetreTS = L=>!scopeIds || scopeIds.has(L.id);
+    const sheetsTS = M.sheets.filter(s=>s.lots.some(dansPerimetreTS));
+    const fs = wb.addWorksheet('Tableau simple', { views:[{ state:'frozen', ySplit:3, showGridLines:false }], pageSetup:{ fitToPage:true, fitToWidth:1, fitToHeight:0, orientation:'landscape' } });
+    RDUE_ENTETE_FAB.forEach((h,k)=>{
+      const c = fs.getCell(3,k+1); c.value = h||''; c.font = FB; c.alignment = CTR; c.fill = k===6?NOIR:VERT_MODELE;
+      c.border = { left:k===0?epais:undefined, right:k===10?epais:undefined, top:epais, bottom:epais };
     });
-    const finF = rf-1;
-    [['E','E'],['F','F'],['J','J']].forEach(([col])=>{ put(fs,5,col.charCodeAt(0)-64,{ formula:'SUM('+col+'7:'+col+finF+')', result:col==='E'?Rflat.net:(col==='F'?Rflat.sacs:Rflat.kg) },{ b:true, fmt:NUM, color:ROUGE }); });
-    [40,14,16,16,14,10,3,14,10,14,16].forEach((w,k)=>{ fs.getColumn(k+1).width = w; });
+    fs.getRow(3).height = 28;
+    put(fs,5,1,'TOTAL',{ b:true });
+    // regroupement par date calendaire (une séance scindée en 2 passages le même jour reste un seul
+    // groupe : rien n'est dissocié de ce qui a été usiné le même jour)
+    const groupesTS = []; let courTS = null;
+    sheetsTS.forEach(s=>{ if (courTS && courTS.d===s.d) courTS.sh.push(s); else { courTS = { d:s.d, sh:[s] }; groupesTS.push(courTS); } });
+    const setQ = (r,c,v)=>{ const x = fs.getCell(r,c); x.value = v; x.font = { name:'Arial', size:10, bold:true, italic:true, color:QUEUE_FONT_TS }; x.alignment = CTR; };
+    // Les lignes « QUEUE DE LOT » affichent leur poids dans la MÊME colonne (E côté camions, J côté lots)
+    // que les lignes réelles, pour qu'elles restent visibles dans l'alignement du tableau -- mais ce poids
+    // est déjà compté dans une séance voisine (c'est la même eau reportée), donc le total ne doit sommer
+    // QUE les lignes réelles : on retient leurs adresses au fil de la construction plutôt que d'utiliser un
+    // SUM(plage) qui compterait deux fois chaque queue de lot.
+    let rowTS = 7, totCamE = 0, totCamF = 0, totLotJ = 0; const camRows = [], lotRows = [];
+    groupesTS.forEach(g=>{
+      const first = rowTS;
+      let rc = rowTS;
+      g.sh.forEach((s,si)=>{
+        if (si===0 && s.report > 0.5){ setQ(rc,2,'QUEUE DE LOT'); const x = fs.getCell(rc,5); x.value = Math.round(s.report); x.numFmt = NUM; x.font = { name:'Arial', size:10, bold:true, italic:true, color:QUEUE_FONT_TS }; x.alignment = CTR; rc++; }
+        s.idxs.forEach(i=>{
+          const t = M.T[i], sacs = achatSacsRetenus(t.a);
+          put(fs,rc,1,t.jour,{ al:CTR }); put(fs,rc,2,suvCourt(t.coop),{ al:CTR });
+          put(fs,rc,3,rdueImmat(t.a),{ al:CTR }); put(fs,rc,4,t.conn,{ al:CTR });
+          put(fs,rc,5,t.avant,{ al:CTR, fmt:NUM }); put(fs,rc,6,sacs,{ al:CTR, fmt:NUM });
+          totCamE += t.avant; totCamF += sacs; camRows.push(rc); rc++;
+        });
+      });
+      let rl = rowTS;
+      g.sh.forEach((s,si)=>{
+        s.lots.filter(dansPerimetreTS).forEach(L=>{
+          put(fs,rl,8,M.lotdate[L.num]||'',{ al:CTR }); put(fs,rl,9,L.num,{ al:CTR, fmt:'0' });
+          put(fs,rl,10,L.w,{ al:CTR, fmt:NUM }); put(fs,rl,11,L.client||'',{ al:CTR });
+          totLotJ += L.w; lotRows.push(rl); rl++;
+        });
+        if (si===g.sh.length-1 && s.queue > 0.5){ setQ(rl,9,'QUEUE DE LOT'); const x = fs.getCell(rl,10); x.value = Math.round(s.queue); x.numFmt = NUM; x.font = { name:'Arial', size:10, bold:true, italic:true, color:QUEUE_FONT_TS }; x.alignment = CTR; rl++; }
+      });
+      const last = Math.max(rc, rl) - 1;
+      for (let rr=rowTS; rr<=last; rr++) fs.getCell(rr,7).fill = NOIR;
+      [1,2,3,4,5,6,8,9,10,11].forEach(c=>{
+        const a = fs.getCell(first,c); a.border = Object.assign({}, a.border, { top:epais });
+        const b = fs.getCell(last,c); b.border = Object.assign({}, b.border, { bottom:epais });
+      });
+      rowTS = last + 1;
+    });
+    // la barre noire ne doit avoir aucune interruption : noircie sur toute la hauteur du tableau, du
+    // haut (au-dessus même de l'en-tête) jusqu'à la dernière ligne de données, pas seulement à l'intérieur
+    // de chaque groupe
+    for (let rr=1; rr<=rowTS-1; rr++) fs.getCell(rr,7).fill = NOIR;
+    const sumAdr = (col, rows)=>'SUM('+rows.map(r=>col+r).join(',')+')';
+    put(fs,5,5,{ formula:sumAdr('E',camRows), result:totCamE },{ b:true, fmt:NUM, color:ROUGE });
+    put(fs,5,6,{ formula:sumAdr('F',camRows), result:totCamF },{ b:true, fmt:NUM, color:ROUGE });
+    put(fs,5,10,{ formula:sumAdr('J',lotRows), result:totLotJ },{ b:true, fmt:NUM, color:ROUGE });
+    [14,20,14,20,12,10,3,14,10,12,14].forEach((w,k)=>{ fs.getColumn(k+1).width = w; });
   }
-  // RECAP LOTS
-  const ws = wb.addWorksheet('RECAP LOTS', { views:[{ state:'frozen', ySplit:3 }], pageSetup:{ fitToPage:true, fitToWidth:1, fitToHeight:0, orientation:'landscape' } });
-  put(ws,1,1,meta.titre,{ b:true }).font = { name:'Arial', size:12, bold:true };
-  const entetesBase = ['N° lot','Client','Date de production','Pesée AGL (port)','Poids du lot (kg)','Composition (coopérative (n° de connaissement) : kg)'];
-  const entetes = avecOT ? entetesBase.concat(['OT','Réf. vendeur','N° BL']) : entetesBase;
-  entetes.forEach((h,k)=>put(ws,3,k+1,h,{ b:true, fill:HEAD, al:CTR, box:true }));
-  ws.getRow(3).height = 32;
-  let r = 4; const R0 = r;
   // scopeIds (optionnel) : limite le rapport à une série précise de lots -- celle présentée à CE client dans
   // CE dossier -- plutôt que tout l'historique du site. Le calcul (suvBatir) reste fait sur l'ensemble du
   // site, pour que l'imputation des camions et la queue de lot restent justes ; seul l'AFFICHAGE (récap +
   // feuilles de séance) est restreint ici. Une séance est gardée entière dès qu'elle contient au moins un
   // lot du périmètre (la freinte d'une séance ne se recalcule pas en coupant ses camions ou ses lots en deux).
   const dansPerimetre = L=>!scopeIds || scopeIds.has(L.id);
-  // Dans la version « dossier de conformité » (avecOT), les lots sont classés par OT (les lots pas encore
-  // sous OT restent à la fin, classés par numéro) : c'est la liste que voit le client, donc organisée selon
-  // ce qui compte pour lui. Les feuilles de séance (camions, queue de lot) ci-dessous restent, elles,
-  // dans l'ordre chronologique de production -- ce classement n'affecte que ce récapitulatif.
-  const lotsAffiches = M.lots.filter(dansPerimetre);
-  if (avecOT){
-    const ot = L=>shipOtDuLot(L.id);
-    lotsAffiches.sort((a,b)=>{
-      const oa = ot(a), ob = ot(b);
-      if (!oa && !ob) return a.num-b.num;
-      if (!oa) return 1; if (!ob) return -1;
-      return String(oa.numero||'').localeCompare(String(ob.numero||''),'fr') || a.num-b.num;
-    });
-  }
-  lotsAffiches.forEach(L=>{
-    put(ws,r,1,L.num,{ al:CTR, fmt:'0', box:true }); put(ws,r,2,L.client||'',{ al:CTR, box:true }); put(ws,r,3,M.lotdate[L.num]||'',{ al:CTR, box:true }); put(ws,r,4,L.agl||'',{ al:CTR, box:true });
-    put(ws,r,5,L.w,{ fmt:NUM, box:true });
-    const parts = new Map(); (M.comp[L.num]||[]).forEach(([i,k])=>{ const e = etiq(M.T[i]); parts.set(e, (parts.get(e)||0)+k); });
-    put(ws,r,6,Array.from(parts.entries()).map(([e,v])=>e+' : '+milliers(v)).join(' ; '),{ al:{ wrapText:true, vertical:'middle' }, box:true });
-    if (avecOT){
-      const ot = shipOtDuLot(L.id);
-      put(ws,r,7,ot ? ot.numero : '— pas encore sous OT —',{ al:CTR, box:true });
-      put(ws,r,8,ot ? (ot.ref_vendeur||'') : '',{ al:CTR, box:true });
-      put(ws,r,9,ot ? (ot.bl_numero||'') : '',{ al:CTR, box:true });
-    }
-    r++;
-  });
-  const RL = r-1, totLots = lotsAffiches.reduce((s,L)=>s+L.w,0);
-  put(ws,r,1,'TOTAL',{ b:true }); put(ws,r,5,{ formula:'SUM(E'+R0+':E'+RL+')', result:totLots },{ b:true, fmt:NUM }); r++;
-  meta.clients.forEach(cl=>{
-    put(ws,r,1,'dont '+cl.nom+' ('+cl.mn+'–'+cl.mx+')',{ b:true });
-    put(ws,r,5,{ formula:'SUMIF(B'+R0+':B'+RL+',"'+cl.nom+'",E'+R0+':E'+RL+')', result:lotsAffiches.filter(L=>L.client===cl.nom).reduce((s,L)=>s+L.w,0) },{ b:true, fmt:NUM }); r++;
-  });
-  r++;
   const sheetsAffichees = M.sheets.filter(s=>s.lots.some(dansPerimetre));
-  const totAvantAffiche = scopeIds ? sheetsAffichees.reduce((s,sh)=>s+sh.idxs.reduce((u,i)=>u+M.T[i].avant,0),0) : M.totAvant;
-  put(ws,r,1,'Camions vidés (poids net avant réfaction)',{ b:true }); put(ws,r,5,totAvantAffiche,{ b:true, fmt:NUM });
-  (avecOT ? [40,12,20,16,16,120,18,22,16] : [40,12,20,16,16,120]).forEach((w,k)=>{ ws.getColumn(k+1).width = w; });
+  // RECAP LOTS -- absente du dossier envoyé au client (avecOT) : pour ce dossier, seul le tableau simple
+  // ci-dessus (déjà filtré au périmètre du client) est montré ; RECAP LOTS reste utile pour le rapport
+  // interne (lotsRapportSuv, sans OT), où elle donne le détail de composition par camion de chaque lot.
+  if (!avecOT){
+    const ws = wb.addWorksheet('RECAP LOTS', { views:[{ state:'frozen', ySplit:3 }], pageSetup:{ fitToPage:true, fitToWidth:1, fitToHeight:0, orientation:'landscape' } });
+    put(ws,1,1,meta.titre,{ b:true }).font = { name:'Arial', size:12, bold:true };
+    const entetesBase = ['N° lot','Client','Date de production','Pesée AGL (port)','Poids du lot (kg)','Composition (coopérative (n° de connaissement) : kg)'];
+    const entetes = avecOT ? entetesBase.concat(['OT','Réf. vendeur','N° BL']) : entetesBase;
+    entetes.forEach((h,k)=>put(ws,3,k+1,h,{ b:true, fill:HEAD, al:CTR, box:true }));
+    ws.getRow(3).height = 32;
+    let r = 4; const R0 = r;
+    // Dans la version « dossier de conformité » (avecOT), les lots sont classés par OT (les lots pas encore
+    // sous OT restent à la fin, classés par numéro) : c'est la liste que voit le client, donc organisée selon
+    // ce qui compte pour lui. Les feuilles de séance (camions, queue de lot) ci-dessous restent, elles,
+    // dans l'ordre chronologique de production -- ce classement n'affecte que ce récapitulatif.
+    const lotsAffiches = M.lots.filter(dansPerimetre);
+    if (avecOT){
+      const ot = L=>shipOtDuLot(L.id);
+      lotsAffiches.sort((a,b)=>{
+        const oa = ot(a), ob = ot(b);
+        if (!oa && !ob) return a.num-b.num;
+        if (!oa) return 1; if (!ob) return -1;
+        return String(oa.numero||'').localeCompare(String(ob.numero||''),'fr') || a.num-b.num;
+      });
+    }
+    lotsAffiches.forEach(L=>{
+      put(ws,r,1,L.num,{ al:CTR, fmt:'0', box:true }); put(ws,r,2,L.client||'',{ al:CTR, box:true }); put(ws,r,3,M.lotdate[L.num]||'',{ al:CTR, box:true }); put(ws,r,4,L.agl||'',{ al:CTR, box:true });
+      put(ws,r,5,L.w,{ fmt:NUM, box:true });
+      const parts = new Map(); (M.comp[L.num]||[]).forEach(([i,k])=>{ const e = etiq(M.T[i]); parts.set(e, (parts.get(e)||0)+k); });
+      put(ws,r,6,Array.from(parts.entries()).map(([e,v])=>e+' : '+milliers(v)).join(' ; '),{ al:{ wrapText:true, vertical:'middle' }, box:true });
+      if (avecOT){
+        const ot = shipOtDuLot(L.id);
+        put(ws,r,7,ot ? ot.numero : '— pas encore sous OT —',{ al:CTR, box:true });
+        put(ws,r,8,ot ? (ot.ref_vendeur||'') : '',{ al:CTR, box:true });
+        put(ws,r,9,ot ? (ot.bl_numero||'') : '',{ al:CTR, box:true });
+      }
+      r++;
+    });
+    const RL = r-1, totLots = lotsAffiches.reduce((s,L)=>s+L.w,0);
+    put(ws,r,1,'TOTAL',{ b:true }); put(ws,r,5,{ formula:'SUM(E'+R0+':E'+RL+')', result:totLots },{ b:true, fmt:NUM }); r++;
+    meta.clients.forEach(cl=>{
+      put(ws,r,1,'dont '+cl.nom+' ('+cl.mn+'–'+cl.mx+')',{ b:true });
+      put(ws,r,5,{ formula:'SUMIF(B'+R0+':B'+RL+',"'+cl.nom+'",E'+R0+':E'+RL+')', result:lotsAffiches.filter(L=>L.client===cl.nom).reduce((s,L)=>s+L.w,0) },{ b:true, fmt:NUM }); r++;
+    });
+    r++;
+    const totAvantAffiche = scopeIds ? sheetsAffichees.reduce((s,sh)=>s+sh.idxs.reduce((u,i)=>u+M.T[i].avant,0),0) : M.totAvant;
+    put(ws,r,1,'Camions vidés (poids net avant réfaction)',{ b:true }); put(ws,r,5,totAvantAffiche,{ b:true, fmt:NUM });
+    (avecOT ? [40,12,20,16,16,120,18,22,16] : [40,12,20,16,16,120]).forEach((w,k)=>{ ws.getColumn(k+1).width = w; });
+  }
   // une feuille par séance
   const noms = new Set();
   sheetsAffichees.forEach(s=>{
