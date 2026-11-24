@@ -4889,7 +4889,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-23-608';
+const APP_VERSION = '2026-11-24-609';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -15068,7 +15068,7 @@ function renderTracageDirect(tr){
 // Le rapport d'usinage est UNIQUE : il est le même pour tous les clients. Seules la géolocalisation et les volumes (étape 4) suivent le format du client.
 // Date de production d'un lot : celle de l'usinier si elle est saisie (« usinier »), sinon reconstituée (« reconstituée ») = jour où le cumul des
 // camions déchargés (dans l'ordre de pesée, poids net payé) atteint le cumul des lots du site.
-function rdueEtat(){ return state.rdue || (state.rdue = { client:'', etape:1, niveau:'fab', decoches:{}, ajoutes:[], ajout:'', msg:'' }); }
+function rdueEtat(){ return state.rdue || (state.rdue = { client:'', etape:1, niveau:'fab', decoches:{}, ajoutes:[], ajout:'', msg:'', cible:'', cibleConfirmee:false }); }
 function rdueNumLot(l){ const n = parseInt(String(l.numero).replace(/\D+/g,''),10); return isNaN(n) ? null : n; }
 function rdueDatePesee(a){
   const d = pdDate(a,'Date P2') || pdDate(a,'Date P1');
@@ -15095,7 +15095,19 @@ function rdueCalcul(site){
   const nonAffecte = reste.reduce((s,x)=>s+Math.max(0,x),0);
   return { camions, vivants, lots, parLot, nonAffecte };
 }
-function rdueSetClient(v){ const e = rdueEtat(); e.client = v; e.decoches = {}; e.ajoutes = []; e.msg = ''; render(); }
+function rdueSetClient(v){ const e = rdueEtat(); e.client = v; e.decoches = {}; e.ajoutes = []; e.msg = ''; e.cible = ''; e.cibleConfirmee = false; render(); }
+// Tonnage visé pour ce client : on coche les lots du client par numéro croissant jusqu'à atteindre le tonnage
+// (le lot qui fait franchir le seuil reste coché — on ne coupe jamais un lot en deux), le reste est décoché.
+// Le mécanisme de case à cocher existant (rdueCoche / « Choix des lots ») reste utilisable ensuite pour ajuster.
+function rdueAppliquerCible(){
+  const e = rdueEtat(), cible = Number(e.cible)||0;
+  const tous = (state.lotsUsinage||[]).filter(l=>rdueNumLot(l)!=null && l.client===e.client).sort(rdueParNum);
+  e.decoches = {};
+  if (cible>0){ let cumul = 0; tous.forEach(l=>{ if (cumul>=cible){ e.decoches[l.id] = true; return; } cumul += lotsUsinagePoidsRetenu(l); }); }
+  render();
+}
+function rdueConfirmerCible(){ const e = rdueEtat(); e.cibleConfirmee = true; e.etape = 1; window.scrollTo(0,0); render(); }
+function rdueChangerCible(){ rdueEtat().cibleConfirmee = false; window.scrollTo(0,0); render(); }
 function rdueCoche(id){ const e = rdueEtat(); if (e.ajoutes.indexOf(id)>=0) e.ajoutes = e.ajoutes.filter(x=>x!==id); else if (e.decoches[id]) delete e.decoches[id]; else e.decoches[id] = true; render(); }
 function rdueAjouter(){
   const e = rdueEtat(), t = String(e.ajout||'').trim(); if (!t) return;
@@ -15172,6 +15184,26 @@ const RDUE_CSS = '<style>.rdue-tbl{width:100%;border-collapse:collapse;font-size
 function rdueNav(n, texte){
   return '<div class="rdue-nav"><span>'+(texte||'')+'</span><span style="display:flex;gap:8px">'+(n>1 ? '<button class="btn" onclick="rdueEtape('+(n-1)+')">‹ Retour</button>' : '')+(n<4 ? '<button class="btn btn-primary" onclick="rdueEtape('+(n+1)+')">Continuer ›</button>' : '')+'</span></div>';
 }
+// Portail d'entrée du dossier RDUE : on choisit le client ET le tonnage à lui présenter AVANT toute autre
+// étape (géolocalisation, liasses, rapport, choix des lots) — tout le reste s'adapte ensuite à ce volume.
+// Ce n'est plus une sélection de lots au cas par cas mais un objectif de poids ; rdueAppliquerCible() s'en
+// charge (numéros de lot croissants), et « Choix des lots » (étape 4) reste disponible pour ajuster à la main.
+function rdueEtapeCible(clients){
+  const e = rdueEtat();
+  const tous = (state.lotsUsinage||[]).filter(l=>rdueNumLot(l)!=null && l.client===e.client);
+  const dispoKg = tous.reduce((s,l)=>s+lotsUsinagePoidsRetenu(l),0), dispoN = tous.length;
+  const S = rdueSelection(), kgChoisi = S.coches.reduce((s,l)=>s+lotsUsinagePoidsRetenu(l),0);
+  return '<div class="panel"><h3 style="margin:0 0 6px">Client et volume du dossier</h3>'
+    + '<p class="hint" style="margin-bottom:14px">Avant de préparer le dossier, choisis le client et le tonnage à lui présenter : le rapport d\'usinage, les liasses, les fiches et la géolocalisation s\'adaptent ensuite à ce volume — pas forcément à tout le potentiel disponible.</p>'
+    + '<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;margin-bottom:10px">'
+    + '<label class="field" style="min-width:200px">Client<select onchange="rdueSetClient(this.value)">'+clients.map(c=>'<option value="'+esc(c)+'"'+(c===e.client?' selected':'')+'>'+esc(c)+'</option>').join('')+'</select></label>'
+    + '<label class="field" style="min-width:220px">Tonnage à présenter (kg)<input type="number" min="0" step="1" placeholder="laisser vide = tout" value="'+esc(e.cible||'')+'" oninput="rdueEtat().cible=this.value" onchange="rdueAppliquerCible()"></label>'
+    + '</div>'
+    + '<p class="hint" style="margin-bottom:10px">'+fmtNum(dispoN)+' lot(s) disponibles pour '+esc(e.client||'ce client')+', '+fmtNum(dispoKg)+' kg au total.</p>'
+    + (e.cible ? '<p>Sélection actuelle (numéros de lot croissants, ajustable à l\'étape suivante) : <b>'+S.coches.length+' lot(s)</b> · <b>'+fmtNum(kgChoisi)+' kg</b> sur <b>'+fmtNum(Number(e.cible))+' kg</b> visés.</p>' : '<p class="hint">Laisse le tonnage vide pour présenter tout le potentiel disponible pour ce client.</p>')
+    + '<div class="rdue-nav"><span></span><button class="btn btn-primary" onclick="rdueConfirmerCible()">Confirmer et continuer ›</button></div>'
+    + '</div>';
+}
 function rdueEtape1(clients){
   const e = rdueEtat(), S = rdueSelection(), kg = S.coches.reduce((s,l)=>s+lotsUsinagePoidsRetenu(l),0);
   const ligne = (l, ajout)=>{
@@ -15208,22 +15240,47 @@ function rdueEtape3(){
   const R = rdueRapport(), parCn = {};
   (state.liasseFichiers||[]).forEach(f=>{ const k = liasseCnNorm(f.connaissement||f.nom); if (k) (parCn[k] = parCn[k]||[]).push(f); });
   const cnt = { present:0, serge:0, manquant:0 };
+  const coops = new Map();
   const rows = R.cams.map(c=>{
     const a = c.a, fs = parCn[liasseCnNorm(a.connaissement)]||[], nabi = fs.filter(f=>f.source!=='serge'), serge = fs.filter(f=>f.source==='serge');
     const st = nabi.length ? 'present' : serge.length ? 'serge' : 'manquant'; cnt[st]++;
+    const cid = a.cooperative_id || '?';
+    if (!coops.has(cid)) coops.set(cid, { nom: rdueCoopNom(a), nCam:0, present:0, serge:0, manquant:0 });
+    const g = coops.get(cid); g.nCam++; g[st]++;
     return '<tr><td>'+(c.d?esc(dateFr(c.d.iso)):'')+'</td><td>'+esc(rdueCoopNom(a))+'</td><td style="font-family:monospace;font-size:12.5px;white-space:nowrap">'+esc(a.connaissement)+'</td><td>'+liassePastille(st)+'</td><td class="r">'+fs.length+'</td></tr>';
   }).join('');
+  // Regroupé par coopérative (nombre de camions/connaissements, présents/chez Serge/manquants) : réduit le
+  // tableau d'une ligne par camion à une ligne par coopérative. Le détail camion par camion reste en dessous.
+  const lignesCoop = Array.from(coops.values()).sort((a,b)=>String(a.nom).localeCompare(String(b.nom),'fr'))
+    .map(g=>'<tr><td><b>'+esc(g.nom)+'</b></td><td class="r">'+g.nCam+'</td><td class="r" style="color:#1e8449">'+g.present+'</td><td class="r" style="color:#1F4E8C">'+g.serge+'</td><td class="r" style="color:'+(g.manquant?'#b36b00':'#999')+'">'+g.manquant+'</td></tr>').join('');
   return '<div class="panel"><h3 style="margin:0 0 10px">2. Liasses et fiches</h3>'
     + (state.liasseCharge ? '<div style="display:flex;flex-wrap:wrap;gap:6px 24px;margin-bottom:12px"><div><b style="font-size:17px">'+cnt.present+'</b><div class="hint">liasses présentes</div></div><div><b style="font-size:17px">'+cnt.serge+'</b><div class="hint">chez Serge seulement</div></div><div><b style="font-size:17px">'+cnt.manquant+'</b><div class="hint">manquantes</div></div></div>' : '<div class="hint">Chargement de l\'inventaire des liasses…</div>')
+    + (lignesCoop ? '<div style="overflow-x:auto"><table class="rdue-tbl"><thead><tr><th>Coopérative</th><th class="r">Camions</th><th class="r">Présentes</th><th class="r">Chez Serge</th><th class="r">Manquantes</th></tr></thead><tbody>'+lignesCoop+'</tbody></table></div>' : '')
+    + '<p class="hint" style="margin:14px 0 6px">Détail camion par camion ('+R.cams.length+')</p>'
     + '<div style="overflow-x:auto"><table class="rdue-tbl"><thead><tr><th>Date de déchargement</th><th>Coopérative</th><th>N° de connaissement</th><th>Liasse documentaire</th><th class="r">Fichiers</th></tr></thead><tbody>'+rows+'</tbody></table></div>'
     + '<p class="hint" style="margin-top:10px">L\'archive zip des liasses et des fiches de traçabilité reste à construire : les PDF sont rangés dans OneDrive, pas dans ORIGEN.</p>'
     + rdueNav(2, '<b>'+R.cams.length+' camions</b>')+'</div>';
 }
+// Pour chaque coopérative des lots choisis : a-t-on bien ses données de géolocalisation (celles transmises
+// par ECORIGINE, type 'geolocalisation' dans coopDatabaseFiles) — les mêmes qui ont servi à tracer les
+// volumes à l'origine. Simple vérification de présence, rien n'est recalculé ici.
+function rdueGeolocCoops(){
+  const R = rdueRapport(), coops = new Map();
+  R.cams.forEach(c=>{ const id = c.a.cooperative_id || '?'; if (!coops.has(id)) coops.set(id, { id, nom: rdueCoopNom(c.a), nCam:0 }); coops.get(id).nCam++; });
+  const filesByCoop = {};
+  (state.coopDatabaseFiles||[]).forEach(f=>{ if (!filesByCoop[f.cooperative_id]) filesByCoop[f.cooperative_id] = {}; filesByCoop[f.cooperative_id][f.type] = f; });
+  return Array.from(coops.values()).map(g=>Object.assign(g, { geoloc: !!(filesByCoop[g.id] && filesByCoop[g.id].geolocalisation) }))
+    .sort((a,b)=>String(a.nom).localeCompare(String(b.nom),'fr'));
+}
 function rdueEtape4(){
-  const R = rdueRapport();
+  const G = rdueGeolocCoops(), nOk = G.filter(g=>g.geoloc).length, tout = G.length>0 && nOk===G.length;
+  const lignes = G.map(g=>'<tr><td><b>'+esc(g.nom)+'</b></td><td class="r">'+g.nCam+'</td><td>'+(g.geoloc ? '<span class="badge ok">✔ Données présentes</span>' : '<span class="badge warn" style="font-weight:700">— Manquantes</span>')+'</td></tr>').join('');
   return '<div class="panel"><h3 style="margin:0 0 10px">1. Géolocalisation et volumes</h3>'
-    + '<p>Première étape du dossier : la géolocalisation des parcelles et les volumes, dans le format de chaque client. Elle part des '+R.lots.length+' lots et des '+R.cams.length+' camions choisis à l\'étape « Choix des lots ».</p>'
-    + '<p class="hint" style="margin-top:8px">À construire à partir du format du client. Envoie-moi son modèle pour que je le reprenne tel quel.</p>'
+    + '<p>Pour chaque coopérative des lots choisis, on confirme que ses données de géolocalisation — celles qui ont servi à tracer les volumes à l\'origine — sont bien enregistrées dans ORIGEN.</p>'
+    + (G.length
+        ? '<div style="overflow-x:auto;margin-top:10px"><table class="rdue-tbl"><thead><tr><th>Coopérative</th><th class="r">Camions</th><th>Géolocalisation</th></tr></thead><tbody>'+lignes+'</tbody></table></div>'
+          + '<p class="hint" style="margin-top:10px;'+(tout?'':'color:var(--warn)')+'">'+(tout ? '✔ Toutes les coopératives ont leurs données de géolocalisation.' : (G.length-nOk)+' coopérative'+((G.length-nOk)>1?'s':'')+' sans données de géolocalisation enregistrées — à compléter dans « Base de données coopérative » avant de présenter le dossier.')+'</p>'
+        : '<div class="hint" style="margin-top:10px">Aucun lot choisi pour ce client — va à l\'étape « Choix des lots ».</div>')
     + rdueNav(1, '')+'</div>';
 }
 // ---- Aperçu + téléchargement groupé du dossier RDUE, par client ----
@@ -15298,11 +15355,19 @@ function renderDossierRdue(){
   if (!state.liasseCharge && !state.liasseChargementLance){ state.liasseChargementLance = true; chargerLiasses().then(()=>render()); }
   const e = rdueEtat(), clients = Array.from(new Set((state.lotsUsinage||[]).filter(l=>l.client && rdueNumLot(l)!=null).map(l=>l.client))).sort((a,b)=>a.localeCompare(b,'fr'));
   if (!e.client && clients.length) e.client = clients.indexOf('CARGILL')>=0 ? 'CARGILL' : clients[0];
+  // Portail : client + tonnage à présenter, à confirmer AVANT toute autre étape (géoloc, liasses, rapport,
+  // choix des lots, aperçu/téléchargement) — tant que ce n'est pas confirmé, rien d'autre ne s'affiche.
+  if (!e.cibleConfirmee){
+    return RDUE_CSS+'<div class="panel"><div class="panel-head"><div><h2>Dossier de conformité RDUE</h2><p style="margin:2px 0 0;color:var(--ink-soft);font-size:13px">Rien n\'est enregistré : tout est calculé à partir des livraisons et des lots.</p></div></div></div>'
+      + rdueEtapeCible(clients);
+  }
   const et = e.etape||1, noms = ['Géolocalisation et volumes','Liasses et fiches',"Rapport d'usinage",'Choix des lots'];
-  let h = RDUE_CSS+'<div class="panel"><div class="panel-head"><div><h2>Dossier de conformité RDUE</h2><p style="margin:2px 0 0;color:var(--ink-soft);font-size:13px">Clique sur une étape pour y aller. Rien n\'est enregistré : tout est calculé à partir des livraisons et des lots.</p></div></div><div class="trc-progress">'
+  let h = RDUE_CSS+'<div class="panel"><div class="panel-head"><div><h2>Dossier de conformité RDUE</h2><p style="margin:2px 0 0;color:var(--ink-soft);font-size:13px">Client <b>'+esc(e.client)+'</b>'+(e.cible ? ', tonnage visé '+fmtNum(Number(e.cible))+' kg' : ', tout le potentiel disponible')+' · <a href="#" onclick="rdueChangerCible();return false;">changer</a> · Clique sur une étape pour y aller.</p></div></div><div class="trc-progress">'
     + noms.map((t,i)=>'<div class="pt '+(i+1<et?'fait':(i+1===et?'encours':'attente'))+'" onclick="rdueEtape('+(i+1)+')"><b>'+(i+1<et?'✓':(i+1))+'</b>'+esc(t)+'</div>').join('<div class="pl"></div>')+'</div></div>';
+  // Contenu de l'étape toujours au-dessus, tableau de synthèse (aperçu par coopérative) toujours en dessous.
+  h += (et===1 ? rdueEtape4() : et===2 ? rdueEtape3() : et===3 ? rdueEtape2() : rdueEtape1(clients));
   if (e.client) h += rdueApercuHtml(e.client);
-  return h + (et===1 ? rdueEtape4() : et===2 ? rdueEtape3() : et===3 ? rdueEtape2() : rdueEtape1(clients));
+  return h;
 }
 // ---- Dossier par traitant : qui livre à quel client final (ACT, Cargill, ...), via quel traitant, coopérative par coopérative ----
 // Vue de lecture seule pour préparer le dossier de conformité RDUE : aucune écriture en base, aucun téléchargement automatique — c'est l'utilisateur
