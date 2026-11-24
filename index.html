@@ -4887,7 +4887,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-24-629';
+const APP_VERSION = '2026-11-24-630';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -12866,7 +12866,7 @@ function suvBatir(lots, camions){
   const feuilles = sheets.slice(0, dern+1);
   return { T, lots, comp:res.comp, lotdate, sheets:feuilles, mode, manque, totAvant:feuilles.reduce((s,sh)=>s+sh.idxs.reduce((u,i)=>u+T[i].avant,0),0) };
 }
-function suvClasseur(ExcelJS, M, meta, avecOT){
+function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds){
   const wb = new ExcelJS.Workbook(); wb.creator = 'ORIGEN · ECORIGINE'; wb.created = new Date();
   const FN = { name:'Arial', size:10 }, FB = { name:'Arial', size:10, bold:true };
   const trait = { style:'thin', color:{ argb:'FF999999' } }, cadre = { top:trait, bottom:trait, left:trait, right:trait };
@@ -12884,11 +12884,17 @@ function suvClasseur(ExcelJS, M, meta, avecOT){
   entetes.forEach((h,k)=>put(ws,3,k+1,h,{ b:true, fill:HEAD, al:CTR, box:true }));
   ws.getRow(3).height = 32;
   let r = 4; const R0 = r;
+  // scopeIds (optionnel) : limite le rapport à une série précise de lots -- celle présentée à CE client dans
+  // CE dossier -- plutôt que tout l'historique du site. Le calcul (suvBatir) reste fait sur l'ensemble du
+  // site, pour que l'imputation des camions et la queue de lot restent justes ; seul l'AFFICHAGE (récap +
+  // feuilles de séance) est restreint ici. Une séance est gardée entière dès qu'elle contient au moins un
+  // lot du périmètre (la freinte d'une séance ne se recalcule pas en coupant ses camions ou ses lots en deux).
+  const dansPerimetre = L=>!scopeIds || scopeIds.has(L.id);
   // Dans la version « dossier de conformité » (avecOT), les lots sont classés par OT (les lots pas encore
   // sous OT restent à la fin, classés par numéro) : c'est la liste que voit le client, donc organisée selon
   // ce qui compte pour lui. Les feuilles de séance (camions, queue de lot) ci-dessous restent, elles,
   // dans l'ordre chronologique de production -- ce classement n'affecte que ce récapitulatif.
-  const lotsAffiches = M.lots.slice();
+  const lotsAffiches = M.lots.filter(dansPerimetre);
   if (avecOT){
     const ot = L=>shipOtDuLot(L.id);
     lotsAffiches.sort((a,b)=>{
@@ -12911,18 +12917,20 @@ function suvClasseur(ExcelJS, M, meta, avecOT){
     }
     r++;
   });
-  const RL = r-1, totLots = M.lots.reduce((s,L)=>s+L.w,0);
+  const RL = r-1, totLots = lotsAffiches.reduce((s,L)=>s+L.w,0);
   put(ws,r,1,'TOTAL',{ b:true }); put(ws,r,5,{ formula:'SUM(E'+R0+':E'+RL+')', result:totLots },{ b:true, fmt:NUM }); r++;
   meta.clients.forEach(cl=>{
     put(ws,r,1,'dont '+cl.nom+' ('+cl.mn+'–'+cl.mx+')',{ b:true });
-    put(ws,r,5,{ formula:'SUMIF(B'+R0+':B'+RL+',"'+cl.nom+'",E'+R0+':E'+RL+')', result:M.lots.filter(L=>L.client===cl.nom).reduce((s,L)=>s+L.w,0) },{ b:true, fmt:NUM }); r++;
+    put(ws,r,5,{ formula:'SUMIF(B'+R0+':B'+RL+',"'+cl.nom+'",E'+R0+':E'+RL+')', result:lotsAffiches.filter(L=>L.client===cl.nom).reduce((s,L)=>s+L.w,0) },{ b:true, fmt:NUM }); r++;
   });
   r++;
-  put(ws,r,1,'Camions vidés (poids net avant réfaction)',{ b:true }); put(ws,r,5,M.totAvant,{ b:true, fmt:NUM });
+  const sheetsAffichees = M.sheets.filter(s=>s.lots.some(dansPerimetre));
+  const totAvantAffiche = scopeIds ? sheetsAffichees.reduce((s,sh)=>s+sh.idxs.reduce((u,i)=>u+M.T[i].avant,0),0) : M.totAvant;
+  put(ws,r,1,'Camions vidés (poids net avant réfaction)',{ b:true }); put(ws,r,5,totAvantAffiche,{ b:true, fmt:NUM });
   (avecOT ? [40,12,20,16,16,120,18,22,16] : [40,12,20,16,16,120]).forEach((w,k)=>{ ws.getColumn(k+1).width = w; });
   // une feuille par séance
   const noms = new Set();
-  M.sheets.forEach(s=>{
+  sheetsAffichees.forEach(s=>{
     let nom = s.d.slice(0,6).replace(/\//g,'-') + s.d.slice(-2); if (noms.has(nom)) nom += ' ('+(s.g+1)+')'; noms.add(nom);
     const w = wb.addWorksheet(nom, { views:[{ showGridLines:false }], pageSetup:{ fitToPage:true, fitToWidth:1, fitToHeight:1, orientation:'portrait' } });
     put(w,3,1,'ECORIGINE ECO',{ b:true });
@@ -12988,7 +12996,7 @@ function suvClasseur(ExcelJS, M, meta, avecOT){
 }
 // Construit le classeur « Rapport d'usinage » d'une usine SANS le télécharger (utilisé à la fois par le téléchargement
 // direct ci-dessous et par le ZIP complet du dossier RDUE). Renvoie { erreur, type } en cas d'échec, sinon { wb, nom, M, nomSite }.
-async function rdueConstruireRapportSuv(siteCode, avecOT){
+async function rdueConstruireRapportSuv(siteCode, avecOT, scopeIds){
   const site = lotsSiteParCode(siteCode), nomSite = site ? site.nom : siteCode;
   const lotsDb = (state.lotsUsinage||[]).filter(l=>l.site_code===siteCode && rdueNumLot(l)!=null).sort(rdueParNum);
   if (!lotsDb.length) return { erreur:'Aucun lot d\'usinage pour '+nomSite+'.' };
@@ -12999,11 +13007,16 @@ async function rdueConstruireRapportSuv(siteCode, avecOT){
   const M = suvBatir(lots, camions);
   if (!M) return { erreur:'Rapport impossible : pas assez de données.', type:'error' };
   lots.forEach(L=>{ if (L.date_production && M.lotdate[L.num]) M.lotdate[L.num] = dateFr(L.date_production); });
-  const mn = lots[0].num, mx = lots[lots.length-1].num, clientsNom = Array.from(new Set(lots.map(L=>L.client).filter(Boolean)));
+  // Si scopeIds est fourni (dossier de conformité), le titre/nom de fichier et le périmètre clients
+  // reflètent UNIQUEMENT les lots présentés dans ce dossier -- pas tout l'historique du site (M reste,
+  // lui, calculé sur l'ensemble du site : voir la note dans suvClasseur).
+  const lotsTitre = scopeIds ? lots.filter(L=>scopeIds.has(L.id)) : lots;
+  if (scopeIds && !lotsTitre.length) return { erreur:'Aucun lot de ce dossier usiné à '+nomSite+'.' };
+  const mn = lotsTitre[0].num, mx = lotsTitre[lotsTitre.length-1].num, clientsNom = Array.from(new Set(lotsTitre.map(L=>L.client).filter(Boolean)));
   const traitant = site && site.traitant && site.traitant.toLowerCase()!==String(nomSite).toLowerCase() ? site.traitant : '';
-  const meta = { clients: clientsNom.length>1 ? clientsNom.map(c=>{ const n = lots.filter(L=>L.client===c).map(L=>L.num); return { nom:c, mn:Math.min.apply(null,n), mx:Math.max.apply(null,n) }; }) : [],
+  const meta = { clients: clientsNom.length>1 ? clientsNom.map(c=>{ const n = lotsTitre.filter(L=>L.client===c).map(L=>L.num); return { nom:c, mn:Math.min.apply(null,n), mx:Math.max.apply(null,n) }; }) : [],
     titre:"RAPPORT D'USINAGE – "+nomSite+' ('+siteCode+')'+(traitant ? ' – '+traitant.toUpperCase() : '')+' – lots '+mn+' à '+mx+(clientsNom.length===1 ? ' ('+clientsNom[0]+')' : '') };
-  let wb; try{ wb = suvClasseur(ExcelJS, M, meta, avecOT); }catch(e){ return { erreur:'Rapport impossible : '+e.message, type:'error' }; }
+  let wb; try{ wb = suvClasseur(ExcelJS, M, meta, avecOT, scopeIds); }catch(e){ return { erreur:'Rapport impossible : '+e.message, type:'error' }; }
   const nom = "Rapport d'usinage "+(traitant ? traitant+' ' : '')+nomSite+' '+mn+'-'+mx+'.xlsx';
   return { wb, nom, M, nomSite };
 }
@@ -13018,10 +13031,12 @@ async function lotsRapportSuv(siteCode){
 // colonnes OT / Réf. vendeur / N° BL sur RECAP LOTS (lots classés par OT) — c'est la version à destination
 // du client, celle incluse dans le ZIP du dossier (rdueTelechargerTout).
 async function rdueExporterSuvAvecOT(siteCode){
-  const R = await rdueConstruireRapportSuv(siteCode, true);
+  const Rd = rdueRapport(), scopeIds = new Set(Rd.lots.filter(o=>o.l.site_code===siteCode).map(o=>o.l.id));
+  const R = await rdueConstruireRapportSuv(siteCode, true, scopeIds);
   if (R.erreur){ showToast(R.erreur, R.type); return; }
   await qcTelechargerClasseur(R.wb, R.nom);
-  showToast("Rapport d'usinage "+R.nomSite+' (avec OT) prêt : '+R.M.lots.length+' lots.', 'success');
+  const nLots = Array.from(scopeIds).length;
+  showToast("Rapport d'usinage "+R.nomSite+' (avec OT) prêt : '+nLots+' lot'+(nLots>1?'s':'')+' de ce dossier.', 'success');
 }
 function lotsRapportSuvSites(){
   const m = new Map(); (state.lotsUsinage||[]).forEach(l=>{ if (l.site_code && rdueNumLot(l)!=null) m.set(l.site_code, (m.get(l.site_code)||0)+1); });
@@ -15163,7 +15178,7 @@ function renderTracageDirect(tr){
 // Le rapport d'usinage est UNIQUE : il est le même pour tous les clients. Seules la géolocalisation et les volumes (étape 4) suivent le format du client.
 // Date de production d'un lot : celle de l'usinier si elle est saisie (« usinier »), sinon reconstituée (« reconstituée ») = jour où le cumul des
 // camions déchargés (dans l'ordre de pesée, poids net payé) atteint le cumul des lots du site.
-function rdueEtat(){ return state.rdue || (state.rdue = { client:'', etape:1, niveau:'fab', decoches:{}, ajoutes:[], ajout:'', msg:'', cible:'', cibleConfirmee:false, dossierId:null }); }
+function rdueEtat(){ return state.rdue || (state.rdue = { client:'', etape:1, niveau:'fab', decoches:{}, ajoutes:[], ajout:'', msg:'', cible:'250000', cibleConfirmee:false, dossierId:null }); }
 // ---- Persistance du dossier RDUE (table rdue_dossiers) ----
 // Un seul dossier « ouvert » à la fois (contrainte en base aussi) : tant qu'il n'est pas clos, on le
 // reprend tel quel (client, tonnage, étape, cases cochées) à chaque chargement, quels que soient les
@@ -15770,7 +15785,8 @@ async function rdueTelechargerTout(client, formatFiche){
       const sitesConcernes = Array.from(new Set(R.lots.map(o=>o.l.site_code).filter(Boolean)));
       for (const sc of sitesConcernes){
         if (btn) btn.textContent = "Rapport d'usinage… "+((lotsSiteParCode(sc)||{}).nom||sc);
-        const Rs = await rdueConstruireRapportSuv(sc, true);
+        const scopeIds = new Set(R.lots.filter(o=>o.l.site_code===sc).map(o=>o.l.id));
+        const Rs = await rdueConstruireRapportSuv(sc, true, scopeIds);
         if (Rs.erreur){ koRap++; continue; }
         const buf = await Rs.wb.xlsx.writeBuffer(); zip.file(nomDossier+"/99 - Rapport d'usinage/"+Rs.nom, buf); nRap++;
       }
