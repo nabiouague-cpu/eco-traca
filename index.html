@@ -4887,7 +4887,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-24-636';
+const APP_VERSION = '2026-11-24-637';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -8305,6 +8305,25 @@ async function graphFetch(chemin, opt, interactif){
   const r = await fetch(chemin.indexOf('http')===0 ? chemin : 'https://graph.microsoft.com/v1.0'+chemin, Object.assign({}, opt, { headers:Object.assign({ Authorization:'Bearer '+jeton }, (opt && opt.headers) || {}) }));
   if (!r.ok){ let t = ''; try{ t = (await r.json()).error.message; }catch(e){} throw new Error('OneDrive '+r.status+(t ? ' : '+t : '')); }
   return r;
+}
+// Un appel Graph isolé (ex. un PDF parmi des dizaines dans un ZIP de dossier RDUE) peut échouer de façon
+// purement transitoire -- blip réseau, throttling OneDrive (429/503) -- sans que le fichier soit réellement
+// absent. Sans reprise, ce genre d'incident ponctuel se traduisait par un « manquant » définitif alors que le
+// fichier est bien là (cause probable du bug remonté : une liasse signalée disponible à la préparation mais
+// « manquante » au téléchargement). On retente avec un petit backoff, sauf sur 404 : un identifiant OneDrive
+// introuvable ne se résoudra jamais en réessayant (fichier déplacé/supprimé côté OneDrive).
+async function graphFetchAvecReprise(chemin, opt, tentatives){
+  tentatives = tentatives==null ? 3 : tentatives;
+  let derniereErreur;
+  for (let t=0; t<tentatives; t++){
+    try{ return await graphFetch(chemin, opt); }
+    catch(e){
+      derniereErreur = e;
+      if (/\s404\b/.test((e && e.message) || '')) break;
+      if (t < tentatives-1) await new Promise(r=>setTimeout(r, 400*Math.pow(2,t)));
+    }
+  }
+  throw derniereErreur;
 }
 async function graphRemplacer(id, octets){
   if (octets.length < 3500000) return await (await graphFetch('/me/drive/items/'+id+'/content', { method:'PUT', headers:{ 'Content-Type':'application/pdf' }, body:octets })).json();
@@ -15754,6 +15773,7 @@ async function rdueTelechargerTout(client, formatFiche){
     R.cams.forEach(c=>{ const cid = c.a.cooperative_id, k = liasseCnNorm(c.a.connaissement); if (cid && k) (cnsParCoop[cid]=cnsParCoop[cid]||[]).push(k); });
 
     let nGeo=0, nLia=0, nBordRetire=0, nFic=0, koGeo=0, koLia=0, koFic=0, nRap=0, koRap=0, nRec=0, koRec=0;
+    const koLiaDetails = [];   // { connaissement, cooperative, raison } -- pour pouvoir répondre « laquelle ? » sans ressaisir le téléchargement
 
     // Connexion OneDrive seulement si des liasses documentaires sont effectivement concernées.
     let graphOk = false;
@@ -15810,10 +15830,10 @@ async function rdueTelechargerTout(client, formatFiche){
           const vusLia = new Set();
           for (const k of cns){
             const fs = parCnLia[k]||[];
-            if (!fs.length){ koLia++; continue; }
+            if (!fs.length){ koLia++; koLiaDetails.push({ connaissement:k, cooperative:c.nom, raison:'aucune liasse indexée pour ce connaissement' }); continue; }
             for (const f of fs){
               try{
-                let blob = await (await graphFetch('/me/drive/items/'+f.id+'/content')).blob();
+                let blob = await (await graphFetchAvecReprise('/me/drive/items/'+f.id+'/content')).blob();
                 let name = f.nom || (k+'.pdf');
                 if (vusLia.has(name)){ const p=name.split('.'),ext=p.length>1?'.'+p.pop():''; name = p.join('.')+'_'+Math.random().toString(36).slice(2,7)+ext; }
                 vusLia.add(name);
@@ -15822,10 +15842,10 @@ async function rdueTelechargerTout(client, formatFiche){
                 if (/\.pdf$/i.test(name)){ const rb = await retirerBordereauLiasse(blob); if (rb.retire){ blob = rb.donnees; nBordRetire++; } }
                 const prep = await preparerFichierPourZip(name, blob, alleger);
                 zip.file(dossierCoop+'/2 - Liasses documentaires/'+name, prep.donnees, optionsCompressionZip(name)); nLia++;
-              }catch(e){ koLia++; }
+              }catch(e){ koLia++; koLiaDetails.push({ connaissement:k, cooperative:c.nom, nom:f.nom, raison:(e && e.message) || String(e) }); }
             }
           }
-        } else koLia += cns.length;
+        } else { koLia += cns.length; cns.forEach(k=>koLiaDetails.push({ connaissement:k, cooperative:c.nom, raison:'connexion OneDrive indisponible' })); }
       }
 
       // 3) Fiches de traçabilité, au format choisi avant le téléchargement (rdueDemanderFormatFiche) :
@@ -15918,8 +15938,12 @@ async function rdueTelechargerTout(client, formatFiche){
     rdueMarquerTelecharge(client, R.lots.map(o=>o.l.id));
 
     const manques = [koGeo?koGeo+' géoloc/registre':'', koLia?koLia+' liasse(s)':'', koFic?koFic+' fiche(s)':'', koRap?koRap+' rapport(s)':'', koRec?koRec+' récapitulatif(s)':''].filter(Boolean).join(', ');
+    // Nomme le(s) connaissement(s) en cause au lieu d'un simple compte, pour répondre directement à
+    // « c'est laquelle ? » sans avoir à ressaisir le téléchargement ou fouiller la console.
+    if (koLiaDetails.length) console.warn('Liasse(s) manquante(s) dans le dossier '+client+' :', koLiaDetails);
+    const detailLia = koLiaDetails.length ? ' ['+koLiaDetails.slice(0,5).map(d=>d.connaissement+' ('+d.cooperative+(d.raison?' — '+d.raison:'')+')').join(', ')+(koLiaDetails.length>5 ? ', +'+(koLiaDetails.length-5)+' autre(s)' : '')+']' : '';
     const libFormat = formatFiche==='cargill' ? ' (fiches au format Cargill)' : formatFiche==='deux' ? ' (fiches aux deux formats)' : '';
-    showToast('Dossier '+client+' téléchargé'+libFormat+' : '+coops.length+' coopérative'+(coops.length>1?'s':'')+', '+nRec+' récapitulatif(s), '+nGeo+' géoloc/registre, '+nLia+' liasse(s)'+(nBordRetire ? ' (bordereau de réception retiré sur '+nBordRetire+')' : '')+', '+nFic+' fiche(s), '+nRap+' rapport'+(nRap>1?'s':'')+" d'usinage"+(manques ? ' · manquant : '+manques : '')+'.', manques ? undefined : 'success');
+    showToast('Dossier '+client+' téléchargé'+libFormat+' : '+coops.length+' coopérative'+(coops.length>1?'s':'')+', '+nRec+' récapitulatif(s), '+nGeo+' géoloc/registre, '+nLia+' liasse(s)'+(nBordRetire ? ' (bordereau de réception retiré sur '+nBordRetire+')' : '')+', '+nFic+' fiche(s), '+nRap+' rapport'+(nRap>1?'s':'')+" d'usinage"+(manques ? ' · manquant : '+manques+detailLia : '')+'.', manques ? undefined : 'success');
   }catch(e){ showToast('Échec du téléchargement : '+(e && e.message ? e.message : e)); }
   if (btn) btn.disabled = false;
   render();
