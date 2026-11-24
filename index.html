@@ -4887,7 +4887,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-24-630';
+const APP_VERSION = '2026-11-24-631';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -12866,7 +12866,7 @@ function suvBatir(lots, camions){
   const feuilles = sheets.slice(0, dern+1);
   return { T, lots, comp:res.comp, lotdate, sheets:feuilles, mode, manque, totAvant:feuilles.reduce((s,sh)=>s+sh.idxs.reduce((u,i)=>u+T[i].avant,0),0) };
 }
-function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds){
+function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds, Rflat){
   const wb = new ExcelJS.Workbook(); wb.creator = 'ORIGEN · ECORIGINE'; wb.created = new Date();
   const FN = { name:'Arial', size:10 }, FB = { name:'Arial', size:10, bold:true };
   const trait = { style:'thin', color:{ argb:'FF999999' } }, cadre = { top:trait, bottom:trait, left:trait, right:trait };
@@ -12928,6 +12928,19 @@ function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds){
   const totAvantAffiche = scopeIds ? sheetsAffichees.reduce((s,sh)=>s+sh.idxs.reduce((u,i)=>u+M.T[i].avant,0),0) : M.totAvant;
   put(ws,r,1,'Camions vidés (poids net avant réfaction)',{ b:true }); put(ws,r,5,totAvantAffiche,{ b:true, fmt:NUM });
   (avecOT ? [40,12,20,16,16,120,18,22,16] : [40,12,20,16,16,120]).forEach((w,k)=>{ ws.getColumn(k+1).width = w; });
+  // Deuxième feuille, juste après RECAP LOTS : le tableau simple habituel (déchargements ↔ lots produits,
+  // niveau fabrication) pour CE dossier -- demandé en plus du modèle SUV, à la place d'un fichier séparé.
+  if (Rflat){
+    const fs = wb.addWorksheet('Tableau simple', { views:[{ state:'frozen', ySplit:3 }], pageSetup:{ fitToPage:true, fitToWidth:1, fitToHeight:0, orientation:'landscape' } });
+    RDUE_ENTETE_FAB.forEach((h,k)=>{ if (!h) return; put(fs,3,k+1,h,{ b:true, fill:HEAD, al:CTR, box:true }); });
+    fs.getRow(3).height = 32;
+    const lignesF = rdueLignes(Rflat,'fab'); let rf = 7;
+    put(fs,5,1,'TOTAL',{ b:true });
+    lignesF.forEach(l=>{ l.forEach((v,i)=>{ if (i===6) return; put(fs,rf,i+1,(v===null||v===undefined||v==='')?'':v,{ al:CTR, fmt:[4,5,9].includes(i)?NUM:undefined, box:true }); }); rf++; });
+    const finF = rf-1;
+    [['E','E'],['F','F'],['J','J']].forEach(([col])=>{ put(fs,5,col.charCodeAt(0)-64,{ formula:'SUM('+col+'7:'+col+finF+')', result:col==='E'?Rflat.net:(col==='F'?Rflat.sacs:Rflat.kg) },{ b:true, fmt:NUM }); });
+    [40,14,16,16,14,10,3,14,10,14,16].forEach((w,k)=>{ fs.getColumn(k+1).width = w; });
+  }
   // une feuille par séance
   const noms = new Set();
   sheetsAffichees.forEach(s=>{
@@ -12996,7 +13009,7 @@ function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds){
 }
 // Construit le classeur « Rapport d'usinage » d'une usine SANS le télécharger (utilisé à la fois par le téléchargement
 // direct ci-dessous et par le ZIP complet du dossier RDUE). Renvoie { erreur, type } en cas d'échec, sinon { wb, nom, M, nomSite }.
-async function rdueConstruireRapportSuv(siteCode, avecOT, scopeIds){
+async function rdueConstruireRapportSuv(siteCode, avecOT, scopeIds, Rflat){
   const site = lotsSiteParCode(siteCode), nomSite = site ? site.nom : siteCode;
   const lotsDb = (state.lotsUsinage||[]).filter(l=>l.site_code===siteCode && rdueNumLot(l)!=null).sort(rdueParNum);
   if (!lotsDb.length) return { erreur:'Aucun lot d\'usinage pour '+nomSite+'.' };
@@ -13016,7 +13029,7 @@ async function rdueConstruireRapportSuv(siteCode, avecOT, scopeIds){
   const traitant = site && site.traitant && site.traitant.toLowerCase()!==String(nomSite).toLowerCase() ? site.traitant : '';
   const meta = { clients: clientsNom.length>1 ? clientsNom.map(c=>{ const n = lotsTitre.filter(L=>L.client===c).map(L=>L.num); return { nom:c, mn:Math.min.apply(null,n), mx:Math.max.apply(null,n) }; }) : [],
     titre:"RAPPORT D'USINAGE – "+nomSite+' ('+siteCode+')'+(traitant ? ' – '+traitant.toUpperCase() : '')+' – lots '+mn+' à '+mx+(clientsNom.length===1 ? ' ('+clientsNom[0]+')' : '') };
-  let wb; try{ wb = suvClasseur(ExcelJS, M, meta, avecOT, scopeIds); }catch(e){ return { erreur:'Rapport impossible : '+e.message, type:'error' }; }
+  let wb; try{ wb = suvClasseur(ExcelJS, M, meta, avecOT, scopeIds, Rflat); }catch(e){ return { erreur:'Rapport impossible : '+e.message, type:'error' }; }
   const nom = "Rapport d'usinage "+(traitant ? traitant+' ' : '')+nomSite+' '+mn+'-'+mx+'.xlsx';
   return { wb, nom, M, nomSite };
 }
@@ -13031,8 +13044,9 @@ async function lotsRapportSuv(siteCode){
 // colonnes OT / Réf. vendeur / N° BL sur RECAP LOTS (lots classés par OT) — c'est la version à destination
 // du client, celle incluse dans le ZIP du dossier (rdueTelechargerTout).
 async function rdueExporterSuvAvecOT(siteCode){
-  const Rd = rdueRapport(), scopeIds = new Set(Rd.lots.filter(o=>o.l.site_code===siteCode).map(o=>o.l.id));
-  const R = await rdueConstruireRapportSuv(siteCode, true, scopeIds);
+  const Rd = rdueRapport(), lotsIci = Rd.lots.filter(o=>o.l.site_code===siteCode).map(o=>o.l), scopeIds = new Set(lotsIci.map(l=>l.id));
+  const Rflat = lotsIci.length ? rdueRapportDe(lotsIci) : null;
+  const R = await rdueConstruireRapportSuv(siteCode, true, scopeIds, Rflat);
   if (R.erreur){ showToast(R.erreur, R.type); return; }
   await qcTelechargerClasseur(R.wb, R.nom);
   const nLots = Array.from(scopeIds).length;
@@ -15785,8 +15799,9 @@ async function rdueTelechargerTout(client, formatFiche){
       const sitesConcernes = Array.from(new Set(R.lots.map(o=>o.l.site_code).filter(Boolean)));
       for (const sc of sitesConcernes){
         if (btn) btn.textContent = "Rapport d'usinage… "+((lotsSiteParCode(sc)||{}).nom||sc);
-        const scopeIds = new Set(R.lots.filter(o=>o.l.site_code===sc).map(o=>o.l.id));
-        const Rs = await rdueConstruireRapportSuv(sc, true, scopeIds);
+        const lotsIci = R.lots.filter(o=>o.l.site_code===sc).map(o=>o.l), scopeIds = new Set(lotsIci.map(l=>l.id));
+        const RflatSite = lotsIci.length ? rdueRapportDe(lotsIci) : null;
+        const Rs = await rdueConstruireRapportSuv(sc, true, scopeIds, RflatSite);
         if (Rs.erreur){ koRap++; continue; }
         const buf = await Rs.wb.xlsx.writeBuffer(); zip.file(nomDossier+"/99 - Rapport d'usinage/"+Rs.nom, buf); nRap++;
       }
@@ -17436,6 +17451,14 @@ function ocNomFicheTrac(coopId, numero){
   if (!coop || !coop.code_court || !num) return '';
   return nomFicheDeDemande(coop.code_court+'_'+num.toUpperCase(), '.xlsx', 0);
 }
+// Ligne « VILLE D'ORIGINE » de la fiche de traçabilité : l'origine du CHARGEMENT (connaissement) en
+// provenance de la coopérative, pas la ville du siège social de la coopérative — même champ lieu_origine
+// que celui utilisé pour le TKM et les lots SAIGIC. Et client associé à ce connaissement.
+// src = l'achat lui-même, ou un objet { achat, vu, ... } (ex. ocTvCandidats) qui le porte.
+function ocFicheOrigineClient(src, coop){
+  const a = (src && src.achat) || src || null;
+  return { ville: (a && a.lieu_origine) || (coop ? (coop.ville || coop.siege_social || '') : ''), client: (a && a.client) || '' };
+}
 async function ocConstruireFicheTracabiliteDirecte(allocations, sacsArr, datesArr, coopId, campagneId, entete){
   if (typeof JSZip === 'undefined') throw new Error("La bibliothèque de compression n'a pas pu se charger (connexion internet requise).");
   if (allocations.length>999) throw new Error('La fiche ne peut contenir que 999 lignes ('+allocations.length+' demandées).');
@@ -17510,6 +17533,22 @@ async function ocConstruireFicheTracabiliteDirecte(allocations, sacsArr, datesAr
     curseur = fin;
   }
   sheet1 = out + sheet1.slice(curseur);
+  // Ajoute une ligne « CLIENT » à l'en-tête, après « NUMERO CONNAISSEMENT » : la ligne 9 du modèle est une
+  // bande fusionnée (C9:I9) vide, prévue comme simple espacement — on la dé-fusionne et la remplit sur le
+  // même gabarit que les autres lignes de l'en-tête (libellé / « : » / valeur), et on déplace vers elle la
+  // bordure de fermeture du bandeau (I/J « s=44/50 ») qui se trouvait jusque-là sur la ligne 8.
+  const remplacerFixe = (ancien, nouveau, quoi)=>{ if (sheet1.indexOf(ancien)<0) throw new Error(quoi+" introuvable dans le modèle Excel (ligne CLIENT)."); sheet1 = sheet1.replace(ancien, nouveau); };
+  remplacerFixe(
+    '<c r="I8" s="44" t="n"></c><c r="J8" s="50" t="n"></c>',
+    '<c r="I8" s="58" t="n"></c><c r="J8" s="49" t="n"></c>',
+    'Bordure de fermeture (ligne 8)'
+  );
+  remplacerFixe(
+    '<c r="C9" s="87" t="n"></c><c r="D9" s="88" t="n"></c><c r="E9" s="88" t="n"></c><c r="F9" s="88" t="n"></c><c r="G9" s="88" t="n"></c><c r="H9" s="88" t="n"></c><c r="I9" s="89" t="n"></c><c r="J9" s="25" t="n"></c>',
+    '<c r="C9" s="67" t="inlineStr"><is><t>CLIENT</t></is></c><c r="D9" s="68" t="n"></c><c r="E9" s="68" t="n"></c><c r="F9" s="68" t="n"></c><c r="G9" s="24" t="n"></c><c r="H9" s="24" t="inlineStr"><is><t>:</t></is></c><c r="I9" s="44" t="n"></c><c r="J9" s="50" t="n"></c>',
+    'Ligne 9'
+  );
+  remplacerFixe('<mergeCells count="11"><mergeCell ref="C6:D6"/><mergeCell ref="C9:I9"/>', '<mergeCells count="10"><mergeCell ref="C6:D6"/>', 'Fusion C9:I9');
   // En-tête : informations de la coopérative (B) dont les producteurs figurent dans la fiche, et connaissement concerné.
   const ent = entete || {};
   const celluleTexte = (ref, style, txt)=> txt ? '<c r="'+ref+'" s="'+style+'" t="inlineStr"><is><t>'+escXmlTracabilite(txt)+'</t></is></c>' : '<c r="'+ref+'" s="'+style+'" t="n"></c>';
@@ -17517,7 +17556,8 @@ async function ocConstruireFicheTracabiliteDirecte(allocations, sacsArr, datesAr
   posEnt('I5','58', ent.fournisseur||nomCoop);
   posEnt('I6','58', ent.ville||'');
   posEnt('I7','58', ent.dateConnaissement||'');
-  posEnt('I8','44', ent.numero||'');
+  posEnt('I8','58', ent.numero||'');
+  posEnt('I9','44', ent.client||'');
   // Totaux : le modèle soustrait des « non conformes » calculés par des formules qui pointent des colonnes absentes (#REF!).
   // Ici tous les producteurs sont conformes : on additionne simplement les lignes.
   const totSacs = lignes.reduce((t,l)=>t+(Number(l.sacs)||0), 0), totKg = lignes.reduce((t,l)=>t+(Number(l.a.kg)||0), 0);
@@ -17631,8 +17671,8 @@ async function ocFicheNormaleConstruire(coopId, code){
   const allocations = lig.map(a=>({ p:parFarm.get(a.producteur_id), kg:Math.round(Number(a.quantite_kg)||0) }));
   if (allocations.some(a=>!a.p)) throw new Error('producteur introuvable pour une ligne du traçage');
   const sacsArr = lig.map(a=>Math.max(1, Math.round(Number(a.nombre_sacs)||0))), datesArr = lig.map(a=>String(a.date).slice(0,10));
-  const cam = ocCargillCamion(coopId, code), coop = coopById(coopId);
-  const entete = { fournisseur: String((cam && cam.fournisseur_saigic)||'').trim() || (coop ? (coop.nom_complet || coop.nom || '') : ''), ville: coop ? (coop.ville || coop.siege_social || '') : '',
+  const cam = ocCargillCamion(coopId, code), coop = coopById(coopId), oc_ = ocFicheOrigineClient(cam, coop);
+  const entete = { fournisseur: String((cam && cam.fournisseur_saigic)||'').trim() || (coop ? (coop.nom_complet || coop.nom || '') : ''), ville: oc_.ville, client: oc_.client,
     dateConnaissement: cam && cam.date ? dateFr(String(cam.date).slice(0,10)) : '', numero:code, coopFichier:coopId };
   return await ocConstruireFicheTracabiliteDirecte(allocations, sacsArr, datesArr, coopId, lig[0].campagne_id, entete);
 }
@@ -18498,8 +18538,8 @@ async function ocAppliquerSimCamion(coopId, code){
   const volumeKg = allocations.reduce((t,a)=>t+a.kg,0);
   const nbSacs = Math.max(allocations.length, Math.round(Number(it.sacs)||0) || Math.round(volumeKg/65));
   const sacsArr = ocRepartirSacs(allocations, nbSacs), datesArr = allocations.map(()=>ocDateAleatoireDansIntervalle(pf.dateDebut, pf.dateFin));
-  const coopFiche = coopById(coopId), sigleConn = String((it.vu && it.vu.fournisseur_saigic) || (it.achat && it.achat.fournisseur_saigic) || '').trim();
-  const entete = { fournisseur: sigleConn || (coopFiche ? (coopFiche.nom_complet || coopFiche.nom || '') : ''), ville: coopFiche ? (coopFiche.ville || coopFiche.siege_social || '') : '',
+  const coopFiche = coopById(coopId), sigleConn = String((it.vu && it.vu.fournisseur_saigic) || (it.achat && it.achat.fournisseur_saigic) || '').trim(), oc_ = ocFicheOrigineClient(it, coopFiche);
+  const entete = { fournisseur: sigleConn || (coopFiche ? (coopFiche.nom_complet || coopFiche.nom || '') : ''), ville: oc_.ville, client: oc_.client,
     dateConnaissement: it.iso ? dateFr(it.iso) : '', numero: code, coopFichier: coopId };
   const fiche = await ocConstruireFicheTracabiliteDirecte(allocations, sacsArr, datesArr, coopId, campagneId, entete);
   const genId_ = genId('gen');
@@ -18830,7 +18870,8 @@ async function ocTracerCoeur(coopId, campagneId, volumeKg, nbSacs, nbProd, dateD
   // 1) on construit d'abord la fiche : si elle echoue, rien n'est enregistre en base
   const coopFiche = coopById(coopId);
   const sigleConn = itSrc ? String((itSrc.vu && itSrc.vu.fournisseur_saigic) || (itSrc.achat && itSrc.achat.fournisseur_saigic) || '').trim() : '';
-  const entete = { fournisseur: sigleConn || (coopFiche ? (coopFiche.nom_complet || coopFiche.nom || '') : ''), ville: coopFiche ? (coopFiche.ville || coopFiche.siege_social || '') : '',
+  const oc_ = ocFicheOrigineClient(itSrc, coopFiche);
+  const entete = { fournisseur: sigleConn || (coopFiche ? (coopFiche.nom_complet || coopFiche.nom || '') : ''), ville: oc_.ville, client: oc_.client,
     dateConnaissement: itSrc && itSrc.iso ? dateFr(itSrc.iso) : '', numero: itSrc ? itSrc.code : '', coopFichier: coopSrc || coopId };
   let fiche;
   try{ fiche = await ocConstruireFicheTracabiliteDirecte(resultat.allocations, sacsArr, datesArr, coopId, campagneId, entete); }
