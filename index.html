@@ -12957,64 +12957,72 @@ function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds, Rflat){
       });
       rowTS = last + 1;
     });
+    // la barre noire ne doit avoir aucune interruption : noircie sur toute la hauteur du tableau, du
+    // haut (au-dessus même de l'en-tête) jusqu'à la dernière ligne de données, pas seulement à l'intérieur
+    // de chaque groupe
+    for (let rr=1; rr<=rowTS-1; rr++) fs.getCell(rr,7).fill = NOIR;
     const sumAdr = (col, rows)=>'SUM('+rows.map(r=>col+r).join(',')+')';
     put(fs,5,5,{ formula:sumAdr('E',camRows), result:totCamE },{ b:true, fmt:NUM, color:ROUGE });
     put(fs,5,6,{ formula:sumAdr('F',camRows), result:totCamF },{ b:true, fmt:NUM, color:ROUGE });
     put(fs,5,10,{ formula:sumAdr('J',lotRows), result:totLotJ },{ b:true, fmt:NUM, color:ROUGE });
     [14,20,14,20,12,10,3,14,10,12,14].forEach((w,k)=>{ fs.getColumn(k+1).width = w; });
   }
-  // RECAP LOTS
-  const ws = wb.addWorksheet('RECAP LOTS', { views:[{ state:'frozen', ySplit:3 }], pageSetup:{ fitToPage:true, fitToWidth:1, fitToHeight:0, orientation:'landscape' } });
-  put(ws,1,1,meta.titre,{ b:true }).font = { name:'Arial', size:12, bold:true };
-  const entetesBase = ['N° lot','Client','Date de production','Pesée AGL (port)','Poids du lot (kg)','Composition (coopérative (n° de connaissement) : kg)'];
-  const entetes = avecOT ? entetesBase.concat(['OT','Réf. vendeur','N° BL']) : entetesBase;
-  entetes.forEach((h,k)=>put(ws,3,k+1,h,{ b:true, fill:HEAD, al:CTR, box:true }));
-  ws.getRow(3).height = 32;
-  let r = 4; const R0 = r;
   // scopeIds (optionnel) : limite le rapport à une série précise de lots -- celle présentée à CE client dans
   // CE dossier -- plutôt que tout l'historique du site. Le calcul (suvBatir) reste fait sur l'ensemble du
   // site, pour que l'imputation des camions et la queue de lot restent justes ; seul l'AFFICHAGE (récap +
   // feuilles de séance) est restreint ici. Une séance est gardée entière dès qu'elle contient au moins un
   // lot du périmètre (la freinte d'une séance ne se recalcule pas en coupant ses camions ou ses lots en deux).
   const dansPerimetre = L=>!scopeIds || scopeIds.has(L.id);
-  // Dans la version « dossier de conformité » (avecOT), les lots sont classés par OT (les lots pas encore
-  // sous OT restent à la fin, classés par numéro) : c'est la liste que voit le client, donc organisée selon
-  // ce qui compte pour lui. Les feuilles de séance (camions, queue de lot) ci-dessous restent, elles,
-  // dans l'ordre chronologique de production -- ce classement n'affecte que ce récapitulatif.
-  const lotsAffiches = M.lots.filter(dansPerimetre);
-  if (avecOT){
-    const ot = L=>shipOtDuLot(L.id);
-    lotsAffiches.sort((a,b)=>{
-      const oa = ot(a), ob = ot(b);
-      if (!oa && !ob) return a.num-b.num;
-      if (!oa) return 1; if (!ob) return -1;
-      return String(oa.numero||'').localeCompare(String(ob.numero||''),'fr') || a.num-b.num;
-    });
-  }
-  lotsAffiches.forEach(L=>{
-    put(ws,r,1,L.num,{ al:CTR, fmt:'0', box:true }); put(ws,r,2,L.client||'',{ al:CTR, box:true }); put(ws,r,3,M.lotdate[L.num]||'',{ al:CTR, box:true }); put(ws,r,4,L.agl||'',{ al:CTR, box:true });
-    put(ws,r,5,L.w,{ fmt:NUM, box:true });
-    const parts = new Map(); (M.comp[L.num]||[]).forEach(([i,k])=>{ const e = etiq(M.T[i]); parts.set(e, (parts.get(e)||0)+k); });
-    put(ws,r,6,Array.from(parts.entries()).map(([e,v])=>e+' : '+milliers(v)).join(' ; '),{ al:{ wrapText:true, vertical:'middle' }, box:true });
-    if (avecOT){
-      const ot = shipOtDuLot(L.id);
-      put(ws,r,7,ot ? ot.numero : '— pas encore sous OT —',{ al:CTR, box:true });
-      put(ws,r,8,ot ? (ot.ref_vendeur||'') : '',{ al:CTR, box:true });
-      put(ws,r,9,ot ? (ot.bl_numero||'') : '',{ al:CTR, box:true });
-    }
-    r++;
-  });
-  const RL = r-1, totLots = lotsAffiches.reduce((s,L)=>s+L.w,0);
-  put(ws,r,1,'TOTAL',{ b:true }); put(ws,r,5,{ formula:'SUM(E'+R0+':E'+RL+')', result:totLots },{ b:true, fmt:NUM }); r++;
-  meta.clients.forEach(cl=>{
-    put(ws,r,1,'dont '+cl.nom+' ('+cl.mn+'–'+cl.mx+')',{ b:true });
-    put(ws,r,5,{ formula:'SUMIF(B'+R0+':B'+RL+',"'+cl.nom+'",E'+R0+':E'+RL+')', result:lotsAffiches.filter(L=>L.client===cl.nom).reduce((s,L)=>s+L.w,0) },{ b:true, fmt:NUM }); r++;
-  });
-  r++;
   const sheetsAffichees = M.sheets.filter(s=>s.lots.some(dansPerimetre));
-  const totAvantAffiche = scopeIds ? sheetsAffichees.reduce((s,sh)=>s+sh.idxs.reduce((u,i)=>u+M.T[i].avant,0),0) : M.totAvant;
-  put(ws,r,1,'Camions vidés (poids net avant réfaction)',{ b:true }); put(ws,r,5,totAvantAffiche,{ b:true, fmt:NUM });
-  (avecOT ? [40,12,20,16,16,120,18,22,16] : [40,12,20,16,16,120]).forEach((w,k)=>{ ws.getColumn(k+1).width = w; });
+  // RECAP LOTS -- absente du dossier envoyé au client (avecOT) : pour ce dossier, seul le tableau simple
+  // ci-dessus (déjà filtré au périmètre du client) est montré ; RECAP LOTS reste utile pour le rapport
+  // interne (lotsRapportSuv, sans OT), où elle donne le détail de composition par camion de chaque lot.
+  if (!avecOT){
+    const ws = wb.addWorksheet('RECAP LOTS', { views:[{ state:'frozen', ySplit:3 }], pageSetup:{ fitToPage:true, fitToWidth:1, fitToHeight:0, orientation:'landscape' } });
+    put(ws,1,1,meta.titre,{ b:true }).font = { name:'Arial', size:12, bold:true };
+    const entetesBase = ['N° lot','Client','Date de production','Pesée AGL (port)','Poids du lot (kg)','Composition (coopérative (n° de connaissement) : kg)'];
+    const entetes = avecOT ? entetesBase.concat(['OT','Réf. vendeur','N° BL']) : entetesBase;
+    entetes.forEach((h,k)=>put(ws,3,k+1,h,{ b:true, fill:HEAD, al:CTR, box:true }));
+    ws.getRow(3).height = 32;
+    let r = 4; const R0 = r;
+    // Dans la version « dossier de conformité » (avecOT), les lots sont classés par OT (les lots pas encore
+    // sous OT restent à la fin, classés par numéro) : c'est la liste que voit le client, donc organisée selon
+    // ce qui compte pour lui. Les feuilles de séance (camions, queue de lot) ci-dessous restent, elles,
+    // dans l'ordre chronologique de production -- ce classement n'affecte que ce récapitulatif.
+    const lotsAffiches = M.lots.filter(dansPerimetre);
+    if (avecOT){
+      const ot = L=>shipOtDuLot(L.id);
+      lotsAffiches.sort((a,b)=>{
+        const oa = ot(a), ob = ot(b);
+        if (!oa && !ob) return a.num-b.num;
+        if (!oa) return 1; if (!ob) return -1;
+        return String(oa.numero||'').localeCompare(String(ob.numero||''),'fr') || a.num-b.num;
+      });
+    }
+    lotsAffiches.forEach(L=>{
+      put(ws,r,1,L.num,{ al:CTR, fmt:'0', box:true }); put(ws,r,2,L.client||'',{ al:CTR, box:true }); put(ws,r,3,M.lotdate[L.num]||'',{ al:CTR, box:true }); put(ws,r,4,L.agl||'',{ al:CTR, box:true });
+      put(ws,r,5,L.w,{ fmt:NUM, box:true });
+      const parts = new Map(); (M.comp[L.num]||[]).forEach(([i,k])=>{ const e = etiq(M.T[i]); parts.set(e, (parts.get(e)||0)+k); });
+      put(ws,r,6,Array.from(parts.entries()).map(([e,v])=>e+' : '+milliers(v)).join(' ; '),{ al:{ wrapText:true, vertical:'middle' }, box:true });
+      if (avecOT){
+        const ot = shipOtDuLot(L.id);
+        put(ws,r,7,ot ? ot.numero : '— pas encore sous OT —',{ al:CTR, box:true });
+        put(ws,r,8,ot ? (ot.ref_vendeur||'') : '',{ al:CTR, box:true });
+        put(ws,r,9,ot ? (ot.bl_numero||'') : '',{ al:CTR, box:true });
+      }
+      r++;
+    });
+    const RL = r-1, totLots = lotsAffiches.reduce((s,L)=>s+L.w,0);
+    put(ws,r,1,'TOTAL',{ b:true }); put(ws,r,5,{ formula:'SUM(E'+R0+':E'+RL+')', result:totLots },{ b:true, fmt:NUM }); r++;
+    meta.clients.forEach(cl=>{
+      put(ws,r,1,'dont '+cl.nom+' ('+cl.mn+'–'+cl.mx+')',{ b:true });
+      put(ws,r,5,{ formula:'SUMIF(B'+R0+':B'+RL+',"'+cl.nom+'",E'+R0+':E'+RL+')', result:lotsAffiches.filter(L=>L.client===cl.nom).reduce((s,L)=>s+L.w,0) },{ b:true, fmt:NUM }); r++;
+    });
+    r++;
+    const totAvantAffiche = scopeIds ? sheetsAffichees.reduce((s,sh)=>s+sh.idxs.reduce((u,i)=>u+M.T[i].avant,0),0) : M.totAvant;
+    put(ws,r,1,'Camions vidés (poids net avant réfaction)',{ b:true }); put(ws,r,5,totAvantAffiche,{ b:true, fmt:NUM });
+    (avecOT ? [40,12,20,16,16,120,18,22,16] : [40,12,20,16,16,120]).forEach((w,k)=>{ ws.getColumn(k+1).width = w; });
+  }
   // une feuille par séance
   const noms = new Set();
   sheetsAffichees.forEach(s=>{
