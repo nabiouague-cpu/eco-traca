@@ -4889,7 +4889,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-24-613';
+const APP_VERSION = '2026-11-24-614';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -15200,6 +15200,36 @@ async function rdueClore(){
   state.rdueDossiersCharges = false; state.rdueDossiersChargementLance = false; state.rdueHydrate = false;
   render();
 }
+// Dossiers clôturés : visibles dès le portail (avant même de choisir client/tonnage), pour pouvoir rouvrir
+// un dossier déjà clos et y faire des aménagements. Rouvrir n'est possible que si aucun dossier n'est ouvert
+// ailleurs (contrainte « un dossier à la fois », appliquée aussi en base). Les lot_ids figés restent tels
+// quels pendant la réouverture — rdueClore() les recalculera et les réécrira à la prochaine clôture.
+function rdueDossiersClotures(){
+  return (state.rdueDossiers||[]).filter(d=>d.etat==='clos').sort((a,b)=>String(b.clos_le||'').localeCompare(String(a.clos_le||'')));
+}
+async function rdueRouvrir(id){
+  if (!supabaseClient) return;
+  const e = rdueEtat();
+  if (e.dossierId){ showToast('Un dossier est déjà ouvert : clôture-le ou annule-le avant d\'en rouvrir un autre.'); return; }
+  const d = (state.rdueDossiers||[]).find(x=>x.id===id); if (!d) return;
+  const { error } = await supabaseClient.from('rdue_dossiers').update({ etat:'ouvert', clos_le:null }).eq('id', id);
+  if (error){ showToast('Impossible de rouvrir ce dossier : '+error.message, 'error'); return; }
+  showToast('Dossier '+d.client+' rouvert : les aménagements sont possibles.', 'success');
+  state.rdueDossiersCharges = false; state.rdueDossiersChargementLance = false; state.rdueHydrate = false;
+  render();
+}
+function rdueClosListHtml(){
+  const clos = rdueDossiersClotures();
+  if (!clos.length) return '';
+  const verrou = !!rdueEtat().dossierId;
+  const lignes = clos.map(d=>{
+    const n = Array.isArray(d.lot_ids) ? d.lot_ids.length : 0;
+    return '<tr><td><b>'+esc(d.client)+'</b></td><td class="r">'+(d.cible_kg!=null ? fmtNum(Number(d.cible_kg))+' kg visés' : 'tout le potentiel')+'</td><td class="r">'+n+' lot(s)</td><td>'+esc(d.clos_le ? dateFr(String(d.clos_le).slice(0,10)) : '—')+'</td><td>'+(verrou ? '<span class="hint">un dossier est déjà ouvert</span>' : '<button class="btn-ghost" onclick="rdueRouvrir(\''+escJs(d.id)+'\')">Rouvrir →</button>')+'</td></tr>';
+  }).join('');
+  return '<div class="panel" style="margin-top:16px"><h3 style="margin:0 0 10px">Dossiers clôturés</h3>'
+    + '<p class="hint" style="margin-bottom:10px">Tu peux rouvrir un dossier déjà clôturé pour y faire des aménagements — tant qu\'aucun autre n\'est ouvert en parallèle.</p>'
+    + '<div style="overflow-x:auto"><table class="rdue-tbl"><thead><tr><th>Client</th><th>Tonnage</th><th>Lots</th><th>Clôturé le</th><th></th></tr></thead><tbody>'+lignes+'</tbody></table></div></div>';
+}
 function rdueCoche(id){ const e = rdueEtat(); if (e.ajoutes.indexOf(id)>=0) e.ajoutes = e.ajoutes.filter(x=>x!==id); else if (e.decoches[id]) delete e.decoches[id]; else e.decoches[id] = true; rdueSauvegarder(); render(); }
 function rdueAjouter(){
   const e = rdueEtat(), t = String(e.ajout||'').trim(); if (!t) return;
@@ -15223,11 +15253,15 @@ function rdueSelection(){
 function rdueExportDuLot(lotId){ const lk = (state.lotsExportUsinage||[]).find(x=>x.lot_usinage_id===lotId); return lk ? ((state.lotsExport||[]).find(x=>x.id===lk.lot_export_id)||null) : null; }
 function rdueUsineLib(l){ const s = lotsSiteParCode(l.site_code); return l.site_code ? (s ? s.nom+' ('+l.site_code+')' : l.site_code) : (l.site||'—'); }
 function rdueEntrepotLib(l){ return l.entrepot ? l.entrepot+(l.ville_entrepot ? ', '+l.ville_entrepot : '') : '—'; }
-// Rapport : camions (poids net payé, refoulés jamais comptés ni montrés) et lots de la sélection. « fab » s'arrête au client, « export » va jusqu'au BL.
-function rdueRapport(){
-  const S = rdueSelection(), Rs = {}, camMap = {};
-  S.coches.forEach(l=>{ if (l.site_code && !Rs[l.site_code]) Rs[l.site_code] = rdueCalcul(l.site_code); });
-  const lots = S.coches.map(l=>{
+// Rapport : camions (poids net payé, refoulés jamais comptés ni montrés) et lots d'une liste donnée. « fab »
+// s'arrête au client, « export » va jusqu'au BL. rdueRapportDe() prend n'importe quelle liste de lots (la
+// sélection du dossier en cours, ou tous les lots d'un client) ; rdueRapport() reste la variante « dossier en
+// cours » utilisée partout dans l'écran RDUE, et rdueRapportClientComplet() la variante « tous les lots du
+// client », pour le bouton de rapport d'usinage indépendant du dossier.
+function rdueRapportDe(lots0){
+  const Rs = {}, camMap = {};
+  lots0.forEach(l=>{ if (l.site_code && !Rs[l.site_code]) Rs[l.site_code] = rdueCalcul(l.site_code); });
+  const lots = lots0.map(l=>{
     const P = (Rs[l.site_code]||{ parLot:{} }).parLot[l.id] || { comp:[], date:null, manque:0 };
     P.comp.forEach(x=>{ camMap[x.c.a.id||x.c.a.connaissement] = x.c; });
     const date = l.date_production ? { txt:dateFr(l.date_production), src:'usinier' } : (P.date ? { txt:P.date.aff+'/'+P.date.iso.slice(0,4), src:'reconstituée' } : null);
@@ -15236,7 +15270,15 @@ function rdueRapport(){
   const cams = Object.keys(camMap).map(k=>camMap[k]).sort((x,y)=>(x.d?x.d.tri:'9').localeCompare(y.d?y.d.tri:'9'));
   const vendu = {}; lots.forEach(o=>{ if (o.ex) vendu[o.ex.id] = (vendu[o.ex.id]||0)+o.kg; });
   const vu = {}; lots.forEach(o=>{ o.premier = !!o.ex && !vu[o.ex.id]; if (o.ex) vu[o.ex.id] = true; o.vendu = o.ex ? vendu[o.ex.id] : null; });
-  return { S, lots, cams, net:cams.reduce((s,c)=>s+c.net,0), sacs:cams.reduce((s,c)=>s+(Number(c.a.nombre_sacs_accepte)||0),0), kg:lots.reduce((s,o)=>s+o.kg,0), manque:lots.filter(o=>o.P.manque>0).length };
+  return { lots, cams, net:cams.reduce((s,c)=>s+c.net,0), sacs:cams.reduce((s,c)=>s+(Number(c.a.nombre_sacs_accepte)||0),0), kg:lots.reduce((s,o)=>s+o.kg,0), manque:lots.filter(o=>o.P.manque>0).length };
+}
+function rdueRapport(){
+  const S = rdueSelection();
+  return Object.assign({ S }, rdueRapportDe(S.coches));
+}
+function rdueRapportClientComplet(client){
+  const lots = (state.lotsUsinage||[]).filter(l=>l.client===client && rdueNumLot(l)!=null).sort(rdueParNum);
+  return rdueRapportDe(lots);
 }
 function rdueImmat(a){ return String(a.immat_vehicule||'').trim() || String(pdVal(a,'Immatriculation')||'').split('/')[0].trim(); }
 const RDUE_ENTETE_FAB = ['Date de déchargement','Coopérative','Référence camion','N° de connaissement','Poids net','Nombre de sac','','Date product°','N° Lots','Poids net (KG)','Client'];
@@ -15252,13 +15294,12 @@ function rdueLignes(R, niveau){
   }
   return out;
 }
-// Classeur « Rapport d'usinage » SPÉCIFIQUE à ce dossier : uniquement les lots et camions de la sélection
-// (rdueRapport()), PAS tout le site — à la différence du modèle SUV complet de l'usine (rdueConstruireRapportSuv /
-// lotsRapportSuv, un rapport usine entier et à part, utile seulement quand l'usinier n'a pas fourni le sien).
-// Les deux niveaux (fabrication et export) sont sur deux feuilles du même classeur. Construit SANS télécharger,
-// réutilisé par le bouton de l'étape « Rapport d'usinage » et par le ZIP complet du dossier.
-async function rdueConstruireRapportDossier(){
-  const e = rdueEtat(), R = rdueRapport();
+// Classeur « Rapport d'usinage » à partir d'un R (rdueRapport() ou rdueRapportClientComplet()) : uniquement
+// les lots et camions de R, PAS tout le site — à la différence du modèle SUV complet de l'usine
+// (rdueConstruireRapportSuv / lotsRapportSuv, un rapport usine entier et à part, utile seulement quand
+// l'usinier n'a pas fourni le sien). Les deux niveaux (fabrication et export) sont sur deux feuilles du même
+// classeur. Construit SANS télécharger.
+async function rdueConstruireRapportDe(R, nom){
   if (!R.lots.length) return { erreur:'Aucun lot sélectionné.' };
   let ExcelJS; try{ ExcelJS = await qcChargerExcelJS(); }catch(err){ return { erreur:'Impossible de préparer le classeur : '+err.message, type:'error' }; }
   const wb = new ExcelJS.Workbook(); wb.creator = 'ORIGEN · ECORIGINE';
@@ -15275,14 +15316,35 @@ async function rdueConstruireRapportDossier(){
     S.columns = ent.map((h,i)=>({ width:[22,32,20,28,16,16,3,18,12,18,18,20,26,20][i] }));
     S.views = [{ state:'frozen', ySplit:6 }];
   });
-  const nom = "Rapport d'usinage "+(e.client||'')+' '+new Date().toISOString().slice(0,10)+'.xlsx';
   return { wb, nom, R };
+}
+// Variante « dossier en cours » (lots et camions sélectionnés pour ce dossier) : réutilisée par le bouton de
+// l'étape « Rapport d'usinage » et par le ZIP complet du dossier.
+async function rdueConstruireRapportDossier(){
+  const e = rdueEtat(), R = rdueRapport();
+  const nom = "Rapport d'usinage "+(e.client||'')+' '+new Date().toISOString().slice(0,10)+'.xlsx';
+  return rdueConstruireRapportDe(R, nom);
+}
+// Variante « tous les lots du client » (ignore la sélection/tonnage du dossier en cours, prend tous les lots
+// affectés à ce client) : pour re-télécharger le rapport d'usinage seul, sur l'ensemble des lots du client,
+// indépendamment du dossier en cours.
+async function rdueConstruireRapportClientComplet(client){
+  const R = rdueRapportClientComplet(client);
+  const nom = "Rapport d'usinage complet "+client+' '+new Date().toISOString().slice(0,10)+'.xlsx';
+  return rdueConstruireRapportDe(R, nom);
 }
 async function rdueExporter(){
   const Rb = await rdueConstruireRapportDossier();
   if (Rb.erreur){ showToast(Rb.erreur, Rb.type); return; }
   await qcTelechargerClasseur(Rb.wb, Rb.nom);
   showToast("Rapport d'usinage de ce dossier exporté : "+Rb.R.lots.length+' lot(s).', 'success');
+}
+async function rdueExporterClientComplet(){
+  const e = rdueEtat(); if (!e.client) return;
+  const Rb = await rdueConstruireRapportClientComplet(e.client);
+  if (Rb.erreur){ showToast(Rb.erreur, Rb.type); return; }
+  await qcTelechargerClasseur(Rb.wb, Rb.nom);
+  showToast("Rapport d'usinage complet de "+e.client+' exporté : '+Rb.R.lots.length+' lot(s) au total pour ce client.', 'success');
 }
 const RDUE_CSS = '<style>.rdue-tbl{width:100%;border-collapse:collapse;font-size:14px}.rdue-tbl th,.rdue-tbl td{text-align:center;vertical-align:middle;padding:10px 14px;border-bottom:1px solid var(--border);}.rdue-tbl th{font-size:12.5px;color:var(--ink-soft);font-weight:600;white-space:nowrap}.rdue-tbl .r{text-align:center;font-variant-numeric:tabular-nums;white-space:nowrap}.rdue-tbl .gap{width:16px;padding:0;background:var(--surface-2,rgba(128,128,128,.08))}.rdue-tbl tr.tot td{font-weight:600;border-bottom:2px solid var(--ink-soft)}.rdue-tbl tr.alerte td{background:var(--warn-bg);color:var(--ink)}.rdue-c th,.rdue-c td{text-align:center!important}.rdue-nav{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px}.trc-progress .pt{cursor:pointer}</style>';
 function rdueNav(n, texte){
@@ -15340,6 +15402,7 @@ function rdueEtape2(){
     + '<p class="hint" style="margin-top:10px">'+(nbReco ? nbReco+' date(s) de production reconstituée(s) à partir des déchargements, à un jour près, en attendant celles de l\'usinier. ' : '')+(R.manque ? R.manque+' lot(s) sans assez de camions pesés. ' : '')+(niv==='export' ? 'Volume vendu, réf vendeur et N°BL se remplissent quand les lots sont sous OT.' : '')+'</p>'
     + '<div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:8px">'
       + '<button class="btn btn-primary" title="Seulement les lots et les camions sélectionnés dans ce dossier" onclick="rdueExporter()">⭳ Rapport d\'usinage de ce dossier</button>'
+      + '<button class="btn" title="Tous les lots actuellement affectés à ce client, pas seulement ceux choisis dans ce dossier" onclick="rdueExporterClientComplet()">⭳ Rapport d\'usinage — tous les lots '+esc(e.client)+'</button>'
       + Array.from(new Set(R.lots.map(o=>o.l.site_code).filter(Boolean))).map(sc=>'<button class="btn" title="Rapport complet de l\'usine, au modèle SUV (lots, camions, séances, freinte) — PAS limité à ce dossier" onclick="lotsRapportSuv(\''+esc(sc)+'\')">⭳ Rapport SUV complet '+esc((lotsSiteParCode(sc)||{}).nom||sc)+'</button>').join('')
       + '</div>'
     + rdueNav(3, '<b>'+R.cams.length+' camions</b> · '+R.lots.length+' lots')+'</div>';
@@ -15575,7 +15638,7 @@ function renderDossierRdue(){
   // choix des lots, aperçu/téléchargement) — tant que ce n'est pas confirmé, rien d'autre ne s'affiche.
   if (!e.cibleConfirmee){
     return RDUE_CSS+'<div class="panel"><div class="panel-head"><div><h2>Dossier de conformité RDUE</h2><p style="margin:2px 0 0;color:var(--ink-soft);font-size:13px">Rien n\'est enregistré : tout est calculé à partir des livraisons et des lots.</p></div></div></div>'
-      + rdueEtapeCible(clients);
+      + rdueEtapeCible(clients) + rdueClosListHtml();
   }
   const et = e.etape||1, noms = ['Géolocalisation et volumes','Liasses et fiches',"Rapport d'usinage",'Choix des lots'];
   let h = RDUE_CSS+'<div class="panel"><div class="panel-head"><div><h2>Dossier de conformité RDUE</h2><p style="margin:2px 0 0;color:var(--ink-soft);font-size:13px">Client <b>'+esc(e.client)+'</b>'+(e.cible ? ', tonnage visé '+fmtNum(Number(e.cible))+' kg' : ', tout le potentiel disponible')+' · Clique sur une étape pour y aller.</p></div>'
