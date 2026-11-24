@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.57
+// @version      0.4.58
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.57';
+  const VERSION = '0.4.58';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -671,6 +671,17 @@
     setInput(q('#txtville_fournisseurAdd'), villeC); // modèle : ni DFE, ni RCCM, ni téléphone/e-mail du fournisseur
     setInput(q('#txtadresse_postale_fournisseurAdd'), c.adresse_postale || ('BP ' + villeC)); setInput(q('#txtadresse_geographique_fournisseurAdd'), c.siege || villeC);
     setRadio('txttype_fournisseur_agroAdd2'); setInput(q('#txtnumero_agrement_ccc_fournisseur_agroAdd'), c.ccc); // code CCC demandé en plus du modèle
+    // OBC n'active « Enregistrer » que si Téléphone ET Mobile (section Contacts) sont renseignés : téléphone de la coopérative, à défaut celui de l'interlocuteur, à défaut 10 zéros (règle de Nabi).
+    const telCoop = c.telephone || c.interlocuteur_tel || '0000000000';
+    setInput(q('#txttelephone_fournisseurAdd'), telCoop); setInput(q('#txtmobile_fournisseurAdd'), telCoop);
+    // Interlocuteur : celui d'ORIGEN ; coopérative sans interlocuteur et rattachée à BOBBY VO : BOBBY VO lui-même (règle de Nabi).
+    const gtC = grosTraitantCible(lot), interNom = c.interlocuteur_nom || (gtC && gtC.cle === 'BOBBY VO' ? 'BOBBY VO' : '');
+    setInput(q('#txtnom_prenom_interlocuteurAdd0'), interNom); setInput(q('#txtnum_telephone2_interlocuteurAdd0'), c.interlocuteur_tel || (interNom ? telCoop : '')); setInput(q('#txtemail_interlocuteurAdd0'), c.email); // modèle : téléphone dans « Téléphone 2 » de l'interlocuteur
+    // Gros traitant rattaché, poste comptable et type de prestation : réglés EN DERNIER, après tous les champs ci-dessus (nom, ville,
+    // adresse, téléphone, mobile, interlocuteur). OBC efface ces listes à chaque champ rempli plus haut ; les régler plus tôt (comme
+    // avant la 0.4.58) revenait à les faire écraser puis les rattraper après coup dans reappliquer — ce qui ne suffisait plus
+    // (24/11/2026 : échec persistant sur SC120484-2026-2-26 malgré la patience de la 0.4.57). Les régler une fois tous les autres
+    // champs posés laisse moins de choses, après eux, susceptibles de les effacer encore.
     // Gros traitant rattaché : le traitant du site de déchargement du lot dans ORIGEN (Awahus, Sitapa, M Bobby Vo, Coops Touton, Coops Sucden ; « Coops Ecorigine » = coopératives en propre, aucun gros traitant),
     // retrouvé par son nom dans la liste des gros traitants d'OBC. Aucun rattachement n'est inventé : sans correspondance, la liste reste vide.
     e.note = ''; let traitantNote = '';
@@ -684,12 +695,6 @@
         if (choisi) { setSelect(sel, choisi.value); traitantNote = ' Gros traitant rattaché : ' + choisi.text.trim() + ' (ORIGEN : ' + cand + ').'; journal(e, 'Gros traitant rattaché : ' + choisi.text.trim()); }
         else { traitantNote = ' ⚠ Gros traitant : « ' + cands.join(' / ') + ' » (ORIGEN) ne correspond à aucun gros traitant d\'OBC (' + opts.map((o) => o.text.trim()).join(', ') + ') : choisis-le toi-même dans « Gros traitant rattaché » avant d\'enregistrer si nécessaire.'; journal(e, 'Gros traitant : aucune correspondance pour ' + cands.join(' / ')); }
       } }
-    // OBC n'active « Enregistrer » que si Téléphone ET Mobile (section Contacts) sont renseignés : téléphone de la coopérative, à défaut celui de l'interlocuteur, à défaut 10 zéros (règle de Nabi).
-    const telCoop = c.telephone || c.interlocuteur_tel || '0000000000';
-    setInput(q('#txttelephone_fournisseurAdd'), telCoop); setInput(q('#txtmobile_fournisseurAdd'), telCoop);
-    // Interlocuteur : celui d'ORIGEN ; coopérative sans interlocuteur et rattachée à BOBBY VO : BOBBY VO lui-même (règle de Nabi).
-    const gtC = grosTraitantCible(lot), interNom = c.interlocuteur_nom || (gtC && gtC.cle === 'BOBBY VO' ? 'BOBBY VO' : '');
-    setInput(q('#txtnom_prenom_interlocuteurAdd0'), interNom); setInput(q('#txtnum_telephone2_interlocuteurAdd0'), c.interlocuteur_tel || (interNom ? telCoop : '')); setInput(q('#txtemail_interlocuteurAdd0'), c.email); // modèle : téléphone dans « Téléphone 2 » de l'interlocuteur
     await attendreOption(q('#txtnumero_poste_comptableAdd0'), new RegExp('^' + poste.Value + '\\b'));
     if (!setSelect(q('#txtnumero_poste_comptableAdd0'), poste.Value)) throw new Error('Poste comptable non sélectionnable');
     setSelect(q('#txttype_prestation_achatAdd0'), '1');
@@ -1072,14 +1077,10 @@
     await dormir(1500);
     // OBC remplit la récolte tout seul depuis le connaissement usine choisi ; on vérifie, et on la renseigne nous-mêmes si elle est restée vide.
     { const rs = q('#txtcampagne_recolte_idAdd'); if (rs && !rs.value) { await attendre(() => rs.options.length > 1, 4000, 300); if (!rs.value) await setSelectTexte(rs, new RegExp('^' + lot.campagne.recolte, 'i'), 'Récolte'); } }
-    // Le formulaire pesée porte aussi commodité, type, certification, fournisseur et origine : OBC ne les remplit « pas toujours » à partir du connaissement usine (comme pour les données livraison). Laissés vides, la pesée est enregistrée SANS fournisseur ni certification et le bordereau répond « Le fournisseur du bordereau est introuvable ». On les renseigne nous-mêmes.
+    // Le formulaire pesée porte aussi commodité, type et certification : OBC ne les remplit « pas toujours » à partir du connaissement usine (comme pour les données livraison). On les renseigne nous-mêmes, tôt (ce sont des champs amont, rien ne les écrase après).
     { const cm = q('#txtcommodite_idAdd'); if (cm && !cm.value) await setSelectTexte(cm, /^CACAO/i, 'Commodité');
       const tc = q('#txttype_commodite_idAdd'); if (tc && !tc.value) { await dormir(600); await listeStable(tc); await setSelectTexte(tc, new RegExp('^' + c.type_commodite, 'i'), 'Type commodité'); }
-      const ce = q('#txtcertification_idAdd'); if (ce && !ce.value && c.certification) { await dormir(400); await setSelectTexte(ce, new RegExp('^' + c.certification, 'i'), 'Certification'); }
-      const fo = q('#txtid_fournisseurAdd'); if (fo && e.ids.fournisseur_id) { if (fo.value && fo.value !== String(e.ids.fournisseur_id)) journal(e, 'Pesée : OBC avait choisi le fournisseur « ' + ((fo.selectedOptions[0] || {}).text || fo.value) + ' » (valeur ' + fo.value + ') : remplacé par la coopérative (id ' + e.ids.fournisseur_id + ')'); if (fo.value !== String(e.ids.fournisseur_id)) { await attendre(() => [...fo.options].some((o) => o.value === String(e.ids.fournisseur_id)), 6000, 300); if (!setSelect(fo, e.ids.fournisseur_id)) throw new Error('Coopérative (id ' + e.ids.fournisseur_id + ') absente de la liste Fournisseur de la pesée (' + fo.options.length + ' choix)'); } }
-      const og = q('#txtorigine_idAdd'); if (og && !og.value) { await listeStable(og); const oo = await attendre(() => optionParTexte(og, exact(c.origine)), 4000, 300); if (oo) setSelect(og, oo.value); else journal(e, 'Pesée : origine « ' + c.origine + ' » absente de la liste, laissée vide'); }
-      await dormir(800);
-      { const vu = (id) => { const el = q(id); return el ? (((el.selectedOptions[0] || {}).text || el.value || 'vide') + (el.disabled ? ' [verrouillé]' : '') + ' (' + el.options.length + ' choix)') : 'absent'; }; e.diagPesee = 'commodité=' + vu('#txtcommodite_idAdd') + ' ; type=' + vu('#txttype_commodite_idAdd') + ' ; certification=' + vu('#txtcertification_idAdd') + ' ; fournisseur=' + vu('#txtid_fournisseurAdd') + ' ; origine=' + vu('#txtorigine_idAdd'); journal(e, 'Pesée, après réglage : ' + e.diagPesee); } }
+      const ce = q('#txtcertification_idAdd'); if (ce && !ce.value && c.certification) { await dormir(400); await setSelectTexte(ce, new RegExp('^' + c.certification, 'i'), 'Certification'); } }
     setInput(q('#txtpesee_brousse_dateAdd'), isoDate(p.date || c.date)); setInput(q('#txtpesee_brousse_numeroAdd'), p.code);
     setInput(q('#txtpesee_brousse_poids_entreeAdd'), num(p.poids_entree)); setInput(q('#txtpesee_brousse_poids_sortieAdd'), num(p.poids_sortie));
     if (p.date_entree) setInput(q('#txtpesee_brousse_date_entreeAdd'), p.date_entree); if (p.date_sortie) setInput(q('#txtpesee_brousse_date_sortieAdd'), p.date_sortie);
@@ -1098,9 +1099,16 @@
     setInput(q('#txtpesee_brousse_tare_sacs_acceptesAdd'), num(p.tare_sacs)); setInput(q('#txtpesee_brousse_tare_palettesAdd'), '0'); setInput(q('#txtpesee_brousse_poids_refactionAdd'), String(refac));
     if (p.classement) await setSelectTexte(q('#txtqualite_idAdd'), exact(p.classement), 'Classement', p.classement);
     ['poids_entree', 'poids_sortie', 'sacs_decharges', 'sacs_acceptes', 'tare_sacs_acceptes', 'tare_palettes', 'poids_refaction'].forEach((k) => { const el = q('#txtpesee_brousse_' + k + 'Add'); if (el) el.dispatchEvent(new Event('focusout', { bubbles: true })); });
+    // Fournisseur et origine : renseignés EN DERNIER, après tous les autres champs de l'écran (poids, rubriques qualité,
+    // réfaction, classement). OBC les efface à chaque champ rempli plus haut ; les régler plus tôt (comme avant la 0.4.58)
+    // revenait à les faire écraser puis les rattraper après coup. Les régler une fois tous les autres champs posés laisse
+    // moins de choses, après eux, susceptibles de les effacer encore (24/11/2026 : échec persistant malgré la patience de la 0.4.57).
+    { const fo = q('#txtid_fournisseurAdd'); if (fo && e.ids.fournisseur_id) { await attendre(() => [...fo.options].some((o) => o.value === String(e.ids.fournisseur_id)), 6000, 300); if (!setSelect(fo, e.ids.fournisseur_id)) throw new Error('Coopérative (id ' + e.ids.fournisseur_id + ') absente de la liste Fournisseur de la pesée (' + fo.options.length + ' choix)'); } }
+    { const og = q('#txtorigine_idAdd'); if (og && !og.value) { await listeStable(og); const oo = await attendre(() => optionParTexte(og, exact(c.origine)), 4000, 300); if (oo) setSelect(og, oo.value); else journal(e, 'Pesée : origine « ' + c.origine + ' » absente de la liste, laissée vide'); } }
+    await dormir(800);
     { const m = await reappliquer(f); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
-    // Reprises multiples (comme reappliquer ci-dessus) : OBC remet parfois le fournisseur de la pesée à vide plusieurs fois de
-    // suite après la case précédente, une seule reprise (jusqu'à la 0.4.56) ne suffisait pas toujours (24/11/2026).
+    // Reprises multiples : OBC remet parfois le fournisseur (ou la certification) à vide plusieurs fois de suite même après
+    // reappliquer ; une seule reprise (jusqu'à la 0.4.56) ne suffisait pas toujours.
     { const fo = q('#txtid_fournisseurAdd'), ce = q('#txtcertification_idAdd');
       for (let t = 0; t < 3; t++) {
         const manq = []; if (fo && e.ids.fournisseur_id && fo.value !== String(e.ids.fournisseur_id)) manq.push('fournisseur'); if (ce && c.certification && !ce.value) manq.push('certification');
@@ -1110,8 +1118,11 @@
         if (ce && c.certification && !ce.value) await setSelectTexte(ce, new RegExp('^' + c.certification, 'i'), 'Certification');
         await dormir(800 + t * 400);
       }
+      const vu = (id) => { const el = q(id); return el ? (((el.selectedOptions[0] || {}).text || el.value || 'vide') + (el.disabled ? ' [verrouillé]' : '') + ' (' + el.options.length + ' choix)') : 'absent'; };
+      e.diagPesee = 'commodité=' + vu('#txtcommodite_idAdd') + ' ; type=' + vu('#txttype_commodite_idAdd') + ' ; certification=' + vu('#txtcertification_idAdd') + ' ; fournisseur=' + vu('#txtid_fournisseurAdd') + ' ; origine=' + vu('#txtorigine_idAdd');
       const manq2 = []; if (fo && e.ids.fournisseur_id && fo.value !== String(e.ids.fournisseur_id)) manq2.push('fournisseur (vu : « ' + ((fo.selectedOptions[0] || {}).text || fo.value || 'vide') + ' », attendu id ' + e.ids.fournisseur_id + ')'); if (ce && c.certification && !ce.value) manq2.push('certification');
-      if (manq2.length) throw new Error('Pesée : OBC n\'a pas retenu ' + manq2.join(' ni ') + ' (rien n\'est enregistré). Vu à l\'écran : ' + (e.diagPesee || '?'));
+      if (manq2.length) throw new Error('Pesée : OBC n\'a pas retenu ' + manq2.join(' ni ') + ' (rien n\'est enregistré). Vu à l\'écran : ' + e.diagPesee);
+      journal(e, 'Pesée, réglage final : ' + e.diagPesee);
     }
     { const rs = q('#txtcampagne_recolte_idAdd'); if (rs && !rs.value) throw new Error('Pesée : la récolte (' + lot.campagne.recolte + ') n\'est pas renseignée : rien n\'est enregistré'); }
     // Cases CALCULÉES par OBC (poids brut, net livré, net payé) : OBC les laisse parfois à 0. On les contrôle et, au besoin, on y écrit la valeur d'ORIGEN.
