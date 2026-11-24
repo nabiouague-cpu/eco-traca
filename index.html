@@ -4889,7 +4889,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-24-617';
+const APP_VERSION = '2026-11-24-618';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -15336,23 +15336,37 @@ async function rdueConstruireRapportClientComplet(client){
 // Récapitulatif des déchargements d'une coopérative, pour le ZIP du dossier : un camion/connaissement par
 // ligne, avec le poids et le nombre de sacs TELS QUE PORTÉS SUR LE CONNAISSEMENT au déchargement (quantite_kg,
 // nombre_sacs — avant toute acceptation), puis le poids net final payé et le nombre de sacs acceptés à l'usine
-// (poids_net_produit, nombre_sacs_accepte — après agréage). Même habillage que le rapport d'usinage (bordures,
-// en-tête grisé, ligne TOTAL en formules, volet figé).
-async function rdueConstruireRecapCoop(nomCoop, cams){
+// (poids_net_produit, nombre_sacs_accepte — après agréage).
+// Habillage repris du modèle ORIGEN déjà utilisé partout ailleurs pour les récaps par coopérative (feuille
+// « Récap par coopérative » de finEtatPaiementExporter, feuille « Livraisons » de livraisonsCoopExporter) :
+// en-tête orange ENTETE, police Calibri, bordures fines noires (cadre), titre en gros au-dessus, ligne TOTAL
+// en jaune — pas un style réinventé pour l'occasion.
+async function rdueConstruireRecapCoop(nomCoop, client, cams){
   let ExcelJS; try{ ExcelJS = await qcChargerExcelJS(); }catch(err){ return { erreur:'Impossible de préparer le classeur : '+err.message, type:'error' }; }
-  const wb = new ExcelJS.Workbook(); wb.creator = 'ORIGEN · ECORIGINE';
-  const cadre = { top:{style:'thin',color:{argb:'FF999999'}}, bottom:{style:'thin',color:{argb:'FF999999'}}, left:{style:'thin',color:{argb:'FF999999'}}, right:{style:'thin',color:{argb:'FF999999'}} };
-  const S = wb.addWorksheet('Récapitulatif des déchargements');
-  const ent = ['Date de déchargement','N° de connaissement','Camion / remorque','Poids déchargé (connaissement, kg)','Nombre de sacs (connaissement)','Poids net payé (kg)','Nombre de sacs acceptés à l\'usine'];
-  ent.forEach((h,i)=>{ const c = S.getCell(3,i+1); c.value = h; c.font = { name:'Arial', size:10, bold:true }; c.alignment = { horizontal:'center', vertical:'middle', wrapText:true }; c.fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FFD9E1F2'} }; c.border = cadre; });
-  S.getRow(3).height = 32;
-  const lignes = cams.map(c=>{ const a = c.a; return [ c.d ? dateFr(c.d.iso) : '', a.connaissement||'', rdueImmat(a), Number(a.quantite_kg)||Number(a.poids_brut)||0, Number(a.nombre_sacs)||0, Number(a.poids_net_produit)||0, Number(a.nombre_sacs_accepte)||0 ]; });
-  lignes.forEach((l,k)=>l.forEach((v,i)=>{ const c = S.getCell(7+k,i+1); if (v!==null && v!=='' && v!==undefined) c.value = v; c.font = { name:'Arial', size:10 }; c.alignment = { horizontal:'center', vertical:'middle' }; c.border = cadre; if (i>=3) c.numFmt = '#,##0'; }));
-  const fin = 6+lignes.length;
-  S.getCell('A5').value = 'TOTAL'; S.getCell('A5').font = { name:'Arial', size:10, bold:true }; S.getCell('A5').alignment = { horizontal:'center', vertical:'middle' };
-  ['D','E','F','G'].forEach(col=>{ const c = S.getCell(col+'5'); c.value = { formula:'SUM('+col+'7:'+col+fin+')' }; c.numFmt = '#,##0'; c.font = { name:'Arial', size:10, bold:true }; c.alignment = { horizontal:'center', vertical:'middle' }; });
-  S.columns = ent.map((h,i)=>({ width:[22,24,26,22,20,20,24][i] }));
-  S.views = [{ state:'frozen', ySplit:6 }];
+  const ENTETE = 'FFC55A11', JAUNE = 'FFFFF2CC', NOIR = { argb:'FF000000' };
+  const bord = { style:'thin', color:NOIR }, cadre = { top:bord, bottom:bord, left:bord, right:bord };
+  const NB = '#,##0', F = (o)=>Object.assign({ name:'Calibri', size:10 }, o||{});
+  const dateXl = iso=>{ const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso||'')); return m ? new Date(Date.UTC(+m[1], +m[2]-1, +m[3])) : null; };
+  const wb = new ExcelJS.Workbook(); wb.creator = 'ORIGEN · ECORIGINE'; wb.created = new Date();
+  const S = wb.addWorksheet(String(nomCoop).replace(/[\\\/\?\*\[\]:]/g,' ').trim().slice(0,31) || 'Récapitulatif', { views:[{ state:'frozen', ySplit:4 }] });
+  S.getCell('B1').value = 'RÉCAPITULATIF DES DÉCHARGEMENTS — '+String(nomCoop).toUpperCase(); S.getCell('B1').font = F({ size:13, bold:true, color:{argb:'FF'+ENTETE.slice(2)} });
+  S.getCell('B2').value = 'Dossier '+client+' · '+cams.length+' connaissement'+(cams.length>1?'s':'')+' · édité le '+dateFr(new Date().toISOString().slice(0,10)); S.getCell('B2').font = F({ italic:true, color:{argb:'FF595959'} });
+  const hdr = ['N°','DATE DE DÉCHARGEMENT','N° CONNAISSEMENT','IMMATRICULATION','N° SACS (CONNAISSEMENT)','POIDS CONNAISSEMENT (kg)','N° SACS ACCEPTÉS (USINE)','POIDS NET PAYÉ (kg)'];
+  const widths = [5,18,22,16,16,16,16,16];
+  S.columns = [{ width:2 }].concat(widths.map(w=>({ width:w })));
+  const H = S.getRow(4); H.height = 32;
+  hdr.forEach((h,i)=>{ const c = H.getCell(i+2); c.value = h; c.font = F({ bold:true, color:{argb:'FFFFFFFF'} }); c.fill = { type:'pattern', pattern:'solid', fgColor:{argb:ENTETE} }; c.alignment = { horizontal:'center', vertical:'middle', wrapText:true }; c.border = cadre; });
+  cams.forEach((c,i)=>{
+    const a = c.a, row = S.getRow(5+i);
+    const vals = [ i+1, dateXl(a.date), a.connaissement||'', rdueImmat(a), Number(a.nombre_sacs)||null, Number(a.quantite_kg)||Number(a.poids_brut)||null, Number(a.nombre_sacs_accepte)||null, Number(a.poids_net_produit)||null ];
+    vals.forEach((v,k)=>{ const x = row.getCell(k+2); if (v!==null) x.value = v; x.font = F(); x.border = cadre; x.alignment = k<=3 ? { horizontal: k===0 ? 'center' : (k===1 ? 'center' : 'left') } : { horizontal:'right', indent:1 };
+      if (k===1) x.numFmt = 'dd/mm/yyyy'; if (k>=4) x.numFmt = NB; });
+  });
+  const fin = 4+cams.length, tot = S.getRow(fin+1);
+  tot.getCell('E').value = 'TOTAL'; tot.getCell('E').alignment = { horizontal:'right' };
+  ['F','G','H','I'].forEach(col=>{ const c = tot.getCell(col); c.value = { formula:'SUM('+col+'5:'+col+fin+')' }; c.numFmt = NB; c.alignment = { horizontal:'right', indent:1 }; });
+  hdr.forEach((h,i)=>{ const c = tot.getCell(i+2); c.border = cadre; c.font = F({ bold:true }); c.fill = { type:'pattern', pattern:'solid', fgColor:{argb:JAUNE} }; });
+  S.autoFilter = { from:{ row:4, column:2 }, to:{ row:fin, column:1+hdr.length } };
   const nom = 'Récapitulatif des déchargements - '+nomCoop+'.xlsx';
   return { wb, nom };
 }
@@ -15532,7 +15546,7 @@ async function rdueTelechargerTout(client){
       // sacs acceptés à l'usine, camion par camion.
       {
         const camsCoop = R.cams.filter(x=>x.a.cooperative_id===c.id);
-        const Rr = await rdueConstruireRecapCoop(c.nom, camsCoop);
+        const Rr = await rdueConstruireRecapCoop(c.nom, client, camsCoop);
         if (Rr.erreur){ koRec++; }
         else { const buf = await Rr.wb.xlsx.writeBuffer(); zip.file(dossierCoop+'/'+Rr.nom, buf); nRec++; }
       }
