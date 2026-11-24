@@ -4889,7 +4889,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-24-614';
+const APP_VERSION = '2026-11-24-615';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -15430,7 +15430,7 @@ function rdueEtape3(){
     + (lignesCoop ? '<div style="overflow-x:auto"><table class="rdue-tbl"><thead><tr><th>Coopérative</th><th class="r">Camions</th><th class="r">Présentes</th><th class="r">Chez Serge</th><th class="r">Manquantes</th></tr></thead><tbody>'+lignesCoop+'</tbody></table></div>' : '')
     + '<p class="hint" style="margin:14px 0 6px">Détail camion par camion ('+R.cams.length+')</p>'
     + '<div style="overflow-x:auto"><table class="rdue-tbl"><thead><tr><th>Date de déchargement</th><th>Coopérative</th><th>N° de connaissement</th><th>Liasse documentaire</th><th class="r">Fichiers</th></tr></thead><tbody>'+rows+'</tbody></table></div>'
-    + '<p class="hint" style="margin-top:10px">L\'archive zip des liasses et des fiches de traçabilité reste à construire : les PDF sont rangés dans OneDrive, pas dans ORIGEN.</p>'
+    + '<p class="hint" style="margin-top:10px">Le ZIP du dossier (dernière étape) range liasses et fiches de traçabilité dans le dossier de chaque coopérative — les liasses viennent du OneDrive, les fiches de documents-coop.</p>'
     + rdueNav(2, '<b>'+R.cams.length+' camions</b>')+'</div>';
 }
 // Pour chaque coopérative des lots choisis : a-t-on bien ses données de géolocalisation (celles transmises
@@ -15536,8 +15536,14 @@ async function rdueTelechargerTout(client){
         } else koLia += cns.length;
       }
 
-      // 3) Fiches de traçabilité (générées par ORIGEN, rangées dans documents-coop, reliées par connaissement)
-      const dfs = (state.demandeFichiers||[]).filter(f=>f.type==='product_movements' && f.connaissement && cns.indexOf(liasseCnNorm(f.connaissement))>=0);
+      // 3) Fiches de traçabilité (générées par ORIGEN, rangées dans documents-coop, reliées par connaissement).
+      // Les fiches générées directement (sans passer par une « demande » coopérative) ont demande_id=null et
+      // sont chargées à part dans state.fichesGenerees (voir refreshDemandesTab/chargerTout) — state.demandeFichiers
+      // ne couvre que celles rattachées à une demande. On cherche dans les deux, dédoublonnées par id, sinon les
+      // fiches générées hors demande (le cas normal pour la traçabilité) ne ressortaient jamais ici.
+      const dfs = (state.fichesGenerees||[]).concat((state.demandeFichiers||[]).filter(f=>f.type==='product_movements'))
+        .filter((f,i,arr)=>arr.findIndex(x=>x.id===f.id)===i)
+        .filter(f=>f.type==='product_movements' && f.connaissement && cns.indexOf(liasseCnNorm(f.connaissement))>=0);
       const vusFic = new Set();
       for (const f of dfs){
         const { data, error } = await supabaseClient.storage.from('documents-coop').download(f.path);
