@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.56
+// @version      0.4.57
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.56';
+  const VERSION = '0.4.57';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -387,20 +387,21 @@
     // On réapplique donc dans l'ordre du formulaire, en attendant que chaque liste soit rechargée, puis on recommence tant que quelque chose a bougé.
     let manques = [];
     rafraichirListes(form);
-    // 6 passes (au lieu de 4) et une attente un peu plus longue par liste : certaines listes en cascade d'OBC (ex. gros traitant
-    // rattaché) mettent plus de temps à se recharger que les autres, et 4 passes / 5 s ne suffisaient pas toujours (23/11/2026).
-    for (let passe = 0; passe < 6; passe++) {
-      await dormir(passe === 0 ? (ms || 800) : 600); manques = []; let modifie = false;
+    // 9 passes (au lieu de 6) et une attente encore un peu plus longue par liste : certaines paires de listes en cascade d'OBC
+    // (ex. gros traitant rattaché / poste comptable de la fiche coopérative) se renvoient la réinitialisation l'une l'autre et
+    // mettent parfois plus de temps à se stabiliser que les 6 passes précédentes ne le permettaient (24/11/2026).
+    for (let passe = 0; passe < 9; passe++) {
+      await dormir(passe === 0 ? (ms || 800) : 800); manques = []; let modifie = false;
       for (const el of [...form.querySelectorAll('select[data-origen-val]')]) {
         const v = el.dataset.origenVal; if (el.value === v) continue;
         let ok = setSelect(el, v);
         if (!ok) { await attendre(() => [...el.options].some((o) => o.value === v), 9000, 300); ok = setSelect(el, v); }
-        modifie = true; await dormir(1200); // laisse OBC recharger les listes qui dépendent de celle-ci
+        modifie = true; await dormir(1600); // laisse OBC recharger les listes qui dépendent de celle-ci
         if (!ok) manques.push(el.id);
       }
       if (!modifie) break; // tout est en place et stable
     }
-    await dormir(400);
+    await dormir(600);
     [...form.querySelectorAll('select[data-origen-val]')].forEach((el) => { if (el.value !== el.dataset.origenVal && !manques.includes(el.id)) manques.push(el.id); });
     rafraichirListes(form);
     return manques;
@@ -1098,7 +1099,20 @@
     if (p.classement) await setSelectTexte(q('#txtqualite_idAdd'), exact(p.classement), 'Classement', p.classement);
     ['poids_entree', 'poids_sortie', 'sacs_decharges', 'sacs_acceptes', 'tare_sacs_acceptes', 'tare_palettes', 'poids_refaction'].forEach((k) => { const el = q('#txtpesee_brousse_' + k + 'Add'); if (el) el.dispatchEvent(new Event('focusout', { bubbles: true })); });
     { const m = await reappliquer(f); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
-    { const fo = q('#txtid_fournisseurAdd'), ce = q('#txtcertification_idAdd'), manq = []; if (fo && e.ids.fournisseur_id && fo.value !== String(e.ids.fournisseur_id)) manq.push('fournisseur'); if (ce && c.certification && !ce.value) manq.push('certification'); if (manq.length) { await dormir(1500); if (fo && e.ids.fournisseur_id && fo.value !== String(e.ids.fournisseur_id)) setSelect(fo, e.ids.fournisseur_id); if (ce && c.certification && !ce.value) await setSelectTexte(ce, new RegExp('^' + c.certification, 'i'), 'Certification'); await dormir(800); const manq2 = []; if (fo && e.ids.fournisseur_id && fo.value !== String(e.ids.fournisseur_id)) manq2.push('fournisseur (vu : « ' + ((fo.selectedOptions[0] || {}).text || fo.value || 'vide') + ' », attendu id ' + e.ids.fournisseur_id + ')'); if (ce && c.certification && !ce.value) manq2.push('certification'); if (manq2.length) throw new Error('Pesée : OBC n\'a pas retenu ' + manq2.join(' ni ') + ' (rien n\'est enregistré). Vu à l\'écran : ' + (e.diagPesee || '?')); } }
+    // Reprises multiples (comme reappliquer ci-dessus) : OBC remet parfois le fournisseur de la pesée à vide plusieurs fois de
+    // suite après la case précédente, une seule reprise (jusqu'à la 0.4.56) ne suffisait pas toujours (24/11/2026).
+    { const fo = q('#txtid_fournisseurAdd'), ce = q('#txtcertification_idAdd');
+      for (let t = 0; t < 3; t++) {
+        const manq = []; if (fo && e.ids.fournisseur_id && fo.value !== String(e.ids.fournisseur_id)) manq.push('fournisseur'); if (ce && c.certification && !ce.value) manq.push('certification');
+        if (!manq.length) break;
+        await dormir(1500 + t * 700);
+        if (fo && e.ids.fournisseur_id && fo.value !== String(e.ids.fournisseur_id)) setSelect(fo, e.ids.fournisseur_id);
+        if (ce && c.certification && !ce.value) await setSelectTexte(ce, new RegExp('^' + c.certification, 'i'), 'Certification');
+        await dormir(800 + t * 400);
+      }
+      const manq2 = []; if (fo && e.ids.fournisseur_id && fo.value !== String(e.ids.fournisseur_id)) manq2.push('fournisseur (vu : « ' + ((fo.selectedOptions[0] || {}).text || fo.value || 'vide') + ' », attendu id ' + e.ids.fournisseur_id + ')'); if (ce && c.certification && !ce.value) manq2.push('certification');
+      if (manq2.length) throw new Error('Pesée : OBC n\'a pas retenu ' + manq2.join(' ni ') + ' (rien n\'est enregistré). Vu à l\'écran : ' + (e.diagPesee || '?'));
+    }
     { const rs = q('#txtcampagne_recolte_idAdd'); if (rs && !rs.value) throw new Error('Pesée : la récolte (' + lot.campagne.recolte + ') n\'est pas renseignée : rien n\'est enregistré'); }
     // Cases CALCULÉES par OBC (poids brut, net livré, net payé) : OBC les laisse parfois à 0. On les contrôle et, au besoin, on y écrit la valeur d'ORIGEN.
     {
