@@ -4887,7 +4887,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-24-619';
+const APP_VERSION = '2026-11-24-620';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -15573,8 +15573,13 @@ async function rdueTelechargerTout(client){
       for (const f of dfs){
         const { data, error } = await supabaseClient.storage.from('documents-coop').download(f.path);
         if (error){ koFic++; continue; }
-        let name = f.nom || f.path.split('/').pop();
-        if (vusFic.has(name)){ const p=name.split('.'),ext=p.length>1?'.'+p.pop():''; name = p.join('.')+'_'+Math.random().toString(36).slice(2,7)+ext; }
+        // Nom dans le ZIP = le connaissement correspondant (même convention que les liasses, qui
+        // utilisent déjà ce nom), et non le nom d'origine du fichier généré -- pour que la fiche et
+        // sa liasse se retrouvent facilement côte à côte dans le dossier de la coopérative.
+        const nomOrigine = f.nom || f.path.split('/').pop();
+        const ext = (()=>{ const p = String(nomOrigine).split('.'); return p.length>1 ? '.'+p.pop() : ''; })();
+        let name = (liasseCnNorm(f.connaissement) || assainirNomFichier(String(f.connaissement||'').trim())) + ext;
+        if (vusFic.has(name)){ const p=name.split('.'),extB=p.length>1?'.'+p.pop():''; name = p.join('.')+'_'+Math.random().toString(36).slice(2,7)+extB; }
         vusFic.add(name);
         const prep = await preparerFichierPourZip(name, data, alleger);
         zip.file(dossierCoop+'/3 - Fiches de traçabilité/'+name, prep.donnees, optionsCompressionZip(name)); nFic++;
