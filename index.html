@@ -4889,7 +4889,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-24-610';
+const APP_VERSION = '2026-11-24-611';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -15068,7 +15068,42 @@ function renderTracageDirect(tr){
 // Le rapport d'usinage est UNIQUE : il est le même pour tous les clients. Seules la géolocalisation et les volumes (étape 4) suivent le format du client.
 // Date de production d'un lot : celle de l'usinier si elle est saisie (« usinier »), sinon reconstituée (« reconstituée ») = jour où le cumul des
 // camions déchargés (dans l'ordre de pesée, poids net payé) atteint le cumul des lots du site.
-function rdueEtat(){ return state.rdue || (state.rdue = { client:'', etape:1, niveau:'fab', decoches:{}, ajoutes:[], ajout:'', msg:'', cible:'', cibleConfirmee:false }); }
+function rdueEtat(){ return state.rdue || (state.rdue = { client:'', etape:1, niveau:'fab', decoches:{}, ajoutes:[], ajout:'', msg:'', cible:'', cibleConfirmee:false, dossierId:null }); }
+// ---- Persistance du dossier RDUE (table rdue_dossiers) ----
+// Un seul dossier « ouvert » à la fois (contrainte en base aussi) : tant qu'il n'est pas clos, on le
+// reprend tel quel (client, tonnage, étape, cases cochées) à chaque chargement, quels que soient les
+// redéploiements ou rechargements de page — rien ne revient à zéro en cours de route.
+async function chargerRdueDossiers(){
+  if (!supabaseClient){ state.rdueDossiersCharges = true; return; }
+  const { data, error } = await supabaseClient.from('rdue_dossiers').select('*').order('created_at', { ascending:false });
+  state.rdueDossiers = error ? (state.rdueDossiers||[]) : (data||[]);
+  state.rdueDossiersCharges = true;
+  if (!state.rdueHydrate){
+    state.rdueHydrate = true;
+    const ouvert = (state.rdueDossiers||[]).find(d=>d.etat==='ouvert');
+    if (ouvert){
+      state.rdue = { client:ouvert.client, etape:ouvert.etape||1, niveau:ouvert.niveau||'fab', decoches:ouvert.decoches||{}, ajoutes:ouvert.ajoutes||[], ajout:'', msg:'', cible: ouvert.cible_kg!=null ? String(ouvert.cible_kg) : '', cibleConfirmee:true, dossierId:ouvert.id };
+    }
+  }
+  render();
+}
+function rdueSauvegarder(){
+  const e = rdueEtat();
+  if (!e.dossierId || !supabaseClient) return;
+  supabaseClient.from('rdue_dossiers').update({ etape:e.etape, niveau:e.niveau, decoches:e.decoches, ajoutes:e.ajoutes, cible_kg: e.cible ? Number(e.cible) : null, updated_at:new Date().toISOString() }).eq('id', e.dossierId)
+    .then(({error})=>{ if (error) console.error('rdue_dossiers update', error); });
+}
+// Lots déjà présentés dans un dossier CLOS de ce client : exclus des prochains dossiers pour ce même
+// client (« on repart sur les volumes restants ») — un lot une fois présenté ne revient jamais.
+function rdueDejaPresentes(client){
+  const s = new Set();
+  (state.rdueDossiers||[]).forEach(d=>{ if (d.etat==='clos' && d.client===client && Array.isArray(d.lot_ids)) d.lot_ids.forEach(id=>s.add(id)); });
+  return s;
+}
+function rdueLotsClientDispo(client){
+  const dej = rdueDejaPresentes(client);
+  return (state.lotsUsinage||[]).filter(l=>rdueNumLot(l)!=null && l.client===client && !dej.has(l.id));
+}
 function rdueNumLot(l){ const n = parseInt(String(l.numero).replace(/\D+/g,''),10); return isNaN(n) ? null : n; }
 function rdueDatePesee(a){
   const d = pdDate(a,'Date P2') || pdDate(a,'Date P1');
@@ -15095,36 +15130,69 @@ function rdueCalcul(site){
   const nonAffecte = reste.reduce((s,x)=>s+Math.max(0,x),0);
   return { camions, vivants, lots, parLot, nonAffecte };
 }
-function rdueSetClient(v){ const e = rdueEtat(); e.client = v; e.decoches = {}; e.ajoutes = []; e.msg = ''; e.cible = ''; e.cibleConfirmee = false; render(); }
+// Changer de client n'est permis que tant qu'aucun dossier n'est ouvert pour celui déjà en cours
+// (le sélecteur client du portail est désactivé sinon — voir rdueEtapeCible) : un dossier à la fois.
+function rdueSetClient(v){ const e = rdueEtat(); if (e.dossierId) return; e.client = v; e.decoches = {}; e.ajoutes = []; e.msg = ''; e.cible = ''; e.cibleConfirmee = false; render(); }
 // Tonnage visé pour ce client : on coche les lots du client par numéro croissant jusqu'à atteindre le tonnage
 // (le lot qui fait franchir le seuil reste coché — on ne coupe jamais un lot en deux), le reste est décoché.
 // Le mécanisme de case à cocher existant (rdueCoche / « Choix des lots ») reste utilisable ensuite pour ajuster.
+// Part des lots DISPONIBLES seulement (rdueLotsClientDispo) : ceux déjà présentés dans un dossier clos
+// précédent pour ce client n'y reviennent jamais.
 function rdueAppliquerCible(){
   const e = rdueEtat(), cible = Number(e.cible)||0;
-  const tous = (state.lotsUsinage||[]).filter(l=>rdueNumLot(l)!=null && l.client===e.client).sort(rdueParNum);
+  const tous = rdueLotsClientDispo(e.client).sort(rdueParNum);
   e.decoches = {};
   if (cible>0){ let cumul = 0; tous.forEach(l=>{ if (cumul>=cible){ e.decoches[l.id] = true; return; } cumul += lotsUsinagePoidsRetenu(l); }); }
+  rdueSauvegarder(); render();
+}
+// Ouvre le dossier en base s'il ne l'est pas déjà (une seule fois) ; la contrainte d'unicité en base
+// protège si un dossier a été ouvert entre-temps ailleurs — on reprend alors celui-là, sans rien écraser.
+async function rdueConfirmerCible(){
+  const e = rdueEtat();
+  if (!e.dossierId){
+    if (!supabaseClient){ showToast('Connexion indisponible : impossible d\'ouvrir le dossier.', 'error'); return; }
+    const id = genId('rdue');
+    const { error } = await supabaseClient.from('rdue_dossiers').insert({ id, client:e.client, cible_kg: e.cible ? Number(e.cible) : null, etape:1, niveau:'fab', decoches:e.decoches, ajoutes:e.ajoutes, etat:'ouvert' });
+    if (error){
+      state.rdueDossiersCharges = false; state.rdueDossiersChargementLance = false; state.rdueHydrate = false;
+      showToast('Un dossier est déjà ouvert ailleurs : on reprend celui-là.', 'error');
+      render(); return;
+    }
+    e.dossierId = id;
+  }
+  e.cibleConfirmee = true; e.etape = 1; window.scrollTo(0,0); render();
+}
+function rdueChangerCible(){ rdueEtat().cibleConfirmee = false; window.scrollTo(0,0); render(); }
+// Clôture définitive : fige la liste des lots réellement présentés (lot_ids), pour qu'ils soient exclus
+// du prochain dossier de ce client. Remet l'écran à zéro, prêt pour un nouveau dossier (même client ou un autre).
+async function rdueClore(){
+  const e = rdueEtat(); if (!e.dossierId || !supabaseClient) return;
+  const R = rdueRapport(), lotIds = R.lots.map(o=>o.l.id);
+  if (!lotIds.length){ showToast('Aucun lot dans ce dossier : rien à clôturer.'); return; }
+  const { error } = await supabaseClient.from('rdue_dossiers').update({ etat:'clos', lot_ids:lotIds, clos_le:new Date().toISOString(), etape:e.etape, niveau:e.niveau, decoches:e.decoches, ajoutes:e.ajoutes }).eq('id', e.dossierId);
+  if (error){ showToast('Impossible de clôturer le dossier : '+error.message, 'error'); return; }
+  showToast('Dossier '+e.client+' clôturé : '+lotIds.length+' lot(s) présenté(s). Les prochains dossiers de ce client repartiront des volumes restants.', 'success');
+  state.rdue = { client:'', etape:1, niveau:'fab', decoches:{}, ajoutes:[], ajout:'', msg:'', cible:'', cibleConfirmee:false, dossierId:null };
+  state.rdueDossiersCharges = false; state.rdueDossiersChargementLance = false; state.rdueHydrate = false;
   render();
 }
-function rdueConfirmerCible(){ const e = rdueEtat(); e.cibleConfirmee = true; e.etape = 1; window.scrollTo(0,0); render(); }
-function rdueChangerCible(){ rdueEtat().cibleConfirmee = false; window.scrollTo(0,0); render(); }
-function rdueCoche(id){ const e = rdueEtat(); if (e.ajoutes.indexOf(id)>=0) e.ajoutes = e.ajoutes.filter(x=>x!==id); else if (e.decoches[id]) delete e.decoches[id]; else e.decoches[id] = true; render(); }
+function rdueCoche(id){ const e = rdueEtat(); if (e.ajoutes.indexOf(id)>=0) e.ajoutes = e.ajoutes.filter(x=>x!==id); else if (e.decoches[id]) delete e.decoches[id]; else e.decoches[id] = true; rdueSauvegarder(); render(); }
 function rdueAjouter(){
   const e = rdueEtat(), t = String(e.ajout||'').trim(); if (!t) return;
   const l = (state.lotsUsinage||[]).find(x=>String(x.numero)===t);
   if (!l) e.msg = 'Le lot '+t+' est introuvable.';
   else if (l.client===e.client) e.msg = 'Le lot '+t+' fait déjà partie des lots du client.';
   else if (e.ajoutes.indexOf(l.id)>=0) e.msg = 'Le lot '+t+' est déjà ajouté.';
-  else { e.ajoutes.push(l.id); e.msg = ''; }
+  else { e.ajoutes.push(l.id); e.msg = ''; rdueSauvegarder(); }
   e.ajout = ''; render();
 }
-function rdueEtape(n){ rdueEtat().etape = n; window.scrollTo(0,0); render(); }
-function rdueNiveau(k){ rdueEtat().niveau = k; render(); }
+function rdueEtape(n){ rdueEtat().etape = n; rdueSauvegarder(); window.scrollTo(0,0); render(); }
+function rdueNiveau(k){ rdueEtat().niveau = k; rdueSauvegarder(); render(); }
 function rdueCoopNom(a){ const c = coopById(a.cooperative_id); return c ? c.nom : (a.cooperative_nom||'—'); }
 function rdueParNum(a,b){ return rdueNumLot(a)-rdueNumLot(b); }
 function rdueSelection(){
-  const e = rdueEtat(), tous = (state.lotsUsinage||[]).filter(l=>rdueNumLot(l)!=null);
-  const duClient = tous.filter(l=>l.client===e.client).sort(rdueParNum);
+  const e = rdueEtat();
+  const duClient = rdueLotsClientDispo(e.client).sort(rdueParNum);
   const ajoutes = e.ajoutes.map(lotUsinageParId).filter(Boolean).sort(rdueParNum);
   return { duClient, ajoutes, coches: duClient.filter(l=>!e.decoches[l.id]).concat(ajoutes) };
 }
@@ -15189,17 +15257,19 @@ function rdueNav(n, texte){
 // Ce n'est plus une sélection de lots au cas par cas mais un objectif de poids ; rdueAppliquerCible() s'en
 // charge (numéros de lot croissants), et « Choix des lots » (étape 4) reste disponible pour ajuster à la main.
 function rdueEtapeCible(clients){
-  const e = rdueEtat();
-  const tous = (state.lotsUsinage||[]).filter(l=>rdueNumLot(l)!=null && l.client===e.client);
+  const e = rdueEtat(), verrou = !!e.dossierId;
+  const tous = rdueLotsClientDispo(e.client);
   const dispoKg = tous.reduce((s,l)=>s+lotsUsinagePoidsRetenu(l),0), dispoN = tous.length;
+  const dejaN = rdueDejaPresentes(e.client).size;
   const S = rdueSelection(), kgChoisi = S.coches.reduce((s,l)=>s+lotsUsinagePoidsRetenu(l),0);
   return '<div class="panel"><h3 style="margin:0 0 6px">Client et volume du dossier</h3>'
     + '<p class="hint" style="margin-bottom:14px">Avant de préparer le dossier, choisis le client et le tonnage à lui présenter : le rapport d\'usinage, les liasses, les fiches et la géolocalisation s\'adaptent ensuite à ce volume — pas forcément à tout le potentiel disponible.</p>'
+    + (verrou ? '<p class="hint" style="margin-bottom:10px">Un dossier est déjà ouvert pour <b>'+esc(e.client)+'</b> : il faut le clôturer (dernière étape) avant d\'en ouvrir un pour un autre client — un dossier à la fois.</p>' : '')
     + '<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;margin-bottom:10px">'
-    + '<label class="field" style="min-width:200px">Client<select onchange="rdueSetClient(this.value)">'+clients.map(c=>'<option value="'+esc(c)+'"'+(c===e.client?' selected':'')+'>'+esc(c)+'</option>').join('')+'</select></label>'
+    + '<label class="field" style="min-width:200px">Client<select onchange="rdueSetClient(this.value)"'+(verrou?' disabled':'')+'>'+clients.map(c=>'<option value="'+esc(c)+'"'+(c===e.client?' selected':'')+'>'+esc(c)+'</option>').join('')+'</select></label>'
     + '<label class="field" style="min-width:220px">Tonnage à présenter (kg)<input type="number" min="0" step="1" placeholder="laisser vide = tout" value="'+esc(e.cible||'')+'" oninput="rdueEtat().cible=this.value" onchange="rdueAppliquerCible()"></label>'
     + '</div>'
-    + '<p class="hint" style="margin-bottom:10px">'+fmtNum(dispoN)+' lot(s) disponibles pour '+esc(e.client||'ce client')+', '+fmtNum(dispoKg)+' kg au total.</p>'
+    + '<p class="hint" style="margin-bottom:10px">'+fmtNum(dispoN)+' lot(s) disponibles pour '+esc(e.client||'ce client')+', '+fmtNum(dispoKg)+' kg au total'+(dejaN ? ' ('+fmtNum(dejaN)+' lot(s) déjà présenté(s) dans un dossier précédent, exclus ici)' : '')+'.</p>'
     + (e.cible ? '<p>Sélection actuelle (numéros de lot croissants, ajustable à l\'étape suivante) : <b>'+S.coches.length+' lot(s)</b> · <b>'+fmtNum(kgChoisi)+' kg</b> sur <b>'+fmtNum(Number(e.cible))+' kg</b> visés.</p>' : '<p class="hint">Laisse le tonnage vide pour présenter tout le potentiel disponible pour ce client.</p>')
     + '<div class="rdue-nav"><span></span><button class="btn btn-primary" onclick="rdueConfirmerCible()">Confirmer et continuer ›</button></div>'
     + '</div>';
@@ -15344,8 +15414,17 @@ function rdueApercuHtml(client, avecTelechargement){
     + '<div style="display:flex;flex-wrap:wrap;gap:6px 24px;margin-bottom:12px"><div><b style="font-size:17px">'+coops.size+'</b><div class="hint">coopérative'+(coops.size>1?'s':'')+'</div></div><div><b style="font-size:17px">'+R.cams.length+'</b><div class="hint">camions</div></div><div><b style="font-size:17px">'+R.lots.length+'</b><div class="hint">lots</div></div><div><b style="font-size:17px">'+fmtNum(R.kg)+'</b><div class="hint">kg</div></div></div>'
     + (lignes ? '<div style="overflow-x:auto"><table class="rdue-tbl"><thead><tr><th>Coopérative</th><th class="r">Camions</th><th class="r">Liasses présentes</th><th class="r">Chez Serge</th><th class="r">Manquantes</th></tr></thead><tbody>'+lignes+'</tbody></table></div>' : '<div class="hint">Aucun lot choisi pour ce client — va à l\'étape « Choix des lots ».</div>')
     + '<p class="hint" style="margin-top:8px">Géolocalisation, registre et liasses : regarde le détail aux étapes « 1. Géolocalisation et volumes » et « 2. Liasses et fiches » ci-dessous — ce ne sont pas encore des fichiers prêts à empaqueter ici.</p>'
-    + (avecTelechargement ? rdueTelechargerHtml(client) : '<p class="hint" style="margin-top:10px">Le téléchargement du dossier se fait à la dernière étape, une fois toutes les précédentes passées en revue.</p>')
+    + (avecTelechargement ? rdueTelechargerHtml(client) + rdueClotureHtml() : '<p class="hint" style="margin-top:10px">Le téléchargement du dossier se fait à la dernière étape, une fois toutes les précédentes passées en revue.</p>')
     + '</div>';
+}
+// Clôture : fige les lots réellement présentés et les exclut des prochains dossiers de ce client
+// (« on repart sur les volumes restants »). Un dossier à la fois : tant qu'il n'est pas clos, impossible
+// d'en ouvrir un autre, même pour un client différent.
+function rdueClotureHtml(){
+  const R = rdueRapport();
+  return '<div style="margin-top:10px;background:var(--surface-2,#f4f6f5);border:1px solid var(--border,#e2e6e4);border-radius:10px;padding:12px 14px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">'
+    + '<div><b>Clôturer le dossier</b><div class="hint" style="margin-top:2px">Fige les '+R.lots.length+' lot(s) présenté(s) : ils ne reviendront plus dans un prochain dossier de ce client. À faire une fois le dossier vraiment transmis.</div></div>'
+    + '<button class="btn" style="color:#a33;border-color:#e3b3b3" onclick="askConfirm(\'Clôturer définitivement ce dossier ? Les lots présentés seront exclus des prochains dossiers de ce client.\', rdueClore)">🔒 Clôturer le dossier</button></div>';
 }
 function renderDossierRdue(){
   if (!state.lotsCharges){
@@ -15353,6 +15432,10 @@ function renderDossierRdue(){
     return '<div class="panel"><div class="hint" style="padding:6px 0">Chargement des lots d\'usinage…</div></div>';
   }
   if (!state.liasseCharge && !state.liasseChargementLance){ state.liasseChargementLance = true; chargerLiasses().then(()=>render()); }
+  if (!state.rdueDossiersCharges){
+    if (!state.rdueDossiersChargementLance){ state.rdueDossiersChargementLance = true; chargerRdueDossiers().then(()=>render()); }
+    return '<div class="panel"><div class="hint" style="padding:6px 0">Chargement du dossier RDUE en cours…</div></div>';
+  }
   const e = rdueEtat(), clients = Array.from(new Set((state.lotsUsinage||[]).filter(l=>l.client && rdueNumLot(l)!=null).map(l=>l.client))).sort((a,b)=>a.localeCompare(b,'fr'));
   if (!e.client && clients.length) e.client = clients.indexOf('CARGILL')>=0 ? 'CARGILL' : clients[0];
   // Portail : client + tonnage à présenter, à confirmer AVANT toute autre étape (géoloc, liasses, rapport,
