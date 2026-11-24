@@ -4887,7 +4887,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-24-631';
+const APP_VERSION = '2026-11-24-632';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -6375,15 +6375,17 @@ function renderFichesTracabilite(coopId){
   const erreur = state.fichesErreur ? '<div class="error-banner" style="margin:0 0 10px;"><span>Lecture impossible : '+esc(state.fichesErreur)+'</span></div>' : '';
   if (fiches.length===0) return erreur + '<div class="stock-empty">Aucune fiche de traçabilité pour le moment.</div>';
   const nAvecConn = fiches.filter(f=>f.connaissement).length;
-  const boutonTout = nAvecConn ? '<div style="margin:0 0 10px"><button class="btn btn-primary" onclick="ocFichesTousCoop(\''+escJs(coopId)+'\')" title="Propose le format (normal / Cargill / les deux) puis télécharge en un seul ZIP les fiches de tous les connaissements tracés de cette coopérative.">⬇ Tout télécharger ('+nAvecConn+')</button></div>' : '';
+  const boutonTout = nAvecConn ? '<div style="margin:0 0 10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary" onclick="ocFichesTousCoop(\''+escJs(coopId)+'\')" title="Propose le format (normal / Cargill / les deux) puis télécharge en un seul ZIP les fiches de tous les connaissements tracés de cette coopérative.">⬇ Tout télécharger ('+nAvecConn+')</button>'
+    + '<button class="btn-ghost" onclick="ocFichesRegenererTousCoop(\''+escJs(coopId)+'\',this)" title="Reconstruit chaque fiche (format normal) avec les données et le modèle actuels, et remplace la version stockée au même endroit — utile après une correction du modèle.">♻ Régénérer tout ('+nAvecConn+')</button></div>' : '';
   return erreur + boutonTout + '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th>Connaissement</th><th>Fichier</th><th>Ajoutée le</th><th>Taille</th><th>État</th><th></th></tr></thead><tbody>'
     + fiches.map(f=>{
         const nom = nomFicheAffiche(f);
         const etat = !f.volumes_enregistres ? '<span class="badge warn" title="Les volumes de cette fiche ne sont pas encore enregistrés">Volumes à enregistrer</span>' : '<span class="badge neutral">Volumes enregistrés</span>';
         return '<tr data-id="'+esc(f.id)+'"><td><b>'+esc(f.connaissement||'—')+'</b></td><td class="nom-fichier" title="'+esc(nom)+'">'+esc(nom)+'</td>'
           + '<td>'+esc(dateFr(String(dateAjoutStockage(f)).slice(0,10))||'—')+'</td><td>'+fmtOctets(f.taille)+'</td><td>'+etat+'</td>'
-          + '<td style="white-space:nowrap"><button class="doc-btn" onclick="telechargerFichierDemande(\''+escJs(f.path)+'\',\''+escJs(nom||'fiche')+'\')" title="Fiche de traçabilité au format ECORIGINE">📥 Format ECORIGINE</button> '
-          + (f.connaissement ? '<button class="doc-btn" onclick="ocCargillTelecharger(\''+escJs(coopId)+'\',\''+escJs(f.connaissement)+'\')" title="Même traçabilité au format Cargill (EUDR Delivery Template)">📥 Format Cargill</button>' : '')+'</td></tr>';
+          + '<td style="white-space:nowrap"><button class="doc-btn" onclick="telechargerFichierDemande(\''+escJs(f.path)+'\',\''+escJs(nom||'fiche')+'\')" title="Fiche de traçabilité au format ECORIGINE (version actuellement stockée)">📥 Format ECORIGINE</button> '
+          + (f.connaissement ? '<button class="doc-btn" onclick="ocCargillTelecharger(\''+escJs(coopId)+'\',\''+escJs(f.connaissement)+'\')" title="Même traçabilité au format Cargill (EUDR Delivery Template)">📥 Format Cargill</button> ' : '')
+          + (f.connaissement ? '<button class="doc-btn" onclick="ocFicheRegenererTelecharger(\''+escJs(coopId)+'\',\''+escJs(f.connaissement)+'\',\''+escJs(f.path)+'\')" title="Reconstruit cette fiche avec les données et le modèle actuels, remplace la version stockée, puis la télécharge">♻ Régénérer</button>' : '')+'</td></tr>';
       }).join('')
     + '</tbody></table></div>';
 }
@@ -17679,6 +17681,38 @@ async function ocFicheNormaleConstruire(coopId, code){
 async function ocFicheNormaleTelecharger(coopId, code){
   try{ const f = await ocFicheNormaleConstruire(coopId, code); ocTelechargerBlob(f.blob, f.nomFichier); showToast('Fiche au format normal prête.', 'success'); }
   catch(e){ showToast('Fiche impossible : '+(e && e.message ? e.message : e), 'error'); }
+}
+// Régénère une fiche de traçabilité DÉJÀ rangée dans le stockage (documents-coop), avec les données et le
+// modèle actuels — même chemin, contenu refait : nécessaire quand le modèle a changé depuis la génération
+// d'origine (ex. ajout de la ligne CLIENT / correction de VILLE D'ORIGINE le 24/11/2026), sinon la fiche
+// téléchargée (et celle incluse dans le ZIP du dossier de conformité) reste l'ancienne version figée.
+async function ocFicheRegenerer(coopId, code, path){
+  const f = await ocFicheNormaleConstruire(coopId, code);
+  const { error } = await supabaseClient.storage.from('documents-coop').upload(path, f.blob, { upsert:true });
+  if (error) throw new Error(error.message);
+  return f;
+}
+async function ocFicheRegenererTelecharger(coopId, code, path){
+  try{
+    const f = await ocFicheRegenerer(coopId, code, path);
+    ocTelechargerBlob(f.blob, f.nomFichier);
+    state.fichesTracabilite = null;
+    showToast('Fiche régénérée (modèle à jour) et téléchargée.', 'success');
+    render();
+  }catch(e){ showToast('Régénération impossible : '+(e && e.message ? e.message : e), 'error'); }
+}
+async function ocFichesRegenererTousCoop(coopId, btn){
+  const fiches = fichesDeCoop(coopId).filter(f=>f.connaissement);
+  if (!fiches.length){ showToast('Aucune fiche de traçabilité avec connaissement pour cette coopérative.'); return; }
+  let ok = 0, ko = 0;
+  for (const f of fiches){
+    if (btn) btn.textContent = 'Régénération… '+(ok+ko+1)+'/'+fiches.length;
+    try{ await ocFicheRegenerer(coopId, f.connaissement, f.path); ok++; }
+    catch(e){ ko++; console.warn('Fiche non régénérée ('+f.connaissement+') :', e && e.message); }
+  }
+  state.fichesTracabilite = null;
+  showToast(ok+' fiche(s) régénérée(s)'+(ko?', '+ko+' échec(s)':'')+'.', ko ? '' : 'success');
+  render();
 }
 // items = [{ coopId, code }] ; fiche = fiche normale déjà construite (cas d'un seul camion, évite de la refaire)
 function ocFormatFicheProposer(items, fiche){
