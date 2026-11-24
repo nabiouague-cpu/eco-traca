@@ -4887,7 +4887,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-24-620';
+const APP_VERSION = '2026-11-24-621';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -15539,9 +15539,12 @@ async function rdueTelechargerTout(client){
       // l'autre). On ne tente désormais que les fichiers source!=='serge' ; un connaissement qui n'a qu'une
       // entrée « serge » (aucune copie chez Nabi) reste absent du ZIP et compte en manquant, sans tentative
       // de téléchargement vouée à l'échec.
+      // Table connaissement normalisé -> fichier(s) liasse (source!=='serge' uniquement), calculée une
+      // fois : sert à nommer les liasses ci-dessous ET, étape 3, à aligner le nom de la fiche de
+      // traçabilité sur celui de sa liasse (Nabi veut le même nom pour les deux).
+      const parCnLia = {};
+      (state.liasseFichiers||[]).filter(f=>f.source!=='serge').forEach(f=>{ const k = liasseCnNorm(f.connaissement||f.nom); if (k) (parCnLia[k]=parCnLia[k]||[]).push(f); });
       if (cns.length){
-        const parCnLia = {};
-        (state.liasseFichiers||[]).filter(f=>f.source!=='serge').forEach(f=>{ const k = liasseCnNorm(f.connaissement||f.nom); if (k) (parCnLia[k]=parCnLia[k]||[]).push(f); });
         if (graphOk){
           const vusLia = new Set();
           for (const k of cns){
@@ -15573,12 +15576,22 @@ async function rdueTelechargerTout(client){
       for (const f of dfs){
         const { data, error } = await supabaseClient.storage.from('documents-coop').download(f.path);
         if (error){ koFic++; continue; }
-        // Nom dans le ZIP = le connaissement correspondant (même convention que les liasses, qui
-        // utilisent déjà ce nom), et non le nom d'origine du fichier généré -- pour que la fiche et
-        // sa liasse se retrouvent facilement côte à côte dans le dossier de la coopérative.
+        // Nom dans le ZIP = le même nom que la liasse documentaire correspondante (même connaissement),
+        // seule l'extension change -- pour que la fiche et sa liasse se retrouvent sous un nom identique
+        // dans le dossier de la coopérative. À défaut de liasse retrouvée (manquante), repli sur le
+        // connaissement normalisé.
         const nomOrigine = f.nom || f.path.split('/').pop();
         const ext = (()=>{ const p = String(nomOrigine).split('.'); return p.length>1 ? '.'+p.pop() : ''; })();
-        let name = (liasseCnNorm(f.connaissement) || assainirNomFichier(String(f.connaissement||'').trim())) + ext;
+        const kFic = liasseCnNorm(f.connaissement);
+        const liasseCorrespondante = (parCnLia[kFic]||[])[0];
+        let base;
+        if (liasseCorrespondante && liasseCorrespondante.nom){
+          const pL = String(liasseCorrespondante.nom).split('.');
+          base = pL.length>1 ? pL.slice(0,-1).join('.') : liasseCorrespondante.nom;
+        } else {
+          base = kFic || assainirNomFichier(String(f.connaissement||'').trim());
+        }
+        let name = base + ext;
         if (vusFic.has(name)){ const p=name.split('.'),extB=p.length>1?'.'+p.pop():''; name = p.join('.')+'_'+Math.random().toString(36).slice(2,7)+extB; }
         vusFic.add(name);
         const prep = await preparerFichierPourZip(name, data, alleger);
