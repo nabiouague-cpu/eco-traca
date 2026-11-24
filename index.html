@@ -4887,7 +4887,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-24-632';
+const APP_VERSION = '2026-11-24-633';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -12877,7 +12877,28 @@ function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds, Rflat){
   const NUM = '#,##0', PCT = '0.00%', dv = (a,b)=>b ? a/b : 0;
   const milliers = n=>String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
   const etiq = t=>suvCourt(t.coop)+' ('+t.conn+')';
-  const put = (ws, r, c, v, o)=>{ o = o||{}; const x = ws.getCell(r,c); x.value = v; x.font = o.b ? FB : FN; if (o.fmt) x.numFmt = o.fmt; if (o.al) x.alignment = o.al; if (o.fill) x.fill = o.fill; if (o.box) x.border = cadre; return x; };
+  const put = (ws, r, c, v, o)=>{ o = o||{}; const x = ws.getCell(r,c); x.value = v; x.font = o.color ? Object.assign({}, o.b ? FB : FN, { color:o.color }) : (o.b ? FB : FN); if (o.fmt) x.numFmt = o.fmt; if (o.al) x.alignment = o.al; if (o.fill) x.fill = o.fill; if (o.box) x.border = cadre; return x; };
+  // Première feuille du classeur (« le premier rapport ») : le tableau simple habituel (déchargements ↔
+  // lots produits, niveau fabrication) pour CE dossier, repris aux mêmes couleurs et à la même logique
+  // d'agencement que le modèle d'usinage fourni par l'usinier (classeur « Rapport d'usinage » type Cargill,
+  // feuille « Retraité ») : bandeau d'en-tête vert pâle filant sur tout le tableau (camions à gauche, lots
+  // à droite), colonne tampon étroite noircie entre les deux blocs pour les séparer visuellement, total en
+  // rouge gras juste sous l'en-tête.
+  const VERT_MODELE = fond('FFD9F2D0'), NOIR = fond('FF000000'), ROUGE = { argb:'FFFF0000' };
+  if (Rflat){
+    const fs = wb.addWorksheet('Tableau simple', { views:[{ state:'frozen', ySplit:3 }], pageSetup:{ fitToPage:true, fitToWidth:1, fitToHeight:0, orientation:'landscape' } });
+    RDUE_ENTETE_FAB.forEach((h,k)=>put(fs,3,k+1,h||'',{ b:true, fill:VERT_MODELE, al:CTR, box:true }));
+    fs.getRow(3).height = 32;
+    const lignesF = rdueLignes(Rflat,'fab'); let rf = 7;
+    put(fs,5,1,'TOTAL',{ b:true }); put(fs,5,7,'',{ fill:NOIR }); put(fs,6,7,'',{ fill:NOIR });
+    lignesF.forEach(l=>{
+      l.forEach((v,i)=>{ put(fs,rf,i+1,(i===6)?'':((v===null||v===undefined||v==='')?'':v),{ al:CTR, fmt:[4,5,9].includes(i)?NUM:undefined, box:i!==6, fill:i===6?NOIR:undefined }); });
+      rf++;
+    });
+    const finF = rf-1;
+    [['E','E'],['F','F'],['J','J']].forEach(([col])=>{ put(fs,5,col.charCodeAt(0)-64,{ formula:'SUM('+col+'7:'+col+finF+')', result:col==='E'?Rflat.net:(col==='F'?Rflat.sacs:Rflat.kg) },{ b:true, fmt:NUM, color:ROUGE }); });
+    [40,14,16,16,14,10,3,14,10,14,16].forEach((w,k)=>{ fs.getColumn(k+1).width = w; });
+  }
   // RECAP LOTS
   const ws = wb.addWorksheet('RECAP LOTS', { views:[{ state:'frozen', ySplit:3 }], pageSetup:{ fitToPage:true, fitToWidth:1, fitToHeight:0, orientation:'landscape' } });
   put(ws,1,1,meta.titre,{ b:true }).font = { name:'Arial', size:12, bold:true };
@@ -12930,19 +12951,6 @@ function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds, Rflat){
   const totAvantAffiche = scopeIds ? sheetsAffichees.reduce((s,sh)=>s+sh.idxs.reduce((u,i)=>u+M.T[i].avant,0),0) : M.totAvant;
   put(ws,r,1,'Camions vidés (poids net avant réfaction)',{ b:true }); put(ws,r,5,totAvantAffiche,{ b:true, fmt:NUM });
   (avecOT ? [40,12,20,16,16,120,18,22,16] : [40,12,20,16,16,120]).forEach((w,k)=>{ ws.getColumn(k+1).width = w; });
-  // Deuxième feuille, juste après RECAP LOTS : le tableau simple habituel (déchargements ↔ lots produits,
-  // niveau fabrication) pour CE dossier -- demandé en plus du modèle SUV, à la place d'un fichier séparé.
-  if (Rflat){
-    const fs = wb.addWorksheet('Tableau simple', { views:[{ state:'frozen', ySplit:3 }], pageSetup:{ fitToPage:true, fitToWidth:1, fitToHeight:0, orientation:'landscape' } });
-    RDUE_ENTETE_FAB.forEach((h,k)=>{ if (!h) return; put(fs,3,k+1,h,{ b:true, fill:HEAD, al:CTR, box:true }); });
-    fs.getRow(3).height = 32;
-    const lignesF = rdueLignes(Rflat,'fab'); let rf = 7;
-    put(fs,5,1,'TOTAL',{ b:true });
-    lignesF.forEach(l=>{ l.forEach((v,i)=>{ if (i===6) return; put(fs,rf,i+1,(v===null||v===undefined||v==='')?'':v,{ al:CTR, fmt:[4,5,9].includes(i)?NUM:undefined, box:true }); }); rf++; });
-    const finF = rf-1;
-    [['E','E'],['F','F'],['J','J']].forEach(([col])=>{ put(fs,5,col.charCodeAt(0)-64,{ formula:'SUM('+col+'7:'+col+finF+')', result:col==='E'?Rflat.net:(col==='F'?Rflat.sacs:Rflat.kg) },{ b:true, fmt:NUM }); });
-    [40,14,16,16,14,10,3,14,10,14,16].forEach((w,k)=>{ fs.getColumn(k+1).width = w; });
-  }
   // une feuille par séance
   const noms = new Set();
   sheetsAffichees.forEach(s=>{
