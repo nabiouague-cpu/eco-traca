@@ -4887,7 +4887,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-24-626';
+const APP_VERSION = '2026-11-24-627';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -12415,18 +12415,67 @@ function renderLotsUsinage(){
   html += renderLotsRepartitionClients(campagneId);
   html += renderLotsPeses(campagneId);
   if (!lots.length) return html + '<div class="hint">Aucun lot d\'usinage. Crée le premier, ou importe le rapport d\'usinage de l\'usinier.</div>';
-  html += '<div class="achats-defile"><table class="tbl-fiches tbl-dense"><thead><tr><th>N° lot</th><th>Campagne</th><th>Client</th><th>Période</th><th>Site · traitant</th><th>Entrepôt</th><th>Type</th><th>Niveau</th><th>Livraisons</th><th>Entrée</th><th>Sortie usine</th><th>Pesé entrepôt</th><th>Dispo. export</th><th>Statut</th><th></th></tr></thead><tbody>';
+  const luSel = luSelectionActive();
+  if (luSel.length){
+    html += '<div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px;background:#fff6e6;border:1px solid #e8c468;border-radius:8px;padding:8px 12px">'
+      + '<b>'+luSel.length+' lot'+(luSel.length>1?'s':'')+' sélectionné'+(luSel.length>1?'s':'')+'</b>'
+      + '<button class="btn btn-primary btn-compact" onclick="lotsUsinageReaffecterOuvrir()">Réaffecter à un autre client</button>'
+      + '<button class="btn-ghost btn-compact" onclick="lotsUsinageSelectionVider()">Annuler la sélection</button></div>';
+  }
+  html += '<div class="achats-defile"><table class="tbl-fiches tbl-dense"><thead><tr><th><input type="checkbox" '+(luSel.length && luSel.length===lots.length?'checked':'')+' onchange="lotsUsinageToutCocher(this.checked)"></th><th>N° lot</th><th>Campagne</th><th>Client</th><th>Période</th><th>Site · traitant</th><th>Entrepôt</th><th>Type</th><th>Niveau</th><th>Livraisons</th><th>Entrée</th><th>Sortie usine</th><th>Pesé entrepôt</th><th>Dispo. export</th><th>Statut</th><th></th></tr></thead><tbody>';
   lots.forEach(l=>{
     const compo = lotsUsinageCompo(l.id), entree = lotsUsinageEntree(l), sortie = lotsUsinageSortie(l), solde = lotsUsinageSoldeExport(l);
-    html += '<tr><td><b>'+esc(l.numero)+'</b>'+(l.origine==='transfert' ? ' <span class="badge" title="Lot importé d\'un tableau de transfert">transfert</span>' : '')+'</td><td>'+esc(lotsCampagneNom(l.campagne_id)||'—')+'</td><td>'+(l.client?esc(l.client):'—')+'</td><td>'+esc((dateFr(l.date_debut)||'—')+(l.date_fin?' → '+dateFr(l.date_fin):''))+'</td><td>'+esc(l.site||'—')+(function(){ const st = sachSiteDe(l.site); return st && st.traitant ? ' <span class="hint" style="margin:0">· '+esc(st.traitant)+'</span>' : ''; })()+'</td><td>'+(l.entrepot ? esc(l.entrepot)+(l.ville_entrepot?' <span class="hint" style="margin:0">'+esc(l.ville_entrepot)+'</span>':'') : '—')+'</td><td>'+esc(l.type_cacao||'—')+'</td><td>'+esc(l.niveau_tracabilite||'—')+'</td>'
+    html += '<tr><td><input type="checkbox" '+(luSel.indexOf(l.id)>=0?'checked':'')+' onchange="lotsUsinageCocher(\''+esc(l.id)+'\', this.checked)"></td><td><b>'+esc(l.numero)+'</b>'+(l.origine==='transfert' ? ' <span class="badge" title="Lot importé d\'un tableau de transfert">transfert</span>' : '')+'</td><td>'+esc(lotsCampagneNom(l.campagne_id)||'—')+'</td><td>'+(l.client?esc(l.client):'—')+'</td><td>'+esc((dateFr(l.date_debut)||'—')+(l.date_fin?' → '+dateFr(l.date_fin):''))+'</td><td>'+esc(l.site||'—')+(function(){ const st = sachSiteDe(l.site); return st && st.traitant ? ' <span class="hint" style="margin:0">· '+esc(st.traitant)+'</span>' : ''; })()+'</td><td>'+(l.entrepot ? esc(l.entrepot)+(l.ville_entrepot?' <span class="hint" style="margin:0">'+esc(l.ville_entrepot)+'</span>':'') : '—')+'</td><td>'+esc(l.type_cacao||'—')+'</td><td>'+esc(l.niveau_tracabilite||'—')+'</td>'
       + '<td>'+(l.origine==='transfert' ? '<span class="hint" style="margin:0" title="Usinage hors ECORIGINE : pas de rapport d\'usinage, donc pas de composition">—</span>' : compo.length)+'</td><td>'+(l.origine==='transfert' ? '—' : fmtKg(entree))+'</td><td>'+fmtKg(sortie)+(l.origine==='transfert' ? ' <span class="badge warn" title="Poids du tableau de transfert (pas de rapport d\'usinage)">théorique</span>' : (Number(l.poids_sortie_kg)>0 && entree>0 ? ' <span class="hint" style="margin:0">('+Math.round((sortie/entree)*1000)/10+' %)</span>' : ''))+'</td>'
       + '<td>'+(lotsUsinagePese(l)>0 ? '<b>'+fmtKg(lotsUsinagePese(l))+'</b> <span class="badge ok" title="Poids pesé à l\'entrée de l\'entrepôt export : poids définitif">⚖</span>'+(sortie>0 ? ' <span class="hint" style="margin:0">('+((lotsUsinagePese(l)-sortie>0?'+':'')+fmtNum(Math.round(lotsUsinagePese(l)-sortie)))+' kg)</span>' : '') : '<span class="hint" style="margin:0">à peser</span>')+'</td><td>'+fmtKg(solde)+'</td><td>'+lotsBadge(LOTS_STATUTS_USINAGE, l.statut)+'</td>'
       + '<td style="white-space:nowrap"><button class="btn-ghost btn-compact" onclick="lotsPoidsEntrepotOuvrir(\''+esc(l.id)+'\')">Poids pesé</button> <button class="btn-ghost btn-compact" onclick="lotUsinageComposer(\''+esc(l.id)+'\')">Composer</button> <button class="btn-ghost btn-compact" onclick="lotUsinageOuvrir(\''+esc(l.id)+'\')">Modifier</button> <button class="btn-ghost btn-compact" onclick="lotUsinageBasculer(\''+esc(l.id)+'\')">'+(l.statut==='clos'?'Rouvrir':'Clore')+'</button> <button class="btn-danger-text btn-compact" onclick="lotUsinageSupprimer(\''+esc(l.id)+'\')">Supprimer</button></td></tr>';
     if (compo.length){
-      html += '<tr class="lots-detail"><td colspan="15"><div class="lots-compo">'+compo.map(c=>{ const a = lotsAchatParId(c.achat_id); return '<span class="lots-puce">'+esc(a ? lotsTexteAchat(a) : c.achat_id)+' — <b>'+fmtKg(c.poids_kg)+'</b></span>'; }).join('')+'</div></td></tr>';
+      html += '<tr class="lots-detail"><td colspan="16"><div class="lots-compo">'+compo.map(c=>{ const a = lotsAchatParId(c.achat_id); return '<span class="lots-puce">'+esc(a ? lotsTexteAchat(a) : c.achat_id)+' — <b>'+fmtKg(c.poids_kg)+'</b></span>'; }).join('')+'</div></td></tr>';
     }
   });
   return html + '</tbody></table></div>';
+}
+// ---- Réaffectation en masse du client d'un ou plusieurs lots d'usinage (ex. 250T transférées de ACT à TOUTON) :
+// évite d'avoir à passer par un correctif en base à chaque fois qu'une décision de ce type est prise par mail.
+function luSelectionActive(){ if (!state.luSelection) state.luSelection = []; return state.luSelection; }
+function lotsUsinageCocher(id, v){
+  const sel = luSelectionActive(), i = sel.indexOf(id);
+  if (v){ if (i<0) sel.push(id); } else if (i>=0) sel.splice(i,1);
+  render();
+}
+function lotsUsinageToutCocher(v){
+  state.luSelection = v ? (state.lotsUsinage||[]).map(l=>l.id) : [];
+  render();
+}
+function lotsUsinageSelectionVider(){ state.luSelection = []; render(); }
+function lotsUsinageReaffecterOuvrir(){
+  const ids = luSelectionActive().slice();
+  if (!ids.length){ showToast('Sélectionne au moins un lot.'); return; }
+  state.modal = { type:'luReaffecter', payload:{ ids, client:'', motif:'' } };
+  render();
+}
+async function lotsUsinageReaffecterValider(){
+  const pl = state.modal && state.modal.type==='luReaffecter' ? state.modal.payload : null; if (!pl) return;
+  const client = fv('lu_reaff_client').trim(), motif = fv('lu_reaff_motif').trim();
+  if (!client){ showToast('Choisis le nouveau client.'); return; }
+  const lots = pl.ids.map(id=>lotUsinageParId(id)).filter(Boolean);
+  if (!lots.length){ closeModal(); return; }
+  askConfirm('Réaffecter '+lots.length+' lot'+(lots.length>1?'s':'')+' ('+lots.map(l=>l.numero).join(', ')+') au client « '+client+' » ? La série, le contrat et le projet de durabilité actuels seront effacés (ils seront retrouvés automatiquement au prochain enregistrement du lot).', async()=>{
+    try{
+      const maj = new Date().toISOString();
+      const ids = lots.map(l=>l.id);
+      const r1 = await supabaseClient.from('lots_usinage').update({ client, serie_id:null, contrat_client_id:null, programme:null, updated_at:maj }).in('id', ids);
+      if (r1.error) throw r1.error;
+      const note = '[Réaffecté à '+client+' le '+dateFr(maj.slice(0,10))+(motif?' — '+motif:'')+']';
+      for (const l of lots){
+        const notes = (l.notes ? l.notes+'\n' : '') + note;
+        const r2 = await supabaseClient.from('lots_usinage').update({ notes }).eq('id', l.id);
+        if (r2.error) throw r2.error;
+      }
+      await chargerLots(); state.luSelection = []; closeModal();
+      showToast(lots.length+' lot'+(lots.length>1?'s':'')+' réaffecté'+(lots.length>1?'s':'')+' à '+client+'.', 'success');
+    }catch(e){ showToast('Échec : '+e.message); }
+  });
 }
 function renderLotsExport(){
   const lots = (state.lotsExport||[]);
@@ -14057,6 +14106,21 @@ async function lotExportConteneursEnregistrer(){
 // ---- Fenetres ----
 function lotsModalsHtml(){
   const m = state.modal; if (!m) return '';
+  if (m.type==='luReaffecter'){
+    const pl = m.payload;
+    const lots = pl.ids.map(id=>lotUsinageParId(id)).filter(Boolean);
+    const campagneId = lots[0] ? lots[0].campagne_id : null;
+    const totalPoids = lots.reduce((s,l)=>s+(lotsUsinageSortie(l)||Number(l.poids_sortie_kg)||0),0);
+    const clientsActuels = Array.from(new Set(lots.map(l=>l.client||'— aucun —')));
+    return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>Réaffecter '+lots.length+' lot'+(lots.length>1?'s':'')+' à un autre client</h3>'
+      + '<div class="hint" style="margin-bottom:10px">Lots concernés : <b>'+lots.map(l=>esc(l.numero)).join(', ')+'</b> ('+fmtKg(totalPoids)+').'
+      + ' Client actuel : <b>'+esc(clientsActuels.join(', '))+'</b>.'
+      + ' La série, le contrat et le projet de durabilité rattachés seront effacés (retrouvés automatiquement pour le nouveau client au prochain enregistrement du lot, sinon numérotation libre).</div>'
+      + '<div id="modal-fields"><label class="field">Nouveau client<select name="lu_reaff_client" onchange="state.modal.payload.client=this.value">'
+      + lotsClientsOptions(campagneId, pl.client).replace('— Aucun (générique) —','— Choisir —')+'</select></label>'
+      + '<label class="field">Motif (optionnel, pour l\'historique du lot)<input type="text" name="lu_reaff_motif" value="'+esc(pl.motif||'')+'" oninput="state.modal.payload.motif=this.value" placeholder="ex : décision du 24/11 — 250T réaffectées de ACT à TOUTON"></label>'
+      + '</div><div class="actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="lotsUsinageReaffecterValider()">Réaffecter</button></div></div></div>';
+  }
   if (m.type==='lotUsinage'){
     const pl = m.payload;
     const serieActive = pl.serie_id ? lotsSerieParId(pl.serie_id) : lotsSerieChoisir(pl.campagne_id, pl.type_cacao, pl.niveau_tracabilite, pl.client, pl.site_code||'', pl.programme||'');
