@@ -4938,7 +4938,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-25-662';
+const APP_VERSION = '2026-11-25-663';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -17621,101 +17621,124 @@ async function jrChargerDonnees(jour){
   } catch(e){ state.jrDon[jour] = null; }
   state.jrDonEnCours[jour] = false; render();
 }
-function jrChoisir(jour){ state.jrJour = jour; render(); }
-function mailSetVue(k){ state.mailFiltre = k; render(); }
 function mailActualiser(){ state.mailsSuivi = null; state.jrRapports = null; state.jrDon = {}; render(); }
-function mailLigne(m, opts){
-  opts = opts||{};
-  const e = mailEtatEcheance(m), ferme = !mailOuvert(m), role = MAIL_ROLES[mailRole(m)], id = esc(m.id);
-  const moi = /nabi\.ouague/i.test(m.expediteur||'');
-  return '<div class="card" style="padding:14px 16px;'+(ferme?'opacity:.72;':'')+(mailEstAlerte(m)?'border-left:4px solid var(--danger,#c0392b);':'')+'">'
-    + '<div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-start;">'
-    +   '<div style="min-width:0;flex:1 1 340px;">'
-    +     '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">'
-    +       (opts.avecDate ? '<span class="badge neutral">'+esc(jrLibelleJour(jrCle(m), true))+'</span>' : '<span class="badge neutral">'+esc(jrHeure(m))+'</span>')
-    +       (moi ? '<span class="badge ok">Envoyé par toi</span>' : '<span class="badge '+role.cls+'">'+role.lib+'</span>')
-    +       (m.evenement ? '<span class="badge warn">Changement</span>' : '')
-    +       (m.lots ? '<span class="badge neutral">'+esc(m.lots)+'</span>' : '')
-    +     '</div>'
-    +     '<div style="font-weight:600;">'+esc(m.objet||'(sans objet)')+'</div>'
-    +     '<div style="font-size:12px;opacity:.75;margin:2px 0 8px;">'+esc(m.expediteur_nom||m.expediteur||'')+(m.nb_messages>1?' · '+m.nb_messages+' messages':'')+'</div>'
-    +     '<div style="font-size:13px;line-height:1.45;">'+esc(m.resume||'')+'</div>'
-    +     (m.implication ? '<div style="font-size:13px;line-height:1.45;margin-top:8px;padding:8px 10px;border-radius:8px;background:rgba(127,127,127,.10);"><b>Ce que ça implique :</b> '+esc(m.implication)+'</div>' : '')
-    +     (m.alerte ? '<div style="font-size:13px;line-height:1.45;margin-top:8px;padding:8px 10px;border-radius:8px;background:rgba(192,57,43,.10);"><b>Alerte :</b> '+esc(m.alerte)+'</div>' : '')
-    +     (m.notes ? '<div style="font-size:12px;opacity:.65;margin-top:8px;">'+esc(m.notes)+'</div>' : '')
-    +   '</div>'
-    +   '<div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;">'
-    +     (ferme ? '<span class="badge ok">'+(m.statut==='ignore'?'Ignoré':'Traité')+'</span>' : (m.echeance ? '<span class="badge '+e.cls+'">'+esc(e.txt)+'</span>' : ''))
-    +     (ferme || moi ? '' : '<label style="font-size:12px;opacity:.8;">Avant le <input type="date" value="'+esc(String(m.echeance||'').slice(0,10))+'" onchange="mailChangerEcheance(\''+id+'\',this.value)" style="margin-left:4px;"></label>')
-    +   '</div></div>'
-    + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">'
-    +   (m.lien ? '<a class="btn btn-compact" href="'+esc(m.lien)+'" target="_blank" rel="noopener">Ouvrir dans Outlook</a>' : '')
-    +   (ferme ? '<button class="btn btn-compact" onclick="mailMaj(\''+id+'\',{statut:\'a_traiter\'})">Rouvrir</button>'
-           : '<button class="btn btn-primary btn-compact" onclick="mailMaj(\''+id+'\',{statut:\'traite\'})">'+(mailRole(m)==='info' ? 'Vu' : 'Marquer traité')+'</button><button class="btn btn-compact" onclick="mailMaj(\''+id+'\',{statut:\'ignore\'})">Ignorer</button>')
-    + '</div></div>';
+const JR_CSS = '<style>'
++ '.jr{display:flex;flex-direction:column;gap:18px}'
++ '.jr h2{margin:0;font-size:26px;letter-spacing:-.01em}.jr .sub{color:var(--ink-soft);font-size:13.5px;margin-top:2px}'
++ '.jr-top{display:grid;grid-template-columns:minmax(340px,1.15fr) minmax(280px,1fr);gap:16px}'
++ '.jr-card{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:20px 22px;box-shadow:var(--shadow-sm)}'
++ '.jr-card h3{margin:0;font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-faint)}'
++ '.jr-cal-t{display:flex;justify-content:space-between;align-items:center;gap:10px}'
++ '.jr-nav{display:flex;gap:6px;align-items:center}.jr-nav button{width:30px;height:30px;border-radius:50%;border:1px solid var(--border);background:var(--surface);cursor:pointer;font-size:15px;color:var(--ink)}.jr-nav span{font-size:13px;font-weight:600;min-width:104px;text-align:center;text-transform:capitalize}'
++ '.jr-big{display:flex;align-items:baseline;gap:8px;margin:10px 0 14px}.jr-big b{font-family:var(--mono);font-size:40px;font-weight:500;line-height:44px}.jr-big small{font-size:16px;color:var(--ink-soft);font-family:var(--mono)}.jr-big em{margin-left:auto;font-style:normal;font-size:12.5px;background:var(--accent-soft);color:var(--accent);padding:4px 12px;border-radius:999px;font-weight:600}'
++ '.jr-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:8px 6px;justify-items:center}'
++ '.jr-grid .jh{font-size:11px;color:var(--ink-faint);font-weight:600}'
++ '.jr-d{position:relative;width:36px;height:36px;border-radius:50%;border:2px solid var(--border);background:var(--surface);font-family:var(--mono);font-size:12.5px;color:var(--ink-soft);cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;transition:transform .15s var(--ease),background .15s}'
++ '.jr-d:hover{transform:scale(1.1)}.jr-d.fut{opacity:.45}.jr-d.rap{background:var(--accent-soft);border-color:var(--accent-line);color:var(--accent);font-weight:600}'
++ '.jr-d.ok{background:var(--teal);border-color:var(--teal);color:#fff}.jr-d.ok svg{width:16px;height:16px}'
++ '.jr-d.auj{box-shadow:0 0 0 3px #F2B70566;border-color:#F2B705}.jr-d.sel{box-shadow:0 0 0 3px var(--accent-line);outline:2px solid var(--accent);outline-offset:2px}'
++ '.jr-d i{position:absolute;top:-2px;right:-2px;width:9px;height:9px;border-radius:50%;background:var(--danger);border:2px solid var(--surface)}'
++ '.jr-leg{display:flex;gap:16px;flex-wrap:wrap;margin-top:14px;font-size:11.5px;color:var(--ink-soft)}.jr-leg span{display:inline-flex;align-items:center;gap:6px}.jr-leg b{width:12px;height:12px;border-radius:50%;border:2px solid var(--border);display:inline-block}.jr-leg b.a{background:var(--teal);border-color:var(--teal)}.jr-leg b.b{background:var(--accent-soft);border-color:var(--accent-line)}.jr-leg b.c{border-color:#F2B705}'
++ '.jr-tiles{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.jr-tile{background:var(--surface-2);border:1px solid var(--border);border-radius:14px;padding:12px 14px}.jr-tile b{display:block;font-family:var(--mono);font-size:28px;font-weight:500;line-height:32px}.jr-tile span{font-size:12px;color:var(--ink-soft)}.jr-tile.r b{color:var(--danger)}.jr-tile.v b{color:var(--ok)}'
++ '.jr-jour{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap}.jr-jour h2{text-transform:capitalize}'
++ '.jr-cocher{display:inline-flex;align-items:center;gap:8px;padding:10px 18px;border-radius:999px;border:2px solid var(--teal);background:var(--surface);color:var(--teal);font-weight:600;font-size:13px;cursor:pointer}.jr-cocher.on{background:var(--teal);color:#fff}.jr-cocher svg{width:16px;height:16px}'
++ '.jr-hero{background:linear-gradient(135deg,#12463F 0%,#0E3B36 55%,#092A26 100%);color:#fff;border-radius:18px;padding:20px 24px;box-shadow:0 24px 60px -34px rgba(9,42,38,.6)}.jr-hero .k{font-size:11.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:#A9D5C8}.jr-hero p{margin:6px 0 0;font-size:16px;line-height:1.5}.jr-hero .pv{display:inline-block;margin-left:10px;font-size:11px;background:#F2B705;color:#2A1E00;padding:2px 10px;border-radius:999px;font-weight:700;letter-spacing:.04em}'
++ '.jr-niv{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px}'
++ '.jr-n{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:16px 18px;box-shadow:var(--shadow-sm);animation:rdueMonte .4s var(--ease) both}'
++ '.jr-n header{display:flex;align-items:center;gap:10px;margin-bottom:10px}.jr-n header i{width:12px;height:12px;border-radius:4px}.jr-n header b{font-size:14.5px}.jr-n header span{margin-left:auto;font-size:11.5px;color:var(--ink-faint);font-family:var(--mono)}'
++ '.jr-it{display:flex;gap:10px;padding:8px 10px;border-radius:10px;font-size:13.5px;line-height:1.45;margin-top:4px}.jr-it .h{flex:0 0 74px;font-family:var(--mono);font-size:11.5px;color:var(--ink-faint);padding-top:2px}.jr-it.fait{background:var(--ok-bg)}.jr-it.fait .h{color:var(--ok);font-weight:600}.jr-it.alerte{background:var(--danger-bg)}.jr-it.alerte .h{color:var(--danger);font-weight:600}'
++ '.jr-2{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px}'
++ '.jr-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);font-size:13.5px}.jr-row:last-child{border:0}.jr-row .bar{flex:1;height:6px;border-radius:99px;background:var(--gray-bg);max-width:120px}.jr-row .bar i{display:block;height:100%;border-radius:99px;background:var(--accent)}.jr-row b{font-family:var(--mono);font-weight:500;min-width:70px;text-align:right}'
++ '.jr-todo{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border);font-size:13.5px}.jr-todo:last-child{border:0}.jr-todo .t{flex:1;min-width:0}.jr-todo .t div:first-child{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.jr-todo .t div:last-child{font-size:12px;color:var(--ink-soft)}.jr-ok{width:30px;height:30px;border-radius:50%;border:2px solid var(--accent-line);background:var(--surface);cursor:pointer;color:var(--accent);font-size:14px}.jr-ok:hover{background:var(--accent);color:#fff}'
++ '.jr-vide{text-align:center;padding:34px 20px;color:var(--ink-soft)}'
++ '@media (max-width:900px){.jr-top{grid-template-columns:1fr}}@media (prefers-reduced-motion:reduce){.jr-n,.jr-d{animation:none;transition:none}}'
++ '</style>';
+const JR_COULEURS = { lots:'#1F6E5C', rdue:'#2C5FAE', certification:'#2E7D46', cooperatives:'#B8720A', paiements:'#8A4FB3', contrats:'#C2410C', logistique:'#B8720A', pilotage:'#5B6B68', plateforme:'#0E3B36', preparation:'#0F766E' };
+const JR_COCHE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+function jrNiveaux(rap){
+  const r = rap && rap.rapport; if (!r) return [];
+  if (Array.isArray(r.niveaux)) return r.niveaux;
+  const items = [].concat((r.mene||[]).map(x=>({heure:x.heure,type:'fait',texte:x.texte})), (r.passe||[]).map(x=>({heure:x.heure,type:'passe',texte:x.texte})));
+  return items.length ? [{ cle:'pilotage', titre:'Activité du jour', items }] : [];
 }
-function jrSection(titre, items, fmt){
-  if (!items || !items.length) return '';
-  return '<div style="margin-top:14px;"><div class="label" style="margin-bottom:4px;">'+titre+'</div><ul style="margin:0;padding-left:18px;line-height:1.55;font-size:13px;">'+items.map(fmt).join('')+'</ul></div>';
+function jrIso(y,m,d){ return y+'-'+String(m).padStart(2,'0')+'-'+String(d).padStart(2,'0'); }
+function jrMoisNav(delta){
+  const [y,m] = (state.jrMois || aujourdhuiIso().slice(0,7)).split('-').map(Number); const d = new Date(Date.UTC(y, m-1+delta, 1));
+  state.jrMois = d.getUTCFullYear()+'-'+String(d.getUTCMonth()+1).padStart(2,'0'); render();
 }
-function jrRapportHtml(jour, rap, don){
-  const r = rap && rap.rapport ? rap.rapport : null;
-  const etat = !rap ? '<span class="badge neutral">Pas de rapport</span>' : (rap.statut==='clos' ? '<span class="badge ok">Rapport de fin de journée</span>' : '<span class="badge warn">Rapport provisoire — mis à jour ce soir</span>');
-  let h = '<div class="card" style="padding:16px 18px;"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;"><b>Rapport de la journée</b>'+etat+'</div>';
-  if (!r) h += '<div class="hint" style="margin-top:8px;">Aucun rapport pour cette journée : le journal a démarré le 25/11/2026.</div>';
-  else {
-    if (r.resume) h += '<div style="margin-top:8px;font-size:14px;line-height:1.5;">'+esc(r.resume)+'</div>';
-    const ligne = x => '<li>'+(x.heure?'<b>'+esc(x.heure)+'</b> · ':'')+esc(x.texte||'')+'</li>';
-    h += jrSection('Ce qui s\'est passé', r.passe, ligne) + jrSection('Ce que tu as mené', r.mene, ligne);
+async function jrCocher(jour){
+  if (!supabaseClient) return;
+  const cur = (state.jrRapports||{})[jour], v = !(cur && cur.valide);
+  const r = await supabaseClient.from('journal_jours').upsert({ jour, valide:v, valide_le: v ? new Date().toISOString() : null }, { onConflict:'jour' });
+  if (r && r.error){ if (typeof showToast==='function') showToast('Impossible de cocher la journée : '+r.error.message,'error'); return; }
+  state.jrRapports = state.jrRapports || {};
+  state.jrRapports[jour] = Object.assign({ jour, rapport:{}, statut:'en_cours' }, cur||{}, { valide:v });
+  render();
+}
+function jrChoisir(jour){ state.jrJour = jour; state.jrMois = jour.slice(0,7); render(); }
+function jrCalendrierHtml(jour, aujourdhui, rapports, alertesParJour){
+  const mois = state.jrMois || jour.slice(0,7), [y,m] = mois.split('-').map(Number);
+  const nbJ = new Date(Date.UTC(y,m,0)).getUTCDate(), lead = (new Date(Date.UTC(y,m-1,1)).getUTCDay()+6)%7;
+  const nomMois = new Date(Date.UTC(y,m-1,1)).toLocaleDateString('fr-FR',{month:'long',year:'numeric',timeZone:'UTC'});
+  let cases = ['L','M','M','J','V','S','D'].map(x=>'<div class="jh">'+x+'</div>').join('') + '<div></div>'.repeat(lead), coches = 0;
+  for (let d=1; d<=nbJ; d++){
+    const iso = jrIso(y,m,d), rp = rapports[iso], ok = !!(rp && rp.valide), a = alertesParJour[iso]||0;
+    if (ok) coches++;
+    cases += '<button type="button" class="jr-d'+(ok?' ok':(rp&&jrNiveaux(rp).length?' rap':''))+(iso===aujourdhui?' auj':'')+(iso===jour?' sel':'')+(iso>aujourdhui?' fut':'')+'" onclick="jrChoisir(\''+iso+'\')" title="'+esc(jrLibelleJour(iso,false))+'">'+(ok?JR_COCHE:d)+(a&&!ok?'<i></i>':'')+'</button>';
   }
-  // Changements dans les donnees : comptes en direct + commentaires du robot
-  const lignesDon = (don||[]).map(x=>'<li>'+esc(x.libelle)+' : '+(x.crees?x.crees+' créé'+(x.crees>1?'s':''):'')+(x.crees&&x.modifies?', ':'')+(x.modifies?x.modifies+' modifié'+(x.modifies>1?'s':''):'')+'</li>').join('');
-  const notes = (r && r.donnees || []).map(t=>'<li>'+esc(t)+'</li>').join('');
-  h += '<div style="margin-top:14px;"><div class="label" style="margin-bottom:4px;">Changements dans les données</div>'
-    + (don===undefined ? '<div class="hint">Calcul en cours…</div>' : (lignesDon || notes ? '<ul style="margin:0;padding-left:18px;line-height:1.55;font-size:13px;">'+lignesDon+notes+'</ul>' : '<div class="hint">Aucune modification enregistrée ce jour-là.</div>'))
-    + '</div>';
-  if (r) h += jrSection('À suivre', r.a_suivre, t=>'<li>'+esc(t)+'</li>');
-  return h + '</div>';
+  // serie de jours coches de suite, en partant d'aujourd'hui (ou d'hier si aujourd'hui n'est pas coche)
+  let serie = 0, t = new Date(aujourdhui+'T12:00:00Z'); if (!(rapports[aujourdhui] && rapports[aujourdhui].valide)) t.setUTCDate(t.getUTCDate()-1);
+  while (rapports[t.toISOString().slice(0,10)] && rapports[t.toISOString().slice(0,10)].valide){ serie++; t.setUTCDate(t.getUTCDate()-1); }
+  const courant = mois === aujourdhui.slice(0,7);
+  return '<div class="jr-card"><div class="jr-cal-t"><h3>Mon mois</h3><div class="jr-nav"><button onclick="jrMoisNav(-1)" aria-label="Mois précédent">‹</button><span>'+esc(nomMois)+'</span><button onclick="jrMoisNav(1)" aria-label="Mois suivant">›</button></div></div>'
+    + '<div class="jr-big"><b>'+(courant ? Number(aujourdhui.slice(8)) : coches)+'</b><small>'+(courant ? '/ '+nbJ+' jours' : 'jours cochés')+'</small>'+(serie ? '<em>'+serie+' jour'+(serie>1?'s':'')+' de suite</em>' : '')+'</div>'
+    + '<div class="jr-grid">'+cases+'</div>'
+    + '<div class="jr-leg"><span><b class="a"></b>Journée cochée</span><span><b class="b"></b>Rapport prêt</span><span><b class="c"></b>Aujourd\'hui</span></div></div>';
+}
+function jrJourHtml(jour, rap, don, aujourdhui){
+  const nivs = jrNiveaux(rap), r = rap && rap.rapport || {}, ok = !!(rap && rap.valide);
+  const cnt = t => nivs.reduce((n,v)=>n+(v.items||[]).filter(i=>i.type===t).length,0);
+  const nbFait = cnt('fait'), nbPasse = cnt('passe'), nbAl = cnt('alerte'), nbSuite = (r.a_suivre||[]).length;
+  const prov = rap && rap.statut!=='clos' && nivs.length;
+  let h = '<div class="jr-jour"><div><h2>'+esc(jrLibelleJour(jour,false))+'</h2><div class="sub">'+(jour===aujourdhui?'Aujourd\'hui · ':'')+(rap && rap.statut==='clos' ? 'Rapport de fin de journée' : (nivs.length ? 'Rapport provisoire, complété ce soir' : 'Pas encore de rapport'))+'</div></div>'
+    + '<button class="jr-cocher'+(ok?' on':'')+'" onclick="jrCocher(\''+jour+'\')">'+(ok ? JR_COCHE+'Journée cochée' : 'Cocher la journée')+'</button></div>';
+  if (!nivs.length){
+    return h + '<div class="jr-card jr-vide"><b>Aucun rapport pour ce jour.</b><div class="hint" style="margin-top:6px;">'+(jour<'2026-11-25' ? 'Le journal de bord démarre le 25 novembre 2026.' : 'Le rapport apparaît ici dès que la journée a de l\'activité ; le robot le complète chaque soir.')+'</div></div>';
+  }
+  h += '<div class="jr-hero"><div class="k">En bref'+(prov?'<span class="pv">PROVISOIRE</span>':'')+'</div><p>'+esc(r.resume||'')+'</p></div>'
+    + '<div class="jr-tiles" style="grid-template-columns:repeat(4,1fr)"><div class="jr-tile v"><b>'+nbFait+'</b><span>Fait par toi</span></div><div class="jr-tile"><b>'+nbPasse+'</b><span>Événements</span></div><div class="jr-tile r"><b>'+nbAl+'</b><span>Alertes</span></div><div class="jr-tile"><b>'+nbSuite+'</b><span>À suivre</span></div></div>';
+  h += '<div class="jr-niv">' + nivs.map((v,i)=>{
+    const c = JR_COULEURS[v.cle] || '#1F6E5C', items = v.items||[];
+    return '<section class="jr-n" style="animation-delay:'+(i*60)+'ms"><header><i style="background:'+c+'"></i><b>'+esc(v.titre||'')+'</b><span>'+items.length+'</span></header>'
+      + items.map(x=>'<div class="jr-it '+esc(x.type||'passe')+'"><span class="h">'+esc(x.type==='fait' && !x.heure ? 'Fait' : (x.type==='alerte' && !x.heure ? 'Alerte' : (x.heure||'')))+'</span><span>'+esc(x.texte||'')+'</span></div>').join('')+'</section>';
+  }).join('') + '</div>';
+  const max = Math.max(1, ...(don||[]).map(x=>(x.crees||0)+(x.modifies||0)));
+  const donH = don===undefined ? '<div class="hint">Calcul en cours…</div>' : ((don||[]).length ? don.map(x=>{ const n=(x.crees||0)+(x.modifies||0); return '<div class="jr-row"><span style="flex:0 0 190px">'+esc(x.libelle)+'</span><span class="bar"><i style="width:'+Math.max(4,Math.round(100*n/max))+'%"></i></span><b>'+(x.crees?x.crees+' créé'+(x.crees>1?'s':''):'')+(x.crees&&x.modifies?' · ':'')+(x.modifies?x.modifies+' modifié'+(x.modifies>1?'s':''):'')+'</b></div>'; }).join('') : '<div class="hint">Aucune modification enregistrée ce jour-là.</div>');
+  const notes = (r.donnees||[]).map(t=>'<div class="jr-it"><span class="h"></span><span>'+esc(t)+'</span></div>').join('');
+  const suite = (r.a_suivre||[]).map(t=>'<div class="jr-it"><span class="h">→</span><span>'+esc(t)+'</span></div>').join('');
+  h += '<div class="jr-2"><section class="jr-card"><h3>Changements dans les données</h3><div style="margin-top:8px">'+donH+notes+'</div></section>'
+    + '<section class="jr-card"><h3>À suivre</h3><div style="margin-top:8px">'+(suite||'<div class="hint">Rien de particulier.</div>')+'</div></section></div>';
+  return h;
+}
+function jrAttenteHtml(){
+  const l = (state.mailsSuivi||[]).filter(m=>m.statut!=='ignore' && mailAFaire(m)).sort(mailCompare);
+  if (!l.length) return '';
+  return '<section class="jr-card"><h3>Ce qui m\'attend ('+l.length+')</h3><div style="margin-top:6px">' + l.slice(0,8).map(m=>{
+    const e = mailEtatEcheance(m);
+    return '<div class="jr-todo"><div class="t"><div>'+esc(m.objet||'')+'</div><div>'+esc(m.implication||m.resume||'')+'</div></div>'+(m.echeance?'<span class="badge '+e.cls+'">'+esc(e.txt)+'</span>':'')+'<button class="jr-ok" title="Marquer traité" onclick="mailMaj(\''+esc(m.id)+'\',{statut:\'traite\'})">✓</button></div>';
+  }).join('') + (l.length>8 ? '<div class="hint" style="margin-top:8px">+ '+(l.length-8)+' autres</div>' : '') + '</div></section>';
 }
 function renderCourrielsTab(){
   if (!state.mailsSuivi){ mailCharger(); return ecranChargement('Chargement du journal de bord…'); }
   if (!state.jrRapports && !state.jrChargement) jrChargerRapports();
-  const vue = state.mailFiltre==='afaire' ? 'afaire' : 'jour';
-  const tous = state.mailsSuivi.filter(m=>m.statut!=='ignore');
-  const aFaire = tous.filter(mailAFaire).sort(mailCompare);
-  const alertes = tous.filter(mailEstAlerte);
-  const retard = aFaire.filter(mailEnRetard).length;
-  const decisions = aFaire.filter(m=>mailRole(m)==='decision').length;
-  const aujourdhui = aujourdhuiIso();
-  const rapports = state.jrRapports || {};
-  // Liste des jours : ceux qui ont des mails ou un rapport, plus aujourd'hui
-  const cles = new Set([aujourdhui]); state.mailsSuivi.forEach(m=>{ if (m.recu_le) cles.add(jrCle(m)); }); Object.keys(rapports).forEach(k=>cles.add(k));
-  const jours = [...cles].sort().reverse();
-  const jour = (state.jrJour && cles.has(state.jrJour)) ? state.jrJour : aujourdhui;
-  const carte = (lab,val,rouge)=>'<div class="card"><div class="label">'+lab+'</div><div class="value" style="color:'+(rouge&&val>0?'var(--danger,#c0392b)':'inherit')+'">'+val+'</div></div>';
-  const mailsJour = state.mailsSuivi.filter(m=>m.statut!=='ignore' && jrCle(m)===jour);
-  let html = '<div class="controls"><div style="flex:1;"><b>Journal de bord</b><div class="hint">Un dossier par jour : ce qui s\'est passé, ce que tu as mené, ce qui a changé dans les données.</div></div><button class="btn btn-compact" onclick="mailActualiser()">↻ Actualiser</button></div>'
-    + '<div class="cards">' + carte('À faire par toi', aFaire.length) + carte('Décisions', decisions, true) + carte('En retard', retard, true) + carte('Alertes', alertes.length, true) + carte('Changements ce jour', mailsJour.filter(m=>m.evenement).length) + '</div>'
-    + '<div class="tabs">' + [['jour','Par jour'],['afaire','À faire ('+aFaire.length+')']].map(([k,l])=>'<button class="tab-btn '+(vue===k?'active':'')+'" onclick="mailSetVue(\''+k+'\')">'+l+'</button>').join('') + '</div>';
-  if (vue==='afaire'){
-    return html + (aFaire.length ? '<div style="display:flex;flex-direction:column;gap:10px;margin-top:10px;">'+aFaire.map(m=>mailLigne(m,{avecDate:true})).join('')+'</div>' : '<div class="empty">Rien à faire pour le moment.</div>');
-  }
+  const aujourdhui = aujourdhuiIso(), rapports = state.jrRapports || {};
+  const jour = state.jrJour || aujourdhui;
+  const alertesParJour = {}; state.mailsSuivi.forEach(m=>{ if (mailEstAlerte(m)) alertesParJour[jrCle(m)] = (alertesParJour[jrCle(m)]||0)+1; });
   if (state.jrDon===undefined || state.jrDon[jour]===undefined) jrChargerDonnees(jour);
   const don = state.jrDon ? state.jrDon[jour] : undefined;
-  const liste = '<div style="flex:0 0 230px;display:flex;flex-direction:column;gap:6px;">' + jours.map(j=>{
-    const L = state.mailsSuivi.filter(m=>m.statut!=='ignore' && jrCle(m)===j), nbAl = L.filter(mailEstAlerte).length, rp = rapports[j];
-    return '<button type="button" onclick="jrChoisir(\''+j+'\')" style="text-align:left;cursor:pointer;padding:10px 12px;border-radius:10px;border:1px solid '+(j===jour?'var(--accent,#2c6e5b)':'rgba(127,127,127,.25)')+';background:'+(j===jour?'rgba(44,110,91,.12)':'transparent')+';color:inherit;font:inherit;">'
-      + '<div style="font-weight:600;">'+esc(jrLibelleJour(j,true))+(j===aujourdhui?' · aujourd\'hui':'')+'</div>'
-      + '<div style="font-size:12px;opacity:.75;margin-top:2px;">'+L.length+' mail'+(L.length>1?'s':'')+(rp?(rp.statut==='clos'?' · rapport ✓':' · rapport provisoire'):'')+(nbAl?' · <span style="color:var(--danger,#c0392b);">'+nbAl+' alerte'+(nbAl>1?'s':'')+'</span>':'')+'</div></button>';
-  }).join('') + '</div>';
-  const triJour = mailsJour.slice().sort((a,b)=>String(b.recu_le).localeCompare(String(a.recu_le)));
-  const detail = '<div style="flex:1 1 480px;min-width:0;display:flex;flex-direction:column;gap:12px;">'
-    + '<div style="font-size:18px;font-weight:700;text-transform:capitalize;">'+esc(jrLibelleJour(jour,false))+'</div>'
-    + jrRapportHtml(jour, rapports[jour], don)
-    + '<div class="label" style="margin-top:4px;">Mails du jour ('+triJour.length+')</div>'
-    + (triJour.length ? triJour.map(m=>mailLigne(m)).join('') : '<div class="empty">Aucun mail retenu ce jour-là.</div>')
-    + '</div>';
-  return html + '<div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;margin-top:10px;">' + liste + detail + '</div>';
+  return JR_CSS + '<div class="jr"><div class="jr-cal-t"><div><h2>Journal de bord</h2><div class="sub">Une case par jour : coche ta journée, ouvre le rapport, vois ce que tu as fait à chaque niveau.</div></div><button class="btn btn-compact" onclick="mailActualiser()">↻ Actualiser</button></div>'
+    + '<div class="jr-top">' + jrCalendrierHtml(jour, aujourdhui, rapports, alertesParJour) + jrAttenteHtml() + '</div>'
+    + jrJourHtml(jour, rapports[jour], don, aujourdhui) + '</div>';
 }
 function renderDemandesTab(){
   if (!state.demandesCoop){ refreshDemandesTab(); return ecranChargement('Chargement des demandes…'); }
