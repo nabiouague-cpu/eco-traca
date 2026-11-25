@@ -2508,6 +2508,10 @@
   .dm-bar .ob-tabs{margin-bottom:0;} .dm-bar .ob-tabs button{padding:8px 15px;font-size:13.5px;}
   .cd-encours{border-left:4px solid var(--info);} .ls-kpis.cd-k4{grid-template-columns:repeat(4,1fr);}
   @media (max-width:900px){.ls-kpis.cd-k4{grid-template-columns:repeat(2,1fr);}}
+  @media (max-width:900px){.ls-kpis[style]{grid-template-columns:repeat(2,1fr) !important;}}
+  .sv-note{display:flex;gap:14px;align-items:center;justify-content:space-between;flex-wrap:wrap;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:14px 18px;margin-bottom:12px;color:var(--ink-soft);font-size:13px;line-height:1.5;box-shadow:var(--shadow-sm);}
+  .sv-note strong{color:var(--ink);} .sv-note > span{flex:1 1 360px;}
+  .cd-barre{margin:0 0 14px;}
   /* Coopératives (cp-) */
   .cp-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 14px;}
   .cp-bar-s{flex:1 1 260px;min-width:220px;} .cp-bar-s .coop-search{margin:0;max-width:none;}
@@ -5271,7 +5275,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-25-702';
+const APP_VERSION = '2026-11-25-703';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -5650,7 +5654,12 @@ async function delierCompteCooperative(userId, coopId){
 }
 
 function renderSauvegardesTab(){
-  let html = '<div class="panel"><div class="panel-head"><h2>Sauvegardes & restauration</h2></div>'
+  let html = lsTuiles([
+    ['','Coopératives',fmtNum((state.cooperatives||[]).length),'fiches enregistrées'],
+    ['','Producteurs',fmtNum((state.producteurs||[]).length),'membres et parcelles'],
+    ['','Achats',fmtNum((state.achats||[]).length),'lignes de livraison'],
+    [state.changesSinceExport>0?'warn':'ok','Depuis la dernière sauvegarde',fmtNum(state.changesSinceExport||0),state.changesSinceExport>0?'modification(s) non sauvegardée(s)':'rien de nouveau']],4)
+    + '<div class="panel"><div class="panel-head"><h2>Sauvegardes & restauration</h2></div>'
     + '<div style="padding:24px 18px;">'
     + '<p class="hint" style="margin-bottom:16px;">Télécharge une sauvegarde complète de la plateforme (coopératives, producteurs, achats, documents, non-conformités, campagnes) au format JSON, ou restaure une sauvegarde précédente.</p>'
     + '<div class="row-actions" style="margin-bottom:10px;">'
@@ -5660,11 +5669,11 @@ function renderSauvegardesTab(){
     + (state.changesSinceExport>0 ? '<span class="hint">'+state.changesSinceExport+' modification(s) depuis la dernière sauvegarde téléchargée</span>' : '')
     + '</div></div>';
 
-  html += '<div class="error-banner" style="align-items:flex-start;background:var(--surface-2);color:var(--ink-soft);border-color:var(--border);">'
+  html += '<div class="sv-note">'
     + '<span><strong>Récupération des anciennes données</strong><br>'
     + 'Si tu avais des données saisies avant le passage à Supabase (visibles uniquement quand ce document est ouvert comme aperçu dans cette conversation Claude.ai), récupère-les ici avant de continuer.'
     + '</span><button class="btn" onclick="recupererDonneesLocales()">Récupérer en fichier JSON</button></div>';
-  html += '<div class="error-banner" style="align-items:flex-start;background:var(--surface-2);color:var(--ink-soft);border-color:var(--border);">'
+  html += '<div class="sv-note">'
     + '<span><strong>Réimporter une sauvegarde dans Supabase</strong><br>'
     + 'Une fois le fichier JSON récupéré ci-dessus, ouvre ce document dans un vrai onglet de navigateur (pas l\'aperçu du chat), puis charge-le ici pour tout renvoyer vers Supabase.'
     + '</span><input type="file" accept=".json" style="display:none" id="import-json-input" onchange="importerSauvegardeJSON(this)">'
@@ -5680,6 +5689,11 @@ function renderAccesTab(){
   let html = '';
 
   const pendingIdentite = (state.demandesIdentite||[]).filter(d=>d.statut==='soumise');
+  { const idsAvecAcces = new Set((state.coopUsers||[]).map(l=>l.cooperative_id)); const sansAcces = (state.cooperatives||[]).filter(c=>!idsAvecAcces.has(c.id) && !c.diligence_externe && c.type!=='acheteur_prive').length;
+    html += lsTuiles([
+      ['ok','Accès actifs',fmtNum((state.coopUsers||[]).length),'comptes liés à une coopérative'],
+      [pendingIdentite.length>0?'warn':'ok','Identités à valider',fmtNum(pendingIdentite.length),pendingIdentite.length>0?'demandes en attente':'aucune demande en attente'],
+      ['','Coopératives sans accès',fmtNum(sansAcces),'n\'ont pas encore de compte']],3); }
   html += '<div class="panel"><div class="panel-head"><h2>Demandes de mise à jour d\'identité — à traiter ('+pendingIdentite.length+')</h2></div>';
   if (pendingIdentite.length===0){
     html += '<div class="empty">Aucune demande en attente.</div>';
@@ -6829,6 +6843,13 @@ function renderStockageTab(){
     + '<button class="btn" style="align-self:flex-end" onclick="exportMultiOuvrir()" title="Exporte un dossier précis (ex. Fiches de traçabilité, Documents de conformité) pour plusieurs coopératives dans un seul ZIP">📦 Exporter un dossier pour plusieurs coopératives</button>'
     + '</div>';
 
+  { const tous = Object.values(dossiers).reduce((a,d)=>a.concat(d.fichiers),[]);
+    const nEc = tous.filter(f=>f.origine==='ecorigine').length, nCo = tous.filter(f=>f.origine==='coop').length, nDos = clesDossiers.filter(c=>dossiers[c].fichiers.length>0).length;
+    html += lsTuiles([
+      ['','Fichiers',fmtNum(totalFichiers),esc(coop?coop.nom:'')],
+      ['','Dossiers utilisés',fmtNum(nDos)+' <small>/ '+fmtNum(clesDossiers.length)+'</small>','types de documents'],
+      ['','Envoyés par ECORIGINE',fmtNum(nEc),'modèles et documents de base'],
+      ['ok','Soumis par la coopérative',fmtNum(nCo),'retours de la coopérative']],4); }
   html += '<div class="panel" id="stock-panel"><div class="panel-head"><h2>'+esc(coop?coop.nom:'')+' — '+fmtNum(totalFichiers)+' fichier(s) au total</h2>'
     + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
     + '<label style="display:flex;gap:6px;align-items:center;font-size:12.5px;color:var(--ink-soft);cursor:pointer;" title="Retire des PDF les données internes inutiles (Photoshop, scanner) qui peuvent représenter 80 % de leur poids. Le rendu des pages est identique. Les fichiers du stockage ne sont pas modifiés, seule la copie du ZIP est allégée."><input type="checkbox" id="stock-alleger-pdf" '+(state.stockageAllegerPdf!==false?'checked':'')+' onchange="state.stockageAllegerPdf=this.checked"> Alléger les PDF dans les exports</label>'
@@ -17179,7 +17200,13 @@ function renderBaseDonneesTab(){
       + (acheteurs.length>0 ? '</optgroup>' : '');
   }
 
-  let html = '<div class="panel"><div class="panel-head" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><h2>Déposer les données d\'une coopérative</h2>'
+  const nbReg = state.cooperatives.filter(c=>(filesByCoop[c.id]||{}).registre).length, nbGeo = state.cooperatives.filter(c=>(filesByCoop[c.id]||{}).geolocalisation).length;
+  let html = lsTuiles([
+      ['','Coopératives',fmtNum(state.cooperatives.length),'à suivre'],
+      ['ok','Registres reçus',fmtNum(nbReg),Math.round(nbReg/Math.max(1,state.cooperatives.length)*100)+' % des coopératives'],
+      ['ok','Géolocalisations reçues',fmtNum(nbGeo),Math.round(nbGeo/Math.max(1,state.cooperatives.length)*100)+' % des coopératives'],
+      [nbEnAttente>0?'warn':'ok','En attente d\'import',fmtNum(nbEnAttente),nbEnAttente>0?'registres à importer vers producteurs':'rien en attente']],4)
+    + '<div class="panel"><div class="panel-head" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><h2>Déposer les données d\'une coopérative</h2>'
     + '<span style="display:flex;gap:8px;flex-wrap:wrap">'
     + (nbEnAttente>0 ? '<button class="btn btn-primary" onclick="importerTousLesEnAttente()">⚡ Importer les producteurs en attente ('+nbEnAttente+')</button>' : '')
     + '<button class="btn" onclick="ouvrirBddGroupe()">📦 Dépôt groupé</button>'
@@ -27365,11 +27392,10 @@ function renderGeoPanel(){
 
   let html = '<div class="panel"><div class="panel-head"><h2>Géolocalisation des parcelles</h2></div>';
   html += '<div class="panel-note">Un point GPS suffit pour les parcelles de 4 ha ou moins ; au-delà, un polygone complet est requis. Cet outil capture et affiche des points (via l\'import Excel, colonnes Latitude/Longitude) — pour les polygones eux-mêmes, un outil SIG dédié reste nécessaire.</div>';
-  html += '<div class="cards" style="margin:16px 18px;grid-template-columns:repeat(3,1fr);">'
-    + '<div class="card"><div class="label">Géolocalisés</div><div class="value">'+fmtNum(withGeo.length)+' / '+fmtNum(list.length)+'</div></div>'
-    + '<div class="card'+(missingGeo.length>0?' alert':'')+'"><div class="label">Sans coordonnées</div><div class="value">'+fmtNum(missingGeo.length)+'</div></div>'
-    + '<div class="card"><div class="label">Polygone requis (&gt;4 ha)</div><div class="value">'+fmtNum(needPolygon.length)+'</div></div>'
-    + '</div>';
+  html += '<div style="padding:16px 18px 0">'+lsTuiles([
+    ['','Géolocalisés',fmtNum(withGeo.length)+' <small>/ '+fmtNum(list.length)+'</small>', list.length?Math.round(withGeo.length/list.length*100)+' % des parcelles':''],
+    [missingGeo.length>0?'warn':'ok','Sans coordonnées',fmtNum(missingGeo.length), missingGeo.length>0?'à compléter':'toutes localisées'],
+    ['','Polygone requis (&gt;4 ha)',fmtNum(needPolygon.length),'parcelles de plus de 4 ha']],3)+'</div>';
   if (withGeo.length>0){
     html += '<div style="padding:0 18px 18px;"><div id="geoMap" style="height:320px;border-radius:8px;border:1px solid var(--border);"></div></div>';
   } else {
@@ -27555,6 +27581,9 @@ const CONFORMITE_GROUPS = [
 ];
 function setConformiteSousOnglet(tab){ state.conformiteSousOnglet = tab; render(); }
 
+function lsTuiles(arr, cols){
+  return '<div class="ls-kpis" style="grid-template-columns:repeat('+(cols||arr.length)+',1fr)">'+arr.map(t=>'<div class="ls-k '+(t[0]||'')+(t[4]?' clic':'')+'"'+(t[4]?' onclick="'+t[4]+'"':'')+'><div class="k">'+t[1]+'</div><div class="v">'+t[2]+'</div><div class="s">'+(t[3]||'')+'</div></div>').join('')+'</div>';
+}
 function renderConformiteTab(){
   const filterCoop = state.conformiteCoopFilter;
   const nonconfs = state.nonconformites.filter(n=>filterCoop==='all'||n.cooperative_id===filterCoop);
@@ -27572,16 +27601,15 @@ function renderConformiteTab(){
     + '<button class="btn" '+(state.cooperatives.length===0?'disabled':'onclick="openModal(\'nonconformite\')"')+'>+ Non-conformité</button>'
     + '</div>';
 
-  html += '<div class="cards">'
-    + '<div class="card'+(totalMissingDocs>0?' alert':'')+'"><div class="label">Documents manquants</div><div class="value">'+fmtNum(totalMissingDocs)+'</div></div>'
-    + '<div class="card'+(gaps.length>0?' alert':'')+'"><div class="label">Données manquantes</div><div class="value">'+fmtNum(gaps.length)+'</div></div>'
-    + '<div class="card'+(nOuvertes>0?' alert':'')+'"><div class="label">Non-conformités ouvertes</div><div class="value">'+fmtNum(nOuvertes)+'</div></div>'
-    + '</div>';
+  html += lsTuiles([
+    [totalMissingDocs>0?'bad':'ok','Documents manquants',fmtNum(totalMissingDocs), totalMissingDocs>0?'à demander aux coopératives':'tout est fourni'],
+    [gaps.length>0?'warn':'ok','Données manquantes',fmtNum(gaps.length), gaps.length>0?'producteurs à compléter':'registres complets'],
+    [nOuvertes>0?'bad':'ok','Non-conformités ouvertes',fmtNum(nOuvertes), nOuvertes>0?'à traiter':'aucune ouverte']], 3);
 
   const sousOnglet = state.conformiteSousOnglet || CONFORMITE_GROUPS[0][0];
-  html += '<div class="tabs">'
-    + CONFORMITE_GROUPS.map(([key,label])=>'<button class="tab-btn '+(sousOnglet===key?'active':'')+'" onclick="setConformiteSousOnglet(\''+key+'\')">'+label+'</button>').join('')
-    + '</div>';
+  html += '<div class="dm-bar"><div class="ob-tabs">'
+    + CONFORMITE_GROUPS.map(([key,label])=>'<button class="'+(sousOnglet===key?'on':'')+'" onclick="setConformiteSousOnglet(\''+key+'\')">'+label+'</button>').join('')
+    + '</div></div>';
 
   if (sousOnglet==='documents'){
     html += filterCoop==='all' ? renderVersionsSummary() + renderChecklistSummary() : renderChecklistForCoop(filterCoop);
@@ -35438,17 +35466,17 @@ function renderCoopDashboard(){
     + (coop.statut==='Certifiée' ? '<div><span>Volume certificat :</span> '+(coop.volume_certificat?fmtKg(coop.volume_certificat):'—')+'</div>' : '')
     + '</div>';
 
-  html += '<div class="cards">'
-    + '<div class="card"><div class="label">Producteurs</div><div class="value" data-n="'+stats.count+'">'+fmtNum(stats.count)+'</div></div>'
-    + '<div class="card"><div class="label">Potentiel total</div><div class="value" data-n="'+Math.round(stats.potentiel)+'">'+fmtKg(stats.potentiel)+'</div></div>'
-    + '<div class="card"><div class="label">Net déclaré (traçabilité)</div><div class="value" data-n="'+Math.round(stats.achete)+'">'+fmtKg(stats.achete)+(stats.pct!=null?' <span style="font-size:13px;color:var(--ink-soft);">('+stats.pct.toFixed(0)+'%)</span>':'')+'</div></div>'
-    + '<div class="card'+(nAlert>0?' alert':'')+'"><div class="label">Producteurs en alerte</div><div class="value" data-n="'+nAlert+'">'+fmtNum(nAlert)+'</div></div>'
+  html += '<div class="ls-kpis" style="grid-template-columns:repeat(4,1fr)">'
+    + '<div class="ls-k"><div class="k">Producteurs</div><div class="v" data-n="'+stats.count+'">'+fmtNum(stats.count)+'</div></div>'
+    + '<div class="ls-k"><div class="k">Potentiel total</div><div class="v" data-n="'+Math.round(stats.potentiel)+'">'+fmtKg(stats.potentiel)+'</div></div>'
+    + '<div class="ls-k"><div class="k">Net déclaré (traçabilité)</div><div class="v" data-n="'+Math.round(stats.achete)+'">'+fmtKg(stats.achete)+(stats.pct!=null?' <span style="font-size:13px;color:var(--ink-soft);">('+stats.pct.toFixed(0)+'%)</span>':'')+'</div></div>'
+    + '<div class="ls-k'+(nAlert>0?' bad':'')+'"><div class="k">Producteurs en alerte</div><div class="v" data-n="'+nAlert+'">'+fmtNum(nAlert)+'</div></div>'
     + '</div>';
-  html += '<div class="cards">'
-    + '<div class="card" title="Volume acheté par ECORIGINE = poids net payé à l\'usine"><div class="label">Volume acheté (net payé)</div><div class="value"'+(stats.netProduit>0?' data-n="'+Math.round(stats.netProduit)+'"':'')+'>'+(stats.netProduit>0?fmtKg(stats.netProduit):'—')+'</div>'+(stats.netProduitPending>0?'<div class="hint" style="margin-top:4px;color:var(--warn);">'+stats.netProduitPending+' connaissement(s) en attente de pesée usine</div>':'')+'</div>'
-    + '<div class="card'+(missing.length>0?' alert':'')+'" style="cursor:pointer;" onclick="goToTabForCoop(\'conformite\')"><div class="label">Documents manquants</div><div class="value" data-n="'+missing.length+'">'+fmtNum(missing.length)+'/'+DOCS_REQUIS.length+'</div></div>'
-    + '<div class="card'+(nOuvertes>0?' alert':'')+'" style="cursor:pointer;" onclick="goToTabForCoop(\'conformite\')"><div class="label">Non-conformités ouvertes</div><div class="value" data-n="'+nOuvertes+'">'+fmtNum(nOuvertes)+'</div></div>'
-    + '<div class="card'+(gapsCount>0?' alert':'')+'" style="cursor:pointer;" onclick="goToTabForCoop(\'conformite\')"><div class="label">Données manquantes</div><div class="value" data-n="'+gapsCount+'">'+fmtNum(gapsCount)+'</div></div>'
+  html += '<div class="ls-kpis" style="grid-template-columns:repeat(4,1fr)">'
+    + '<div class="ls-k" title="Volume acheté par ECORIGINE = poids net payé à l\'usine"><div class="k">Volume acheté (net payé)</div><div class="v"'+(stats.netProduit>0?' data-n="'+Math.round(stats.netProduit)+'"':'')+'>'+(stats.netProduit>0?fmtKg(stats.netProduit):'—')+'</div>'+(stats.netProduitPending>0?'<div class="hint" style="margin-top:4px;color:var(--warn);">'+stats.netProduitPending+' connaissement(s) en attente de pesée usine</div>':'')+'</div>'
+    + '<div class="ls-k'+(missing.length>0?' bad':'')+'" style="cursor:pointer;" onclick="goToTabForCoop(\'conformite\')"><div class="k">Documents manquants</div><div class="v" data-n="'+missing.length+'">'+fmtNum(missing.length)+'/'+DOCS_REQUIS.length+'</div></div>'
+    + '<div class="ls-k'+(nOuvertes>0?' bad':'')+'" style="cursor:pointer;" onclick="goToTabForCoop(\'conformite\')"><div class="k">Non-conformités ouvertes</div><div class="v" data-n="'+nOuvertes+'">'+fmtNum(nOuvertes)+'</div></div>'
+    + '<div class="ls-k'+(gapsCount>0?' bad':'')+'" style="cursor:pointer;" onclick="goToTabForCoop(\'conformite\')"><div class="k">Données manquantes</div><div class="v" data-n="'+gapsCount+'">'+fmtNum(gapsCount)+'</div></div>'
     + '</div>';
 
   html += '<div class="panel"><div class="panel-head"><h2>Producteurs ('+fmtNum(rows.length)+')</h2>'+sectionToggleHtml('coopdash-prod-'+coop.id, rows.length)+'</div>';
