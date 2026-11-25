@@ -4938,7 +4938,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-25-660';
+const APP_VERSION = '2026-11-25-661';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -6821,7 +6821,7 @@ function ocInstallerSwipeValidation(){
 ocInstallerSwipeValidation();
 // ---- Barre laterale v2 ----
 const SIDEBAR_GROUPES = [
-  { titre:'Pilotage',       items:[ ['dashboard','ICON_DASHBOARD','Tableau de bord'], ['tracage','ICON_TRACAGE','Traçage & dossier RDUE'], ['saisieobc','ICON_OBC','Saisie OBC'], ['courriels','ICON_COURRIELS','Courriels'] ] },
+  { titre:'Pilotage',       items:[ ['dashboard','ICON_DASHBOARD','Tableau de bord'], ['tracage','ICON_TRACAGE','Traçage & dossier RDUE'], ['saisieobc','ICON_OBC','Saisie OBC'], ['courriels','ICON_COURRIELS','Journal de bord'] ] },
   { titre:'Opérations',     items:[ ['cooperatives','ICON_COOPS','Fournisseurs'], ['demandes','ICON_DEMANDES','Demandes coopératives'], ['shipping','ICON_LOTS','Shipping'], ['prefinancements','ICON_PREFI','Finance'] ] },
   { titre:'Conformité',     items:[ ['conformite','ICON_CONFORMITE','Conformité & documents'], ['basedonnees','ICON_BASEDONNEES','Base de données coop.'], ['cartes','ICON_CARTE','Cartes & déforestation'] ] },
   { titre:'Administration', items:[ ['acces','ICON_ACCES','Accès coopératives'], ['stockage','ICON_STOCKAGE','Stockage'], ['sauvegardes','ICON_SAUVEGARDES','Sauvegardes'] ] },
@@ -17562,7 +17562,6 @@ async function mailCharger(){
     state.mailsSuivi = (r && !r.error) ? (r.data||[]) : (state.mailsSuivi||[]);
   } finally { state.mailsChargement = false; render(); }
 }
-function mailNbATraiter(){ return (state.mailsSuivi||[]).filter(m=>m.statut==='a_traiter'||m.statut==='nouveau').length; }
 function mailJours(ech){ if (!ech) return null; const a = new Date(aujourdhuiIso()+'T00:00:00Z'), b = new Date(String(ech).slice(0,10)+'T00:00:00Z'); return Math.round((b-a)/86400000); }
 function mailEtatEcheance(m){
   const j = mailJours(m.echeance);
@@ -17580,41 +17579,106 @@ async function mailMaj(id, champs){
   render();
 }
 function mailChangerEcheance(id, v){ mailMaj(id, { echeance: v||null, derniere_alerte: null }); }
+// ---- Journal de bord (remplace l'ancien onglet Courriels) : suivi de l'activite de Nabi a partir de ses mails. ----
+// Remplis par le robot de veille de la boite mail : famille (domaine d'activite), role_nabi (ce qu'on attend de lui),
+// evenement (changement significatif), implication (ce que ca change), alerte (ce qu'il ne voit pas), lots (series/lots concernes).
+const MAIL_FAMILLES = {
+  lots_clients:       { lib:'Lots & clients',           ico:'📦' },
+  certification_ra:   { lib:'Certification RA / FT',     ico:'🌿' },
+  conformite_clients: { lib:'Conformité clients (EUDR)', ico:'🛡' },
+  cooperatives:       { lib:'Coopératives',              ico:'🤝' },
+  contrats:           { lib:'Contrats',                  ico:'📄' },
+  paiements:          { lib:'Paiements & primes',        ico:'💳' },
+  preparation:        { lib:'Préparation de campagne',   ico:'🗓' },
+  autre:              { lib:'Autre',                     ico:'•' }
+};
+const MAIL_FAM_DEFAUT = { certification:'certification_ra', conformite:'conformite_clients', contrats:'contrats', finance:'paiements', cooperatives:'cooperatives', autre:'autre' };
+const MAIL_ROLES = {
+  decision: { lib:'Décision', cls:'bad',     ordre:0 },
+  a_faire:  { lib:'À faire',  cls:'warn',    ordre:1 },
+  verifier: { lib:'À vérifier', cls:'neutral', ordre:2 },
+  info:     { lib:'Pour info', cls:'neutral', ordre:3 }
+};
+function mailFamille(m){ return (m.famille && MAIL_FAMILLES[m.famille]) ? m.famille : (MAIL_FAM_DEFAUT[m.categorie] || 'autre'); }
+function mailRole(m){ return (m.role_nabi && MAIL_ROLES[m.role_nabi]) ? m.role_nabi : 'a_faire'; }
+function mailOuvert(m){ return m.statut==='a_traiter' || m.statut==='nouveau'; }
+function mailEnRetard(m){ const j = mailJours(m.echeance); return j!=null && j<0; }
+function mailEstAlerte(m){ return mailOuvert(m) && (!!m.alerte || (mailEnRetard(m) && mailRole(m)!=='info')); }
+function mailAFaire(m){ return mailOuvert(m) && mailRole(m)!=='info'; }
+// Importance : decision > en retard > priorite haute > echeance la plus proche
+function mailImportance(m){
+  const j = mailJours(m.echeance);
+  return [ MAIL_ROLES[mailRole(m)].ordre, mailEnRetard(m)?0:1, m.priorite==='haute'?0:1, j==null?9999:j ];
+}
+function mailCompare(a,b){ const x = mailImportance(a), y = mailImportance(b); for (let i=0;i<x.length;i++){ if (x[i]!==y[i]) return x[i]-y[i]; } return String(b.recu_le||'').localeCompare(String(a.recu_le||'')); }
+function mailNbATraiter(){ return (state.mailsSuivi||[]).filter(m=>mailAFaire(m) || mailEstAlerte(m)).length; }
+function mailLigne(m, opts){
+  opts = opts||{};
+  const e = mailEtatEcheance(m), ferme = !mailOuvert(m), role = MAIL_ROLES[mailRole(m)], fam = MAIL_FAMILLES[mailFamille(m)];
+  const id = esc(m.id);
+  let h = '<div class="card" style="padding:14px 16px;'+(ferme?'opacity:.7;':'')+(mailEstAlerte(m)?'border-left:4px solid var(--danger,#c0392b);':'')+'">'
+    + '<div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-start;">'
+    +   '<div style="min-width:0;flex:1 1 340px;">'
+    +     '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">'
+    +       '<span class="badge '+role.cls+'">'+role.lib+'</span>'
+    +       '<span class="badge neutral">'+fam.ico+' '+esc(fam.lib)+'</span>'
+    +       (m.evenement ? '<span class="badge warn">Changement</span>' : '')
+    +       (m.lots ? '<span class="badge neutral">'+esc(m.lots)+'</span>' : '')
+    +     '</div>'
+    +     '<div style="font-weight:600;">'+esc(m.objet||'(sans objet)')+'</div>'
+    +     '<div style="font-size:12px;opacity:.75;margin:2px 0 8px;">'+esc(m.expediteur_nom||m.expediteur||'')+' · '+dateFr(m.recu_le)+(m.nb_messages>1?' · '+m.nb_messages+' messages':'')+'</div>'
+    +     '<div style="font-size:13px;line-height:1.45;">'+esc(m.resume||'')+'</div>'
+    +     (m.implication ? '<div style="font-size:13px;line-height:1.45;margin-top:8px;padding:8px 10px;border-radius:8px;background:rgba(127,127,127,.10);"><b>Ce que ça implique :</b> '+esc(m.implication)+'</div>' : '')
+    +     (m.alerte ? '<div style="font-size:13px;line-height:1.45;margin-top:8px;padding:8px 10px;border-radius:8px;background:rgba(192,57,43,.10);"><b>Alerte :</b> '+esc(m.alerte)+'</div>' : '')
+    +     (m.notes ? '<div style="font-size:12px;opacity:.65;margin-top:8px;">'+esc(m.notes)+'</div>' : '')
+    +   '</div>'
+    +   '<div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;">'
+    +     (ferme ? '<span class="badge ok">'+(m.statut==='ignore'?'Ignoré':'Traité')+'</span>' : '<span class="badge '+e.cls+'">'+esc(e.txt)+'</span>')
+    +     (opts.sansEcheance ? '' : '<label style="font-size:12px;opacity:.8;">Avant le <input type="date" value="'+esc(String(m.echeance||'').slice(0,10))+'" onchange="mailChangerEcheance(\''+id+'\',this.value)" style="margin-left:4px;"></label>')
+    +   '</div></div>'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">'
+    +   (m.lien ? '<a class="btn btn-compact" href="'+esc(m.lien)+'" target="_blank" rel="noopener">Ouvrir dans Outlook</a>' : '')
+    +   (ferme ? '<button class="btn btn-compact" onclick="mailMaj(\''+id+'\',{statut:\'a_traiter\'})">Rouvrir</button>'
+           : '<button class="btn btn-primary btn-compact" onclick="mailMaj(\''+id+'\',{statut:\'traite\'})">'+(m.alerte && mailRole(m)==='info' ? 'Vu' : 'Marquer traité')+'</button><button class="btn btn-compact" onclick="mailMaj(\''+id+'\',{statut:\'ignore\'})">Ignorer</button>')
+    + '</div></div>';
+  return h;
+}
+function mailSetVue(k){ state.mailFiltre = k; if (k!=='activite') state.mailFamille = ''; render(); }
+function mailSetFamille(k){ state.mailFamille = (state.mailFamille===k ? '' : k); render(); }
+function mailActualiser(){ state.mailsSuivi = null; render(); }
 function renderCourrielsTab(){
-  if (!state.mailsSuivi){ mailCharger(); return ecranChargement('Chargement des courriels…'); }
-  const f = state.mailFiltre || 'a_traiter';
-  const tous = state.mailsSuivi;
-  const ouverts = tous.filter(m=>m.statut==='a_traiter'||m.statut==='nouveau');
-  const retard = ouverts.filter(m=>{ const j = mailJours(m.echeance); return j!=null && j<0; }).length;
-  const proches = ouverts.filter(m=>{ const j = mailJours(m.echeance); return j!=null && j>=0 && j<=3; }).length;
-  let liste = tous.filter(m=> f==='tous' ? m.statut!=='ignore' : f==='traite' ? m.statut==='traite' : (m.statut==='a_traiter'||m.statut==='nouveau'));
-  let html = '<div class="cards">'
-    + '<div class="card"><div class="label">À traiter</div><div class="value">'+ouverts.length+'</div></div>'
-    + '<div class="card"><div class="label">En retard</div><div class="value" style="color:'+(retard?'var(--danger,#c0392b)':'inherit')+'">'+retard+'</div></div>'
-    + '<div class="card"><div class="label">Échéance sous 3 jours</div><div class="value">'+proches+'</div></div>'
-    + '</div>'
-    + '<div class="tabs">' + [['a_traiter','À traiter'],['traite','Traités'],['tous','Tous']].map(([k,l])=>'<button class="tab-btn '+(f===k?'active':'')+'" onclick="state.mailFiltre=\''+k+'\';render()">'+l+'</button>').join('') + '</div>';
-  if (!liste.length) return html + '<div class="empty">Aucun courriel dans cette liste.</div>';
-  html += '<div style="display:flex;flex-direction:column;gap:10px;margin-top:10px;">' + liste.map(m=>{
-    const e = mailEtatEcheance(m), ferme = m.statut==='traite';
-    const pri = m.priorite==='haute' ? '<span class="badge bad">Haute</span> ' : '';
-    return '<div class="card" style="padding:14px 16px;'+(ferme?'opacity:.65;':'')+'">'
-      + '<div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-start;">'
-      +   '<div style="min-width:0;flex:1 1 320px;"><div style="font-weight:600;">'+pri+esc(m.objet||'(sans objet)')+'</div>'
-      +   '<div style="font-size:12px;opacity:.75;margin:2px 0 6px;">'+esc(m.expediteur_nom||m.expediteur||'')+' · reçu le '+dateFr(m.recu_le)+' · <span class="badge neutral">'+esc(MAIL_CATS[m.categorie]||m.categorie||'Autre')+'</span>'+(m.nb_messages>1?' · '+m.nb_messages+' messages':'')+'</div>'
-      +   '<div style="font-size:13px;line-height:1.45;">'+esc(m.resume||'')+'</div>'
-      +   (m.notes?'<div style="font-size:12px;opacity:.7;margin-top:6px;">'+esc(m.notes)+'</div>':'')
-      +   '</div>'
-      +   '<div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;">'
-      +   (ferme ? '<span class="badge ok">Traité</span>' : '<span class="badge '+e.cls+'">'+esc(e.txt)+'</span>')
-      +   '<label style="font-size:12px;opacity:.8;">À régler avant le <input type="date" value="'+esc(String(m.echeance||'').slice(0,10))+'" onchange="mailChangerEcheance(\''+esc(m.id)+'\',this.value)" style="margin-left:4px;"></label>'
-      +   '</div></div>'
-      + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">'
-      +   (m.lien?'<a class="btn btn-compact" href="'+esc(m.lien)+'" target="_blank" rel="noopener">Ouvrir dans Outlook</a>':'')
-      +   (ferme ? '<button class="btn btn-compact" onclick="mailMaj(\''+esc(m.id)+'\',{statut:\'a_traiter\'})">Rouvrir</button>'
-             : '<button class="btn btn-primary btn-compact" onclick="mailMaj(\''+esc(m.id)+'\',{statut:\'traite\'})">Marquer traité</button><button class="btn btn-compact" onclick="mailMaj(\''+esc(m.id)+'\',{statut:\'ignore\'})">Ignorer</button>')
-      + '</div></div>';
+  if (!state.mailsSuivi){ mailCharger(); return ecranChargement('Chargement du journal de bord…'); }
+  const vue = state.mailFiltre && ['faire','alertes','changements','activite','traite'].includes(state.mailFiltre) ? state.mailFiltre : 'faire';
+  const fam = state.mailFamille || '';
+  const tous = state.mailsSuivi.filter(m=>m.statut!=='ignore');
+  const aFaire = tous.filter(mailAFaire).sort(mailCompare);
+  const alertes = tous.filter(mailEstAlerte).sort(mailCompare);
+  const decisions = aFaire.filter(m=>mailRole(m)==='decision').length;
+  const retard = aFaire.filter(mailEnRetard).length;
+  const sept = new Date(Date.now()-7*86400000).toISOString().slice(0,10);
+  const changements = tous.filter(m=>m.evenement).sort((a,b)=>String(b.recu_le||'').localeCompare(String(a.recu_le||'')));
+  const chg7 = changements.filter(m=>String(m.recu_le||'').slice(0,10)>=sept).length;
+  const traites = tous.filter(m=>m.statut==='traite').sort((a,b)=>String(b.recu_le||'').localeCompare(String(a.recu_le||'')));
+  const carte = (lab,val,alerte)=>'<div class="card"><div class="label">'+lab+'</div><div class="value" style="color:'+(alerte&&val>0?'var(--danger,#c0392b)':'inherit')+'">'+val+'</div></div>';
+  let html = '<div class="controls"><div style="flex:1;"><b>Journal de bord</b><div class="hint">Ce que tu dois faire, ce qui a changé et ce que tu ne vois pas, tiré de tes mails.</div></div><button class="btn btn-compact" onclick="mailActualiser()">↻ Actualiser</button></div>'
+    + '<div class="cards">' + carte('À faire par toi', aFaire.length) + carte('Décisions à prendre', decisions, true) + carte('En retard', retard, true) + carte('Alertes', alertes.length, true) + carte('Changements (7 j)', chg7) + '</div>'
+    + '<div class="tabs">' + [['faire','À faire',aFaire.length],['alertes','Alertes',alertes.length],['changements','Changements',changements.length],['activite','Mon activité',null],['traite','Traités',traites.length]]
+        .map(([k,l,n])=>'<button class="tab-btn '+(vue===k?'active':'')+'" onclick="mailSetVue(\''+k+'\')">'+l+(n!=null&&n>0&&(k==='faire'||k==='alertes')?' <span class="badge '+(k==='alertes'?'bad':'warn')+'" style="margin-left:4px;">'+n+'</span>':'')+'</button>').join('') + '</div>';
+  const liste = (arr, vide, opts)=> arr.length ? '<div style="display:flex;flex-direction:column;gap:10px;margin-top:10px;">'+arr.map(m=>mailLigne(m, opts)).join('')+'</div>' : '<div class="empty">'+vide+'</div>';
+  if (vue==='faire') return html + liste(aFaire, 'Rien à faire pour le moment.');
+  if (vue==='alertes') return html + liste(alertes, 'Aucune alerte.');
+  if (vue==='changements') return html + liste(changements, 'Aucun changement significatif enregistré.', { sansEcheance:true });
+  if (vue==='traite') return html + liste(traites, 'Rien de traité pour le moment.', { sansEcheance:true });
+  // Mon activite : un bloc par famille
+  const cles = Object.keys(MAIL_FAMILLES).filter(k=>tous.some(m=>mailFamille(m)===k));
+  html += '<div class="cards" style="grid-template-columns:repeat(auto-fill,minmax(210px,1fr));margin-top:10px;">' + cles.map(k=>{
+    const L = tous.filter(m=>mailFamille(m)===k), ouv = L.filter(mailAFaire).length, dern = L.map(m=>String(m.recu_le||'')).sort().pop();
+    return '<div class="card'+(ouv>0?' alert':'')+'" style="cursor:pointer;'+(fam===k?'outline:2px solid var(--accent,#2c6e5b);':'')+'" onclick="mailSetFamille(\''+k+'\')">'
+      + '<div class="label">'+MAIL_FAMILLES[k].ico+' '+esc(MAIL_FAMILLES[k].lib)+'</div><div class="value">'+ouv+'</div>'
+      + '<div class="hint">à faire · '+L.length+' mail'+(L.length>1?'s':'')+' · dernier le '+dateFr(dern)+'</div></div>';
   }).join('') + '</div>';
+  if (fam) html += liste(tous.filter(m=>mailFamille(m)===fam).sort((a,b)=>(mailOuvert(b)-mailOuvert(a))||mailCompare(a,b)), 'Rien dans cette famille.');
+  else html += '<div class="hint" style="margin-top:12px;">Clique sur un bloc pour voir les mails de cette activité.</div>';
   return html;
 }
 function renderDemandesTab(){
