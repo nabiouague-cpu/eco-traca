@@ -4938,7 +4938,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-25-647';
+const APP_VERSION = '2026-11-25-648';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -16157,28 +16157,54 @@ function rdueVerifCalculer(i){
   const liste = (a, max)=>{ max = max||6; return a.slice(0,max).concat(a.length>max ? ['… et '+(a.length-max)+' autre'+pl(a.length-max)] : []); };
   if (i===0){
     const G = rdueGeolocCoops(), manq = G.filter(g=>!g.geoloc);
-    if (!G.length) return { etat:'bloque', resume:'Aucune coopérative', points:["Aucun camion n'est rattaché aux lots choisis."] };
-    if (manq.length) return { etat:'bloque', resume:manq.length+' sans données', points:liste(manq.map(g=>g.nom+' : géolocalisation manquante')) };
-    return { etat:'ok', resume:G.length+' coopérative'+pl(G.length)+' en règle', points:[] };
+    if (!G.length) return { etat:'bloque', resume:'Aucune coopérative', points:["Aucun camion n'est rattaché aux lots choisis."], actions:[] };
+    if (manq.length) return { etat:'bloque', resume:manq.length+' sans données', points:manq.map(g=>g.nom+' : géolocalisation manquante'),
+      actions:manq.map(g=>({ lib:'Base de données · '+g.nom, js:"rdueAllerBD('"+escJs(g.id)+"')" })) };
+    return { etat:'ok', resume:G.length+' coopérative'+(G.length>1?'s':'')+' en règle', points:[] };
   }
   if (i===1){
-    if (!state.liasseCharge) return { etat:'attention', resume:'Inventaire indisponible', points:["L'inventaire des liasses n'a pas pu être chargé : relance la vérification."] };
+    if (!state.liasseCharge) return { etat:'attention', resume:'Inventaire indisponible', points:["L'inventaire des liasses n'a pas pu être chargé : relance la vérification."], actions:[] };
     const parCn = {}; (state.liasseFichiers||[]).forEach(f=>{ const k = liasseCnNorm(f.connaissement||f.nom); if (k) (parCn[k] = parCn[k]||[]).push(f); });
-    // Un camion tracé a sa fiche : elle se construit à partir du traçage (même si le fichier n'est pas encore rangé dans le stockage).
-    const fiches = new Set((state.fichesGenerees||[]).concat((state.demandeFichiers||[]).filter(f=>f.type==='product_movements')).map(f=>liasseCnNorm(f.connaissement)).concat((state.achats||[]).filter(a=>a.producteur_id && a.connaissement).map(a=>liasseCnNorm(a.connaissement))).filter(Boolean));
+    // Un camion est tracé quand ses lignes producteurs existent (la fiche en découle) ; une simulation seule n'est PAS un traçage.
+    const stockees = new Set((state.fichesGenerees||[]).concat((state.demandeFichiers||[]).filter(f=>f.type==='product_movements')).map(f=>liasseCnNorm(f.connaissement)).filter(Boolean));
+    const traces = new Set((state.achats||[]).filter(a=>a.producteur_id && a.connaissement).map(a=>a.cooperative_id+'|'+liasseCnNorm(a.connaissement)));
     const sims = new Set((state.tracaSim||[]).map(r=>r.cooperative_id+'|'+liasseCnNorm(r.code_connaissement||(r.serie+'-'+r.seq))));
-    const manqL = [], serge = [], manqF = [], simules = [];
+    const aFiche = (coopId, conn)=>{ const k = liasseCnNorm(conn); return traces.has(coopId+'|'+k) || stockees.has(k); };
+    const parCoop = new Map();
+    const g = (id, nom)=>{ if (!parCoop.has(id)) parCoop.set(id, { id, nom, nonTraces:[], simules:[], liasseManq:[], serge:[], horsNon:[], horsSim:[] }); return parCoop.get(id); };
     R.cams.forEach(c=>{
-      const k = liasseCnNorm(c.a.connaissement), fs = parCn[k]||[], nom = c.a.connaissement+' ('+rdueCoopNom(c.a)+')';
-      if (!fs.length) manqL.push(nom); else if (!fs.some(f=>f.source!=='serge')) serge.push(nom);
-      if (!fiches.has(k)){ if (sims.has(c.a.cooperative_id+'|'+k)) simules.push({ nom, coopId:c.a.cooperative_id, code:c.a.connaissement }); else manqF.push(nom); }
+      const a = c.a, k = liasseCnNorm(a.connaissement), G = g(a.cooperative_id||'?', rdueCoopNom(a)), fs = parCn[k]||[];
+      if (!aFiche(a.cooperative_id, a.connaissement)) (sims.has(a.cooperative_id+'|'+k) ? G.simules : G.nonTraces).push(a.connaissement);
+      if (!fs.length) G.liasseManq.push(a.connaissement); else if (!fs.some(f=>f.source!=='serge')) G.serge.push(a.connaissement);
     });
-    if (manqL.length || manqF.length || simules.length){
-      const parts = [manqL.length ? manqL.length+' liasse'+pl(manqL.length)+' manquante'+pl(manqL.length) : '', simules.length ? simules.length+' traçage'+pl(simules.length)+' simulé'+pl(simules.length)+' à appliquer' : '', manqF.length ? manqF.length+' camion'+pl(manqF.length)+' non tracé'+pl(manqF.length) : ''].filter(Boolean);
-      return { etat:'bloque', resume:parts.join(' · '), simules,
-        points:liste(manqL.map(n=>n+' : liasse documentaire manquante').concat(simules.map(x=>x.nom+" : traçage simulé, pas encore enregistré comme vrai traçage, donc pas de fiche")).concat(manqF.map(n=>n+' : camion pas encore tracé, donc pas de fiche de traçabilité'))) };
-    }
-    if (serge.length) return { etat:'attention', resume:serge.length+' chez Serge seulement', points:liste(serge.map(n=>n+' : liasse chez Serge seulement, absente du ZIP')) };
+    // Les autres camions de ces coopératives, hors de ce dossier : pas tracés non plus -- on les signale aussi.
+    const dansDossier = new Set(R.cams.map(c=>c.a.id||c.a.connaissement));
+    (state.achats||[]).filter(a=>!a.producteur_id && !a.refoulee && a.connaissement && Number(a.poids_net_produit)>0 && parCoop.has(a.cooperative_id) && !dansDossier.has(a.id||a.connaissement)).forEach(a=>{
+      if (aFiche(a.cooperative_id, a.connaissement)) return;
+      (sims.has(a.cooperative_id+'|'+liasseCnNorm(a.connaissement)) ? parCoop.get(a.cooperative_id).horsSim : parCoop.get(a.cooperative_id).horsNon).push(a.connaissement);
+    });
+    const L = Array.from(parCoop.values()).sort((x,y)=>String(x.nom).localeCompare(String(y.nom),'fr'));
+    const cam = (arr,mot)=>arr.length+' '+mot+(arr.length>1?'s':'');
+    const ligneBloc = [], ligneAtt = [], simules = [], actions = [];
+    let nNon = 0, nSim = 0, nLia = 0;
+    L.forEach(G=>{
+      const p = [];
+      if (G.nonTraces.length){ p.push(cam(G.nonTraces,'camion')+' non tracé'+(G.nonTraces.length>1?'s':'')+' ('+G.nonTraces.join(', ')+')'); nNon += G.nonTraces.length; }
+      if (G.simules.length){ p.push(cam(G.simules,'traçage')+' simulé'+(G.simules.length>1?'s':'')+', à appliquer ('+G.simules.join(', ')+')'); nSim += G.simules.length; G.simules.forEach(code=>simules.push({ nom:code+' ('+G.nom+')', coopId:G.id, code })); }
+      if (G.liasseManq.length){ p.push(cam(G.liasseManq,'liasse')+' documentaire'+(G.liasseManq.length>1?'s':'')+' manquante'+(G.liasseManq.length>1?'s':'')+' ('+G.liasseManq.join(', ')+')'); nLia += G.liasseManq.length; }
+      if (p.length) ligneBloc.push(G.nom+' — '+p.join(' · '));
+      if (G.nonTraces.length || G.simules.length) actions.push({ lib:'Tracer · '+G.nom, js:"rdueAllerTracer('"+escJs(G.id)+"')" });
+      const q = [];
+      if (G.serge.length) q.push(cam(G.serge,'liasse')+' chez Serge seulement, absente'+(G.serge.length>1?'s':'')+' du ZIP ('+G.serge.join(', ')+')');
+      if (G.horsNon.length) q.push('hors de ce dossier : '+cam(G.horsNon,'autre camion')+' non tracé ('+G.horsNon.join(', ')+')');
+      if (G.horsSim.length) q.push('hors de ce dossier : '+cam(G.horsSim,'traçage')+' simulé, pas appliqué ('+G.horsSim.join(', ')+')');
+      if (q.length) ligneAtt.push(G.nom+' — '+q.join(' · '));
+      if ((G.horsNon.length || G.horsSim.length) && !actions.some(x=>x.js.indexOf(G.id)>=0)) actions.push({ lib:'Tracer · '+G.nom, js:"rdueAllerTracer('"+escJs(G.id)+"')" });
+    });
+    if (nLia) actions.push({ lib:'Liasses documentaires', js:'rdueAllerLiasses()' });
+    if (ligneBloc.length) return { etat:'bloque', resume:[nNon ? cam(new Array(nNon),'camion')+' non tracé'+(nNon>1?'s':'') : '', nSim ? nSim+' simulé'+(nSim>1?'s':'')+' à appliquer' : '', nLia ? nLia+' liasse'+(nLia>1?'s':'')+' manquante'+(nLia>1?'s':'') : ''].filter(Boolean).join(' · '),
+      points:ligneBloc.concat(ligneAtt), simules, actions };
+    if (ligneAtt.length) return { etat:'attention', resume:ligneAtt.length+' point'+(ligneAtt.length>1?'s':'')+" d'attention", points:ligneAtt, actions };
     return { etat:'ok', resume:R.cams.length+' liasses · '+R.cams.length+' fiches', points:[] };
   }
   if (i===2){
@@ -16207,8 +16233,9 @@ function rdueVerifBilanHtml(V){
   const perime = V.cle !== rdueVerifCle();
   const ul = pts=>'<ul>'+pts.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>';
   let h;
-  if (bl) h = '<div class="rv-alerte bloque"><b>À régler — '+esc(RV_LIBS[V.bloque])+'</b>'+ul(bl.points)+(bl.simules && bl.simules.length ? '<button class="btn btn-primary" style="margin-right:8px" onclick="rdueVerifAppliquerSims()">Appliquer la simulation ('+bl.simules.length+' camion'+(bl.simules.length>1?'s':'')+')</button>' : '')+'<button class="btn" onclick="rdueVoir('+(V.bloque+1)+')">Voir le détail</button></div>';
-  else if (att.length) h = '<div class="rv-alerte attention"><b>Tout est en place, avec '+att.length+' point'+(att.length>1?'s':'')+" d'attention</b>"+ul(att.reduce((a,r)=>a.concat(r.points),[]))+'</div>';
+  const boutons = r=>(r.actions||[]).map(x=>'<button class="btn btn-primary" style="margin:8px 8px 0 0" onclick="'+x.js+'">'+esc(x.lib)+' →</button>').join('');
+  if (bl) h = '<div class="rv-alerte bloque"><b>À régler — '+esc(RV_LIBS[V.bloque])+'</b>'+ul(bl.points)+'<div>'+boutons(bl)+(bl.simules && bl.simules.length ? '<button class="btn" style="margin:8px 8px 0 0" onclick="rdueVerifAppliquerSims()">Appliquer la simulation ici ('+bl.simules.length+' camion'+(bl.simules.length>1?'s':'')+')</button>' : '')+'<button class="btn" style="margin-top:8px" onclick="rdueVoir('+(V.bloque+1)+')">Voir le détail</button></div></div>';
+  else if (att.length) h = '<div class="rv-alerte attention"><b>Rien ne bloque, mais '+att.length+' point'+(att.length>1?'s':'')+" d'attention</b>"+ul(att.reduce((a,r)=>a.concat(r.points),[]))+'<div>'+att.map(boutons).join('')+'</div></div>';
   else h = '<div class="rv-alerte ok"><b>✓ Tout est en place.</b> Tu peux télécharger le dossier.</div>';
   if (perime) h += '<div class="rv-info" style="margin-top:10px">Le choix des lots a changé depuis cette vérification.<button class="btn" onclick="rdueVerifLancer()">Relancer</button></div>';
   return h;
@@ -16244,6 +16271,10 @@ function rdueVerifAppliquerSims(){
     rdueVerifLancer();
   });
 }
+// Boutons de la vérification : ils emmènent directement là où se règle le problème.
+function rdueAllerTracer(coopId){ state.rdueVerif = null; ocEtapeAller(2); ocDossierOuvrir(coopId); }
+function rdueAllerBD(coopId){ state.rdueVerif = null; ocFermerSurcouches(); state.coopDashboardId = null; state.baseDonneesCoopSelected = coopId; state.tab = 'basedonnees'; state.animEntree = true; render(); }
+function rdueAllerLiasses(){ state.rdueVerif = null; ocFermerSurcouches(); state.coopDashboardId = null; state.tab = 'saisieobc'; state.obcVue = 'liasses'; state.animEntree = true; render(); }
 function rdueVerifLancer(){
   const V = state.rdueVerif = { cle:rdueVerifCle(), etape:-1, res:[], actif:true, bloque:null };
   state.rdueVoir = 0; render();
@@ -18820,7 +18851,9 @@ function renderDossiersTab(){
       + '<td class="num">'+(x.nProd ? fmtNum(x.nProd) : '<span class="badge warn" title="Base producteurs non importée : traçabilité impossible">aucun</span>')+'</td>'
       + '<td class="num">'+(n==null ? '<span class="hint">—</span>' : '<b>'+n+'</b>')+'</td>'
       + '<td class="num">'+x.nNous+'</td><td class="num">'+x.nTrace+'</td><td class="num">'+x.nSimule+'</td>'
-      + '<td class="num">'+(x.nATracer ? '<span class="badge warn" style="font-weight:700;font-size:13px">'+x.nATracer+' à tracer</span>' : '<span class="badge ok">à jour</span>')+'</td>'
+      + '<td class="num">'+(x.nATracer ? '<span class="badge warn" style="font-weight:700;font-size:13px">'+x.nATracer+' à tracer</span>'
+        : (x.nSimule || x.nAutre || x.nExt) ? '<span class="badge warn" style="font-weight:700;font-size:13px">'+[x.nSimule ? x.nSimule+' simulé'+(x.nSimule>1?'s':'')+', pas tracé'+(x.nSimule>1?'s':'') : '', x.nAutre ? x.nAutre+' non tracé'+(x.nAutre>1?'s':'')+' (partenaire)' : '', x.nExt ? x.nExt+' non tracé'+(x.nExt>1?'s':'')+' (chez le traitant)' : ''].filter(Boolean).join(' · ')+'</span>'
+        : '<span class="badge ok">à jour</span>')+'</td>'
       + '<td style="white-space:nowrap"><button class="btn btn-primary btn-compact" onclick="ocDossierOuvrir(\''+escJs(x.c.id)+'\')">Ouvrir le dossier</button></td></tr>';
     const entete = (titre, detail, fond, couleur)=>'<tr><td colspan="10" style="background:'+fond+';color:'+couleur+';font-weight:700;padding:8px 10px;border-top:2px solid '+couleur+'">'+titre+' <span style="font-weight:500">'+detail+'</span></td></tr>';
     html += '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th>Coopérative</th><th>N° CCC</th><th>Usine(s)</th><th class="num">Producteurs</th><th class="num" title="Camions de cette coopérative à tracer pour les lots de ce '+(groupe==='traitant'?'traitant':'client')+'">'+libColonne+'</th><th class="num">Chez nous</th><th class="num">Tracés</th><th class="num">Simulés</th><th class="num">Reste à tracer</th><th></th></tr></thead><tbody>'
