@@ -4938,7 +4938,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-25-645';
+const APP_VERSION = '2026-11-25-646';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -12972,7 +12972,6 @@ function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds, Rflat){
   // Chaque reliquat (queIdx / repIdx) est une liste { i (camion de M.T), kg } : un camion peut en être
   // l'origine à lui seul, ou plusieurs quand des camions entiers attendent encore d'être usinés.
   const etiqQueue = e=>suvCourt(M.T[e.i].coop)+' (Queue de lot '+milliers(e.kg)+' kg)';
-  const etiqQueueNoms = es=>{ const noms = Array.from(new Set((es||[]).map(e=>suvCourt(M.T[e.i].coop)).filter(Boolean))); return noms.length ? noms.join(' + ')+' (Queue de lot)' : 'QUEUE DE LOT'; };
   // Lignes de queue pour les feuilles de séance : une par camion d'origine, le poids de la dernière
   // absorbant l'arrondi pour que le total reste égal à la queue de la séance.
   const lignesQueue = (es, total)=>{
@@ -13023,7 +13022,7 @@ function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds, Rflat){
           // Ligne remplie comme un camion ordinaire (date, coopérative, immatriculation, connaissement, poids, sacs) :
           // le nom de la coopérative porte « (Queue de lot <poids> kg) » -- un reliquat de camion d'une séance
           // précédente. Pas de total : ce poids est déjà compté dans la séance où le camion a été vidé.
-          const orig = (s.repIdx && s.repIdx.length) ? s.repIdx : [null];
+          const orig = (g===groupesTS[0] && s.repIdx && s.repIdx.length) ? s.repIdx : [null];   // seule la toute première queue de lot du rapport dit d'où elle vient ; les suivantes restent « QUEUE DE LOT » : rien ne prouve que c'est encore le même cacao
           orig.forEach(e=>{
             const t = e ? M.T[e.i] : null, kg = e ? e.kg : s.report;
             if (t){ setQ(rc,1,t.jour); setQ(rc,2,etiqQueue(e)); setQ(rc,3,rdueImmat(t.a)); setQ(rc,4,t.conn); } else setQ(rc,2,'QUEUE DE LOT');
@@ -13034,8 +13033,7 @@ function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds, Rflat){
         }
         s.idxs.forEach(i=>{
           const t = M.T[i], sacs = achatSacsRetenus(t.a);
-          const reste = (s.queIdx||[]).find(e=>e.i===i);   // camion dont une part part en queue de lot à la fin de cette séance
-          put(fs,rc,1,t.jour,{ al:CTR }); put(fs,rc,2,suvCourt(t.coop)+(reste ? ' (dont '+milliers(reste.kg)+' kg en queue de lot)' : ''),{ al:CTR });
+          put(fs,rc,1,t.jour,{ al:CTR }); put(fs,rc,2,suvCourt(t.coop),{ al:CTR });
           put(fs,rc,3,rdueImmat(t.a),{ al:CTR }); put(fs,rc,4,t.conn,{ al:CTR });
           put(fs,rc,5,t.avant,{ al:CTR, fmt:NUM }); put(fs,rc,6,sacs,{ al:CTR, fmt:NUM });
           totCamE += t.avant; totCamF += sacs; camRows.push(rc); rc++;
@@ -13048,7 +13046,7 @@ function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds, Rflat){
           put(fs,rl,10,L.w,{ al:CTR, fmt:NUM }); put(fs,rl,11,L.client||'',{ al:CTR });
           totLotJ += L.w; lotRows.push(rl); rl++;
         });
-        if (si===g.sh.length-1 && s.queue > 0.5){ setQ(rl,8,s.d); setQ(rl,9,etiqQueueNoms(s.queIdx)); const x = fs.getCell(rl,10); x.value = Math.round(s.queue); x.numFmt = NUM; x.font = { name:'Arial', size:10, bold:true, italic:true, color:QUEUE_FONT_TS }; x.alignment = CTR; rl++; }
+        if (si===g.sh.length-1 && s.queue > 0.5){ setQ(rl,9,'QUEUE DE LOT'); const x = fs.getCell(rl,10); x.value = Math.round(s.queue); x.numFmt = NUM; x.font = { name:'Arial', size:10, bold:true, italic:true, color:QUEUE_FONT_TS }; x.alignment = CTR; rl++; }
       });
       const last = Math.max(rc, rl) - 1;
       for (let rr=rowTS; rr<=last; rr++) fs.getCell(rr,7).fill = NOIR;
@@ -13136,7 +13134,7 @@ function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds, Rflat){
     q++; [2,4,7].forEach(c=>put(w,q,c,'VOLUME',{ b:true, al:CTR }));
     q++; const first = q; let entree = 0;
     if (s.report > 0){
-      lignesQueue(s.repIdx, s.report).forEach(lg=>{
+      lignesQueue(s===sheetsAffichees[0] ? s.repIdx : [], s.report).forEach(lg=>{
         put(w,q,1,lg.lib,{ b:true }); put(w,q,4,lg.kg,{ fmt:NUM });
         for (let c=1;c<=7;c++) w.getCell(q,c).fill = QUEUE;
         entree += lg.kg; q++;
@@ -13153,7 +13151,7 @@ function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds, Rflat){
     const lfirst = q; let sortie = 0;
     s.lots.forEach(L=>{ put(w,q,4,L.num,{ al:CTR, fmt:'0' }); put(w,q,5,L.w,{ fmt:NUM }); sortie += L.w; q++; });
     if (s.queue > 1){
-      lignesQueue(s.queIdx, s.queue).forEach(lg=>{
+      lignesQueue([], s.queue).forEach(lg=>{
         put(w,q,1,lg.lib,{ b:true }); put(w,q,5,lg.kg,{ fmt:NUM });
         for (let c=1;c<=7;c++) w.getCell(q,c).fill = QUEUE;
         sortie += lg.kg; q++;
@@ -16006,6 +16004,25 @@ async function rdueTelechargerTout(client, formatFiche){
           const prep = await preparerFichierPourZip(name, data, alleger);
           zip.file(dossierCoop+'/3 - Fiches de traçabilité/'+name, prep.donnees, optionsCompressionZip(name)); nFic++;
         }
+        // Camions tracés dont la fiche n'est pas encore rangée dans le stockage : elle est construite à partir du traçage.
+        const dejaFic = new Set(dfs.map(f=>liasseCnNorm(f.connaissement)));
+        const tracees = new Set((state.achats||[]).filter(a=>a.producteur_id && a.connaissement).map(a=>liasseCnNorm(a.connaissement)));
+        for (const cam of camsCoop){
+          const code = cam.a.connaissement, kFic = liasseCnNorm(code);
+          if (!kFic || dejaFic.has(kFic) || cns.indexOf(kFic)<0 || !tracees.has(kFic)) continue;
+          dejaFic.add(kFic);
+          try{
+            const data = (await ocFicheNormaleConstruire(c.id, code)).blob;
+            const liasseCorrespondante = (parCnLia[kFic]||[])[0];
+            let base = kFic;
+            if (liasseCorrespondante && liasseCorrespondante.nom){ const pL = String(liasseCorrespondante.nom).split('.'); base = pL.length>1 ? pL.slice(0,-1).join('.') : liasseCorrespondante.nom; }
+            let name = base + '.xlsx';
+            if (vusFic.has(name)){ const p=name.split('.'),extB=p.length>1?'.'+p.pop():''; name = p.join('.')+'_'+Math.random().toString(36).slice(2,7)+extB; }
+            vusFic.add(name);
+            const prep = await preparerFichierPourZip(name, data, alleger);
+            zip.file(dossierCoop+'/3 - Fiches de traçabilité/'+name, prep.donnees, optionsCompressionZip(name)); nFic++;
+          }catch(e){ koFic++; }
+        }
       }
       if (formatFiche!=='normal'){
         const vusFicC = new Set();
@@ -16147,7 +16164,8 @@ function rdueVerifCalculer(i){
   if (i===1){
     if (!state.liasseCharge) return { etat:'attention', resume:'Inventaire indisponible', points:["L'inventaire des liasses n'a pas pu être chargé : relance la vérification."] };
     const parCn = {}; (state.liasseFichiers||[]).forEach(f=>{ const k = liasseCnNorm(f.connaissement||f.nom); if (k) (parCn[k] = parCn[k]||[]).push(f); });
-    const fiches = new Set((state.fichesGenerees||[]).concat((state.demandeFichiers||[]).filter(f=>f.type==='product_movements')).map(f=>liasseCnNorm(f.connaissement)).filter(Boolean));
+    // Un camion tracé a sa fiche : elle se construit à partir du traçage (même si le fichier n'est pas encore rangé dans le stockage).
+    const fiches = new Set((state.fichesGenerees||[]).concat((state.demandeFichiers||[]).filter(f=>f.type==='product_movements')).map(f=>liasseCnNorm(f.connaissement)).concat((state.achats||[]).filter(a=>a.producteur_id && a.connaissement).map(a=>liasseCnNorm(a.connaissement))).filter(Boolean));
     const manqL = [], serge = [], manqF = [];
     R.cams.forEach(c=>{
       const k = liasseCnNorm(c.a.connaissement), fs = parCn[k]||[], nom = c.a.connaissement+' ('+rdueCoopNom(c.a)+')';
@@ -16155,7 +16173,7 @@ function rdueVerifCalculer(i){
       if (!fiches.has(k)) manqF.push(nom);
     });
     if (manqL.length || manqF.length) return { etat:'bloque', resume:(manqL.length ? manqL.length+' liasse'+pl(manqL.length)+' manquante'+pl(manqL.length) : '')+(manqL.length && manqF.length ? ' · ' : '')+(manqF.length ? manqF.length+' fiche'+pl(manqF.length)+' manquante'+pl(manqF.length) : ''),
-      points:liste(manqL.map(n=>n+' : liasse documentaire manquante').concat(manqF.map(n=>n+' : fiche de traçabilité manquante'))) };
+      points:liste(manqL.map(n=>n+' : liasse documentaire manquante').concat(manqF.map(n=>n+' : camion pas encore tracé, donc pas de fiche de traçabilité'))) };
     if (serge.length) return { etat:'attention', resume:serge.length+' chez Serge seulement', points:liste(serge.map(n=>n+' : liasse chez Serge seulement, absente du ZIP')) };
     return { etat:'ok', resume:R.cams.length+' liasses · '+R.cams.length+' fiches', points:[] };
   }
