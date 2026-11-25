@@ -2461,6 +2461,23 @@
   .dbp-row.dbp-clic{cursor:pointer;border-radius:8px;transition:background .12s;} .dbp-row.dbp-clic:hover{background:var(--surface-2);}
   .ls-k.sel{outline:2px solid var(--accent);}
   /* Coopératives (cp-) */
+  .cp-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 14px;}
+  .cp-bar-s{flex:1 1 260px;min-width:220px;} .cp-bar-s .coop-search{margin:0;max-width:none;}
+  .cp-bar-s .coop-search input{border-radius:99px;padding:9px 16px;box-shadow:var(--shadow-sm);}
+  .cp-menu{position:relative;}
+  .cp-btn{display:inline-flex;align-items:center;gap:7px;font:inherit;font-size:13px;font-weight:600;color:var(--ink);background:var(--surface);border:1px solid var(--border);border-radius:99px;padding:8px 15px;cursor:pointer;box-shadow:var(--shadow-sm);transition:border-color .12s,background .12s;white-space:nowrap;}
+  .cp-btn:hover{border-color:var(--ink-faint);}
+  .cp-btn .ic{font-size:14px;line-height:1;} .cp-btn .car{font-size:10px;color:var(--ink-faint);}
+  .cp-menu.open .cp-btn{border-color:var(--accent);color:var(--accent);background:var(--accent-soft);}
+  .cp-pop{display:none;position:absolute;top:calc(100% + 6px);left:0;min-width:320px;max-width:380px;z-index:40;background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:0 14px 36px rgba(0,0,0,.16);padding:6px;}
+  .cp-menu.droite .cp-pop{left:auto;right:0;}
+  .cp-menu.open .cp-pop{display:block;}
+  .cp-it{display:flex;gap:11px;align-items:flex-start;width:100%;text-align:left;border:none;background:none;font:inherit;padding:9px 10px;border-radius:10px;cursor:pointer;color:var(--ink);}
+  .cp-it:hover{background:var(--surface-2);}
+  .cp-it .ic{font-size:16px;width:22px;text-align:center;line-height:1.3;flex-shrink:0;}
+  .cp-it b{display:block;font-size:13px;} .cp-it small{display:block;font-size:11.5px;color:var(--ink-soft);margin-top:1px;line-height:1.35;white-space:normal;}
+  .cp-add{border-radius:99px;padding:9px 18px;}
+
   .dbp-cp{margin-bottom:14px;}
   .dbp-cp .dbp-kpis{grid-template-columns:repeat(5,1fr);}
   .dbp-cp .dbp-2{grid-template-columns:1fr 1fr;margin-top:11px;}
@@ -5206,7 +5223,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-25-691';
+const APP_VERSION = '2026-11-25-692';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -31946,6 +31963,17 @@ function renderCoopDashTab(){
   h += '<section class="cd-card cd-large cd-flush"><header><h3>Matrice de conformité</h3><p>Toutes les coopératives, les plus urgentes en premier</p></header>'+tb+'</section>';
   return '<div class="cd-wrap">'+h+'</div>';
 }
+function cpMenuBasculer(btn){
+  const m = btn.closest('.cp-menu'); const ouvert = m.classList.contains('open');
+  document.querySelectorAll('.cp-menu.open').forEach(x=>x.classList.remove('open'));
+  if (!ouvert) m.classList.add('open');
+}
+function cpMenuFermer(){ document.querySelectorAll('.cp-menu.open').forEach(x=>x.classList.remove('open')); }
+if (!window._cpMenuInit){ window._cpMenuInit = true; document.addEventListener('click', e=>{ if (!e.target.closest || !e.target.closest('.cp-menu')) cpMenuFermer(); }); }
+function cpMenuHtml(libelle, icone, items, droite){
+  return '<div class="cp-menu'+(droite?' droite':'')+'"><button type="button" class="cp-btn" onclick="cpMenuBasculer(this)"><span class="ic">'+icone+'</span>'+libelle+'<span class="car">▾</span></button>'
+    + '<div class="cp-pop">'+items.map(([ic,l,d,act])=>'<button type="button" class="cp-it" onclick="cpMenuFermer();'+act+'"><span class="ic">'+ic+'</span><span><b>'+l+'</b><small>'+d+'</small></span></button>').join('')+'</div></div>';
+}
 function cpDonutHtml(){
   const st = { 'Certifiée':0, 'En cours de certification':0, 'Non certifiée':0, autre:0 };
   state.cooperatives.forEach(c=>{ if (c.statut in st) st[c.statut]++; else st.autre++; });
@@ -31982,21 +32010,25 @@ function renderCooperativesTab(){
   const nProducteursTotal = (state.producteurs||[]).length;
   html += cpTableauHtml(nCertifieesTotal, nNonCertifieesTotal, nProducteursTotal);
   if (state.cooperatives.length>0){
-    html += ocRechercheCoopHtml('coops');
-    html += '<div class="controls">'
-      + '<button class="btn" onclick="ouvrirLienFiche()" title="Pour une coopérative sans portail : elle remplit sa fiche via un lien, elle est créée dans ORIGEN et son contrat peut être généré.">🔗 Lien de fiche (sans portail)</button>'
-      + '<button class="btn" onclick="ouvrirLienQuestionnaire()" title="Lien en lecture seule, sans compte, pour qu\'un partenaire (ex : ECOM) consulte la synthèse du questionnaire de légalité EUDR calculée en direct depuis ORIGEN.">🔗 Lien de consultation (questionnaire EUDR)</button>'
-      + '<button class="btn" onclick="basculerCompteReboursAwahus()">⏳ Compte à rebours</button>'
-      + '<button class="btn" onclick="certLireTout()" title="Lit les certificats déposés dans le stockage et en extrait la date de fin de licence des coopératives qui n\'en ont pas.">📄 Lire les certificats (dates)</button>'
-      + '<button class="btn btn-primary" onclick="ouvrirAjoutCooperative()">+ Ajouter une coopérative</button>'
-      + '<button class="btn btn-primary" onclick="partAffilOuvrir(null)" title="Un traitant peut livrer lui-même et avoir des coopératives affiliées">+ Nouveau traitant</button>'
-      + '<button class="btn btn-primary" onclick="ouvrirEnvoiMessage()">✉ Envoyer un message</button>'
-      + '<button class="btn btn-primary" onclick="ouvrirEnvoiDocuments()">📎 Envoyer des documents</button>'
-      + (nCertifieesTotal>0 ? '<button class="btn btn-primary" onclick="ouvrirGenerationContratsGroupe()">Générer des contrats en masse</button>' : '')
-      + '<button class="btn" onclick="ouvrirCompletionNomsComplets()">Compléter les noms complets</button>'
-      + '<button class="btn" onclick="ouvrirQuestionnaireCoops()" title="Réponses du formulaire d\'enquête coopératives, saisies par l\'automate">📝 Questionnaire coopératives (Forms)</button>'
-      + '<button class="btn" onclick="ouvrirQuestionnaireProds()" title="Questionnaires producteurs CARGILL : réponses terminées et saisie dans le formulaire Forms">📝 Questionnaire producteurs (Forms)</button>'
-      + '<button class="btn" onclick="exporterFichesCooperatives()">⬇ Télécharger les fiches (Excel)</button>'
+    html += '<div class="cp-bar"><div class="cp-bar-s">'+ocRechercheCoopHtml('coops')+'</div>'
+      + '<button type="button" class="cp-btn" onclick="ouvrirEnvoiMessage()"><span class="ic">✉</span>Envoyer un message</button>'
+      + '<button type="button" class="cp-btn" onclick="ouvrirEnvoiDocuments()"><span class="ic">📎</span>Envoyer des documents</button>'
+      + cpMenuHtml('Partager', '🔗', [
+          ['🔗','Lien de fiche (sans portail)','La coopérative remplit sa fiche via un lien : elle est créée dans ORIGEN et son contrat peut être généré.','ouvrirLienFiche()'],
+          ['🔗','Lien de consultation EUDR','Lecture seule, sans compte : un partenaire (ex. ECOM) consulte la synthèse du questionnaire de légalité.','ouvrirLienQuestionnaire()']
+        ].concat(nCertifieesTotal>0 ? [['✍','Générer des contrats en masse','Les contrats de toutes les coopératives certifiées, en une fois.','ouvrirGenerationContratsGroupe()']] : []))
+      + cpMenuHtml('Questionnaires', '📝', [
+          ['📝','Questionnaire coopératives (Forms)','Réponses du formulaire d\'enquête coopératives, saisies par l\'automate.','ouvrirQuestionnaireCoops()'],
+          ['📝','Questionnaire producteurs (Forms)','Questionnaires producteurs CARGILL : réponses terminées et saisie dans Forms.','ouvrirQuestionnaireProds()']
+        ])
+      + cpMenuHtml('Données', '🗂', [
+          ['📄','Lire les certificats (dates)','Lit les certificats déposés dans le stockage et en extrait la date de fin de licence manquante.','certLireTout()'],
+          ['✏️','Compléter les noms complets','Renseigne les noms complets manquants des coopératives.','ouvrirCompletionNomsComplets()'],
+          ['⬇','Télécharger les fiches (Excel)','Toutes les fiches des coopératives dans un classeur.','exporterFichesCooperatives()'],
+          ['⏳','Compte à rebours','Affiche ou masque le compte à rebours.','basculerCompteReboursAwahus()']
+        ], true)
+      + '<button type="button" class="cp-btn" onclick="partAffilOuvrir(null)" title="Un traitant peut livrer lui-même et avoir des coopératives affiliées"><span class="ic">＋</span>Nouveau traitant</button>'
+      + '<button type="button" class="btn btn-primary cp-add" onclick="ouvrirAjoutCooperative()">+ Ajouter une coopérative</button>'
       + '</div>';
     html += renderCertLecture();
     html += renderCompteReboursAwahus();
