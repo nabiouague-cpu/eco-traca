@@ -2371,7 +2371,24 @@
   .shipc-nb2{font:700 10px var(--mono);fill:#F2B705;text-anchor:middle;}
   .shipc-etapes{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-top:10px;}
   .shipc-et{background:rgba(255,255,255,.1);border-radius:10px;padding:8px 10px;position:relative;overflow:hidden;} .shipc-et .n{font:600 20px var(--mono);display:block;line-height:1;} .shipc-et .l{font-size:12px;color:rgba(255,255,255,.8);} .shipc-et i{display:block;height:3px;border-radius:2px;background:#F2B705;margin-top:6px;}
-  /* Liste des déchargements : barre d'avancement et repère d'état par ligne */
+    /* Liste des déchargements : détails sous les chiffres */
+  .tbl-achats .age{font-size:11px;color:var(--ink-faint);margin-top:2px;}
+  .tbl-achats .age-retard{display:inline-block;margin-top:3px;padding:1px 8px;border-radius:99px;font-size:11px;font-weight:600;background:var(--danger-bg);color:var(--danger);}
+  .tbl-achats .pas{display:flex;align-items:center;justify-content:center;margin-top:6px;}
+  .tbl-achats .pas i{width:9px;height:9px;border-radius:50%;background:var(--border);display:block;}
+  .tbl-achats .pas i.f{background:var(--ok,#2E7D4F);}
+  .tbl-achats .pas i.f.part{background:var(--warn,#C98A1B);}
+  .tbl-achats .pas b{width:16px;height:2px;background:var(--border);display:block;}
+  .tbl-achats .ecart-ligne .ecart{font-size:11.5px;}
+  .tbl-achats .usine-ligne{font-family:var(--sans);font-size:10.5px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.05em;}
+  .tbl-achats .barre-paye{height:4px;border-radius:99px;background:var(--gray-bg);overflow:hidden;margin:5px auto 0;max-width:90px;}
+  .tbl-achats .barre-paye i{display:block;height:100%;background:var(--ok,#2E7D4F);border-radius:99px;}
+  .tbl-achats tfoot td{padding:10px 10px;background:var(--surface-2);border-top:1px solid var(--border);font-size:12.5px;font-weight:600;color:var(--ink-soft);text-align:center;}
+  .tbl-achats tfoot td.g{text-align:left;padding-left:14px;}
+  .tbl-achats tfoot td:nth-child(2){border-radius:0;}
+  .tbl-achats tfoot tr td:first-child{border-radius:12px 0 0 12px;} .tbl-achats tfoot tr td:last-child{border-radius:0 12px 12px 0;}
+  .tbl-achats tfoot b{color:var(--ink);}
+/* Liste des déchargements : barre d'avancement et repère d'état par ligne */
   .achats-avance{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:10px 20px;border-bottom:1px solid var(--border);background:var(--surface);}
   .av-titre{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-faint);white-space:nowrap;}
   .av-barre{flex:1 1 260px;display:flex;gap:3px;height:10px;min-width:200px;}
@@ -5111,7 +5128,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-25-686';
+const APP_VERSION = '2026-11-25-687';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -34085,6 +34102,32 @@ async function genererTicketPesee(achatId, donnees){
   }catch(e){ showToast('Échec de la génération du ticket de pesée : '+e.message); }
 }
 
+function ageAchatHtml(a, etat){
+  const d = String(a.date||'').slice(0,10); if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return '';
+  const j = Math.floor((Date.now() - new Date(d+'T12:00:00').getTime())/86400000);
+  if (j<0) return '';
+  const txt = j===0 ? "aujourd'hui" : j===1 ? 'hier' : 'il y a '+j+' j';
+  if (etat.cle==='attente' && j>=3) return '<div class="age-retard" title="Camion déchargé depuis '+j+' jours sans pesée à l\'usine saisie">'+j+' j sans pesée</div>';
+  return '<div class="age">'+txt+'</div>';
+}
+function pasAvancementHtml(etat){
+  const n = etat.cle==='paye' ? 3 : etat.cle==='recu' ? 2 : 1;
+  const noms = ['Déclaré',"Reçu à l'usine",'Payé'];
+  return '<div class="pas" title="Déclaré → Reçu à l\'usine → Payé">'+noms.map((l,i)=>'<i class="'+(i<n?'f':'')+((i===2&&etat.cle==='paye'&&etat.cls==='warn')?' part':'')+'" title="'+esc(l)+'"></i>').join('<b></b>')+'</div>';
+}
+function sousPoidsPayeHtml(a){
+  const e = ecartPoidsAchat(a);
+  const su = (typeof sachSiteDe==='function') ? sachSiteDe(a.usine_dechargement) : null;
+  const usine = su ? su.code : String(a.usine_dechargement||'').trim().slice(0,12);
+  return (e ? '<div class="sous ecart-ligne"><span class="ecart '+(e.kg<0?'neg':e.kg>0?'pos':'')+'" title="Écart entre le poids net payé et le poids net déclaré">'+fmtPctAchat(e.pct)+'</span></div>' : '')
+    + (usine ? '<div class="sous usine-ligne">'+esc(usine)+'</div>' : '');
+}
+function sousMontantHtml(a){
+  const sd = soldeAchat(a); if (!sd || !(sd.du>0)) return '';
+  const pct = Math.min(100, Math.round(sd.paye/sd.du*100));
+  return '<div class="barre-paye" title="Payé '+fmtNum(sd.paye)+' sur '+fmtNum(sd.du)+' FCFA"><i style="width:'+pct+'%"></i></div>'
+    + '<div class="sous">'+(sd.complet ? 'Payé en totalité' : 'Reste '+fmtNum(sd.reste))+'</div>';
+}
 function ligneAchatHtml(a, montrerCoop, ouvert, avecNomPlateforme){
   const coop = coopById(a.cooperative_id);
   const etat = etatAchat(a);
@@ -34101,12 +34144,12 @@ function ligneAchatHtml(a, montrerCoop, ouvert, avecNomPlateforme){
     + '<td class="g cliquable" onclick="toggleAchatDetail(\''+a.id+'\')"><div class="num-conn">'+esc(a.connaissement||'(sans numéro)')+(a.obc_saisi_le ? ' <span class="badge-obc" title="Saisi dans OBC le '+esc(dateFr(String(a.obc_saisi_le).slice(0,10)))+(a.obc_bordereau_numero ? ' · bordereau '+esc(a.obc_bordereau_numero) : '')+'">OBC ✓</span>' : '')+'</div>'
       + '<div class="sous">'+(!coop && (a.code_fourn||a.fournisseur_saigic) ? '<span class="badge warn" title="Fournisseur SAIGIC : '+esc((a.fournisseur_saigic||'')+' '+(a.code_fourn||''))+'">À identifier : '+esc(a.fournisseur_saigic||a.code_fourn)+'</span> <button type="button" class="btn-ghost btn-compact" onclick="identifierCoopSaigic(\''+escJs(a.id)+'\')">Identifier</button>' : (montrerCoop ? esc(coop?coop.nom:'—') : ''))+(montrerCoop && a.type_cacao ? ' · ' : '')+typeCacaoBadgeHtml(a)+'</div>'
       + achatClientSelectHtml(a)+'</td>'
-    + '<td class="n">'+esc(dateFr(a.date)||'—')+'<div class="sous">'+(a.periode ? (a.periode==='principale' ? 'Principale' : 'Intermédiaire') : '')+'</div></td>'
+    + '<td class="n">'+esc(dateFr(a.date)||'—')+'<div class="sous">'+(a.periode ? (a.periode==='principale' ? 'Principale' : 'Intermédiaire') : '')+'</div>'+ageAchatHtml(a, etat)+'</td>'
     + '<td>'+verif+'</td>'
     + '<td class="n">'+(Number(a.quantite_kg)>0 ? fmtNum(a.quantite_kg) : '<span class="vide">—</span>')+'</td>'
-    + '<td><span class="badge '+etat.cls+'">'+esc(etat.label)+'</span></td>'
-    + '<td class="n">'+(Number(a.poids_net_produit)>0 ? '<b>'+fmtNum(a.poids_net_produit)+'</b>' : '<span class="vide">—</span>')+'</td>'
-    + '<td class="n">'+celluleMontantHtml(a)+'</td>'
+    + '<td><span class="badge '+etat.cls+'">'+esc(etat.label)+'</span>'+pasAvancementHtml(etat)+'</td>'
+    + '<td class="n">'+(Number(a.poids_net_produit)>0 ? '<b>'+fmtNum(a.poids_net_produit)+'</b>' : '<span class="vide">—</span>')+sousPoidsPayeHtml(a)+'</td>'
+    + '<td class="n">'+celluleMontantHtml(a)+sousMontantHtml(a)+'</td>'
     + '<td>'+celluleDeclarationHtml(a, avecNomPlateforme)+'</td>'
     + '<td class="acts">'+(function(){
         const bt = [], sd = soldeAchat(a);
@@ -34320,7 +34363,10 @@ function renderAchatsConnaissementPanel(){
     const kg = items.reduce((t,a)=>t+(Number(a.quantite_kg)||0),0), paye = items.reduce((t,a)=>t+(Number(a.poids_net_produit)||0),0), pr = items.reduce((t,a)=>t+calcPrime(a),0);
     html += '<table class="tbl-achats">'+colgroup+'<thead><tr class="groupe"><td colspan="10"><b>'+(camp?esc(camp.nom):'Sans campagne (à corriger)')+'</b> <span>'+fmtNum(items.length)+' connaissement'+(items.length>1?'s':'')+' · '+fmtKg(kg)+' déclarés'+(paye>0?' · '+fmtKg(paye)+' payés':'')+(pr>0 ? ' · prime '+fmtNum(pr)+' FCFA' : (tauxPrimeRenseignes() ? ' · prime à déterminer' : ''))+(pr>0 && items.some(a=>!(Number(a.poids_net_produit)>0)) ? ' (hors connaissements sans pesée)' : '')+'</span></td></tr>'+entete+'</thead><tbody>';
     items.forEach(a=>{ html += ligneAchatHtml(a, montrerCoop, state.achatsOuverts.has(a.id), plateformesListe.length>1); });
-    html += '</tbody></table>';
+    const _mt = items.reduce((t,a)=>{ if (usineTracabiliteExterne(a.usine_dechargement)) return t; const m = calcMontantPaiement(a); return t + (m && m.montant>0 ? m.montant : 0); }, 0);
+    const _nbPes = items.filter(a=>Number(a.poids_net_produit)>0).length;
+    html += '</tbody><tfoot><tr class="total-camp"><td></td><td class="g" colspan="3">Total · '+fmtNum(items.length)+' connaissement'+(items.length>1?'s':'')+'</td>'
+      + '<td class="n">'+fmtNum(kg)+'</td><td>'+fmtNum(_nbPes)+' pesé'+(_nbPes>1?'s':'')+'</td><td class="n"><b>'+(paye>0?fmtNum(paye):'—')+'</b></td><td class="n">'+(_mt>0?fmtNum(_mt):'—')+'</td><td></td><td></td></tr></tfoot></table>';
   });
   html += '</div></div>';
   return html;
