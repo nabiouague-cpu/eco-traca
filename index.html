@@ -5253,7 +5253,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-25-694';
+const APP_VERSION = '2026-11-25-695';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -35141,8 +35141,9 @@ function dtPrimeHtml(){
   D.liste.forEach(G=>{
     h += '<section class="dt-grp"><header><h4>'+esc(G.g.nom)+'</h4><span class="dt-sub">'+fmtNum(G.cs.length)+' coopérative'+(G.cs.length>1?'s':'')+(G.sansPesee?' · '+fmtNum(G.sansPesee)+' sans pesée':'')+'</span>'
       + '<div class="dt-tot"><span>Due <b>'+dtF(G.due)+'</b></span><span class="ok">Payée <b>'+dtF(G.payee)+'</b></span><span class="'+(G.reste>0?'warn':'')+'">Reste <b>'+dtF(G.reste)+'</b></span></div></header>'
-      + '<div class="dt-scroll"><table class="dt-tb"><thead><tr><th>Coopérative</th><th class="n">Livraisons</th><th class="n">Poids net payé (kg)</th><th class="n">Poids primé (kg)</th><th class="n">Prime due (FCFA)</th><th class="n">Payée</th><th class="n">Reste</th></tr></thead><tbody>'
-      + G.cs.map(C=>{ const co = coopById(C.id); return '<tr><td>'+esc(co?co.nom:'—')+'</td><td class="n">'+fmtNum(C.n)+'</td><td class="n">'+fmtNum(C.kg)+'</td><td class="n">'+fmtNum(C.kgPrime)+'</td><td class="n"><b>'+(C.due>0?dtF(C.due):'—')+'</b></td><td class="n">'+(C.payee>0?dtF(C.payee):'—')+'</td><td class="n '+(C.reste>0?'warn':'')+'">'+(C.due>0?dtF(C.reste):'—')+'</td></tr>'; }).join('')
+      + '<div class="dt-scroll"><table class="dt-tb"><thead><tr><th>Coopérative</th><th class="n">Livraisons</th><th class="n">Poids net payé (kg)</th><th class="n">Prime due (FCFA)</th><th class="n">Payée</th><th class="n">Reste</th></tr></thead><tbody>'
+      + G.cs.map(C=>{ const co = coopById(C.id); return '<tr><td>'+esc(co?co.nom:'—')+'</td><td class="n">'+fmtNum(C.n)+'</td><td class="n">'+fmtNum(C.kg)+'</td><td class="n"><b>'+(C.due>0?dtF(C.due):'—')+'</b></td><td class="n">'+(C.payee>0?dtF(C.payee):'—')+'</td><td class="n '+(C.reste>0?'warn':'')+'">'+(C.due>0?dtF(C.reste):'—')+'</td></tr>'; }).join('')
+      + '<tr class="tot"><td>Total '+esc(G.g.nom)+'</td><td class="n">'+fmtNum(G.cs.reduce((t,C)=>t+C.n,0))+'</td><td class="n">'+fmtNum(G.kg)+'</td><td class="n">'+dtF(G.due)+'</td><td class="n">'+dtF(G.payee)+'</td><td class="n">'+dtF(G.reste)+'</td></tr>'
       + '</tbody></table></div></section>';
   });
   return h;
@@ -35218,6 +35219,8 @@ function dtTraitantHtml(E){
     h += '<details class="dt-det"><summary>Détail par lot ('+fmtNum(E.lots.length)+')</summary><div class="dt-scroll"><table class="dt-tb"><thead><tr><th>Lot</th><th>Type</th><th>Client</th><th class="n">Sorti usine</th><th class="n">Magasin (AGL)</th><th class="n">Retenu</th><th class="n">Payable (FCFA)</th></tr></thead><tbody>'
       + E.lots.map(l=>{ const kg = finLotPoidsSortie(l); const pay = Math.round(kg*((via?p.prix_entree_usine_fcfa_kg:0)+p.commission_traitant_fcfa_kg+p.frais_usinage_fcfa_kg+p.frais_divers_fcfa_kg));
         return '<tr><td class="cn">'+esc(l.numero)+'</td><td>'+esc(l.type_cacao||'')+'</td><td>'+esc(l.client||'')+'</td><td class="n">'+(Number(l.poids_sortie_kg)>0?fmtNum(l.poids_sortie_kg):'—')+'</td><td class="n">'+(Number(l.poids_entrepot_kg)>0?fmtNum(l.poids_entrepot_kg):'—')+'</td><td class="n"><b>'+fmtNum(kg)+'</b></td><td class="n">'+dtF(pay)+'</td></tr>'; }).join('')
+      + (()=>{ const sum=f=>E.lots.reduce((t,l)=>t+(Number(f(l))||0),0); const pt=E.lots.reduce((t,l)=>t+Math.round(finLotPoidsSortie(l)*((via?p.prix_entree_usine_fcfa_kg:0)+p.commission_traitant_fcfa_kg+p.frais_usinage_fcfa_kg+p.frais_divers_fcfa_kg)),0);
+          return '<tr class="tot"><td colspan="3">Total ('+fmtNum(E.lots.length)+' lots)</td><td class="n">'+fmtNum(sum(l=>l.poids_sortie_kg))+'</td><td class="n">'+fmtNum(sum(l=>l.poids_entrepot_kg))+'</td><td class="n">'+fmtNum(E.kgLots)+'</td><td class="n">'+dtF(pt)+'</td></tr>'; })()
       + '</tbody></table></div></details>';
   }
   return h + '</section>';
@@ -35238,6 +35241,7 @@ function dtPaiementsHtml(){
       + '<div class="dt-tot"><span>Dû <b>'+dtF(G.du)+'</b></span><span class="ok">Payé <b>'+dtF(G.paye)+'</b></span><span class="'+(G.reste>0?'warn':'')+'">Reste <b>'+dtF(G.reste)+'</b></span></div></header>'
       + '<div class="dt-scroll"><table class="dt-tb"><thead><tr><th>Coopérative</th><th class="n">Livraisons</th><th class="n">Poids net payé (kg)</th><th class="n">Dû (FCFA)</th><th class="n">Payé</th><th class="n">Reste</th></tr></thead><tbody>'
       + G.cs.map(x=>{ const co = coopById(x.id); return '<tr><td>'+esc(co?co.nom:'—')+'</td><td class="n">'+fmtNum(x.n)+'</td><td class="n">'+fmtNum(x.kg)+'</td><td class="n">'+dtF(x.du)+'</td><td class="n">'+(x.paye>0?dtF(x.paye):'—')+'</td><td class="n '+(x.reste>0?'warn':'')+'"><b>'+dtF(x.reste)+'</b></td></tr>'; }).join('')
+      + '<tr class="tot"><td>Total '+esc(G.g.nom)+'</td><td class="n">'+fmtNum(G.cs.reduce((t,x)=>t+x.n,0))+'</td><td class="n">'+fmtNum(G.kg)+'</td><td class="n">'+dtF(G.du)+'</td><td class="n">'+dtF(G.paye)+'</td><td class="n">'+dtF(G.reste)+'</td></tr>'
       + '</tbody></table></div></section>';
   });
   h += '<h3 class="dt-h">Usiniers et traitants (loco-magasin)</h3><p class="dt-note">Payés sur le poids <b>final des lots produits chez eux</b> (poids entré au magasin export s\'il est connu, sinon poids sorti d\'usine), multiplié par les éléments du prix convenus avec chacun : entrée usine, commission, frais d\'usinage, frais divers. À paramétrer dans leur fiche « Contrat ».</p>';
