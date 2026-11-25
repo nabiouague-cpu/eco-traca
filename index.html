@@ -4938,7 +4938,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-25-658';
+const APP_VERSION = '2026-11-25-659';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -15918,7 +15918,9 @@ function rdueFormatFicheChoisir(choix){ const pl = state.modal && state.modal.ty
 async function rdueTelechargerTout(client, formatFiche){
   formatFiche = formatFiche || 'normal';
   if (typeof JSZip === 'undefined'){ showToast("La bibliothèque de compression n'a pas pu se charger (connexion internet requise). Réessaie dans un instant."); return; }
-  const R = rdueRapport();
+  const apercu = (client!==rdueEtat().client) ? rdueApercuCalcul(client) : null;
+  if (client!==rdueEtat().client && !apercu){ showToast('Aperçu pas encore prêt : réessaie dans un instant.'); return; }
+  const R = apercu ? apercu.R : rdueRapport();
   if (!R.lots.length){ showToast('Aucun lot sélectionné pour ce client.'); return; }
   const propre = t=>String(t||'').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/gi,'_').replace(/^_+|_+$/g,'');
   const nums = R.lots.map(o=>rdueNumLot(o.l)).filter(n=>n!=null);
@@ -16212,6 +16214,7 @@ function rdueVerifCalculer(i){
     const G = rdueGeolocCoops(), manq = G.filter(g=>!g.geoloc);
     if (!G.length) return { etat:'bloque', resume:'Aucune coopérative', points:["Aucun camion n'est rattaché aux lots choisis."], actions:[] };
     if (manq.length) return { etat:'bloque', resume:manq.length+' sans données', points:manq.map(g=>g.nom+' : géolocalisation manquante'),
+      items:manq.map(g=>({ coopId:g.id, coop:g.nom, pb:[{ lib:'Géolocalisation manquante', codes:[], sev:'bloque' }], act:{ lib:'Base de données', js:"rdueAllerBD('"+escJs(g.id)+"')" } })),
       actions:manq.map(g=>({ lib:'Base de données · '+g.nom, js:"rdueAllerBD('"+escJs(g.id)+"')" })) };
     return { etat:'ok', resume:G.length+' coopérative'+(G.length>1?'s':'')+' en règle', points:[] };
   }
@@ -16239,7 +16242,7 @@ function rdueVerifCalculer(i){
     });
     const L = Array.from(parCoop.values()).sort((x,y)=>String(x.nom).localeCompare(String(y.nom),'fr'));
     const cam = (arr,mot)=>arr.length+' '+mot+(arr.length>1?'s':'');
-    const ligneBloc = [], ligneAtt = [], simules = [], actions = [];
+    const ligneBloc = [], ligneAtt = [], simules = [], actions = [], items = [];
     let nNon = 0, nSim = 0, nLia = 0;
     L.forEach(G=>{
       const p = [];
@@ -16247,6 +16250,14 @@ function rdueVerifCalculer(i){
       if (G.simules.length){ p.push(cam(G.simules,'traçage')+' simulé'+(G.simules.length>1?'s':'')+', à appliquer ('+G.simules.join(', ')+')'); nSim += G.simules.length; G.simules.forEach(code=>simules.push({ nom:code+' ('+G.nom+')', coopId:G.id, code })); }
       if (G.liasseManq.length){ p.push(cam(G.liasseManq,'liasse')+' documentaire'+(G.liasseManq.length>1?'s':'')+' manquante'+(G.liasseManq.length>1?'s':'')+' ('+G.liasseManq.join(', ')+')'); nLia += G.liasseManq.length; }
       if (p.length) ligneBloc.push(G.nom+' — '+p.join(' · '));
+      { const pb = [];
+        if (G.nonTraces.length) pb.push({ lib:'Camion non tracé', codes:G.nonTraces, sev:'bloque' });
+        if (G.simules.length) pb.push({ lib:'Traçage simulé, à appliquer', codes:G.simules, sev:'bloque' });
+        if (G.liasseManq.length) pb.push({ lib:'Liasse documentaire manquante', codes:G.liasseManq, sev:'bloque' });
+        if (G.serge.length) pb.push({ lib:'Liasse chez Serge seulement (absente du ZIP)', codes:G.serge, sev:'attention' });
+        if (G.horsNon.length) pb.push({ lib:'Autre camion non tracé, hors de ce dossier', codes:G.horsNon, sev:'attention' });
+        if (G.horsSim.length) pb.push({ lib:'Autre traçage simulé, hors de ce dossier', codes:G.horsSim, sev:'attention' });
+        if (pb.length) items.push({ coopId:G.id, coop:G.nom, pb, act: (G.nonTraces.length||G.simules.length||G.horsNon.length||G.horsSim.length) ? { lib:'Tracer', js:"rdueAllerTracer('"+escJs(G.id)+"')" } : (G.liasseManq.length ? { lib:'Liasses', js:'rdueAllerLiasses()' } : null) }); }
       if (G.nonTraces.length || G.simules.length) actions.push({ lib:'Tracer · '+G.nom, js:"rdueAllerTracer('"+escJs(G.id)+"')" });
       const q = [];
       if (G.serge.length) q.push(cam(G.serge,'liasse')+' chez Serge seulement, absente'+(G.serge.length>1?'s':'')+' du ZIP ('+G.serge.join(', ')+')');
@@ -16257,8 +16268,8 @@ function rdueVerifCalculer(i){
     });
     if (nLia) actions.push({ lib:'Liasses documentaires', js:'rdueAllerLiasses()' });
     if (ligneBloc.length) return { etat:'bloque', resume:[nNon ? cam(new Array(nNon),'camion')+' non tracé'+(nNon>1?'s':'') : '', nSim ? nSim+' simulé'+(nSim>1?'s':'')+' à appliquer' : '', nLia ? nLia+' liasse'+(nLia>1?'s':'')+' manquante'+(nLia>1?'s':'') : ''].filter(Boolean).join(' · '),
-      points:ligneBloc.concat(ligneAtt), simules, actions };
-    if (ligneAtt.length) return { etat:'attention', resume:ligneAtt.length+' point'+(ligneAtt.length>1?'s':'')+" d'attention", points:ligneAtt, actions };
+      points:ligneBloc.concat(ligneAtt), simules, actions, items };
+    if (ligneAtt.length) return { etat:'attention', resume:ligneAtt.length+' point'+(ligneAtt.length>1?'s':'')+" d'attention", points:ligneAtt, actions, items };
     return { etat:'ok', resume:R.cams.length+' liasses · '+R.cams.length+' fiches', points:[] };
   }
   if (i===2){
@@ -16282,6 +16293,22 @@ function rdueVerifVue(V, i){
   return { cl:'', p:String(i+1), t:'' };
 }
 function rdueVerifPct(V){ return !V ? 0 : (V.etape>=4 ? 100 : Math.max(0,V.etape)/3*100); }
+function rdueErreursHtml(res, avecSim){
+  const blocs = res.map((r,i)=>({ r, i })).filter(x=>x.r && x.r.etat!=='ok');
+  if (!blocs.length) return '';
+  const cle = { bloque:{ bg:'#fbe4e0', bd:'#e3b3b3', fg:'#a52a1d', lib:'À régler' }, attention:{ bg:'#fdf1dc', bd:'#ecd29b', fg:'#8a5a00', lib:"Point d'attention" } };
+  const pastille = (sev, t)=>'<span style="display:inline-block;padding:1px 9px;border-radius:10px;font-size:12px;font-weight:600;margin-right:6px;background:'+(sev==='bloque' ? '#fbe4e0;color:#a52a1d' : '#fdf1dc;color:#8a5a00')+'">'+esc(t)+'</span>';
+  return blocs.map(({ r, i })=>{
+    const c = cle[r.etat];
+    let corps;
+    if (r.items && r.items.length) corps = '<table style="width:100%;border-collapse:collapse;font-size:13.5px"><tbody>'+r.items.map(it=>'<tr style="border-top:1px solid #eee"><td style="padding:9px 10px 9px 0;font-weight:700;vertical-align:top;width:26%">'+esc(it.coop)+'</td><td style="padding:9px 10px;vertical-align:top">'
+      + it.pb.map(p=>'<div style="margin:0 0 5px">'+pastille(p.sev, p.lib)+(p.codes && p.codes.length ? '<span style="font-family:monospace;font-size:12px;color:var(--ink-soft)">'+p.codes.map(esc).join(' · ')+'</span>' : '')+'</div>').join('')
+      + '</td><td style="padding:9px 0;text-align:right;vertical-align:top;white-space:nowrap">'+(it.act ? '<button class="btn btn-compact" onclick="'+it.act.js+'">'+esc(it.act.lib)+' →</button>' : '')+'</td></tr>').join('')+'</tbody></table>';
+    else corps = '<ul style="margin:8px 0 2px 18px;padding:0;font-size:13.5px">'+(r.points||[]).map(x=>'<li style="margin:3px 0">'+esc(x)+'</li>').join('')+'</ul>';
+    const sim = (avecSim && r.simules && r.simules.length) ? '<div style="margin-top:8px"><button class="btn" onclick="rdueVerifAppliquerSims()">Appliquer la simulation ici ('+r.simules.length+' camion'+(r.simules.length>1?'s':'')+')</button></div>' : '';
+    return '<div style="border:1px solid '+c.bd+';border-radius:12px;overflow:hidden;margin-top:12px"><div style="background:'+c.bg+';color:'+c.fg+';padding:10px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><b>'+(i+1)+'. '+esc(RV_LIBS[i])+'</b><span style="font-weight:600">'+c.lib+'</span><span style="font-weight:400">· '+esc(r.resume||'')+'</span></div><div style="padding:4px 14px 12px">'+corps+sim+'</div></div>';
+  }).join('');
+}
 function rdueVerifBilanHtml(V){
   if (!V || V.actif) return '<span class="rv-info">Vérification des pièces du dossier en cours…</span>';
   const bl = V.bloque!=null ? V.res[V.bloque] : null, att = V.res.filter(r=>r && r.etat==='attention');
@@ -16289,8 +16316,8 @@ function rdueVerifBilanHtml(V){
   const ul = pts=>'<ul>'+pts.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>';
   let h;
   const boutons = r=>(r.actions||[]).map(x=>'<button class="btn btn-primary" style="margin:8px 8px 0 0" onclick="'+x.js+'">'+esc(x.lib)+' →</button>').join('');
-  if (bl) h = '<div class="rv-alerte bloque"><b>À régler — '+esc(RV_LIBS[V.bloque])+'</b>'+ul(bl.points)+'<div>'+boutons(bl)+(bl.simules && bl.simules.length ? '<button class="btn" style="margin:8px 8px 0 0" onclick="rdueVerifAppliquerSims()">Appliquer la simulation ici ('+bl.simules.length+' camion'+(bl.simules.length>1?'s':'')+')</button>' : '')+'<button class="btn" style="margin-top:8px" onclick="rdueVoir('+(V.bloque+1)+')">Voir le détail</button></div></div>';
-  else if (att.length) h = '<div class="rv-alerte attention"><b>Rien ne bloque, mais '+att.length+' point'+(att.length>1?'s':'')+" d'attention</b>"+ul(att.reduce((a,r)=>a.concat(r.points),[]))+'<div>'+att.map(boutons).join('')+'</div></div>';
+  if (bl) h = '<div class="rv-alerte bloque"><b>À régler avant d\'envoyer</b> — la vérification s\'est arrêtée à l\'étape « '+esc(RV_LIBS[V.bloque])+' ».</div>'+rdueErreursHtml(V.res, true)+'<div style="margin-top:10px"><button class="btn" onclick="rdueVoir('+(V.bloque+1)+')">Voir le détail de l\'étape</button></div>';
+  else if (att.length) h = '<div class="rv-alerte attention"><b>Rien ne bloque</b>, mais '+att.length+' point'+(att.length>1?'s':'')+" d'attention.</div>"+rdueErreursHtml(V.res, false);
   else h = '<div class="rv-alerte ok"><b>✓ Tout est en place.</b> Tu peux télécharger le dossier.</div>';
   if (perime) h += '<div class="rv-info" style="margin-top:10px">Le choix des lots a changé depuis cette vérification.<button class="btn" onclick="rdueVerifLancer()">Relancer</button></div>';
   return h;
@@ -16374,6 +16401,8 @@ function renderDossierRdue(){
     return RDUE_CSS+'<div class="panel"><div class="panel-head"><div><h2>Dossier de conformité RDUE</h2><p style="margin:2px 0 0;color:var(--ink-soft);font-size:13px">Rien n\'est enregistré : tout est calculé à partir des livraisons et des lots.</p></div></div><div style="padding:0 18px 14px">'+rdueChaineHtml(0)+'</div></div>'
       + rdueEtapeCible(clients) + rdueClosListHtml();
   }
+  if (state.rdueVue && state.rdueVue!==e.client && clients.indexOf(state.rdueVue)>=0) return rdueVuePreview(state.rdueVue, clients);
+  state.rdueVue = '';
   const RR = rdueRapport(), ST = rdueCoopStats(RR), nbCoops = ST.coops.length, nbLiasses = ST.present+ST.serge;
   // La vérification démarre toute seule à l'arrivée sur le dossier, une seule fois : changer les lots ne la
   // relance pas (un message propose de la relancer), pour ne pas rejouer l'animation à chaque case cochée.
@@ -16387,13 +16416,13 @@ function renderDossierRdue(){
     + '<div class="s">'+RR.lots.length+' lot'+(RR.lots.length>1?'s':'')+(e.cible ? ' · tonnage visé '+fmtNum(Number(e.cible))+' kg' : ' · tout le potentiel disponible')+'</div>'
     + '<div class="bt" style="margin-top:16px"><button class="cta" id="rdue-dl-btn"'+((enCours||state.rdueDl)?' disabled':'')+' onclick="rdueDemanderFormatFiche(\''+escJs(e.client)+'\')">'+libCta+'</button>'
     + '<button onclick="askConfirm(\'Clôturer définitivement ce dossier ? Les lots présentés seront exclus des prochains dossiers de ce client.\', rdueClore)">🔒 Clôturer le dossier</button>'
-    + '<button onclick="rdueChangerCible()">Changer</button><button onclick="rdueAnnulerDemander()">Annuler le dossier</button></div></div></div>'
+    + '<button onclick="rdueChangerCible()">Changer</button><button onclick="rdueAnnulerDemander()">Annuler le dossier</button></div>'
+    + rdueChipsHtml(clients, e.client)+'</div></div>'
     + '<div class="rdue-kpis">'
     + '<div class="rdue-kpi"><div><div class="k">Coopératives</div><div class="s">dans ce dossier</div></div><div class="n">'+nbCoops+'</div></div>'
     + '<div class="rdue-kpi"><div><div class="k">Liasses réunies</div><div class="s">sur '+RR.cams.length+' camion'+(RR.cams.length>1?'s':'')+'</div></div><div class="n">'+nbLiasses+'</div></div>'
     + '<div class="rdue-kpi"><div><div class="k">Lots présentés</div><div class="s">'+(ST.manquant?ST.manquant+' liasse'+(ST.manquant>1?'s':'')+' manquante'+(ST.manquant>1?'s':''):'aucune liasse manquante')+'</div></div><div class="n">'+RR.lots.length+'</div></div>'
     + '</div></div>'
-    + rdueAutresDossiersHtml(clients, e)
     + '<div class="rv"><div class="rv-tete"><div><h3>Vérification du dossier</h3><div class="hint">Chaque étape est contrôlée automatiquement ; un clic sur une étape en ouvre le détail.</div></div><button class="btn" id="rv-relance"'+(enCours?' disabled':'')+' onclick="rdueVerifLancer()">↻ Relancer la vérification</button></div>'
     + '<div class="rv-voie"><div class="rv-ligne"><i id="rv-bar" style="width:'+rdueVerifPct(V)+'%"></i></div>'
     + RV_LIBS.map((t,i)=>{ const v = rdueVerifVue(V,i); return '<div class="rv-n '+v.cl+'" id="rv-n'+i+'" onclick="rdueVoir('+(i+1)+')"><div class="rv-p" id="rv-p'+i+'">'+v.p+'</div><div class="rv-t">'+esc(t)+'</div><div class="rv-r" id="rv-r'+i+'">'+esc(v.t)+'</div></div>'; }).join('')
@@ -16418,7 +16447,37 @@ function rdueApercuCalcul(client){
   } finally { state.rdue = sauve; }
   _rdueApCache = { cle, v }; return v;
 }
-function rdueApercuAutre(c){ state.rdueApercu = (state.rdueApercu===c) ? '' : c; render(); }
+function rdueVue(c){ state.rdueVue = (c===rdueEtat().client) ? '' : c; state.rdueVoir = 0; render(); }
+function rdueChipsHtml(clients, affiche){
+  const ouvert = rdueEtat().client, autres = clients.filter(c=>c!==affiche); if (!autres.length) return '';
+  return '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:16px;align-items:center"><span style="font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;opacity:.65">Autres clients</span>'
+    + autres.map(c=>{ const n = rdueLotsClientDispo(c).length;
+      return '<button style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.28);color:#fff;border-radius:10px;padding:6px 12px;cursor:pointer;font-size:12.5px;text-align:left" onclick="rdueVue(\''+escJs(c)+'\')"><b>'+esc(c)+'</b> <span style="opacity:.75">· '+(c===ouvert ? 'dossier en cours' : (n ? n+' lot'+(n>1?'s':'')+' à présenter' : 'tous présentés'))+'</span></button>'; }).join('')+'</div>';
+}
+// Aperçu d'un client dont le dossier n'est pas ouvert : même présentation que le dossier en cours, en lecture seule.
+function rdueVuePreview(c, clients){
+  const A = rdueApercuCalcul(c);
+  if (!A) return RDUE_CSS+'<div class="panel"><div class="hint" style="padding:6px 0">Chargement de l\'aperçu…</div>'+rdueChipsHtml(clients, c).replace(/color:#fff/g,'color:inherit')+'</div>';
+  const R = A.R, ST = rdueCoopStats(R), faits = A.res.filter(r=>r.etat!=='bloque').length, bloque = A.res.some(r=>r.etat==='bloque'), ouvert = (state.rdueDossiers||[]).find(d=>d.etat==='ouvert');
+  const libCta = state.rdueDl ? 'Préparation…' : '⭳ Télécharger le dossier (ZIP)';
+  return RDUE_CSS+'<div class="rdue-top"><div class="rdue-hero">'
+    + '<div class="ring"><svg width="132" height="132" viewBox="0 0 112 112" aria-hidden="true"><circle cx="56" cy="56" r="46" fill="none" stroke="rgba(255,255,255,.14)" stroke-width="10"/><circle class="arc" cx="56" cy="56" r="46" fill="none" stroke="#F2B705" stroke-width="10" stroke-linecap="round" stroke-dasharray="289" stroke-dashoffset="'+Math.round(289*(1-faits/4))+'" transform="rotate(-90 56 56)"/></svg><div class="c"><b>'+faits+'<small>/4</small></b><span>vérifiées</span></div></div>'
+    + '<div style="flex:1 1 220px;min-width:0"><div class="k">Aperçu du dossier · client '+esc(c)+'</div>'
+    + '<div class="v">'+fmtNum(R.kg)+' <small>kg</small></div>'
+    + '<div class="s">'+R.lots.length+' lot'+(R.lots.length>1?'s':'')+' · tout le potentiel disponible'+(ouvert ? ' · le dossier '+esc(ouvert.client)+' reste ouvert' : '')+'</div>'
+    + '<div class="bt" style="margin-top:16px"><button class="cta" id="rdue-dl-btn"'+((bloque||state.rdueDl)?' disabled title="Règle d\'abord les points ci-dessous"':'')+' onclick="rdueDemanderFormatFiche(\''+escJs(c)+'\')">'+libCta+'</button>'
+    + '<button onclick="_rdueApCache=null;render()">↻ Recalculer</button></div>'
+    + rdueChipsHtml(clients, c)+'</div></div>'
+    + '<div class="rdue-kpis">'
+    + '<div class="rdue-kpi"><div><div class="k">Coopératives</div><div class="s">dans ce dossier</div></div><div class="n">'+ST.coops.length+'</div></div>'
+    + '<div class="rdue-kpi"><div><div class="k">Liasses réunies</div><div class="s">sur '+R.cams.length+' camion'+(R.cams.length>1?'s':'')+'</div></div><div class="n">'+(ST.present+ST.serge)+'</div></div>'
+    + '<div class="rdue-kpi"><div><div class="k">Lots présentés</div><div class="s">'+(ST.manquant?ST.manquant+' liasse'+(ST.manquant>1?'s':'')+' manquante'+(ST.manquant>1?'s':''):'aucune liasse manquante')+'</div></div><div class="n">'+R.lots.length+'</div></div>'
+    + '</div></div>'
+    + '<div class="rv"><div class="rv-tete"><div><h3>Vérification du dossier</h3><div class="hint">Aperçu en lecture seule : le dossier '+(ouvert ? esc(ouvert.client)+' reste ouvert, un seul dossier peut l\'être à la fois.' : 'n\'est pas ouvert.')+'</div></div></div>'
+    + '<div class="rv-voie"><div class="rv-ligne"><i style="width:100%"></i></div>'
+    + RV_LIBS.map((t,i)=>{ const r = A.res[i]; return '<div class="rv-n '+r.etat+'"><div class="rv-p">'+(r.etat==='ok'?'✓':r.etat==='attention'?'!':'✕')+'</div><div class="rv-t">'+esc(t)+'</div><div class="rv-r">'+esc(r.resume||'')+'</div></div>'; }).join('')
+    + '</div><div class="rv-bilan">'+(bloque||A.res.some(r=>r.etat==='attention') ? rdueErreursHtml(A.res, false) : '<div class="rv-alerte ok"><b>✓ Tout est en place.</b> Tu peux télécharger le dossier.</div>')+'</div></div>';
+}
 function rdueAutresDossiersHtml(clients, e){
   const ds = state.rdueDossiers||[], ouvert = ds.find(d=>d.etat==='ouvert');
   const autres = clients.filter(c=>c!==e.client); if (!autres.length) return '';
