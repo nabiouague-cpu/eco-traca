@@ -2503,6 +2503,9 @@
   .btn.tr-danger{color:var(--danger);border-color:var(--danger);background:transparent;}
   .doss-head .trc-actions,.panel-head .trc-actions{margin-top:2px;}
   @media (max-width:900px){.doss-corps .ls-kpis{grid-template-columns:repeat(2,1fr);}}
+  /* Onglet Demandes (dm-) */
+  .dm-bar{display:flex;gap:12px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;margin-bottom:14px;}
+  .dm-bar .ob-tabs{margin-bottom:0;} .dm-bar .ob-tabs button{padding:8px 15px;font-size:13.5px;}
   /* Coopératives (cp-) */
   .cp-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 14px;}
   .cp-bar-s{flex:1 1 260px;min-width:220px;} .cp-bar-s .coop-search{margin:0;max-width:none;}
@@ -5266,7 +5269,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-25-696';
+const APP_VERSION = '2026-11-25-697';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -18498,7 +18501,7 @@ function renderDemandesTab(){
   if (!state.demandesCoop){ refreshDemandesTab(); return ecranChargement('Chargement des demandes…'); }
   if (state.qcVueDemandeId) return qcVueAdminHtml();
 
-  let html = '<div class="controls"><button class="btn btn-primary" onclick="ouvrirNouvelleDemande()">+ Nouvelle demande</button></div>';
+  let html = '';
 
   const DEMANDE_GROUPS = [
     ['compliance', 'Documents de conformité'],
@@ -18508,12 +18511,12 @@ function renderDemandesTab(){
     ['autres', 'Autres documents'],
   ];
 
-  html += '<div class="tabs">'
+  html += '<div class="dm-bar"><div class="ob-tabs">'
     + DEMANDE_GROUPS.map(([type,label])=>{
         const aTraiter = state.demandesCoop.filter(d=>(d.types||[]).includes(type) && (d.statut==='demandee'||d.statut==='en_validation')).length;
-        return '<button class="tab-btn '+(state.demandesSousOnglet===type?'active':'')+'" onclick="setDemandesSousOnglet(\''+type+'\')">'+label+(aTraiter>0?' <span class="badge warn" style="margin-left:4px;">'+aTraiter+'</span>':'')+'</button>';
+        return '<button class="'+((state.demandesSousOnglet||DEMANDE_GROUPS[0][0])===type?'on':'')+'" onclick="setDemandesSousOnglet(\''+type+'\')">'+label+(aTraiter>0?' <span class="badge warn" style="margin-left:2px;">'+aTraiter+'</span>':'')+'</button>';
       }).join('')
-    + '</div>';
+    + '</div><button class="btn btn-primary" onclick="ouvrirNouvelleDemande()">+ Nouvelle demande</button></div>';
 
   const typeActif = state.demandesSousOnglet || DEMANDE_GROUPS[0][0];
   const forType = state.demandesCoop.filter(d=>(d.types||[]).includes(typeActif));
@@ -18545,11 +18548,15 @@ function renderDemandesTab(){
     html += '<button class="btn-ghost" style="margin-bottom:10px;" onclick="unfocusDemandeStatus()">← Retour aux catégories</button>';
     html += focusGroup[2]==='rejetee' ? renderRejetsPanel(focusGroup[0], focusGroup[1]) : renderDemandeStatusPanel(focusGroup[0], focusGroup[1], focusGroup[2]);
   } else {
-    html += '<div class="cards" style="grid-template-columns:repeat(5,1fr);">'
+    const SOUS = { attente:'en attente de la coopérative', validation:'documents à valider', acceptee:'validées', rejetee:'refusées, à reprendre', annulee:'retirées' };
+    const TEINTE = { attente:'warn', validation:'bad', acceptee:'ok', rejetee:'', annulee:'' };
+    html += '<div class="ls-kpis">'
       + GROUPS.map(([title,list,key,alertable])=>
-          '<div class="card'+(alertable && list.length>0?' alert':'')+'" style="cursor:pointer;" onclick="focusDemandeStatus(\''+key+'\')"><div class="label">'+title+'</div><div class="value">'+fmtNum(list.length)+'</div>'+'</div>'
+          '<div class="ls-k clic '+(list.length>0 ? TEINTE[key] : '')+'" onclick="focusDemandeStatus(\''+key+'\')" title="Clique pour voir la liste"><div class="k">'+title.replace(' — à traiter','')+'</div><div class="v">'+fmtNum(list.length)+'</div><div class="s">'+SOUS[key]+'</div></div>'
         ).join('')
       + '</div>';
+    if (!pending.length && !enValidation.length && !accepted.length && !rejected.length && !cancelled.length)
+      html += '<div class="dt-vide">Aucune demande de ce type pour le moment. Utilise « + Nouvelle demande » pour en envoyer une à une coopérative.</div>';
   }
 
   return html;
