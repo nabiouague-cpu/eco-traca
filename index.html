@@ -4938,7 +4938,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-25-654';
+const APP_VERSION = '2026-11-25-655';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -12986,7 +12986,7 @@ function suvBatir(lots, camions){
   });
   const dern = sheets.reduce((m,s,k)=>s.lots.length ? k : m, -1);
   const feuilles = sheets.slice(0, dern+1);
-  return { T, lots, comp:res.comp, lotdate, sheets:feuilles, mode, manque, totAvant:feuilles.reduce((s,sh)=>s+sh.idxs.reduce((u,i)=>u+T[i].avant,0),0) };
+  return { T, lots, comp:res.comp, lotshort:res.lotshort, lotdate, sheets:feuilles, mode, manque, totAvant:feuilles.reduce((s,sh)=>s+sh.idxs.reduce((u,i)=>u+T[i].avant,0),0) };
 }
 function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds, Rflat){
   const wb = new ExcelJS.Workbook(); wb.creator = 'ORIGEN · ECORIGINE'; wb.created = new Date();
@@ -15610,7 +15610,7 @@ function rdueEntrepotLib(l){ return l.entrepot ? l.entrepot+(l.ville_entrepot ? 
 // cours » utilisée partout dans l'écran RDUE, et rdueRapportClientComplet() la variante « tous les lots du
 // client », pour le bouton de rapport d'usinage indépendant du dossier.
 function rdueRapportDe(lots0){
-  const Rs = {}, camMap = {}, camKg = {}, camAv = {};
+  const Rs = {}, camMap = {}, camKg = {}, camAv = {}, courtSuv = {};
   lots0.forEach(l=>{ if (l.site_code && !Rs[l.site_code]) Rs[l.site_code] = rdueCalcul(l.site_code); });
   const lots = lots0.map(l=>{
     const P = (Rs[l.site_code]||{ parLot:{} }).parLot[l.id] || { comp:[], date:null, manque:0 };
@@ -15643,7 +15643,7 @@ function rdueRapportDe(lots0){
     // accepté AVANT réfaction -- la réfaction est un retrait virtuel, elle ne réduit jamais le cacao qui entre en usinage.
     // Pour chaque camion, on retient ce que les lots de CE dossier y ont réellement pris (une part seulement pour un
     // camion partagé avec le client précédent ou suivant).
-    const kgM = {}; M.lots.forEach(L=>{ if (ids.has(L.id)) (M.comp[L.num]||[]).forEach(([i,kg])=>{ kgM[i] = (kgM[i]||0) + kg; }); });
+    const kgM = {}; M.lots.forEach(L=>{ if (ids.has(L.id)){ courtSuv[L.id] = (M.lotshort && M.lotshort[L.num] > 1) ? 1 : 0; (M.comp[L.num]||[]).forEach(([i,kg])=>{ kgM[i] = (kgM[i]||0) + kg; }); } });
     Object.keys(kgM).forEach(i=>{
       const t = M.T[i], k = t.a.id||t.a.connaissement;
       if (!camMap[k]){ const c = vivants.find(v=>(v.a.id||v.a.connaissement)===k); if (!c) return; camMap[k] = c; }
@@ -15658,7 +15658,7 @@ function rdueRapportDe(lots0){
   return { lots, cams, camKg, camAv,
     net: cams.reduce((s,c)=>s+netDe(c),0),
     sacs: cams.reduce((s,c)=>{ const tot = Number(c.a.nombre_sacs_accepte)||0; const b = brutDe(c); return s + (b>0 ? Math.round(tot*(netDe(c)/b)) : tot); },0),
-    kg:lots.reduce((s,o)=>s+o.kg,0), manque:lots.filter(o=>o.P.manque>0).length };
+    kg:lots.reduce((s,o)=>s+o.kg,0), manque:lots.filter(o=>courtSuv[o.l.id]!=null ? courtSuv[o.l.id]>0 : o.P.manque>0).length };
 }
 function rdueRapport(){
   const S = rdueSelection();
