@@ -4938,7 +4938,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-25-657';
+const APP_VERSION = '2026-11-25-658';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -16227,13 +16227,14 @@ function rdueVerifCalculer(i){
     const g = (id, nom)=>{ if (!parCoop.has(id)) parCoop.set(id, { id, nom, nonTraces:[], simules:[], liasseManq:[], serge:[], horsNon:[], horsSim:[] }); return parCoop.get(id); };
     R.cams.forEach(c=>{
       const a = c.a, k = liasseCnNorm(a.connaissement), G = g(a.cooperative_id||'?', rdueCoopNom(a)), fs = parCn[k]||[];
-      if (!aFiche(a.cooperative_id, a.connaissement)) (sims.has(a.cooperative_id+'|'+k) ? G.simules : G.nonTraces).push(a.connaissement);
+      // Camion livré à une usine dont le traçage est assuré par le partenaire : ni fiche ni traçage à faire de notre côté.
+      if (ocATracerSite(a) && !aFiche(a.cooperative_id, a.connaissement)) (sims.has(a.cooperative_id+'|'+k) ? G.simules : G.nonTraces).push(a.connaissement);
       if (!fs.length) G.liasseManq.push(a.connaissement); else if (!fs.some(f=>f.source!=='serge')) G.serge.push(a.connaissement);
     });
     // Les autres camions de ces coopératives, hors de ce dossier : pas tracés non plus -- on les signale aussi.
     const dansDossier = new Set(R.cams.map(c=>c.a.id||c.a.connaissement));
     (state.achats||[]).filter(a=>!a.producteur_id && !a.refoulee && a.connaissement && Number(a.poids_net_produit)>0 && parCoop.has(a.cooperative_id) && !dansDossier.has(a.id||a.connaissement)).forEach(a=>{
-      if (aFiche(a.cooperative_id, a.connaissement)) return;
+      if (!ocATracerSite(a) || aFiche(a.cooperative_id, a.connaissement)) return;
       (sims.has(a.cooperative_id+'|'+liasseCnNorm(a.connaissement)) ? parCoop.get(a.cooperative_id).horsSim : parCoop.get(a.cooperative_id).horsNon).push(a.connaissement);
     });
     const L = Array.from(parCoop.values()).sort((x,y)=>String(x.nom).localeCompare(String(y.nom),'fr'));
@@ -18944,8 +18945,8 @@ function renderDossiersTab(){
       + '<td class="num">'+(n==null ? '<span class="hint">—</span>' : '<b>'+n+'</b>')+'</td>'
       + '<td class="num">'+x.nNous+'</td><td class="num">'+x.nTrace+'</td><td class="num">'+x.nSimule+'</td>'
       + '<td class="num">'+(x.nATracer ? '<span class="badge warn" style="font-weight:700;font-size:13px">'+x.nATracer+' à tracer</span>'
-        : (x.nSimule || x.nAutre || x.nExt) ? '<span class="badge warn" style="font-weight:700;font-size:13px">'+[x.nSimule ? x.nSimule+' simulé'+(x.nSimule>1?'s':'')+', pas tracé'+(x.nSimule>1?'s':'') : '', x.nAutre ? x.nAutre+' non tracé'+(x.nAutre>1?'s':'')+' (partenaire)' : '', x.nExt ? x.nExt+' non tracé'+(x.nExt>1?'s':'')+' (chez le traitant)' : ''].filter(Boolean).join(' · ')+'</span>'
-        : '<span class="badge ok">à jour</span>')+'</td>'
+        : x.nSimule ? '<span class="badge warn" style="font-weight:700;font-size:13px">'+x.nSimule+' simulé'+(x.nSimule>1?'s':'')+', pas tracé'+(x.nSimule>1?'s':'')+'</span>'
+        : '<span class="badge ok">à jour</span>'+((x.nAutre||x.nExt) ? ' <span class="hint">· '+((x.nAutre||0)+(x.nExt||0))+' tracé'+(((x.nAutre||0)+(x.nExt||0))>1?'s':'')+' par le partenaire</span>' : ''))+'</td>'
       + '<td style="white-space:nowrap"><button class="btn btn-primary btn-compact" onclick="ocDossierOuvrir(\''+escJs(x.c.id)+'\')">Ouvrir le dossier</button></td></tr>';
     const entete = (titre, detail, fond, couleur)=>'<tr><td colspan="10" style="background:'+fond+';color:'+couleur+';font-weight:700;padding:8px 10px;border-top:2px solid '+couleur+'">'+titre+' <span style="font-weight:500">'+detail+'</span></td></tr>';
     html += '<div class="achats-defile"><table class="tbl-fiches"><thead><tr><th>Coopérative</th><th>N° CCC</th><th>Usine(s)</th><th class="num">Producteurs</th><th class="num" title="Camions de cette coopérative à tracer pour les lots de ce '+(groupe==='traitant'?'traitant':'client')+'">'+libColonne+'</th><th class="num">Chez nous</th><th class="num">Tracés</th><th class="num">Simulés</th><th class="num">Reste à tracer</th><th></th></tr></thead><tbody>'
