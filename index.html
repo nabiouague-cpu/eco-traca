@@ -5111,7 +5111,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-25-685';
+const APP_VERSION = '2026-11-25-686';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -20514,15 +20514,20 @@ function ocTracerToutModalHtml(){
 }
 
 function _rowsTousProducteurs(){
+  _idxMaj(); const camp = state.campagneFilter;
   const seuil = Number(state.settings.seuil)||90;
   const periode = state.periodeFilter;
   return state.producteurs.map(p=>{
       const pot = potentiel(p);
       const ceiling = effectiveCeiling(p, state.campagneFilter, periode);
-      const cumul = cumulAchats(p.farm_id, state.campagneFilter, periode, p.cooperative_id);
-      const st = statusFor(pot, ceiling, cumul, seuil, state.campagneFilter!=='all' ? periode : null);
+      // même calcul que cumulAchats(), sans créer de liste intermédiaire pour chacun des 29 000 producteurs
+      let cumul = 0; const _l = _idx.achProd.get(p.cooperative_id+'|'+p.farm_id);
+      if (_l) for (let i=0;i<_l.length;i++){ const a=_l[i];
+        if (camp!=='all'){ if ((a.campagne_id||'')!==camp) continue; if (periode==='principale' && a.periode!=='principale') continue; if (periode==='intermediaire' && !(a.periode==='principale'||a.periode==='intermediaire')) continue; }
+        cumul += Number(a.quantite_kg)||0; }
+      const st = statusFor(pot, ceiling, cumul, seuil, camp!=='all' ? periode : null);
       const restant = ceiling>0 ? Math.max(ceiling - cumul, 0) : null;
-      return { p, pot, ceiling, cumul, restant, st, periode: state.campagneFilter!=='all' ? periode : null };
+      return { p, pot, ceiling, cumul, restant, st, periode: camp!=='all' ? periode : null };
     }).sort((a,b)=>{
       const pa = a.st.pct==null ? -1 : a.st.pct;
       const pb = b.st.pct==null ? -1 : b.st.pct;
