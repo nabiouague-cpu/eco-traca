@@ -4938,7 +4938,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-25-653';
+const APP_VERSION = '2026-11-25-654';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -13156,8 +13156,12 @@ function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds, Rflat){
     const totAvantAffiche = camionsAff + queueOuv;
     put(ws,r,1,'Camions vidés'+(queueOuv > 0.5 ? ' + queue de lot d\'ouverture' : '')+' (poids accepté avant réfaction)',{ b:true }); put(ws,r,5,Math.round(totAvantAffiche),{ b:true, fmt:NUM });
     if (queueOuv > 0.5){ r++; put(ws,r,1,'dont queue de lot d\'ouverture (rapport précédent)',{ b:false }); put(ws,r,5,Math.round(queueOuv),{ fmt:NUM }); }
-    r++; put(ws,r,1,'Freinte de production (entrée − lots)',{ b:true }); put(ws,r,5,Math.round(totAvantAffiche - totLots),{ b:true, fmt:NUM });
-    put(ws,r,6,dv(totAvantAffiche - totLots, totAvantAffiche),{ fmt:PCT });
+    // Queue de lot de fin : cacao entré mais pas encore usiné, il part dans le rapport suivant (autre client) : ce n'est pas de la freinte.
+    const queueFin = sheetsAffichees.reduce((s,sh)=>s + (sh.queue > 0.5 && !sheetsAffichees.some(x=>x.g===sh.g+1) ? sh.queue : 0), 0);
+    if (queueFin > 0.5){ r++; put(ws,r,1,'dont queue de lot de fin (reportée au rapport suivant)',{ b:false }); put(ws,r,5,Math.round(queueFin),{ fmt:NUM }); }
+    const freinteAff = Math.round(totAvantAffiche) - totLots - Math.round(queueFin);
+    r++; put(ws,r,1,'Freinte de production (entrée − lots'+(queueFin > 0.5 ? ' − queue de fin' : '')+')',{ b:true }); put(ws,r,5,freinteAff,{ b:true, fmt:NUM });
+    put(ws,r,6,dv(freinteAff, totAvantAffiche - queueFin),{ fmt:PCT });
     (avecOT ? [40,12,20,16,16,120,18,22,16] : [40,12,20,16,16,120]).forEach((w,k)=>{ ws.getColumn(k+1).width = w; });
   }
   // une feuille par séance
