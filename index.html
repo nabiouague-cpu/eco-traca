@@ -4938,7 +4938,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-25-649';
+const APP_VERSION = '2026-11-25-650';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -15571,7 +15571,7 @@ function rdueEntrepotLib(l){ return l.entrepot ? l.entrepot+(l.ville_entrepot ? 
 // cours » utilisée partout dans l'écran RDUE, et rdueRapportClientComplet() la variante « tous les lots du
 // client », pour le bouton de rapport d'usinage indépendant du dossier.
 function rdueRapportDe(lots0){
-  const Rs = {}, camMap = {}, camKg = {};
+  const Rs = {}, camMap = {}, camKg = {}, camAv = {};
   lots0.forEach(l=>{ if (l.site_code && !Rs[l.site_code]) Rs[l.site_code] = rdueCalcul(l.site_code); });
   const lots = lots0.map(l=>{
     const P = (Rs[l.site_code]||{ parLot:{} }).parLot[l.id] || { comp:[], date:null, manque:0 };
@@ -15600,14 +15600,25 @@ function rdueRapportDe(lots0){
         camMap[k] = c; camKg[k] = Math.min(c.net, e.kg);
       });
     });
+    // Poids des camions : ceux du rapport complet de l'usine (même calcul que le rapport Excel), c'est-à-dire le poids
+    // accepté AVANT réfaction -- la réfaction est un retrait virtuel, elle ne réduit jamais le cacao qui entre en usinage.
+    // Pour chaque camion, on retient ce que les lots de CE dossier y ont réellement pris (une part seulement pour un
+    // camion partagé avec le client précédent ou suivant).
+    const kgM = {}; M.lots.forEach(L=>{ if (ids.has(L.id)) (M.comp[L.num]||[]).forEach(([i,kg])=>{ kgM[i] = (kgM[i]||0) + kg; }); });
+    Object.keys(kgM).forEach(i=>{
+      const t = M.T[i], k = t.a.id||t.a.connaissement;
+      if (!camMap[k]){ const c = vivants.find(v=>(v.a.id||v.a.connaissement)===k); if (!c) return; camMap[k] = c; }
+      camKg[k] = kgM[i]; camAv[k] = t.avant;
+    });
   });
   const cams = Object.keys(camMap).map(k=>camMap[k]).sort((x,y)=>(x.d?x.d.tri:'9').localeCompare(y.d?y.d.tri:'9'));
   const vendu = {}; lots.forEach(o=>{ if (o.ex) vendu[o.ex.id] = (vendu[o.ex.id]||0)+o.kg; });
   const vu = {}; lots.forEach(o=>{ o.premier = !!o.ex && !vu[o.ex.id]; if (o.ex) vu[o.ex.id] = true; o.vendu = o.ex ? vendu[o.ex.id] : null; });
-  const netDe = c=>{ const k = c.a.id||c.a.connaissement, kg = camKg[k]; return (kg!=null && kg < c.net) ? kg : c.net; };
-  return { lots, cams, camKg,
+  const netDe = c=>{ const k = c.a.id||c.a.connaissement, kg = camKg[k]; if (camAv[k]!=null) return kg; return (kg!=null && kg < c.net) ? kg : c.net; };
+  const brutDe = c=>{ const k = c.a.id||c.a.connaissement; return camAv[k]!=null ? camAv[k] : c.net; };
+  return { lots, cams, camKg, camAv,
     net: cams.reduce((s,c)=>s+netDe(c),0),
-    sacs: cams.reduce((s,c)=>{ const tot = Number(c.a.nombre_sacs_accepte)||0; return s + (c.net>0 ? Math.round(tot*(netDe(c)/c.net)) : tot); },0),
+    sacs: cams.reduce((s,c)=>{ const tot = Number(c.a.nombre_sacs_accepte)||0; const b = brutDe(c); return s + (b>0 ? Math.round(tot*(netDe(c)/b)) : tot); },0),
     kg:lots.reduce((s,o)=>s+o.kg,0), manque:lots.filter(o=>o.P.manque>0).length };
 }
 function rdueRapport(){
@@ -15622,7 +15633,7 @@ function rdueImmat(a){ return String(a.immat_vehicule||'').trim() || String(pdVa
 const RDUE_ENTETE_FAB = ['Date de déchargement','Coopérative','Référence camion','N° de connaissement','Poids net','Nombre de sac','','Date product°','N° Lots','Poids net (KG)','Client'];
 const RDUE_ENTETE_EXP = RDUE_ENTETE_FAB.concat(['Volume (vendu)','Réf vendeur','N°BL']);
 function rdueLignes(R, niveau){
-  const n = Math.max(R.cams.length, R.lots.length), out = [], camKg = R.camKg||{};
+  const n = Math.max(R.cams.length, R.lots.length), out = [], camKg = R.camKg||{}, camAv = R.camAv||{};
   for (let k=0;k<n;k++){
     const c = R.cams[k], o = R.lots[k], a = c && c.a;
     // Un camion n'est montré en entier que si CE dossier a consommé tout son poids net. S'il n'en a
@@ -15631,9 +15642,9 @@ function rdueLignes(R, niveau){
     // camion entier qui a servi à ce dossier, seulement un reliquat.
     let netAff = null, sacsAff = null, refAff = null;
     if (c){
-      const cle = a.id||a.connaissement, kgDossier = camKg[cle], partiel = kgDossier!=null && kgDossier < c.net - 0.5;
-      netAff = partiel ? Math.round(kgDossier) : c.net;
-      sacsAff = partiel && c.net>0 ? Math.round((Number(a.nombre_sacs_accepte)||0)*(kgDossier/c.net)) : (Number(a.nombre_sacs_accepte)||0);
+      const cle = a.id||a.connaissement, kgDossier = camKg[cle], base = camAv[cle]!=null ? camAv[cle] : c.net, partiel = kgDossier!=null && kgDossier < base - 0.5;
+      netAff = kgDossier!=null && (partiel || camAv[cle]!=null) ? Math.round(kgDossier) : c.net;
+      sacsAff = partiel && base>0 ? Math.round((Number(a.nombre_sacs_accepte)||0)*(kgDossier/base)) : (Number(a.nombre_sacs_accepte)||0);
       refAff = rdueImmat(a) + (partiel ? ' (queue de lot)' : '');
     }
     const ligne = [ c ? (c.d ? dateFr(c.d.iso) : '') : '', c ? rdueCoopNom(a) : '', refAff, c ? a.connaissement : '', netAff, sacsAff, '',
