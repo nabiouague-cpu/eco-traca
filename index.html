@@ -1775,8 +1775,13 @@
   .sidebar.replie .sidebar-nav-item span:last-child{white-space:normal;line-height:1.2;}
   .sidebar.replie .sidebar-nav-item .nav-badge{position:absolute;top:5px;right:8px;margin:0;}
   .sidebar.replie .sidebar-nav-item.active::before{left:-8px;top:12px;bottom:12px;}
-  .sb-replier{margin-top:8px;display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:9px 10px;border:1px solid rgba(255,255,255,.1);border-radius:9px;background:rgba(255,255,255,.04);color:rgba(255,255,255,.7);font:inherit;font-size:12px;cursor:pointer;transition:background .15s,color .15s;}
+  .sb-replier{margin:2px 0 10px;flex-shrink:0;display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:9px 10px;border:1px solid rgba(255,255,255,.1);border-radius:9px;background:rgba(255,255,255,.04);color:rgba(255,255,255,.7);font:inherit;font-size:12px;cursor:pointer;transition:background .15s,color .15s;}
   .sb-replier:hover{background:rgba(255,255,255,.1);color:#fff;}
+  #nav-retour{position:fixed;bottom:22px;left:100px;z-index:900;display:flex;align-items:center;gap:8px;padding:10px 18px 10px 12px;border:0;border-radius:99px;background:var(--gold,#F2B705);color:#2A1D00;font:inherit;font-size:14px;font-weight:700;cursor:pointer;box-shadow:0 8px 24px -8px rgba(0,0,0,.45);animation:navRetourIn .25s var(--ease,ease) both;}
+  #nav-retour:hover{filter:brightness(1.05);transform:translateY(-1px);}
+  #nav-retour svg{width:20px;height:20px;}#nav-retour span{display:flex;flex-direction:column;line-height:1.15;text-align:left;}#nav-retour small{font-size:11px;font-weight:500;opacity:.75;}
+  @keyframes navRetourIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+  @media print{#nav-retour{display:none}}
   .sb-replier svg{width:16px;height:16px;}
   /* ---- Qui trace ? : cartes par partenaire, en trois colonnes ---- */
   .qt-synth{display:grid;grid-template-columns:2fr 1fr 1fr;gap:14px;margin:4px 0 20px}
@@ -4869,8 +4874,49 @@ function ocVerrouillerFond(){
     }
   }catch(e){}
 }
+// ---- Bouton « Retour » (v681) : comme sur un téléphone, quand un clic dans une page t'envoie dans un autre onglet,
+// un bouton flottant te ramène à l'onglet d'où tu venais (même sous-onglet, même position de défilement).
+// Un clic dans la barre latérale repart de zéro (pas de retour).
+function navLibelleOnglet(cle){
+  for (const g of SIDEBAR_GROUPES){ const it = g.items.find(x=>x[0]===cle); if (it) return it[2]; }
+  return cle;
+}
+function navSuivi(){
+  if (state.espaceChoisi && state.espaceChoisi!=='origen'){ state._navPile = []; state._navTab = undefined; return; }
+  const cur = state.tab;
+  if (state._navTab===undefined){ state._navTab = cur; return; }
+  if (cur!==state._navTab){
+    if (state._navDepuisMenu){ state._navPile = []; }
+    else {
+      const snap = state._navSnap || {};
+      state._navPile = (state._navPile||[]).concat([{ tab:state._navTab, sous:snap.sous, coopDash:snap.coopDash, coopFilter:snap.coopFilter, scroll:(window.scrollY||document.documentElement.scrollTop||0) }]).slice(-10);
+    }
+    state._navTab = cur;
+  }
+  state._navDepuisMenu = false;
+}
+function navApresRendu(){
+  state._navSnap = { sous:state.dashboardSousOnglet, coopDash:state.coopDashboardId, coopFilter:state.coopFilter };
+  let b = document.getElementById('nav-retour');
+  const pile = state._navPile || [];
+  if (!pile.length || (state.espaceChoisi && state.espaceChoisi!=='origen') || !state.session){ if (b) b.remove(); return; }
+  const top = pile[pile.length-1];
+  if (!b){ b = document.createElement('button'); b.id = 'nav-retour'; b.type = 'button'; b.onclick = navRetour; document.body.appendChild(b); }
+  b.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg><span>Retour<small>'+esc(navLibelleOnglet(top.tab))+'</small></span>';
+  const sb = document.querySelector('.sidebar'); const x = sb ? Math.round(sb.getBoundingClientRect().right) : 0;
+  b.style.left = (x+16)+'px';
+}
+function navRetour(){
+  const pile = state._navPile || []; const r = pile.pop(); if (!r) return;
+  state._navPile = pile; state.tab = r.tab; state._navTab = r.tab; state.panneau = null; state.recherche = null;
+  if (r.sous!==undefined) state.dashboardSousOnglet = r.sous;
+  state.coopDashboardId = r.coopDash || null; if (r.coopFilter!==undefined) state.coopFilter = r.coopFilter;
+  state.animEntree = true; render();
+  setTimeout(()=>{ window.scrollTo(0, r.scroll||0); }, 60);
+}
 function render(){
   _idxStamp++;
+  try{ navSuivi(); }catch(e){}
   const s = capturerSaisies();
   // Phase 3 : transition douce entre deux ecrans. Juste avant de reconstruire #app (qui remplace tout
   // son innerHTML d'un coup, sans animation possible sur ce qui disparait), on clone l'ecran ACTUEL tel
@@ -4909,6 +4955,7 @@ function render(){
     ocAnimerCompteurs();
     ocAnimerGraphiques();
   }
+  try{ navApresRendu(); }catch(e){}
   // Fenetre ouverte : le fond ne defile plus (souris, clavier, tactile) -- seule la fenetre defile.
   ocVerrouillerFond();
   // Fenetre « Reception a l'usine » : l'ecart et la prime affiches doivent toujours correspondre au poids actuellement saisi.
@@ -5043,7 +5090,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-25-680';
+const APP_VERSION = '2026-11-25-681';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -6940,6 +6987,7 @@ function ocSidebarHtml(dashActive, badges, opts){
     ICON_OC_PORTAIL, ICON_OC_DONNEES, ICON_OC_INTERLOCUTEURS, ICON_OC_EXIGENCES, ICON_OC_CERTIFICAT, ICON_OC_PARTENAIRES, ICON_OC_NC, ICON_OC_DOCUMENTS, ICON_OC_AUDITS, ICON_OC_FORMATION, ICON_OC_CALENDRIER, ICON_OC_ASSISTANT };
   let html = '<nav class="sidebar'+(replie?' replie':'')+'">'
     + '<div class="sb-marque"><div class="logo-badge"><img src="data:image/png;base64,'+ECORIGINE_LOGO_B64+'" alt=""></div><div class="sb-marque-txt"><div class="brand-name">ECORIGINE</div><div class="sb-sous">'+esc(sous)+'</div></div></div>'
+    + '<button type="button" class="sb-replier" onclick="ocBasculerSidebar()" title="'+(replie?'Déplier la barre latérale':'Replier la barre latérale')+'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="'+(replie?'M9 6l6 6-6 6':'M15 6l-6 6 6 6')+'"/></svg><span>'+(replie?'':'Replier')+'</span></button>'
     + '<div class="sidebar-nav">';
   groupes.forEach(g=>{
     html += '<div class="sb-groupe"><div class="sb-groupe-titre">'+esc(g.titre)+'</div>'
@@ -6950,9 +6998,7 @@ function ocSidebarHtml(dashActive, badges, opts){
         }).join('')
       + '</div>';
   });
-  html += '</div>'
-    + '<button type="button" class="sb-replier" onclick="ocBasculerSidebar()" title="'+(replie?'Déplier la barre latérale':'Replier la barre latérale')+'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="'+(replie?'M9 6l6 6-6 6':'M15 6l-6 6 6 6')+'"/></svg><span>'+(replie?'':'Replier')+'</span></button>'
-    + '</nav>';
+  html += '</div></nav>';
   return html;
 }
 
@@ -20457,7 +20503,7 @@ function computeRows(coopImposee){
   return _res;
 }
 
-function setTab(t){ state.tab = t; state.panneau = null; state.animEntree = true; render(); }
+function setTab(t){ state._navDepuisMenu = true; state.tab = t; state.panneau = null; state.animEntree = true; render(); }
 function choisirEspace(espace){
   state.espaceChoisi = espace;
   state.animEntree = true;
