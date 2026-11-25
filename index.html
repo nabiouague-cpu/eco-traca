@@ -4938,7 +4938,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-25-655';
+const APP_VERSION = '2026-11-25-656';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -16264,6 +16264,7 @@ function rdueVerifCalculer(i){
     const nbReco = R.lots.filter(o=>o.date && o.date.src==='reconstituée').length;
     if (!R.lots.length) return { etat:'bloque', resume:'Aucun lot', points:["Aucun lot dans le dossier : le rapport d'usinage serait vide."] };
     if (R.manque) return { etat:'bloque', resume:R.manque+' lot'+pl(R.manque)+' sans assez de camions', points:[R.manque+' lot'+pl(R.manque)+' sans assez de camions pesés pour couvrir son poids.'] };
+    if (R.net < R.kg - 1) return { etat:'attention', resume:'Entrée inférieure aux lots', points:['Le cacao entré ('+fmtNum(Math.round(R.net))+' kg) est inférieur aux lots produits ('+fmtNum(R.kg)+' kg) : à vérifier avant envoi.'] };
     if (nbReco) return { etat:'attention', resume:nbReco+' date'+pl(nbReco)+' reconstituée'+pl(nbReco), points:[nbReco+' date'+pl(nbReco)+' de production reconstituée'+pl(nbReco)+" à partir des déchargements, en attendant celles de l'usinier."] };
     return { etat:'ok', resume:R.lots.length+' lot'+pl(R.lots.length)+' · '+R.cams.length+' camions', points:[] };
   }
@@ -16391,6 +16392,7 @@ function renderDossierRdue(){
     + '<div class="rdue-kpi"><div><div class="k">Liasses réunies</div><div class="s">sur '+RR.cams.length+' camion'+(RR.cams.length>1?'s':'')+'</div></div><div class="n">'+nbLiasses+'</div></div>'
     + '<div class="rdue-kpi"><div><div class="k">Lots présentés</div><div class="s">'+(ST.manquant?ST.manquant+' liasse'+(ST.manquant>1?'s':'')+' manquante'+(ST.manquant>1?'s':''):'aucune liasse manquante')+'</div></div><div class="n">'+RR.lots.length+'</div></div>'
     + '</div></div>'
+    + rdueAutresDossiersHtml(clients, e)
     + '<div class="rv"><div class="rv-tete"><div><h3>Vérification du dossier</h3><div class="hint">Chaque étape est contrôlée automatiquement ; un clic sur une étape en ouvre le détail.</div></div><button class="btn" id="rv-relance"'+(enCours?' disabled':'')+' onclick="rdueVerifLancer()">↻ Relancer la vérification</button></div>'
     + '<div class="rv-voie"><div class="rv-ligne"><i id="rv-bar" style="width:'+rdueVerifPct(V)+'%"></i></div>'
     + RV_LIBS.map((t,i)=>{ const v = rdueVerifVue(V,i); return '<div class="rv-n '+v.cl+'" id="rv-n'+i+'" onclick="rdueVoir('+(i+1)+')"><div class="rv-p" id="rv-p'+i+'">'+v.p+'</div><div class="rv-t">'+esc(t)+'</div><div class="rv-r" id="rv-r'+i+'">'+esc(v.t)+'</div></div>'; }).join('')
@@ -16401,6 +16403,40 @@ function renderDossierRdue(){
   return h;
 }
 
+// ---- Passerelle entre dossiers : tant qu'un dossier est en cours (un seul ouvert à la fois), on peut regarder où en sont les autres
+// clients sans toucher au dossier en cours. L'aperçu est en lecture seule : mêmes contrôles que la vérification, calculés pour ce client.
+let _rdueApCache = null;
+function rdueApercuCalcul(client){
+  const cle = [client, (state.lotsUsinage||[]).length, (state.achats||[]).length, (state.liasseFichiers||[]).length, (state.tracaSim||[]).length, (state.rdueDossiers||[]).length].join('|');
+  if (_rdueApCache && _rdueApCache.cle===cle) return _rdueApCache.v;
+  const sauve = state.rdue; let v;
+  try{
+    state.rdue = { client, etape:1, niveau:'fab', decoches:{}, ajoutes:[], ajout:'', msg:'', cible:'', cibleConfirmee:true, dossierId:null };
+    const R = rdueRapport(); v = { R, res:[0,1,2,3].map(i=>{ try{ return rdueVerifCalculer(i); }catch(err){ return { etat:'attention', resume:'Contrôle impossible', points:[err.message], actions:[] }; } }) };
+  } finally { state.rdue = sauve; }
+  _rdueApCache = { cle, v }; return v;
+}
+function rdueApercuAutre(c){ state.rdueApercu = (state.rdueApercu===c) ? '' : c; render(); }
+function rdueAutresDossiersHtml(clients, e){
+  const ds = state.rdueDossiers||[], ouvert = ds.find(d=>d.etat==='ouvert');
+  const autres = clients.filter(c=>c!==e.client); if (!autres.length) return '';
+  const puces = autres.map(c=>{
+    const dispo = rdueLotsClientDispo(c), kg = dispo.reduce((t,l)=>t+lotsUsinagePoidsRetenu(l),0), nClos = ds.filter(d=>d.client===c && d.etat==='clos').length, sel = state.rdueApercu===c;
+    const etat = dispo.length ? fmtNum(dispo.length)+' lot'+(dispo.length>1?'s':'')+' à présenter · '+fmtNum(Math.round(kg/1000))+' t' : 'tous les lots présentés';
+    return '<button class="'+(sel?'btn btn-primary':'btn')+'" style="text-align:left;padding:8px 12px" onclick="rdueApercuAutre(\''+escJs(c)+'\')"><b>'+esc(c)+'</b><br><span style="font-size:12px;font-weight:400">'+etat+(nClos ? ' · '+nClos+' dossier'+(nClos>1?'s':'')+' clos' : '')+'</span></button>';
+  }).join('');
+  let h = '<div class="panel" style="margin-top:12px;padding:12px 16px"><div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center"><div style="font-weight:700;margin-right:6px">Autres dossiers</div>'+puces
+    + '<div class="hint" style="flex:1 1 220px;margin:0">Dossier en cours : <b>'+esc(e.client)+'</b>. Un seul dossier peut être ouvert à la fois ; clique sur un client pour voir où il en est, sans toucher au dossier en cours.</div></div>';
+  const c = state.rdueApercu;
+  if (c && autres.indexOf(c)>=0){
+    const A = rdueApercuCalcul(c), col = { ok:'#1e8449', attention:'#b36b00', bloque:'#c0392b' }, pt = { ok:'●', attention:'●', bloque:'●' };
+    h += '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:12px"><div style="font-weight:700;margin-bottom:6px">Aperçu · '+esc(c)+' <span class="hint" style="font-weight:400">(lecture seule : '+fmtNum(A.R.lots.length)+' lot'+(A.R.lots.length>1?'s':'')+', '+fmtNum(A.R.kg)+' kg)</span></div>'
+      + A.res.map((r,i)=>'<div style="display:flex;gap:8px;align-items:baseline;margin:4px 0"><span style="color:'+(col[r.etat]||'#555')+'">'+pt[r.etat]+'</span><b style="min-width:150px">'+esc(RV_LIBS[i])+'</b><span>'+esc(r.resume||'')+'</span></div>'
+        + (r.etat!=='ok' && r.points && r.points.length ? '<ul style="margin:0 0 6px 40px;padding:0;font-size:12.5px;color:var(--ink-soft)">'+r.points.slice(0,5).map(x=>'<li>'+esc(x)+'</li>').join('')+(r.points.length>5 ? '<li>… et '+(r.points.length-5)+' autre'+(r.points.length-5>1?'s':'')+'</li>' : '')+'</ul>' : '')).join('')
+      + '<div class="hint" style="margin-top:8px">'+(ouvert ? 'Pour ouvrir ce dossier, clôture ou annule d\'abord celui de '+esc(ouvert.client)+'.' : '')+'</div></div>';
+  }
+  return h+'</div>';
+}
 // ---- Dossier par traitant : qui livre à quel client final (ACT, Cargill, ...), via quel traitant, coopérative par coopérative ----
 // Vue de lecture seule pour préparer le dossier de conformité RDUE : aucune écriture en base, aucun téléchargement automatique — c'est l'utilisateur
 // qui lance les téléchargements (fiches de traçabilité, liasses documentaires) depuis les écrans existants. S'appuie sur les données déjà en place :
