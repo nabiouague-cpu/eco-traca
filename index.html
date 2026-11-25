@@ -4938,7 +4938,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-25-643';
+const APP_VERSION = '2026-11-25-644';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -12952,7 +12952,7 @@ function suvBatir(lots, camions){
     // consommée par les lots des séances déjà bouclées. Le reliquat est le MÊME à la fin d'une séance
     // (queIdx) et au début de la suivante (repIdx) : c'est le même cacao reporté.
     lotsS.forEach(L=>(res.comp[L.num]||[]).forEach(([i,k])=>{ cons[i] += k; }));
-    const queIdx = []; for (let i=0;i<nT;i++) if (sessDe[i] <= g && T[i].avant - cons[i] > 1) queIdx.push(i);
+    const queIdx = []; for (let i=0;i<nT;i++) if (sessDe[i] <= g && T[i].avant - cons[i] > 1) queIdx.push({ i, kg:T[i].avant - cons[i] });
     sheets.push({ d:T[idxs[idxs.length-1]].jour, idxs, lots:lotsS, report:carry, queue, g, repIdx:carryIdx, queIdx }); carry = queue; carryIdx = queIdx;
   });
   const dern = sheets.reduce((m,s,k)=>s.lots.length ? k : m, -1);
@@ -12969,7 +12969,18 @@ function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds, Rflat){
   const milliers = n=>String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
   const etiq = t=>suvCourt(t.coop)+' ('+t.conn+')';
   // Libellé d'une queue de lot : le nom de la coopérative d'où vient le reliquat, suivi de (Queue de lot).
-  const etiqQueue = idxs=>{ const noms = Array.from(new Set((idxs||[]).map(i=>suvCourt(M.T[i].coop)).filter(Boolean))); return noms.length ? noms.join(' + ')+' (Queue de lot)' : 'QUEUE DE LOT'; };
+  // Chaque reliquat (queIdx / repIdx) est une liste { i (camion de M.T), kg } : un camion peut en être
+  // l'origine à lui seul, ou plusieurs quand des camions entiers attendent encore d'être usinés.
+  const etiqQueue = e=>suvCourt(M.T[e.i].coop)+' (Queue de lot '+milliers(e.kg)+' kg)';
+  const etiqQueueNoms = es=>{ const noms = Array.from(new Set((es||[]).map(e=>suvCourt(M.T[e.i].coop)).filter(Boolean))); return noms.length ? noms.join(' + ')+' (Queue de lot)' : 'QUEUE DE LOT'; };
+  // Lignes de queue pour les feuilles de séance : une par camion d'origine, le poids de la dernière
+  // absorbant l'arrondi pour que le total reste égal à la queue de la séance.
+  const lignesQueue = (es, total)=>{
+    const tot = Math.round(total);
+    if (!es || !es.length || total >= 25000) return [{ lib: total < 25000 ? 'QUEUE DE LOT' : "CACAO EN ATTENTE D'USINAGE", kg:tot }];
+    let reste = tot;
+    return es.map((e,k)=>{ const kg = k===es.length-1 ? reste : Math.round(e.kg); reste -= kg; const t = M.T[e.i]; return { lib: suvCourt(t.coop)+' ('+t.conn+') (Queue de lot)', kg }; });
+  };
   const put = (ws, r, c, v, o)=>{ o = o||{}; const x = ws.getCell(r,c); x.value = v; x.font = o.color ? Object.assign({}, o.b ? FB : FN, { color:o.color }) : (o.b ? FB : FN); if (o.fmt) x.numFmt = o.fmt; if (o.al) x.alignment = o.al; if (o.fill) x.fill = o.fill; if (o.box) x.border = cadre; return x; };
   // Première feuille du classeur (« le premier rapport ») : le tableau simple (déchargements <-> lots
   // produits, niveau fabrication), aux mêmes couleurs et à la même logique d'agencement que le modèle
@@ -13008,10 +13019,23 @@ function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds, Rflat){
       const first = rowTS;
       let rc = rowTS;
       g.sh.forEach((s,si)=>{
-        if (si===0 && s.report > 0.5){ setQ(rc,2,etiqQueue(s.repIdx)); const x = fs.getCell(rc,5); x.value = Math.round(s.report); x.numFmt = NUM; x.font = { name:'Arial', size:10, bold:true, italic:true, color:QUEUE_FONT_TS }; x.alignment = CTR; rc++; }
+        if (si===0 && s.report > 0.5){
+          // Ligne remplie comme un camion ordinaire (date, coopérative, immatriculation, connaissement, poids, sacs) :
+          // le nom de la coopérative porte « (Queue de lot <poids> kg) » -- un reliquat de camion d'une séance
+          // précédente. Pas de total : ce poids est déjà compté dans la séance où le camion a été vidé.
+          const orig = (s.repIdx && s.repIdx.length) ? s.repIdx : [null];
+          orig.forEach(e=>{
+            const t = e ? M.T[e.i] : null, kg = e ? e.kg : s.report;
+            if (t){ setQ(rc,1,t.jour); setQ(rc,2,etiqQueue(e)); setQ(rc,3,rdueImmat(t.a)); setQ(rc,4,t.conn); } else setQ(rc,2,'QUEUE DE LOT');
+            setQ(rc,5,Math.round(kg)); fs.getCell(rc,5).numFmt = NUM;
+            if (t && t.avant > 0){ setQ(rc,6,Math.round(achatSacsRetenus(t.a)*kg/t.avant)); fs.getCell(rc,6).numFmt = NUM; }
+            rc++;
+          });
+        }
         s.idxs.forEach(i=>{
           const t = M.T[i], sacs = achatSacsRetenus(t.a);
-          put(fs,rc,1,t.jour,{ al:CTR }); put(fs,rc,2,suvCourt(t.coop),{ al:CTR });
+          const reste = (s.queIdx||[]).find(e=>e.i===i);   // camion dont une part part en queue de lot à la fin de cette séance
+          put(fs,rc,1,t.jour,{ al:CTR }); put(fs,rc,2,suvCourt(t.coop)+(reste ? ' (dont '+milliers(reste.kg)+' kg en queue de lot)' : ''),{ al:CTR });
           put(fs,rc,3,rdueImmat(t.a),{ al:CTR }); put(fs,rc,4,t.conn,{ al:CTR });
           put(fs,rc,5,t.avant,{ al:CTR, fmt:NUM }); put(fs,rc,6,sacs,{ al:CTR, fmt:NUM });
           totCamE += t.avant; totCamF += sacs; camRows.push(rc); rc++;
@@ -13024,7 +13048,7 @@ function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds, Rflat){
           put(fs,rl,10,L.w,{ al:CTR, fmt:NUM }); put(fs,rl,11,L.client||'',{ al:CTR });
           totLotJ += L.w; lotRows.push(rl); rl++;
         });
-        if (si===g.sh.length-1 && s.queue > 0.5){ setQ(rl,9,etiqQueue(s.queIdx)); const x = fs.getCell(rl,10); x.value = Math.round(s.queue); x.numFmt = NUM; x.font = { name:'Arial', size:10, bold:true, italic:true, color:QUEUE_FONT_TS }; x.alignment = CTR; rl++; }
+        if (si===g.sh.length-1 && s.queue > 0.5){ setQ(rl,8,s.d); setQ(rl,9,etiqQueueNoms(s.queIdx)); const x = fs.getCell(rl,10); x.value = Math.round(s.queue); x.numFmt = NUM; x.font = { name:'Arial', size:10, bold:true, italic:true, color:QUEUE_FONT_TS }; x.alignment = CTR; rl++; }
       });
       const last = Math.max(rc, rl) - 1;
       for (let rr=rowTS; rr<=last; rr++) fs.getCell(rr,7).fill = NOIR;
@@ -13112,9 +13136,11 @@ function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds, Rflat){
     q++; [2,4,7].forEach(c=>put(w,q,c,'VOLUME',{ b:true, al:CTR }));
     q++; const first = q; let entree = 0;
     if (s.report > 0){
-      put(w,q,1,s.report < 25000 ? etiqQueue(s.repIdx) : "CACAO EN ATTENTE D'USINAGE",{ b:true }); put(w,q,4,Math.round(s.report),{ fmt:NUM });
-      for (let c=1;c<=7;c++) w.getCell(q,c).fill = QUEUE;
-      entree += Math.round(s.report); q++;
+      lignesQueue(s.repIdx, s.report).forEach(lg=>{
+        put(w,q,1,lg.lib,{ b:true }); put(w,q,4,lg.kg,{ fmt:NUM });
+        for (let c=1;c<=7;c++) w.getCell(q,c).fill = QUEUE;
+        entree += lg.kg; q++;
+      });
     }
     s.idxs.forEach(i=>{ const t = M.T[i]; put(w,q,1,etiq(t)); put(w,q,4,t.avant,{ fmt:NUM }); entree += t.avant; q++; });
     const lastT = q-1; q = Math.max(q+1, 15);
@@ -13127,9 +13153,11 @@ function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds, Rflat){
     const lfirst = q; let sortie = 0;
     s.lots.forEach(L=>{ put(w,q,4,L.num,{ al:CTR, fmt:'0' }); put(w,q,5,L.w,{ fmt:NUM }); sortie += L.w; q++; });
     if (s.queue > 1){
-      put(w,q,1,s.queue < 25000 ? etiqQueue(s.queIdx) : "CACAO EN ATTENTE D'USINAGE",{ b:true }); put(w,q,5,Math.round(s.queue),{ fmt:NUM });
-      for (let c=1;c<=7;c++) w.getCell(q,c).fill = QUEUE;
-      sortie += Math.round(s.queue); q++;
+      lignesQueue(s.queIdx, s.queue).forEach(lg=>{
+        put(w,q,1,lg.lib,{ b:true }); put(w,q,5,lg.kg,{ fmt:NUM });
+        for (let c=1;c<=7;c++) w.getCell(q,c).fill = QUEUE;
+        sortie += lg.kg; q++;
+      });
     }
     const plast = q-1; q = Math.max(q+1, vid+13);
     const tot = q;
@@ -13168,6 +13196,13 @@ function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds, Rflat){
 }
 // Construit le classeur « Rapport d'usinage » d'une usine SANS le télécharger (utilisé à la fois par le téléchargement
 // direct ci-dessous et par le ZIP complet du dossier RDUE). Renvoie { erreur, type } en cas d'échec, sinon { wb, nom, M, nomSite }.
+// Modèle SUV d'un site (séances, queues de lot) SANS classeur : même calcul que rdueConstruireRapportSuv.
+function suvModeleSite(siteCode){
+  const lots = (state.lotsUsinage||[]).filter(l=>l.site_code===siteCode && rdueNumLot(l)!=null).sort(rdueParNum)
+    .map(l=>({ id:l.id, num:rdueNumLot(l), w:lotsUsinagePoidsRetenu(l) })).filter(L=>L.w>0);
+  const camions = suvCamions(siteCode);
+  return (lots.length && camions.length) ? suvBatir(lots, camions) : null;
+}
 async function rdueConstruireRapportSuv(siteCode, avecOT, scopeIds, Rflat){
   const site = lotsSiteParCode(siteCode), nomSite = site ? site.nom : siteCode;
   const lotsDb = (state.lotsUsinage||[]).filter(l=>l.site_code===siteCode && rdueNumLot(l)!=null).sort(rdueParNum);
@@ -15547,6 +15582,22 @@ function rdueRapportDe(lots0){
     P.comp.forEach(x=>{ const k = x.c.a.id||x.c.a.connaissement; camMap[k] = x.c; camKg[k] = (camKg[k]||0) + x.kg; });
     const date = l.date_production ? { txt:dateFr(l.date_production), src:'usinier' } : (P.date ? { txt:P.date.aff+'/'+P.date.iso.slice(0,4), src:'reconstituée' } : null);
     return { l, P, date, kg:lotsUsinagePoidsRetenu(l), ex:rdueExportDuLot(l.id) };
+  });
+  // Queue de lot d'ouverture : le rapport d'usinage montre, en tête de séance, le reliquat d'un camion vidé
+  // plus tôt (souvent pour un autre client). Ce camion fait donc partie du dossier -- liasse, fiche de
+  // traçabilité, géolocalisation, récapitulatif -- même si le calcul ci-dessus ne l'a pas retenu. On ajoute
+  // seulement la part qui revient à ce dossier ; un camion déjà présent garde son poids.
+  Object.keys(Rs).forEach(sc=>{
+    let M = null; try{ M = suvModeleSite(sc); }catch(e){ M = null; }
+    if (!M) return;
+    const ids = new Set(lots0.filter(l=>l.site_code===sc).map(l=>l.id)), vivants = Rs[sc].vivants||[];
+    M.sheets.filter(sh=>sh.lots.some(L=>ids.has(L.id))).forEach(sh=>{
+      (sh.repIdx||[]).forEach(e=>{
+        const a = M.T[e.i].a, k = a.id||a.connaissement; if (camMap[k]) return;
+        const c = vivants.find(v=>(v.a.id||v.a.connaissement)===k); if (!c) return;
+        camMap[k] = c; camKg[k] = Math.min(c.net, e.kg);
+      });
+    });
   });
   const cams = Object.keys(camMap).map(k=>camMap[k]).sort((x,y)=>(x.d?x.d.tri:'9').localeCompare(y.d?y.d.tri:'9'));
   const vendu = {}; lots.forEach(o=>{ if (o.ex) vendu[o.ex.id] = (vendu[o.ex.id]||0)+o.kg; });
