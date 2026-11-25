@@ -4938,7 +4938,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-25-661';
+const APP_VERSION = '2026-11-25-662';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -17579,107 +17579,143 @@ async function mailMaj(id, champs){
   render();
 }
 function mailChangerEcheance(id, v){ mailMaj(id, { echeance: v||null, derniere_alerte: null }); }
-// ---- Journal de bord (remplace l'ancien onglet Courriels) : suivi de l'activite de Nabi a partir de ses mails. ----
-// Remplis par le robot de veille de la boite mail : famille (domaine d'activite), role_nabi (ce qu'on attend de lui),
-// evenement (changement significatif), implication (ce que ca change), alerte (ce qu'il ne voit pas), lots (series/lots concernes).
-const MAIL_FAMILLES = {
-  lots_clients:       { lib:'Lots & clients',           ico:'📦' },
-  certification_ra:   { lib:'Certification RA / FT',     ico:'🌿' },
-  conformite_clients: { lib:'Conformité clients (EUDR)', ico:'🛡' },
-  cooperatives:       { lib:'Coopératives',              ico:'🤝' },
-  contrats:           { lib:'Contrats',                  ico:'📄' },
-  paiements:          { lib:'Paiements & primes',        ico:'💳' },
-  preparation:        { lib:'Préparation de campagne',   ico:'🗓' },
-  autre:              { lib:'Autre',                     ico:'•' }
-};
-const MAIL_FAM_DEFAUT = { certification:'certification_ra', conformite:'conformite_clients', contrats:'contrats', finance:'paiements', cooperatives:'cooperatives', autre:'autre' };
+// ---- Journal de bord (remplace l'ancien onglet Courriels) : un dossier par jour, avec le rapport de fin de journee. ----
+// Alimente par le robot de veille (table suivi_mails : role_nabi, evenement, implication, alerte, lots) et par le robot du soir (table journal_jours : rapport).
+// Les changements de donnees du jour sont comptes en direct dans la base (fonction journal_donnees).
 const MAIL_ROLES = {
-  decision: { lib:'Décision', cls:'bad',     ordre:0 },
-  a_faire:  { lib:'À faire',  cls:'warn',    ordre:1 },
+  decision: { lib:'Décision',   cls:'bad',     ordre:0 },
+  a_faire:  { lib:'À faire',    cls:'warn',    ordre:1 },
   verifier: { lib:'À vérifier', cls:'neutral', ordre:2 },
-  info:     { lib:'Pour info', cls:'neutral', ordre:3 }
+  info:     { lib:'Pour info',  cls:'neutral', ordre:3 }
 };
-function mailFamille(m){ return (m.famille && MAIL_FAMILLES[m.famille]) ? m.famille : (MAIL_FAM_DEFAUT[m.categorie] || 'autre'); }
 function mailRole(m){ return (m.role_nabi && MAIL_ROLES[m.role_nabi]) ? m.role_nabi : 'a_faire'; }
 function mailOuvert(m){ return m.statut==='a_traiter' || m.statut==='nouveau'; }
 function mailEnRetard(m){ const j = mailJours(m.echeance); return j!=null && j<0; }
 function mailEstAlerte(m){ return mailOuvert(m) && (!!m.alerte || (mailEnRetard(m) && mailRole(m)!=='info')); }
 function mailAFaire(m){ return mailOuvert(m) && mailRole(m)!=='info'; }
-// Importance : decision > en retard > priorite haute > echeance la plus proche
-function mailImportance(m){
-  const j = mailJours(m.echeance);
-  return [ MAIL_ROLES[mailRole(m)].ordre, mailEnRetard(m)?0:1, m.priorite==='haute'?0:1, j==null?9999:j ];
+function mailCompare(a,b){
+  const k = m=>[ MAIL_ROLES[mailRole(m)].ordre, mailEnRetard(m)?0:1, m.priorite==='haute'?0:1, mailJours(m.echeance)==null?9999:mailJours(m.echeance) ];
+  const x = k(a), y = k(b); for (let i=0;i<x.length;i++){ if (x[i]!==y[i]) return x[i]-y[i]; }
+  return String(b.recu_le||'').localeCompare(String(a.recu_le||''));
 }
-function mailCompare(a,b){ const x = mailImportance(a), y = mailImportance(b); for (let i=0;i<x.length;i++){ if (x[i]!==y[i]) return x[i]-y[i]; } return String(b.recu_le||'').localeCompare(String(a.recu_le||'')); }
-function mailNbATraiter(){ return (state.mailsSuivi||[]).filter(m=>mailAFaire(m) || mailEstAlerte(m)).length; }
+function mailNbATraiter(){ return (state.mailsSuivi||[]).filter(m=>m.statut!=='ignore' && (mailAFaire(m) || mailEstAlerte(m))).length; }
+function jrCle(m){ return String(m.recu_le||'').slice(0,10); }
+function jrHeure(m){ try{ return new Date(m.recu_le).toISOString().slice(11,16); }catch(e){ return ''; } }
+function jrLibelleJour(iso, court){
+  try{ const d = new Date(iso+'T12:00:00Z'); return d.toLocaleDateString('fr-FR', court ? { weekday:'short', day:'numeric', month:'short', timeZone:'UTC' } : { weekday:'long', day:'numeric', month:'long', year:'numeric', timeZone:'UTC' }); }catch(e){ return iso; }
+}
+async function jrChargerRapports(){
+  if (!supabaseClient || state.jrChargement) return; state.jrChargement = true;
+  try{
+    const r = await supabaseClient.from('journal_jours').select('*').order('jour', {ascending:false});
+    const map = {}; ((r && !r.error && r.data) || []).forEach(x=>{ map[String(x.jour).slice(0,10)] = x; });
+    state.jrRapports = map;
+  } finally { state.jrChargement = false; render(); }
+}
+async function jrChargerDonnees(jour){
+  state.jrDon = state.jrDon || {}; state.jrDonEnCours = state.jrDonEnCours || {};
+  if (state.jrDon[jour]!==undefined || state.jrDonEnCours[jour] || !supabaseClient) return; state.jrDonEnCours[jour] = true;
+  try{
+    const r = await supabaseClient.rpc('journal_donnees', { p_jour: jour });
+    state.jrDon[jour] = (r && !r.error) ? (r.data||[]).filter(x=>(x.crees||0)+(x.modifies||0)>0) : null;
+  } catch(e){ state.jrDon[jour] = null; }
+  state.jrDonEnCours[jour] = false; render();
+}
+function jrChoisir(jour){ state.jrJour = jour; render(); }
+function mailSetVue(k){ state.mailFiltre = k; render(); }
+function mailActualiser(){ state.mailsSuivi = null; state.jrRapports = null; state.jrDon = {}; render(); }
 function mailLigne(m, opts){
   opts = opts||{};
-  const e = mailEtatEcheance(m), ferme = !mailOuvert(m), role = MAIL_ROLES[mailRole(m)], fam = MAIL_FAMILLES[mailFamille(m)];
-  const id = esc(m.id);
-  let h = '<div class="card" style="padding:14px 16px;'+(ferme?'opacity:.7;':'')+(mailEstAlerte(m)?'border-left:4px solid var(--danger,#c0392b);':'')+'">'
+  const e = mailEtatEcheance(m), ferme = !mailOuvert(m), role = MAIL_ROLES[mailRole(m)], id = esc(m.id);
+  const moi = /nabi\.ouague/i.test(m.expediteur||'');
+  return '<div class="card" style="padding:14px 16px;'+(ferme?'opacity:.72;':'')+(mailEstAlerte(m)?'border-left:4px solid var(--danger,#c0392b);':'')+'">'
     + '<div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-start;">'
     +   '<div style="min-width:0;flex:1 1 340px;">'
     +     '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">'
-    +       '<span class="badge '+role.cls+'">'+role.lib+'</span>'
-    +       '<span class="badge neutral">'+fam.ico+' '+esc(fam.lib)+'</span>'
+    +       (opts.avecDate ? '<span class="badge neutral">'+esc(jrLibelleJour(jrCle(m), true))+'</span>' : '<span class="badge neutral">'+esc(jrHeure(m))+'</span>')
+    +       (moi ? '<span class="badge ok">Envoyé par toi</span>' : '<span class="badge '+role.cls+'">'+role.lib+'</span>')
     +       (m.evenement ? '<span class="badge warn">Changement</span>' : '')
     +       (m.lots ? '<span class="badge neutral">'+esc(m.lots)+'</span>' : '')
     +     '</div>'
     +     '<div style="font-weight:600;">'+esc(m.objet||'(sans objet)')+'</div>'
-    +     '<div style="font-size:12px;opacity:.75;margin:2px 0 8px;">'+esc(m.expediteur_nom||m.expediteur||'')+' · '+dateFr(m.recu_le)+(m.nb_messages>1?' · '+m.nb_messages+' messages':'')+'</div>'
+    +     '<div style="font-size:12px;opacity:.75;margin:2px 0 8px;">'+esc(m.expediteur_nom||m.expediteur||'')+(m.nb_messages>1?' · '+m.nb_messages+' messages':'')+'</div>'
     +     '<div style="font-size:13px;line-height:1.45;">'+esc(m.resume||'')+'</div>'
     +     (m.implication ? '<div style="font-size:13px;line-height:1.45;margin-top:8px;padding:8px 10px;border-radius:8px;background:rgba(127,127,127,.10);"><b>Ce que ça implique :</b> '+esc(m.implication)+'</div>' : '')
     +     (m.alerte ? '<div style="font-size:13px;line-height:1.45;margin-top:8px;padding:8px 10px;border-radius:8px;background:rgba(192,57,43,.10);"><b>Alerte :</b> '+esc(m.alerte)+'</div>' : '')
     +     (m.notes ? '<div style="font-size:12px;opacity:.65;margin-top:8px;">'+esc(m.notes)+'</div>' : '')
     +   '</div>'
     +   '<div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;">'
-    +     (ferme ? '<span class="badge ok">'+(m.statut==='ignore'?'Ignoré':'Traité')+'</span>' : '<span class="badge '+e.cls+'">'+esc(e.txt)+'</span>')
-    +     (opts.sansEcheance ? '' : '<label style="font-size:12px;opacity:.8;">Avant le <input type="date" value="'+esc(String(m.echeance||'').slice(0,10))+'" onchange="mailChangerEcheance(\''+id+'\',this.value)" style="margin-left:4px;"></label>')
+    +     (ferme ? '<span class="badge ok">'+(m.statut==='ignore'?'Ignoré':'Traité')+'</span>' : (m.echeance ? '<span class="badge '+e.cls+'">'+esc(e.txt)+'</span>' : ''))
+    +     (ferme || moi ? '' : '<label style="font-size:12px;opacity:.8;">Avant le <input type="date" value="'+esc(String(m.echeance||'').slice(0,10))+'" onchange="mailChangerEcheance(\''+id+'\',this.value)" style="margin-left:4px;"></label>')
     +   '</div></div>'
     + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">'
     +   (m.lien ? '<a class="btn btn-compact" href="'+esc(m.lien)+'" target="_blank" rel="noopener">Ouvrir dans Outlook</a>' : '')
     +   (ferme ? '<button class="btn btn-compact" onclick="mailMaj(\''+id+'\',{statut:\'a_traiter\'})">Rouvrir</button>'
-           : '<button class="btn btn-primary btn-compact" onclick="mailMaj(\''+id+'\',{statut:\'traite\'})">'+(m.alerte && mailRole(m)==='info' ? 'Vu' : 'Marquer traité')+'</button><button class="btn btn-compact" onclick="mailMaj(\''+id+'\',{statut:\'ignore\'})">Ignorer</button>')
+           : '<button class="btn btn-primary btn-compact" onclick="mailMaj(\''+id+'\',{statut:\'traite\'})">'+(mailRole(m)==='info' ? 'Vu' : 'Marquer traité')+'</button><button class="btn btn-compact" onclick="mailMaj(\''+id+'\',{statut:\'ignore\'})">Ignorer</button>')
     + '</div></div>';
-  return h;
 }
-function mailSetVue(k){ state.mailFiltre = k; if (k!=='activite') state.mailFamille = ''; render(); }
-function mailSetFamille(k){ state.mailFamille = (state.mailFamille===k ? '' : k); render(); }
-function mailActualiser(){ state.mailsSuivi = null; render(); }
+function jrSection(titre, items, fmt){
+  if (!items || !items.length) return '';
+  return '<div style="margin-top:14px;"><div class="label" style="margin-bottom:4px;">'+titre+'</div><ul style="margin:0;padding-left:18px;line-height:1.55;font-size:13px;">'+items.map(fmt).join('')+'</ul></div>';
+}
+function jrRapportHtml(jour, rap, don){
+  const r = rap && rap.rapport ? rap.rapport : null;
+  const etat = !rap ? '<span class="badge neutral">Pas de rapport</span>' : (rap.statut==='clos' ? '<span class="badge ok">Rapport de fin de journée</span>' : '<span class="badge warn">Rapport provisoire — mis à jour ce soir</span>');
+  let h = '<div class="card" style="padding:16px 18px;"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;"><b>Rapport de la journée</b>'+etat+'</div>';
+  if (!r) h += '<div class="hint" style="margin-top:8px;">Aucun rapport pour cette journée : le journal a démarré le 25/11/2026.</div>';
+  else {
+    if (r.resume) h += '<div style="margin-top:8px;font-size:14px;line-height:1.5;">'+esc(r.resume)+'</div>';
+    const ligne = x => '<li>'+(x.heure?'<b>'+esc(x.heure)+'</b> · ':'')+esc(x.texte||'')+'</li>';
+    h += jrSection('Ce qui s\'est passé', r.passe, ligne) + jrSection('Ce que tu as mené', r.mene, ligne);
+  }
+  // Changements dans les donnees : comptes en direct + commentaires du robot
+  const lignesDon = (don||[]).map(x=>'<li>'+esc(x.libelle)+' : '+(x.crees?x.crees+' créé'+(x.crees>1?'s':''):'')+(x.crees&&x.modifies?', ':'')+(x.modifies?x.modifies+' modifié'+(x.modifies>1?'s':''):'')+'</li>').join('');
+  const notes = (r && r.donnees || []).map(t=>'<li>'+esc(t)+'</li>').join('');
+  h += '<div style="margin-top:14px;"><div class="label" style="margin-bottom:4px;">Changements dans les données</div>'
+    + (don===undefined ? '<div class="hint">Calcul en cours…</div>' : (lignesDon || notes ? '<ul style="margin:0;padding-left:18px;line-height:1.55;font-size:13px;">'+lignesDon+notes+'</ul>' : '<div class="hint">Aucune modification enregistrée ce jour-là.</div>'))
+    + '</div>';
+  if (r) h += jrSection('À suivre', r.a_suivre, t=>'<li>'+esc(t)+'</li>');
+  return h + '</div>';
+}
 function renderCourrielsTab(){
   if (!state.mailsSuivi){ mailCharger(); return ecranChargement('Chargement du journal de bord…'); }
-  const vue = state.mailFiltre && ['faire','alertes','changements','activite','traite'].includes(state.mailFiltre) ? state.mailFiltre : 'faire';
-  const fam = state.mailFamille || '';
+  if (!state.jrRapports && !state.jrChargement) jrChargerRapports();
+  const vue = state.mailFiltre==='afaire' ? 'afaire' : 'jour';
   const tous = state.mailsSuivi.filter(m=>m.statut!=='ignore');
   const aFaire = tous.filter(mailAFaire).sort(mailCompare);
-  const alertes = tous.filter(mailEstAlerte).sort(mailCompare);
-  const decisions = aFaire.filter(m=>mailRole(m)==='decision').length;
+  const alertes = tous.filter(mailEstAlerte);
   const retard = aFaire.filter(mailEnRetard).length;
-  const sept = new Date(Date.now()-7*86400000).toISOString().slice(0,10);
-  const changements = tous.filter(m=>m.evenement).sort((a,b)=>String(b.recu_le||'').localeCompare(String(a.recu_le||'')));
-  const chg7 = changements.filter(m=>String(m.recu_le||'').slice(0,10)>=sept).length;
-  const traites = tous.filter(m=>m.statut==='traite').sort((a,b)=>String(b.recu_le||'').localeCompare(String(a.recu_le||'')));
-  const carte = (lab,val,alerte)=>'<div class="card"><div class="label">'+lab+'</div><div class="value" style="color:'+(alerte&&val>0?'var(--danger,#c0392b)':'inherit')+'">'+val+'</div></div>';
-  let html = '<div class="controls"><div style="flex:1;"><b>Journal de bord</b><div class="hint">Ce que tu dois faire, ce qui a changé et ce que tu ne vois pas, tiré de tes mails.</div></div><button class="btn btn-compact" onclick="mailActualiser()">↻ Actualiser</button></div>'
-    + '<div class="cards">' + carte('À faire par toi', aFaire.length) + carte('Décisions à prendre', decisions, true) + carte('En retard', retard, true) + carte('Alertes', alertes.length, true) + carte('Changements (7 j)', chg7) + '</div>'
-    + '<div class="tabs">' + [['faire','À faire',aFaire.length],['alertes','Alertes',alertes.length],['changements','Changements',changements.length],['activite','Mon activité',null],['traite','Traités',traites.length]]
-        .map(([k,l,n])=>'<button class="tab-btn '+(vue===k?'active':'')+'" onclick="mailSetVue(\''+k+'\')">'+l+(n!=null&&n>0&&(k==='faire'||k==='alertes')?' <span class="badge '+(k==='alertes'?'bad':'warn')+'" style="margin-left:4px;">'+n+'</span>':'')+'</button>').join('') + '</div>';
-  const liste = (arr, vide, opts)=> arr.length ? '<div style="display:flex;flex-direction:column;gap:10px;margin-top:10px;">'+arr.map(m=>mailLigne(m, opts)).join('')+'</div>' : '<div class="empty">'+vide+'</div>';
-  if (vue==='faire') return html + liste(aFaire, 'Rien à faire pour le moment.');
-  if (vue==='alertes') return html + liste(alertes, 'Aucune alerte.');
-  if (vue==='changements') return html + liste(changements, 'Aucun changement significatif enregistré.', { sansEcheance:true });
-  if (vue==='traite') return html + liste(traites, 'Rien de traité pour le moment.', { sansEcheance:true });
-  // Mon activite : un bloc par famille
-  const cles = Object.keys(MAIL_FAMILLES).filter(k=>tous.some(m=>mailFamille(m)===k));
-  html += '<div class="cards" style="grid-template-columns:repeat(auto-fill,minmax(210px,1fr));margin-top:10px;">' + cles.map(k=>{
-    const L = tous.filter(m=>mailFamille(m)===k), ouv = L.filter(mailAFaire).length, dern = L.map(m=>String(m.recu_le||'')).sort().pop();
-    return '<div class="card'+(ouv>0?' alert':'')+'" style="cursor:pointer;'+(fam===k?'outline:2px solid var(--accent,#2c6e5b);':'')+'" onclick="mailSetFamille(\''+k+'\')">'
-      + '<div class="label">'+MAIL_FAMILLES[k].ico+' '+esc(MAIL_FAMILLES[k].lib)+'</div><div class="value">'+ouv+'</div>'
-      + '<div class="hint">à faire · '+L.length+' mail'+(L.length>1?'s':'')+' · dernier le '+dateFr(dern)+'</div></div>';
+  const decisions = aFaire.filter(m=>mailRole(m)==='decision').length;
+  const aujourdhui = aujourdhuiIso();
+  const rapports = state.jrRapports || {};
+  // Liste des jours : ceux qui ont des mails ou un rapport, plus aujourd'hui
+  const cles = new Set([aujourdhui]); state.mailsSuivi.forEach(m=>{ if (m.recu_le) cles.add(jrCle(m)); }); Object.keys(rapports).forEach(k=>cles.add(k));
+  const jours = [...cles].sort().reverse();
+  const jour = (state.jrJour && cles.has(state.jrJour)) ? state.jrJour : aujourdhui;
+  const carte = (lab,val,rouge)=>'<div class="card"><div class="label">'+lab+'</div><div class="value" style="color:'+(rouge&&val>0?'var(--danger,#c0392b)':'inherit')+'">'+val+'</div></div>';
+  const mailsJour = state.mailsSuivi.filter(m=>m.statut!=='ignore' && jrCle(m)===jour);
+  let html = '<div class="controls"><div style="flex:1;"><b>Journal de bord</b><div class="hint">Un dossier par jour : ce qui s\'est passé, ce que tu as mené, ce qui a changé dans les données.</div></div><button class="btn btn-compact" onclick="mailActualiser()">↻ Actualiser</button></div>'
+    + '<div class="cards">' + carte('À faire par toi', aFaire.length) + carte('Décisions', decisions, true) + carte('En retard', retard, true) + carte('Alertes', alertes.length, true) + carte('Changements ce jour', mailsJour.filter(m=>m.evenement).length) + '</div>'
+    + '<div class="tabs">' + [['jour','Par jour'],['afaire','À faire ('+aFaire.length+')']].map(([k,l])=>'<button class="tab-btn '+(vue===k?'active':'')+'" onclick="mailSetVue(\''+k+'\')">'+l+'</button>').join('') + '</div>';
+  if (vue==='afaire'){
+    return html + (aFaire.length ? '<div style="display:flex;flex-direction:column;gap:10px;margin-top:10px;">'+aFaire.map(m=>mailLigne(m,{avecDate:true})).join('')+'</div>' : '<div class="empty">Rien à faire pour le moment.</div>');
+  }
+  if (state.jrDon===undefined || state.jrDon[jour]===undefined) jrChargerDonnees(jour);
+  const don = state.jrDon ? state.jrDon[jour] : undefined;
+  const liste = '<div style="flex:0 0 230px;display:flex;flex-direction:column;gap:6px;">' + jours.map(j=>{
+    const L = state.mailsSuivi.filter(m=>m.statut!=='ignore' && jrCle(m)===j), nbAl = L.filter(mailEstAlerte).length, rp = rapports[j];
+    return '<button type="button" onclick="jrChoisir(\''+j+'\')" style="text-align:left;cursor:pointer;padding:10px 12px;border-radius:10px;border:1px solid '+(j===jour?'var(--accent,#2c6e5b)':'rgba(127,127,127,.25)')+';background:'+(j===jour?'rgba(44,110,91,.12)':'transparent')+';color:inherit;font:inherit;">'
+      + '<div style="font-weight:600;">'+esc(jrLibelleJour(j,true))+(j===aujourdhui?' · aujourd\'hui':'')+'</div>'
+      + '<div style="font-size:12px;opacity:.75;margin-top:2px;">'+L.length+' mail'+(L.length>1?'s':'')+(rp?(rp.statut==='clos'?' · rapport ✓':' · rapport provisoire'):'')+(nbAl?' · <span style="color:var(--danger,#c0392b);">'+nbAl+' alerte'+(nbAl>1?'s':'')+'</span>':'')+'</div></button>';
   }).join('') + '</div>';
-  if (fam) html += liste(tous.filter(m=>mailFamille(m)===fam).sort((a,b)=>(mailOuvert(b)-mailOuvert(a))||mailCompare(a,b)), 'Rien dans cette famille.');
-  else html += '<div class="hint" style="margin-top:12px;">Clique sur un bloc pour voir les mails de cette activité.</div>';
-  return html;
+  const triJour = mailsJour.slice().sort((a,b)=>String(b.recu_le).localeCompare(String(a.recu_le)));
+  const detail = '<div style="flex:1 1 480px;min-width:0;display:flex;flex-direction:column;gap:12px;">'
+    + '<div style="font-size:18px;font-weight:700;text-transform:capitalize;">'+esc(jrLibelleJour(jour,false))+'</div>'
+    + jrRapportHtml(jour, rapports[jour], don)
+    + '<div class="label" style="margin-top:4px;">Mails du jour ('+triJour.length+')</div>'
+    + (triJour.length ? triJour.map(m=>mailLigne(m)).join('') : '<div class="empty">Aucun mail retenu ce jour-là.</div>')
+    + '</div>';
+  return html + '<div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;margin-top:10px;">' + liste + detail + '</div>';
 }
 function renderDemandesTab(){
   if (!state.demandesCoop){ refreshDemandesTab(); return ecranChargement('Chargement des demandes…'); }
