@@ -2506,6 +2506,8 @@
   /* Onglet Demandes (dm-) */
   .dm-bar{display:flex;gap:12px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;margin-bottom:14px;}
   .dm-bar .ob-tabs{margin-bottom:0;} .dm-bar .ob-tabs button{padding:8px 15px;font-size:13.5px;}
+  .cd-encours{border-left:4px solid var(--info);} .ls-kpis.cd-k4{grid-template-columns:repeat(4,1fr);}
+  @media (max-width:900px){.ls-kpis.cd-k4{grid-template-columns:repeat(2,1fr);}}
   /* Coopératives (cp-) */
   .cp-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 14px;}
   .cp-bar-s{flex:1 1 260px;min-width:220px;} .cp-bar-s .coop-search{margin:0;max-width:none;}
@@ -5269,7 +5271,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-25-700';
+const APP_VERSION = '2026-11-25-701';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -27756,9 +27758,8 @@ function carteDepuis(x){
 function renderCartesTab(){
   if (!state.cartesCharge && !state.cartesChargeEnCours){ state.cartesChargeEnCours = true; setTimeout(()=>{ chargerCartes(); }, 0); }
   const vue = state.cartesVue || 'cartes';
-  let h = '<div class="panel"><div class="panel-head"><h2>Cartes &amp; déforestation</h2></div>'
-    + '<div style="display:flex;gap:8px;padding:0 18px 12px;flex-wrap:wrap">'
-    + [['cartes','🗺 Cartes de localisation'],['deforestation','🌳 Analyse déforestation']].map(([k,l])=>'<button class="'+(vue===k?'btn btn-primary':'btn')+' btn-compact" onclick="state.cartesVue=\''+k+'\';render()">'+l+'</button>').join('')
+  let h = '<div class="dm-bar"><div class="ob-tabs">'
+    + [['cartes','Cartes de localisation'],['deforestation','Analyse déforestation']].map(([k,l])=>'<button class="'+(vue===k?'on':'')+'" onclick="state.cartesVue=\''+k+'\';render()">'+l+'</button>').join('')
     + '</div></div>';
   if (vue==='deforestation'){
     return h + renderDefoVue();
@@ -27766,7 +27767,17 @@ function renderCartesTab(){
   const liste = state.cartes || [];
   carteSuivi();
   const nEnCours = liste.filter(x=>x.statut==='demandee'||x.statut==='en_cours').length;
-  if (nEnCours) h += '<div class="panel" style="border-left:4px solid #1f5fa8"><div style="padding:12px 18px"><b>⏳ '+nEnCours+' carte'+(nEnCours>1?'s':'')+' en cours de génération</b> <span class="hint" style="margin:0 0 0 6px">Compte 3 à 6 minutes. Pas besoin de rafraîchir : cette liste se met à jour toute seule et te prévient quand la carte est prête.</span></div></div>';
+  if (state.cartesCharge && !state.cartesIndispo){
+    const nTerm = liste.filter(x=>x.statut==='terminee').length, nErr = liste.filter(x=>x.statut==='erreur').length, nTot = liste.filter(x=>x.statut!=='annulee').length;
+    const derniere = liste.filter(x=>x.statut==='terminee').map(x=>String(x.created_at).slice(0,10)).sort().pop();
+    h += '<div class="ls-kpis cd-k4">'
+      + '<div class="ls-k"><div class="k">Cartes demandées</div><div class="v">'+fmtNum(nTot)+'</div><div class="s">depuis le début</div></div>'
+      + '<div class="ls-k ok"><div class="k">Terminées</div><div class="v">'+fmtNum(nTerm)+'</div><div class="s">'+(derniere?'dernière le '+esc(dateFr(derniere)):'aucune pour le moment')+'</div></div>'
+      + '<div class="ls-k'+(nEnCours?' warn':'')+'"><div class="k">En cours</div><div class="v">'+fmtNum(nEnCours)+'</div><div class="s">'+(nEnCours?'génération en cours':'rien en attente')+'</div></div>'
+      + '<div class="ls-k'+(nErr?' bad':' ok')+'"><div class="k">En erreur</div><div class="v">'+fmtNum(nErr)+'</div><div class="s">'+(nErr?'à relancer ou supprimer':'aucune erreur')+'</div></div>'
+      + '</div>';
+  }
+  if (nEnCours) h += '<div class="panel cd-encours"><div style="padding:12px 18px"><b>⏳ '+nEnCours+' carte'+(nEnCours>1?'s':'')+' en cours de génération</b> <span class="hint" style="margin:0 0 0 6px">Compte 3 à 6 minutes. Pas besoin de rafraîchir : cette liste se met à jour toute seule et te prévient quand la carte est prête.</span></div></div>';
   h += '<div class="panel"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 18px 8px">'
     + '<div class="hint" style="margin:0">Une carte par demande. Le fichier est généré automatiquement et apparaît ici quand il est prêt (quelques minutes).</div>'
     + '<div style="display:flex;gap:8px;flex-wrap:wrap"><a href="modele_localites_carte.xlsx" download="modele_localites.xlsx" class="btn" style="text-decoration:none;display:inline-block">⬇ Télécharger le modèle Excel</a>'
@@ -27887,8 +27898,19 @@ function renderDefoVue(){
   const analyses = tout.filter(x=>x.etape==='analyse' && !(x.entrees && x.entrees.prep_id && tout.some(p=>p.id===x.entrees.prep_id)));
   const nEnCours = tout.filter(x=>x.statut==='demandee'||x.statut==='en_cours').length;
   let h = '';
+  if (state.defoCharge && !state.defoIndispo && liste.length){
+    let nOk = 0, nErr = 0, nTrav = 0, nAtt = 0;
+    liste.forEach(p=>{ try{ const t = defoEtapeLabel(p).txt; if (/^Base finale/.test(t)) nOk++; else if (/^Erreur/.test(t)) nErr++; else if (/^En cours/.test(t)) nTrav++; else nAtt++; }catch(e){ nAtt++; } });
+    h += '<div class="ls-kpis">'
+      + '<div class="ls-k"><div class="k">Dossiers</div><div class="v">'+fmtNum(liste.length)+'</div><div class="s">coopératives suivies</div></div>'
+      + '<div class="ls-k ok"><div class="k">Bases finales prêtes</div><div class="v">'+fmtNum(nOk)+'</div><div class="s">'+Math.round(nOk/liste.length*100)+' % des dossiers</div></div>'
+      + '<div class="ls-k'+(nAtt?' warn':'')+'"><div class="k">À traiter</div><div class="v">'+fmtNum(nAtt)+'</div><div class="s">une étape attend une décision</div></div>'
+      + '<div class="ls-k"><div class="k">Analyses en cours</div><div class="v">'+fmtNum(nTrav)+'</div><div class="s">'+(nTrav?'traitement en cours':'rien en cours')+'</div></div>'
+      + '<div class="ls-k'+(nErr?' bad':' ok')+'"><div class="k">En erreur</div><div class="v">'+fmtNum(nErr)+'</div><div class="s">'+(nErr?'à relancer':'aucune erreur')+'</div></div>'
+      + '</div>';
+  }
   if (nEnCours){ const nomsEc = [...new Set(tout.filter(x=>x.statut==='demandee'||x.statut==='en_cours').map(x=>x.cooperative_nom||'—'))];
-    h += '<div class="panel" style="border-left:4px solid #1f5fa8"><div style="padding:12px 18px"><b>⏳ '+nEnCours+' tâche'+(nEnCours>1?'s':'')+' en cours</b> <span class="hint" style="margin:0 0 0 6px">'+esc(nomsEc.slice(0,8).join(', ')+(nomsEc.length>8?'…':''))+' — la liste se met à jour toute seule.</span></div></div>'; }
+    h += '<div class="panel cd-encours"><div style="padding:12px 18px"><b>⏳ '+nEnCours+' tâche'+(nEnCours>1?'s':'')+' en cours</b> <span class="hint" style="margin:0 0 0 6px">'+esc(nomsEc.slice(0,8).join(', ')+(nomsEc.length>8?'…':''))+' — la liste se met à jour toute seule.</span></div></div>'; }
   h += '<div class="panel"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 18px 16px">'
     + '<div><b>Dossiers des coopératives</b><div class="hint" style="margin:2px 0 0">Une coopérative = un dossier = un seul parcours : <b>Préparation → Whisp → Analyse → Aperçu → Nettoyage → Base finale</b>. Dépose ses fichiers (KML, KMZ, GPX, GeoJSON, shapefile .zip), puis passe d\'un onglet à l\'autre : l\'onglet à faire s\'ouvre tout seul, les suivants attendent que le précédent soit terminé.</div></div>'
     + '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary" onclick="ouvrirDefoRapports()" title="Choisir des coopératives, par période, et télécharger leurs rapports dans un seul zip">📥 Télécharger les rapports</button><button class="btn" onclick="defoTelechargerBase()" title="Télécharge la base consolidée ECORIGINE la plus récente (GeoJSON dans un zip)">🗺️ Base consolidée ECORIGINE</button><button class="btn" onclick="ouvrirDefoCombine()" title="Un seul rapport Excel pour plusieurs coopératives">📊 Rapport combiné</button><button class="btn" onclick="ouvrirDefoRG()" title="Retraits par motif, décision fournisseur et volumes livrables pour plusieurs coopératives">📑 Rapport général des suppressions</button><button class="btn" onclick="ouvrirDefoCompare()" title="Comparer la version initiale et la version actualisée des données d\'une coopérative">⚖ Comparer deux versions</button><button class="btn" onclick="ouvrirDefoEnvoi()" title="Mails individuels aux coopératives ou mail groupé à un partenaire">✉ Envoyer par e-mail</button><button class="btn" onclick="ouvrirDefoGroupe()" title="Un ZIP pour plusieurs coopératives : reconnaissance par le nom des fichiers, registre retrouvé, une analyse par coopérative">📦 Dépôt groupé</button><button class="btn btn-primary" onclick="ouvrirDefoPrep()">🌳 Nouvelle préparation</button></div></div>';
