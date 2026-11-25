@@ -5008,7 +5008,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-25-676';
+const APP_VERSION = '2026-11-25-677';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -17795,6 +17795,13 @@ const JR_CSS = '<style>'
 + '.jdr i.n-paiement{background:#E0A526}.jdr i.n-retard{background:#E5594B}.jdr i.n-urgent{background:#F08A3C}.jdr i.n-silence{background:#9B7FE0}.jdr i.n-alerte{background:#5C8FD6}.jd-plus{font-size:11.5px;color:var(--ink-soft);padding-left:18px}.jd-vide{font-size:12.5px;color:var(--ink-soft);padding:8px 0}.jd.vide{opacity:.7}'
 + '@media (max-width:1100px){.jd-g{grid-template-columns:repeat(2,minmax(0,1fr))}}@media (max-width:640px){.jd-g{grid-template-columns:1fr}}'
 + '.jr.sombre .jd{background:color-mix(in srgb,var(--c) 22%,rgba(18,24,30,.45));border-color:color-mix(in srgb,var(--c) 55%,transparent)}.jr.sombre .jd-h b{color:#fff}.jr.sombre .jd-n{color:#fff}.jr.sombre .jd-al{background:#FF8C7F;color:#2A0C08}.jr.sombre .ja-b.prevu,.jr-fond.sombre .ja-b.prevu{background:rgba(255,255,255,.12);color:#CDD4CF}'
++ '.jr .ja.g-rouge,.jr-fond .ja.g-rouge{border:1.5px solid #D92D20;border-left:6px solid #D92D20;animation:jrClignote 1.6s ease-in-out infinite}.jr .ja.g-orange,.jr-fond .ja.g-orange{border:1.5px solid #F08A24;border-left:6px solid #F08A24}.jr .ja.g-vert,.jr-fond .ja.g-vert{border:1.5px solid #2E9E5B;border-left:6px solid #2E9E5B}'
++ '.jr.sombre .ja.g-rouge,.jr-fond.sombre .ja.g-rouge{border-color:#FF6B5E}.jr.sombre .ja.g-orange,.jr-fond.sombre .ja.g-orange{border-color:#FFA94D}.jr.sombre .ja.g-vert,.jr-fond.sombre .ja.g-vert{border-color:#5FD08A}'
++ '.jr .jd{cursor:pointer}.jr .jd.g-rouge{border:2px solid #D92D20;animation:jrClignote 1.6s ease-in-out infinite}.jr .jd.g-orange{border:2px solid #F08A24}.jr .jd.g-vert{border:2px solid #2E9E5B}'
++ '.jr.sombre .jd.g-rouge{border-color:#FF6B5E}.jr.sombre .jd.g-orange{border-color:#FFA94D}.jr.sombre .jd.g-vert{border-color:#5FD08A}'
++ '.jdr i.g-rouge{background:#D92D20;animation:jrClignote 1.6s ease-in-out infinite}.jdr i.g-orange{background:#F08A24}.jdr i.g-vert{background:#2E9E5B}.jr.sombre .jdr i.g-rouge{background:#FF6B5E}.jr.sombre .jdr i.g-orange{background:#FFA94D}.jr.sombre .jdr i.g-vert{background:#5FD08A}'
++ '.jdr-ok{margin-left:auto;flex:0 0 auto;padding:1px 8px;font-size:12px;line-height:1.6}'
++ '@keyframes jrClignote{0%,100%{box-shadow:0 0 0 0 rgba(217,45,32,0)}50%{box-shadow:0 0 0 4px rgba(217,45,32,.28)}}@media (prefers-reduced-motion:reduce){.jr .ja.g-rouge,.jr-fond .ja.g-rouge,.jr .jd.g-rouge,.jdr i.g-rouge{animation:none}}'
 + '</style>';
 const JR_COULEURS = { lots:'#1F6E5C', rdue:'#2C5FAE', certification:'#2E7D46', cooperatives:'#B8720A', paiements:'#8A4FB3', contrats:'#C2410C', logistique:'#B8720A', pilotage:'#5B6B68', plateforme:'#0E3B36', preparation:'#0F766E' };
 const JR_COCHE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
@@ -17939,10 +17946,19 @@ function jrItems(){
   });
   return l.sort((a,b)=>JR_NIV_ALERTE[a.niv].o-JR_NIV_ALERTE[b.niv].o || (a.j==null?999:a.j)-(b.j==null?999:b.j));
 }
+// Gravité d'une alerte : rouge = le plus grave (clignote jusqu'à ce que tu coches ✓), orange = moins grave, vert = pas de problème
+function jrGravite(x){
+  if (!x) return 'vert';
+  if (x.niv==='retard' || x.niv==='urgent') return 'rouge';
+  if (x.niv==='paiement') return (x.j!=null && x.j<=3) ? 'rouge' : 'orange';
+  if (x.niv==='silence' || x.niv==='alerte') return 'orange';
+  return 'vert';
+}
+function jrGraviteListe(l){ return l.some(x=>jrGravite(x)==='rouge') ? 'rouge' : (l.some(x=>jrGravite(x)==='orange') ? 'orange' : 'vert'); }
 function jrAssistantListe(l, max){
-  if (!l.length) return '<div class="ja ok"><span class="ja-b alerte" style="background:rgba(126,214,154,.2);color:#2E7D46">OK</span><div class="t"><b>Rien à signaler</b><small>Aucune alerte et aucune action en attente ici.</small></div></div>';
+  if (!l.length) return '<div class="ja g-vert ok"><span class="ja-b alerte" style="background:rgba(126,214,154,.2);color:#2E7D46">OK</span><div class="t"><b>Rien à signaler</b><small>Aucune alerte et aucune action en attente ici.</small></div></div>';
   return '<div class="ja-l">'+l.slice(0,max||l.length).map(x=>{ const m = x.m, lien = /^https:\/\//.test(m.lien||'') ? '<a href="'+esc(m.lien)+'" target="_blank" rel="noopener" title="Ouvrir le mail dans Outlook">↗</a>' : '';
-    return '<div class="ja"><span class="ja-b '+x.niv+'">'+JR_NIV_ALERTE[x.niv].lib+'</span><div class="t"><b title="'+esc(m.objet||'')+'">'+esc(m.objet||'')+'</b><small>'+esc(x.why)+(m.implication?' · '+esc(m.implication):'')+'</small></div>'+lien+'<button class="jr-ok" title="Marquer traité" onclick="mailMaj(\''+esc(m.id)+'\',{statut:\'traite\'})">✓</button></div>'; }).join('')+'</div>';
+    return '<div class="ja g-'+jrGravite(x)+'"><span class="ja-b '+x.niv+'">'+JR_NIV_ALERTE[x.niv].lib+'</span><div class="t"><b title="'+esc(m.objet||'')+'">'+esc(m.objet||'')+'</b><small>'+esc(x.why)+(m.implication?' · '+esc(m.implication):'')+'</small></div>'+lien+'<button class="jr-ok" title="Marquer traité" onclick="mailMaj(\''+esc(m.id)+'\',{statut:\'traite\'})">✓</button></div>'; }).join('')+'</div>';
 }
 function jrAssistantSection(jour, aujourdhui, rapports){
   const mois = state.jrMois || jour.slice(0,7), [y,m] = mois.split('-').map(Number), nbJ = new Date(Date.UTC(y,m,0)).getUTCDate();
@@ -17992,8 +18008,8 @@ function jrDomainesSection(){
   JR_DOMAINES.forEach((d,i)=>{
     const l = tous.filter(x=>x.dom===d.cle); if (d.cle==='autre' && !l.length) return;
     const nAl = l.filter(x=>x.niv!=='prevu').length;
-    const rows = l.length ? l.slice(0,3).map(x=>'<div class="jdr"><i class="n-'+x.niv+'"></i><div><b>'+esc(x.m.objet||'')+'</b><small>'+esc(x.why)+'</small></div></div>').join('') + (l.length>3 ? '<div class="jd-plus">+ '+(l.length-3)+' autre'+(l.length-3>1?'s':'')+'</div>' : '') : '<div class="jd-vide">Rien à signaler</div>';
-    bat.push('<button type="button" class="jd'+(l.length?'':' vide')+'" style="--c:'+d.c+'" onclick="jrOuvrir(\'domaine\','+i+')"><div class="jd-h"><div><b>'+esc(d.titre)+'</b><small>'+esc(d.sous)+'</small></div><span class="jd-n">'+l.length+'</span></div>'+(nAl?'<div class="jd-al">'+nAl+' alerte'+(nAl>1?'s':'')+'</div>':'')+'<div class="jd-r">'+rows+'</div></button>');
+    const rows = l.length ? l.slice(0,3).map(x=>'<div class="jdr"><i class="g-'+jrGravite(x)+'"></i><div><b>'+esc(x.m.objet||'')+'</b><small>'+esc(x.why)+'</small></div><button type="button" class="jr-ok jdr-ok" title="Marquer traité" onclick="event.stopPropagation();mailMaj(\''+esc(x.m.id)+'\',{statut:\'traite\'})">✓</button></div>').join('') + (l.length>3 ? '<div class="jd-plus">+ '+(l.length-3)+' autre'+(l.length-3>1?'s':'')+'</div>' : '') : '<div class="jd-vide">Rien à signaler</div>';
+    bat.push('<div role="button" tabindex="0" class="jd g-'+jrGraviteListe(l)+(l.length?'':' vide')+'" style="--c:'+d.c+'" onclick="jrOuvrir(\'domaine\','+i+')" onkeydown="if(event.key===\'Enter\')jrOuvrir(\'domaine\','+i+')"><div class="jd-h"><div><b>'+esc(d.titre)+'</b><small>'+esc(d.sous)+'</small></div><span class="jd-n">'+l.length+'</span></div>'+(nAl?'<div class="jd-al">'+nAl+' alerte'+(nAl>1?'s':'')+'</div>':'')+'<div class="jd-r">'+rows+'</div></div>');
   });
   return jrSection('3','#1F6E5C','Alertes par domaine','Tes mails et actions à venir, rangés selon ton activité : clique une case pour tout voir',  '<div class="jd-g">'+bat.join('')+'</div>','c12');
 }
