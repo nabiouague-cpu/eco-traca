@@ -4938,7 +4938,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-25-642';
+const APP_VERSION = '2026-11-25-643';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -12944,11 +12944,16 @@ function suvBatir(lots, camions){
   }
   const sessDe = {}; groupes.forEach((idxs,g)=>idxs.forEach(i=>{ sessDe[i] = g; }));
   const lotdate = {}; lots.forEach(L=>{ if (res.lotin[L.num] > 0) lotdate[L.num] = T[groupes[sessDe[res.lotidx[L.num]]].slice(-1)[0]].jour; });
-  let carry = 0; const sheets = [];
+  let carry = 0, carryIdx = []; const sheets = [], cons = T.map(()=>0);
   groupes.forEach((idxs,g)=>{
     const lotsS = lots.filter(L=>res.lotin[L.num] > 0 && sessDe[res.lotidx[L.num]] === g);
     const entree = carry + idxs.reduce((s,i)=>s+T[i].avant,0), used = lotsS.reduce((s,L)=>s+res.lotin[L.num],0), queue = Math.max(0, entree-used);
-    sheets.push({ d:T[idxs[idxs.length-1]].jour, idxs, lots:lotsS, report:carry, queue, g }); carry = queue;
+    // Origine de la queue de lot : les camions (de cette séance ou d'avant) dont une part n'a pas encore été
+    // consommée par les lots des séances déjà bouclées. Le reliquat est le MÊME à la fin d'une séance
+    // (queIdx) et au début de la suivante (repIdx) : c'est le même cacao reporté.
+    lotsS.forEach(L=>(res.comp[L.num]||[]).forEach(([i,k])=>{ cons[i] += k; }));
+    const queIdx = []; for (let i=0;i<nT;i++) if (sessDe[i] <= g && T[i].avant - cons[i] > 1) queIdx.push(i);
+    sheets.push({ d:T[idxs[idxs.length-1]].jour, idxs, lots:lotsS, report:carry, queue, g, repIdx:carryIdx, queIdx }); carry = queue; carryIdx = queIdx;
   });
   const dern = sheets.reduce((m,s,k)=>s.lots.length ? k : m, -1);
   const feuilles = sheets.slice(0, dern+1);
@@ -12963,6 +12968,8 @@ function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds, Rflat){
   const NUM = '#,##0', PCT = '0.00%', dv = (a,b)=>b ? a/b : 0;
   const milliers = n=>String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
   const etiq = t=>suvCourt(t.coop)+' ('+t.conn+')';
+  // Libellé d'une queue de lot : le nom de la coopérative d'où vient le reliquat, suivi de (Queue de lot).
+  const etiqQueue = idxs=>{ const noms = Array.from(new Set((idxs||[]).map(i=>suvCourt(M.T[i].coop)).filter(Boolean))); return noms.length ? noms.join(' + ')+' (Queue de lot)' : 'QUEUE DE LOT'; };
   const put = (ws, r, c, v, o)=>{ o = o||{}; const x = ws.getCell(r,c); x.value = v; x.font = o.color ? Object.assign({}, o.b ? FB : FN, { color:o.color }) : (o.b ? FB : FN); if (o.fmt) x.numFmt = o.fmt; if (o.al) x.alignment = o.al; if (o.fill) x.fill = o.fill; if (o.box) x.border = cadre; return x; };
   // Première feuille du classeur (« le premier rapport ») : le tableau simple (déchargements <-> lots
   // produits, niveau fabrication), aux mêmes couleurs et à la même logique d'agencement que le modèle
@@ -13001,7 +13008,7 @@ function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds, Rflat){
       const first = rowTS;
       let rc = rowTS;
       g.sh.forEach((s,si)=>{
-        if (si===0 && s.report > 0.5){ setQ(rc,2,'QUEUE DE LOT'); const x = fs.getCell(rc,5); x.value = Math.round(s.report); x.numFmt = NUM; x.font = { name:'Arial', size:10, bold:true, italic:true, color:QUEUE_FONT_TS }; x.alignment = CTR; rc++; }
+        if (si===0 && s.report > 0.5){ setQ(rc,2,etiqQueue(s.repIdx)); const x = fs.getCell(rc,5); x.value = Math.round(s.report); x.numFmt = NUM; x.font = { name:'Arial', size:10, bold:true, italic:true, color:QUEUE_FONT_TS }; x.alignment = CTR; rc++; }
         s.idxs.forEach(i=>{
           const t = M.T[i], sacs = achatSacsRetenus(t.a);
           put(fs,rc,1,t.jour,{ al:CTR }); put(fs,rc,2,suvCourt(t.coop),{ al:CTR });
@@ -13017,7 +13024,7 @@ function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds, Rflat){
           put(fs,rl,10,L.w,{ al:CTR, fmt:NUM }); put(fs,rl,11,L.client||'',{ al:CTR });
           totLotJ += L.w; lotRows.push(rl); rl++;
         });
-        if (si===g.sh.length-1 && s.queue > 0.5){ setQ(rl,9,'QUEUE DE LOT'); const x = fs.getCell(rl,10); x.value = Math.round(s.queue); x.numFmt = NUM; x.font = { name:'Arial', size:10, bold:true, italic:true, color:QUEUE_FONT_TS }; x.alignment = CTR; rl++; }
+        if (si===g.sh.length-1 && s.queue > 0.5){ setQ(rl,9,etiqQueue(s.queIdx)); const x = fs.getCell(rl,10); x.value = Math.round(s.queue); x.numFmt = NUM; x.font = { name:'Arial', size:10, bold:true, italic:true, color:QUEUE_FONT_TS }; x.alignment = CTR; rl++; }
       });
       const last = Math.max(rc, rl) - 1;
       for (let rr=rowTS; rr<=last; rr++) fs.getCell(rr,7).fill = NOIR;
@@ -13105,7 +13112,7 @@ function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds, Rflat){
     q++; [2,4,7].forEach(c=>put(w,q,c,'VOLUME',{ b:true, al:CTR }));
     q++; const first = q; let entree = 0;
     if (s.report > 0){
-      put(w,q,1,s.report < 25000 ? 'QUEUE DE LOT' : "CACAO EN ATTENTE D'USINAGE",{ b:true }); put(w,q,4,Math.round(s.report),{ fmt:NUM });
+      put(w,q,1,s.report < 25000 ? etiqQueue(s.repIdx) : "CACAO EN ATTENTE D'USINAGE",{ b:true }); put(w,q,4,Math.round(s.report),{ fmt:NUM });
       for (let c=1;c<=7;c++) w.getCell(q,c).fill = QUEUE;
       entree += Math.round(s.report); q++;
     }
@@ -13120,7 +13127,7 @@ function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds, Rflat){
     const lfirst = q; let sortie = 0;
     s.lots.forEach(L=>{ put(w,q,4,L.num,{ al:CTR, fmt:'0' }); put(w,q,5,L.w,{ fmt:NUM }); sortie += L.w; q++; });
     if (s.queue > 1){
-      put(w,q,1,s.queue < 25000 ? 'QUEUE DE LOT' : "CACAO EN ATTENTE D'USINAGE",{ b:true }); put(w,q,5,Math.round(s.queue),{ fmt:NUM });
+      put(w,q,1,s.queue < 25000 ? etiqQueue(s.queIdx) : "CACAO EN ATTENTE D'USINAGE",{ b:true }); put(w,q,5,Math.round(s.queue),{ fmt:NUM });
       for (let c=1;c<=7;c++) w.getCell(q,c).fill = QUEUE;
       sortie += Math.round(s.queue); q++;
     }
