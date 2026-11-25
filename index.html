@@ -4938,7 +4938,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-25-650';
+const APP_VERSION = '2026-11-25-651';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -12888,6 +12888,9 @@ async function lotsRapportClient(clientNom){
 // séances de 3 à 4 camions aux dates les plus proches ; coopérative = nom court + (n° de connaissement) ; queue de lot reportée d'une séance à l'autre ;
 // freinte brute = (lots + queues) - vidées, dont 80 % de déchets (le reste = perte d'eau), brisures / grabots / ficelles à 0.
 const SUV_PART_DECHETS = 0.80;
+// Clients dont la freinte est répartie lot par lot (au lieu d'un taux unique identique sur tous les lots) quand le rapport est en mode « déduit ».
+// Autres clients : inchangés. Étendre cette liste pour appliquer la même méthode à d'autres clients.
+const SUV_FREINTE_VARIEE = ['TOUTON'];
 function suvCourt(nom){
   let x = String(nom||'').toUpperCase();
   ['COOP-CA','COOP CA','SCOOPS'].forEach(m=>{ x = x.split(m).join(' '); });
@@ -12926,6 +12929,31 @@ function suvBatir(lots, camions){
   let mode = 'refaction', res = consommer(T0.map(t=>t.ref/t.avant));
   // Si, avec la réfaction, le cacao reçu ne suffit pas à faire les lots, la perte réelle est forcément plus faible : taux unique déduit du poids entré et du poids sorti.
   if (somme(res.lotshort) > 1 && totW < totAv){ const rs = 1 - totW/totAv; mode = 'deduite'; res = consommer(T0.map(()=>rs)); Object.keys(res.lotshort).forEach(k=>{ if (res.lotshort[k] < 1) res.lotshort[k] = 0; }); }
+  // Freinte répartie : le poids entré (accepté avant réfaction) et le poids des lots restent exacts, ainsi que le total de la perte
+  // sur l'ensemble des lots du client. Seule la répartition de cette perte entre les lots change : un lot alimenté par des camions
+  // à forte réfaction en porte un peu plus, un lot alimenté par des camions propres un peu moins (la réfaction n'est qu'une estimation,
+  // elle sert de clé de répartition, pas de perte réelle). Les lots des autres clients et les reliquats aux frontières sont inchangés.
+  if (mode==='deduite' && SUV_FREINTE_VARIEE.length){
+    const zone = lots.filter(L=>SUV_FREINTE_VARIEE.indexOf(String(L.client||'').toUpperCase())>=0 && res.lotin[L.num]>0);
+    if (zone.length>1){
+      const moy = T0.reduce((a,t)=>a+t.ref,0)/Math.max(1,T0.reduce((a,t)=>a+t.avant,0)), cle = {}; let S = 0, F = 0;
+      zone.forEach(L=>{ cle[L.num] = (res.comp[L.num]||[]).reduce((a,[i,k])=>a + k*(T0[i].ref/T0[i].avant + 0.25*moy), 0); S += cle[L.num]; F += res.lotin[L.num] - L.w; });
+      if (S>0 && F>0){
+        const reste = T0.map(t=>t.avant); let i = 0, last = 0, man = 0; const comp = {}, lotin = {}, lotshort = {}, lotidx = {};
+        for (const L of lots){
+          let b = res.lotin[L.num]||0; if (cle[L.num]!=null) b = L.w + F*cle[L.num]/S;
+          let used = 0; comp[L.num] = [];
+          while (b > 1e-6){
+            if (i >= T0.length){ man += b; break; }
+            const k = Math.min(b, reste[i]); reste[i] -= k; b -= k; used += k; comp[L.num].push([i,k]); last = i;
+            if (reste[i] < 1e-6) i++;
+          }
+          lotin[L.num] = used; lotshort[L.num] = 0; lotidx[L.num] = last;
+        }
+        if (man < 1) res = { comp, lotin, lotshort, lotidx, last };
+      }
+    }
+  }
   const manque = somme(res.lotshort);
   const T = T0.slice(0, res.last+1), nT = T.length;       // camions au-delà du dernier utilisé = en attente d'usinage : jamais dans le rapport
   // séances : groupes de 3 ou 4 camions (2 ou 5 en bout de série) dont la somme des écarts de dates est minimale
@@ -13200,7 +13228,7 @@ function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds, Rflat){
 // Modèle SUV d'un site (séances, queues de lot) SANS classeur : même calcul que rdueConstruireRapportSuv.
 function suvModeleSite(siteCode){
   const lots = (state.lotsUsinage||[]).filter(l=>l.site_code===siteCode && rdueNumLot(l)!=null).sort(rdueParNum)
-    .map(l=>({ id:l.id, num:rdueNumLot(l), w:lotsUsinagePoidsRetenu(l) })).filter(L=>L.w>0);
+    .map(l=>({ id:l.id, num:rdueNumLot(l), w:lotsUsinagePoidsRetenu(l), client:l.client||'' })).filter(L=>L.w>0);
   const camions = suvCamions(siteCode);
   return (lots.length && camions.length) ? suvBatir(lots, camions) : null;
 }
