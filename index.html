@@ -4938,7 +4938,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-25-641';
+const APP_VERSION = '2026-11-25-642';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -6434,7 +6434,7 @@ function renderFichesTracabilite(coopId){
         const etat = !f.volumes_enregistres ? '<span class="badge warn" title="Les volumes de cette fiche ne sont pas encore enregistrés">Volumes à enregistrer</span>' : '<span class="badge neutral">Volumes enregistrés</span>';
         return '<tr data-id="'+esc(f.id)+'"><td><b>'+esc(f.connaissement||'—')+'</b></td><td class="nom-fichier" title="'+esc(nom)+'">'+esc(nom)+'</td>'
           + '<td>'+esc(dateFr(String(dateAjoutStockage(f)).slice(0,10))||'—')+'</td><td>'+fmtOctets(f.taille)+'</td><td>'+etat+'</td>'
-          + '<td style="white-space:nowrap"><button class="doc-btn" onclick="telechargerFichierDemande(\''+escJs(f.path)+'\',\''+escJs(nom||'fiche')+'\')" title="Fiche de traçabilité au format ECORIGINE (version actuellement stockée)">📥 Format ECORIGINE</button> '
+          + '<td style="white-space:nowrap"><button class="doc-btn" onclick="'+(f.connaissement ? 'ocFicheNormaleTelecharger(\''+escJs(coopId)+'\',\''+escJs(f.connaissement)+'\')' : 'telechargerFichierDemande(\''+escJs(f.path)+'\',\''+escJs(nom||'fiche')+'\')')+'" title="Fiche de traçabilité au format ECORIGINE, reconstruite avec le modèle et les données actuels">📥 Format ECORIGINE</button> '
           + (f.connaissement ? '<button class="doc-btn" onclick="ocCargillTelecharger(\''+escJs(coopId)+'\',\''+escJs(f.connaissement)+'\')" title="Même traçabilité au format Cargill (EUDR Delivery Template)">📥 Format Cargill</button> ' : '')
           + (f.connaissement ? '<button class="doc-btn" onclick="ocFicheRegenererTelecharger(\''+escJs(coopId)+'\',\''+escJs(f.connaissement)+'\',\''+escJs(f.path)+'\')" title="Reconstruit cette fiche avec les données et le modèle actuels, remplace la version stockée, puis la télécharge">♻ Régénérer</button>' : '')+'</td></tr>';
       }).join('')
@@ -15916,8 +15916,15 @@ async function rdueTelechargerTout(client, formatFiche){
           .filter(f=>f.type==='product_movements' && f.connaissement && cns.indexOf(liasseCnNorm(f.connaissement))>=0);
         const vusFic = new Set();
         for (const f of dfs){
-          const { data, error } = await supabaseClient.storage.from('documents-coop').download(f.path);
-          if (error){ koFic++; continue; }
+          // Fiche reconstruite avec le modèle et les données actuels (en-tête CLIENT, ville d'origine) : la version
+          // stockée peut dater d'avant une évolution du modèle. À défaut, repli sur la version stockée.
+          let data = null;
+          try{ data = (await ocFicheNormaleConstruire(c.id, f.connaissement)).blob; }catch(e){ data = null; }
+          if (!data){
+            const r = await supabaseClient.storage.from('documents-coop').download(f.path);
+            if (r.error){ koFic++; continue; }
+            data = r.data;
+          }
           // Nom dans le ZIP = le même nom que la liasse documentaire correspondante (même connaissement),
           // seule l'extension change -- pour que la fiche et sa liasse se retrouvent sous un nom identique
           // dans le dossier de la coopérative. À défaut de liasse retrouvée (manquante), repli sur le
@@ -17744,31 +17751,33 @@ async function ocConstruireFicheTracabiliteDirecte(allocations, sacsArr, datesAr
     curseur = fin;
   }
   sheet1 = out + sheet1.slice(curseur);
-  // Ajoute une ligne « CLIENT » à l'en-tête, après « NUMERO CONNAISSEMENT » : la ligne 9 du modèle est une
-  // bande fusionnée (C9:I9) vide, prévue comme simple espacement — on la dé-fusionne et la remplit sur le
-  // même gabarit que les autres lignes de l'en-tête (libellé / « : » / valeur), et on déplace vers elle la
-  // bordure de fermeture du bandeau (I/J « s=44/50 ») qui se trouvait jusque-là sur la ligne 8.
-  const remplacerFixe = (ancien, nouveau, quoi)=>{ if (sheet1.indexOf(ancien)<0) throw new Error(quoi+" introuvable dans le modèle Excel (ligne CLIENT)."); sheet1 = sheet1.replace(ancien, nouveau); };
-  remplacerFixe(
-    '<c r="I8" s="44" t="n"></c><c r="J8" s="50" t="n"></c>',
-    '<c r="I8" s="58" t="n"></c><c r="J8" s="49" t="n"></c>',
-    'Bordure de fermeture (ligne 8)'
-  );
-  remplacerFixe(
-    '<c r="C9" s="87" t="n"></c><c r="D9" s="88" t="n"></c><c r="E9" s="88" t="n"></c><c r="F9" s="88" t="n"></c><c r="G9" s="88" t="n"></c><c r="H9" s="88" t="n"></c><c r="I9" s="89" t="n"></c><c r="J9" s="25" t="n"></c>',
-    '<c r="C9" s="67" t="inlineStr"><is><t>CLIENT</t></is></c><c r="D9" s="68" t="n"></c><c r="E9" s="68" t="n"></c><c r="F9" s="68" t="n"></c><c r="G9" s="24" t="n"></c><c r="H9" s="24" t="inlineStr"><is><t>:</t></is></c><c r="I9" s="44" t="n"></c><c r="J9" s="50" t="n"></c>',
-    'Ligne 9'
-  );
-  remplacerFixe('<mergeCells count="11"><mergeCell ref="C6:D6"/><mergeCell ref="C9:I9"/>', '<mergeCells count="10"><mergeCell ref="C6:D6"/>', 'Fusion C9:I9');
-  // En-tête : informations de la coopérative (B) dont les producteurs figurent dans la fiche, et connaissement concerné.
+  // En-tête (lignes 4 à 9) : EXPORTATEUR, puis CLIENT juste en dessous, puis FOURNISSEUR, VILLE D'ORIGINE,
+  // DATE et NUMERO DE CONNAISSEMENT. Le modèle n'a que 5 lignes d'en-tête (4 à 8) et une bande vide fusionnée
+  // en ligne 9 : on réécrit les lignes 5 à 9 sur le même gabarit (libellé / « : » / valeur), on retire les
+  // fusions des lignes 6, 7 et 9, et la bordure de fermeture du bandeau passe sur la dernière ligne (9).
   const ent = entete || {};
-  const celluleTexte = (ref, style, txt)=> txt ? '<c r="'+ref+'" s="'+style+'" t="inlineStr"><is><t>'+escXmlTracabilite(txt)+'</t></is></c>' : '<c r="'+ref+'" s="'+style+'" t="n"></c>';
-  const posEnt = (ref, style, txt)=>{ const re = new RegExp('<c r="'+ref+'" s="'+style+'" t="n"></c>'); if (!re.test(sheet1)) throw new Error('Cellule '+ref+" introuvable dans le modèle Excel."); sheet1 = sheet1.replace(re, celluleTexte(ref, style, txt)); };
-  posEnt('I5','58', ent.fournisseur||nomCoop);
-  posEnt('I6','58', ent.ville||'');
-  posEnt('I7','58', ent.dateConnaissement||'');
-  posEnt('I8','58', ent.numero||'');
-  posEnt('I9','44', ent.client||'');
+  const ligneEnt = (r, libelle, valeur, derniere)=>
+    '<row r="'+r+'"><c r="A'+r+'" s="81" t="n"></c><c r="B'+r+'" s="81" t="n"></c>'
+    + '<c r="C'+r+'" s="67" t="inlineStr"><is><t>'+escXmlTracabilite(libelle)+'</t></is></c>'
+    + '<c r="D'+r+'" s="68" t="n"></c><c r="E'+r+'" s="68" t="n"></c><c r="F'+r+'" s="68" t="n"></c><c r="G'+r+'" s="24" t="n"></c>'
+    + '<c r="H'+r+'" s="24" t="inlineStr"><is><t>:</t></is></c>'
+    + (valeur ? '<c r="I'+r+'" s="'+(derniere?'44':'58')+'" t="inlineStr"><is><t>'+escXmlTracabilite(valeur)+'</t></is></c>' : '<c r="I'+r+'" s="'+(derniere?'44':'58')+'" t="n"></c>')
+    + '<c r="J'+r+'" s="'+(derniere?'50':'49')+'" t="n"></c><c r="K'+r+'" s="81" t="n"></c></row>';
+  const lignesEnt = [
+    [5, 'CLIENT', ent.client||''],
+    [6, 'NOM FOURNISSEUR', ent.fournisseur||nomCoop],
+    [7, "VILLE D'ORIGINE", ent.ville||''],
+    [8, 'DATE DE CONNAISSEMENT', ent.dateConnaissement||''],
+    [9, 'NUMERO CONNAISSEMENT', ent.numero||'']
+  ];
+  lignesEnt.forEach(([r, lib, val])=>{
+    const re = new RegExp('<row r="'+r+'">[\\s\\S]*?</row>');
+    if (!re.test(sheet1)) throw new Error('Ligne '+r+" de l'en-tête introuvable dans le modèle Excel.");
+    sheet1 = sheet1.replace(re, ()=>ligneEnt(r, lib, val, r===9));
+  });
+  ['<mergeCell ref="C6:D6"/>','<mergeCell ref="C7:D7"/>','<mergeCell ref="C9:I9"/>'].forEach(m=>{ if (sheet1.indexOf(m)<0) throw new Error('Fusion '+m+" introuvable dans le modèle Excel."); sheet1 = sheet1.replace(m,''); });
+  if (sheet1.indexOf('<mergeCells count="11">')<0) throw new Error('Nombre de fusions inattendu dans le modèle Excel.');
+  sheet1 = sheet1.replace('<mergeCells count="11">','<mergeCells count="8">');
   // Totaux : le modèle soustrait des « non conformes » calculés par des formules qui pointent des colonnes absentes (#REF!).
   // Ici tous les producteurs sont conformes : on additionne simplement les lignes.
   const totSacs = lignes.reduce((t,l)=>t+(Number(l.sacs)||0), 0), totKg = lignes.reduce((t,l)=>t+(Number(l.a.kg)||0), 0);
