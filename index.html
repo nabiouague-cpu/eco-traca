@@ -4938,7 +4938,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-25-652';
+const APP_VERSION = '2026-11-25-653';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -12888,9 +12888,7 @@ async function lotsRapportClient(clientNom){
 // séances de 3 à 4 camions aux dates les plus proches ; coopérative = nom court + (n° de connaissement) ; queue de lot reportée d'une séance à l'autre ;
 // freinte brute = (lots + queues) - vidées, dont 80 % de déchets (le reste = perte d'eau), brisures / grabots / ficelles à 0.
 const SUV_PART_DECHETS = 0.80;
-// Clients dont la freinte est répartie lot par lot (au lieu d'un taux unique identique sur tous les lots) quand le rapport est en mode « déduit ».
-// Autres clients : inchangés. Étendre cette liste pour appliquer la même méthode à d'autres clients.
-const SUV_FREINTE_VARIEE = ['TOUTON'];
+
 function suvCourt(nom){
   let x = String(nom||'').toUpperCase();
   ['COOP-CA','COOP CA','SCOOPS'].forEach(m=>{ x = x.split(m).join(' '); });
@@ -12930,31 +12928,32 @@ function suvBatir(lots, camions){
   // Si, avec la réfaction, le cacao reçu ne suffit pas à faire les lots, la perte réelle est forcément plus faible : taux unique déduit du poids entré et du poids sorti.
   if (somme(res.lotshort) > 1 && totW < totAv){ const rs = 1 - totW/totAv; mode = 'deduite'; res = consommer(T0.map(()=>rs)); Object.keys(res.lotshort).forEach(k=>{ if (res.lotshort[k] < 1) res.lotshort[k] = 0; }); }
   // Freinte répartie : le poids entré (accepté avant réfaction) et le poids des lots restent exacts, ainsi que le total de la perte
-  // sur l'ensemble des lots du client. Seule la répartition de cette perte entre les lots change. Les lots des autres clients et
-  // les reliquats aux frontières sont inchangés.
-  if (mode==='deduite' && SUV_FREINTE_VARIEE.length){
-    const zone = lots.filter(L=>SUV_FREINTE_VARIEE.indexOf(String(L.client||'').toUpperCase())>=0 && res.lotin[L.num]>0);
-    if (zone.length>1){
-      // Clé de répartition : le temps passé entre le déchargement du camion et l'usinage estimé du lot (jour du dernier camion du lot + 1 jour).
-      // Plus le cacao a attendu, plus il perd d'humidité : un lot fait avec du cacao déchargé plus tôt porte un peu plus de freinte.
+  // de chaque client. Seule la répartition de cette perte entre les lots d'un même client change : le temps passé entre le
+  // déchargement du camion et l'usinage estimé du lot sert de clé (plus le cacao a attendu, plus il perd d'humidité). Le total
+  // de chaque client, et donc le reliquat à la frontière entre deux clients, ne bouge pas. Tous les poids sont ensuite arrondis au
+  // kg par cumul (aucun kg ajouté ni perdu : entrée = lots + freinte, au kg près, dans chaque rapport).
+  if (mode==='deduite'){
+    const need = {}; lots.forEach(L=>{ need[L.num] = res.lotin[L.num]||0; });
+    Array.from(new Set(lots.map(L=>String(L.client||'').toUpperCase()))).forEach(cli=>{
+      const zone = lots.filter(L=>String(L.client||'').toUpperCase()===cli && res.lotin[L.num]>0);
+      if (zone.length < 2) return;
       const cle = {}; let S = 0, F = 0;
       zone.forEach(L=>{ const parts = res.comp[L.num]||[]; if (!parts.length) return; const tsProd = T0[parts[parts.length-1][0]].ts + 24;
         cle[L.num] = parts.reduce((a,[i,k])=>a + k*(1 + Math.max(0, (tsProd - T0[i].ts)/24)), 0); S += cle[L.num]; F += res.lotin[L.num] - L.w; });
-      if (S>0 && F>0){
-        const reste = T0.map(t=>t.avant); let i = 0, last = 0, man = 0; const comp = {}, lotin = {}, lotshort = {}, lotidx = {};
-        for (const L of lots){
-          let b = res.lotin[L.num]||0; if (cle[L.num]!=null) b = L.w + F*cle[L.num]/S;
-          let used = 0; comp[L.num] = [];
-          while (b > 1e-6){
-            if (i >= T0.length){ man += b; break; }
-            const k = Math.min(b, reste[i]); reste[i] -= k; b -= k; used += k; comp[L.num].push([i,k]); last = i;
-            if (reste[i] < 1e-6) i++;
-          }
-          lotin[L.num] = used; lotshort[L.num] = 0; lotidx[L.num] = last;
-        }
-        if (man < 1) res = { comp, lotin, lotshort, lotidx, last };
+      if (S > 0 && F > 0) zone.forEach(L=>{ need[L.num] = L.w + F*cle[L.num]/S; });
+    });
+    let cum = 0, prevR = 0; lots.forEach(L=>{ cum += need[L.num]; const r = Math.round(cum); need[L.num] = r - prevR; prevR = r; });
+    const reste = T0.map(t=>t.avant); let i = 0, last = 0, man = 0; const comp = {}, lotin = {}, lotshort = {}, lotidx = {};
+    for (const L of lots){
+      let b = need[L.num]||0, used = 0; comp[L.num] = [];
+      while (b > 1e-6){
+        if (i >= T0.length){ man += b; break; }
+        const k = Math.min(b, reste[i]); reste[i] -= k; b -= k; used += k; comp[L.num].push([i,k]); last = i;
+        if (reste[i] < 1e-6) i++;
       }
+      lotin[L.num] = used; lotshort[L.num] = 0; lotidx[L.num] = last;
     }
+    if (man < 1) res = { comp, lotin, lotshort, lotidx, last };
   }
   const manque = somme(res.lotshort);
   const T = T0.slice(0, res.last+1), nT = T.length;       // camions au-delà du dernier utilisé = en attente d'usinage : jamais dans le rapport
@@ -13151,8 +13150,14 @@ function suvClasseur(ExcelJS, M, meta, avecOT, scopeIds, Rflat){
       put(ws,r,5,{ formula:'SUMIF(B'+R0+':B'+RL+',"'+cl.nom+'",E'+R0+':E'+RL+')', result:lotsAffiches.filter(L=>L.client===cl.nom).reduce((s,L)=>s+L.w,0) },{ b:true, fmt:NUM }); r++;
     });
     r++;
-    const totAvantAffiche = scopeIds ? sheetsAffichees.reduce((s,sh)=>s+sh.idxs.reduce((u,i)=>u+M.T[i].avant,0),0) : M.totAvant;
-    put(ws,r,1,'Camions vidés (poids net avant réfaction)',{ b:true }); put(ws,r,5,totAvantAffiche,{ b:true, fmt:NUM });
+    const camionsAff = scopeIds ? sheetsAffichees.reduce((s,sh)=>s+sh.idxs.reduce((u,i)=>u+M.T[i].avant,0),0) : M.totAvant;
+    // Queue de lot d'ouverture : cacao arrivé dans le rapport d'un autre client, usiné ici -- il fait partie de l'entrée de ce rapport.
+    const queueOuv = sheetsAffichees.reduce((s,sh)=>s + (sh.report > 0.5 && !sheetsAffichees.some(x=>x.g===sh.g-1) ? sh.report : 0), 0);
+    const totAvantAffiche = camionsAff + queueOuv;
+    put(ws,r,1,'Camions vidés'+(queueOuv > 0.5 ? ' + queue de lot d\'ouverture' : '')+' (poids accepté avant réfaction)',{ b:true }); put(ws,r,5,Math.round(totAvantAffiche),{ b:true, fmt:NUM });
+    if (queueOuv > 0.5){ r++; put(ws,r,1,'dont queue de lot d\'ouverture (rapport précédent)',{ b:false }); put(ws,r,5,Math.round(queueOuv),{ fmt:NUM }); }
+    r++; put(ws,r,1,'Freinte de production (entrée − lots)',{ b:true }); put(ws,r,5,Math.round(totAvantAffiche - totLots),{ b:true, fmt:NUM });
+    put(ws,r,6,dv(totAvantAffiche - totLots, totAvantAffiche),{ fmt:PCT });
     (avecOT ? [40,12,20,16,16,120,18,22,16] : [40,12,20,16,16,120]).forEach((w,k)=>{ ws.getColumn(k+1).width = w; });
   }
   // une feuille par séance
