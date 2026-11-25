@@ -4938,7 +4938,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-25-659';
+const APP_VERSION = '2026-11-25-660';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -16032,7 +16032,7 @@ async function rdueTelechargerTout(client, formatFiche){
           // Fiche reconstruite avec le modèle et les données actuels (en-tête CLIENT, ville d'origine) : la version
           // stockée peut dater d'avant une évolution du modèle. À défaut, repli sur la version stockée.
           let data = null;
-          try{ data = (await ocFicheNormaleConstruire(c.id, f.connaissement)).blob; }catch(e){ data = null; }
+          try{ data = (await ocFicheNormaleConstruire(c.id, f.connaissement, client)).blob; }catch(e){ data = null; }
           if (!data){
             const r = await supabaseClient.storage.from('documents-coop').download(f.path);
             if (r.error){ koFic++; continue; }
@@ -16067,7 +16067,7 @@ async function rdueTelechargerTout(client, formatFiche){
           if (!kFic || dejaFic.has(kFic) || cns.indexOf(kFic)<0 || !tracees.has(kFic)) continue;
           dejaFic.add(kFic);
           try{
-            const data = (await ocFicheNormaleConstruire(c.id, code)).blob;
+            const data = (await ocFicheNormaleConstruire(c.id, code, client)).blob;
             const liasseCorrespondante = (parCnLia[kFic]||[])[0];
             let base = kFic;
             if (liasseCorrespondante && liasseCorrespondante.nom){ const pL = String(liasseCorrespondante.nom).split('.'); base = pL.length>1 ? pL.slice(0,-1).join('.') : liasseCorrespondante.nom; }
@@ -18271,7 +18271,8 @@ async function ocCargillTelecharger(coopId, code){
   catch(e){ showToast('Format Cargill impossible : '+(e && e.message ? e.message : e), 'error'); }
 }
 // ---- Fiche de traçabilité au format normal (modèle officiel) refaite depuis le traçage réel, et choix du format avant tout téléchargement ----
-async function ocFicheNormaleConstruire(coopId, code){
+// clientForce : client du dossier de conformité en cours (prime sur l'ancienne destination portée par le camion).
+async function ocFicheNormaleConstruire(coopId, code, clientForce){
   const lig = (state.achats||[]).filter(a=>a.cooperative_id===coopId && a.producteur_id && String(a.connaissement)===String(code));
   if (!lig.length) throw new Error("ce connaissement n'est pas encore tracé : pas de fiche à produire");
   const parFarm = new Map(); (state.producteurs||[]).filter(p=>p.cooperative_id===coopId).forEach(p=>{ if (p.farm_id) parFarm.set(p.farm_id, p); parFarm.set(p.id, p); });
@@ -18279,7 +18280,7 @@ async function ocFicheNormaleConstruire(coopId, code){
   if (allocations.some(a=>!a.p)) throw new Error('producteur introuvable pour une ligne du traçage');
   const sacsArr = lig.map(a=>Math.max(1, Math.round(Number(a.nombre_sacs)||0))), datesArr = lig.map(a=>String(a.date).slice(0,10));
   const cam = ocCargillCamion(coopId, code), coop = coopById(coopId), oc_ = ocFicheOrigineClient(cam, coop);
-  const entete = { fournisseur: String((cam && cam.fournisseur_saigic)||'').trim() || (coop ? (coop.nom_complet || coop.nom || '') : ''), ville: oc_.ville, client: oc_.client,
+  const entete = { fournisseur: String((cam && cam.fournisseur_saigic)||'').trim() || (coop ? (coop.nom_complet || coop.nom || '') : ''), ville: oc_.ville, client: String(clientForce||'').trim() || oc_.client,
     dateConnaissement: cam && cam.date ? dateFr(String(cam.date).slice(0,10)) : '', numero:code, coopFichier:coopId };
   return await ocConstruireFicheTracabiliteDirecte(allocations, sacsArr, datesArr, coopId, lig[0].campagne_id, entete);
 }
