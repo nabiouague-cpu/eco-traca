@@ -726,9 +726,12 @@
   .defo-mur{height:0;overflow-y:hidden;overflow-x:hidden;transition:height .65s cubic-bezier(.5,0,.3,1);padding:0 4px;scrollbar-width:thin}
   .defo-ms-col.ouvert .defo-mur{height:min(580px,calc(100vh - 200px));overflow-y:auto}
   .defo-pile{position:relative}
+  .defo-mur-cadre{position:relative}
+  .defo-mur-fondu{position:absolute;left:0;right:0;bottom:0;height:54px;pointer-events:none;opacity:0;transition:opacity .25s;background:linear-gradient(to bottom,rgba(255,255,255,0),var(--surface) 82%);display:flex;align-items:flex-end;justify-content:center;padding-bottom:6px;color:var(--ink-soft);border-radius:0 0 14px 14px}
+  .defo-ms-col.ouvert .defo-mur-cadre:not(.fin) .defo-mur-fondu{opacity:1}
+  .defo-mur-fondu svg{display:block}
   .defo-carte{position:absolute;left:0;right:0;top:0;height:190px;box-sizing:border-box;border-radius:16px;overflow:hidden;color:#fff;cursor:pointer;opacity:0;transform:scale(.94);pointer-events:none;border:2px solid rgba(255,255,255,.14);box-shadow:0 -4px 12px rgba(0,0,0,.22);transition:top .55s cubic-bezier(.3,.9,.3,1),opacity .35s ease,transform .55s ease;background:linear-gradient(150deg,var(--c1),var(--c2))}
   .defo-ms-col.ouvert .defo-carte{top:var(--t);opacity:1;transform:none;pointer-events:auto}
-  .defo-ms-col.fresh .defo-carte{transition-delay:calc(var(--i)*75ms)}
   .defo-carte:focus-visible{outline:2px solid #F2B705;outline-offset:2px}
   .defo-carte.sel{border-color:#F2B705;box-shadow:0 10px 26px rgba(0,0,0,.35),0 0 0 3px rgba(242,183,5,.25)}
   .defo-carte .bd{display:flex;align-items:center;gap:10px;height:52px;padding:0 14px;box-sizing:border-box}
@@ -5326,7 +5329,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-26-707';
+const APP_VERSION = '2026-11-26-708';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -28141,7 +28144,7 @@ function defoDossierChoisir(id){
   const w0 = document.getElementById('defo-mur'), st = w0 ? w0.scrollTop : 0;
   state.defoSel = id; state.defoEnv = true; render();
   const w1 = document.getElementById('defo-mur');
-  if (w1){ w1.scrollTop = st; const i = defoOrdre().findIndex(o=>o.x.id===id), haut = i*DEFO_CARTE_BANDE; if (i>=0 && (haut < st || haut > st + w1.clientHeight - DEFO_CARTE_H)) w1.scrollTop = Math.max(0, haut - 8); }
+  if (w1){ w1.scrollTop = st; const i = defoOrdre().findIndex(o=>o.x.id===id), haut = i*DEFO_CARTE_BANDE; if (i>=0 && (haut < st || haut > st + w1.clientHeight - DEFO_CARTE_H)) w1.scrollTop = Math.max(0, haut - 8); defoMurFondu(); }
   const e = document.getElementById('defo-ms'); if (e && e.getBoundingClientRect().top < 0) e.scrollIntoView({ block:'start' });
 }
 function defoDossierFiltre(v){
@@ -28262,16 +28265,26 @@ function defoDossiersHtml(liste){
   const env = '<button type="button" class="defo-env" onclick="defoEnvBascule()" aria-expanded="'+ouvert+'" title="Sortir ou ranger les cartes des analyses">'
     + '<span class="defo-env-ico"><i class="defo-env-dos"></i><i class="defo-env-lettre"></i><i class="defo-env-rabat"></i><i class="defo-env-face"></i></span>'
     + '<span class="defo-env-txt"><b>Analyses effectuées</b><span>'+liste.length+' coopérative'+(liste.length>1?'s':'')+(nbParcelles?' · '+fmtNum(nbParcelles)+' parcelles':'')+'</span><span class="defo-env-ind">'+(ouvert?'Clique pour ranger les cartes':'Clique pour sortir les cartes')+'</span></span></button>';
-  const mur = '<div id="defo-mur" class="defo-mur"><div id="defo-ms-liste" class="defo-pile" style="height:'+defoPileHauteur(tri.length, idxSel)+'px">'+defoLignesHtml(tri, sel)+'</div></div>';
+  const mur = '<div id="defo-mur-cadre" class="defo-mur-cadre"><div id="defo-mur" class="defo-mur" onscroll="defoMurFondu()"><div id="defo-ms-liste" class="defo-pile" style="height:'+defoPileHauteur(tri.length, idxSel)+'px">'+defoLignesHtml(tri, sel)+'</div></div>'
+    + '<div class="defo-mur-fondu" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div></div>';
   return '<div id="defo-ms" class="defo-ms"><div id="defo-ms-col" class="defo-ms-col'+(ouvert?' ouvert':'')+'">'+env+mur+'</div>'
     + '<div class="defo-ms-det">'+(sel ? defoDossierDetailHtml(sel) : '<div class="defo-ms-vide"><b>Aucune coopérative ouverte.</b><div class="hint" style="margin:4px 0 0">Sors les cartes de l\'enveloppe, puis choisis une analyse : son dossier s\'ouvre ici, seul, avec son nom en haut.</div></div>')+'</div></div>';
+}
+function defoMurFondu(){
+  const m = document.getElementById('defo-mur'), c = document.getElementById('defo-mur-cadre'); if (!m || !c) return;
+  c.classList.toggle('fin', m.scrollTop + m.clientHeight >= m.scrollHeight - 6);
 }
 function defoEnvBascule(){
   const col = document.getElementById('defo-ms-col'); if (!col) return;
   const ouvre = !col.classList.contains('ouvert');
   state.defoEnv = ouvre;
-  if (ouvre){ col.classList.add('fresh'); void col.offsetWidth; col.classList.add('ouvert'); setTimeout(()=>col.classList.remove('fresh'), 1900); }
-  else { col.classList.remove('fresh'); col.classList.remove('ouvert'); }
+  if (ouvre){
+    col.classList.add('ouvert');
+    // une fois sorties, la pile fait un petit mouvement vers le bas puis revient : les cartes continuent plus bas
+    setTimeout(()=>{ const m = document.getElementById('defo-mur'); if (!m || !state.defoEnv || m.scrollHeight <= m.clientHeight + 8 || m.scrollTop > 0) return;
+      m.scrollTo({ top:64, behavior:'smooth' }); setTimeout(()=>{ if (m.scrollTop <= 80) m.scrollTo({ top:0, behavior:'smooth' }); }, 650); }, 750);
+  } else { col.classList.remove('ouvert'); }
+  setTimeout(defoMurFondu, 700);
   const t = col.querySelector('.defo-env-ind'); if (t) t.textContent = ouvre ? 'Clique pour ranger les cartes' : 'Clique pour sortir les cartes';
   const b = col.querySelector('.defo-env'); if (b) b.setAttribute('aria-expanded', String(ouvre));
 }
