@@ -300,7 +300,7 @@ const CONFIG = {
   compaciteMin: 0.2, sommetsMax: 1000, convexiteMin: 0.8,             // contour irrégulier ou trop détaillé : simplifiable
   detailSommets: 100, detailSegmentM: 8, // contour GPS très détaillé
   simplM: 2, simplIrregM: 3, simplReplis: [1.5, 1, 0.5, 0.25], simplAireMax: 2, sommetsApresMin: 15, simplMargeM2: 0.1,
-  similIoU: 0.5, similTempsMs: 60000,
+  similIoU: 0.9, similTempsMs: 60000,   // ressemblance (surface commune ÷ surface couverte, contours centrés) à partir de laquelle deux formes sont jugées semblables : 90 % (validé par Nabi le 26/11 ; à 50 %, 385 parcelles sur 555 étaient retirées sur la base finale CTW)
   bboxCI: [-8.7, 4.3, -2.4, 10.8]        // Côte d'Ivoire (lon min, lat min, lon max, lat max)
 };
 
@@ -946,7 +946,7 @@ function reponse(q){
   const t = q.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
   const n = (a)=>S.plan?S.plan[a].length:0;
   if (/chevauch/.test(t)) return 'Deux parcelles se chevauchent quand l\'une recouvre l\'autre. Règle d\'ORIGEN : quand une parcelle en chevauche une autre jusqu\'à 20 % (tout 20,xx compte comme 20), on lui enlève la partie qui chevauche et on harmonise le contour : le reste est gardé, sans chevauchement. Si ce qui reste fait moins de 0,5 ha, la parcelle est retirée ; les morceaux de moins de 0,5 % de sa surface sont écartés. De 21 à 50 %, on garde la parcelle seulement si son plus grand morceau, une fois la partie qui chevauche enlevée, fait au moins 1 ha ; sinon elle est retirée. Au-delà de 50 %, on la supprime. Seuls les recouvrements de moins de 50 m² sont ignorés. Pour la base existante, côté serveur, le calcul est indicatif : il ne bloque rien. Ici : '+S.chev.length+' paire(s) concernée(s), '+n('reduire')+' à réduire, '+n('garder')+' à garder au plus grand morceau et '+n('supprimer')+' à supprimer.';
-  if (/semblab|forme/.test(t)) return 'Deux contours de forme presque identique, même éloignés, sont suspects (copie d\'un tracé). Seuil : ressemblance d\'au moins 50 %. Mesure : on ne garde qu\'une parcelle par groupe. Ici : '+S.simil.length+' paire(s).';
+  if (/semblab|forme/.test(t)) return 'Deux contours de forme presque identique, même éloignés, sont suspects (copie d\'un tracé). Seuil : ressemblance d\'au moins 90 %. Mesure : on ne garde qu\'une parcelle par groupe. Ici : '+S.simil.length+' paire(s).';
   if (/main|dessin/.test(t)) return 'Chaque contour reçoit un score sur 5 : peu de sommets (8 ou moins : +2, 12 ou moins : +1), segments de plus de 40 m en médiane (+1), angles droits sur la moitié des sommets (+1), coordonnées à 5 décimales ou moins (+1). À partir de 3 sur 5, le tracé ressemble à un dessin sur écran plutôt qu\'à une marche GPS. C\'est un signal à examiner : la seule mesure possible est de les mettre de côté pour les re-cartographier ; on n\'ajoute jamais de sommets pour les faire ressembler à un relevé. Ici : '+n('main')+' parcelle(s).';
   if (/detail|simplif|sommet|densif/.test(t)) return 'Un contour de 100 sommets ou plus avec des segments de moins de 8 m est un tracé GPS très fin ; un contour très irrégulier (compacité sous 0,2) ou de plus de 1 000 sommets est simplifié de la même façon. Ce n\'est pas une anomalie : on peut l\'alléger (Douglas-Peucker à 2 m, 3 m si la forme est irrégulière, puis 1,5 / 1 / 0,5 / 0,25 m si besoin) sans changer la surface à plus de 2 % près, sans empiéter sur une parcelle voisine, avec au moins 15 sommets. La simplification enlève le bruit du relevé : elle n\'améliore pas sa précision. Un contour de moins de 15 sommets reçoit au contraire des sommets ajoutés au milieu de ses plus longs segments (forme et surface inchangées), sauf s\'il est signalé « dessiné à la main » (il est alors mis de côté, on ne l\'habille pas). Ici : '+n('simplifier')+' contour(s).';
   if (/doublon|identique/.test(t)) return 'Un doublon est une parcelle dont la géométrie est exactement la même qu\'une autre. On retire la copie. Ici : '+n('doublons')+' doublon(s).';
@@ -1019,7 +1019,7 @@ async function analyserTout(){
 const REGLES = [
   ['main',      'Mettre de côté les polygones dessinés à la main', 'main'],
   ['doublons',  'Retirer les doublons identiques (même géométrie)', 'doublons'],
-  ['simil',     'Garder une seule parcelle parmi les formes semblables (plus de 50 %)', 'simil'],
+  ['simil',     'Garder une seule parcelle parmi les formes semblables (90 % et plus)', 'simil'],
   ['simplifier','Simplifier les contours très détaillés ou irréguliers (2 m, 3 m si forme irrégulière, surface conservée à 2 %, au moins 15 sommets)', 'simplifier'],
   ['densifier', 'Ajouter des sommets aux polygones de moins de 15 sommets (forme et surface inchangées)', 'densifier'],
   ['reduire',   'Réduire les parcelles qui chevauchent une autre jusqu\'à 20 % (reste d\'au moins 0,5 ha)', 'reduire'],
@@ -1186,7 +1186,7 @@ async function telechargerExcel(){
   r.addRow(['Géométrie : contours réparés', cnt('repare')]); r.addRow(['Géométrie : contours non réparables', cnt('croise')]); r.addRow(['Géométrie : trop peu de sommets', cnt('sommets')]);
   r.addRow(['Géométrie : dessinés à la main (probable)', S.res.filter(x=>x.main).length]); r.addRow(['Géométrie : contours très détaillés', S.res.filter(x=>x.detail).length]); r.addRow(['Géométrie : contours irréguliers ou de plus de 1 000 sommets', S.res.filter(x=>x.irreg).length]);
   r.addRow(['Doublons : identifiants en double', cnt('dup_id')]); r.addRow(['Doublons : géométries identiques', cnt('dup_geom')]);
-  r.addRow(['Formes semblables (plus de 50 %)', new Set(S.simil.flatMap(p=>[p.a,p.b])).size]);
+  r.addRow(['Formes semblables (90 % et plus)', new Set(S.simil.flatMap(p=>[p.a,p.b])).size]);
   r.addRow(['Chevauchements entre parcelles', new Set(S.chev.flatMap(p=>[p.grand,p.petit])).size]); r.addRow([]);
   r.addRow(['BASE FINALE','']).font = {bold:true};
   r.addRow(['Parcelles gardées', S.final.gardees.length]); r.addRow(['Parcelles écartées', S.final.ecartees.length]); r.addRow(['Parcelles modifiées', S.final.gardees.filter(g=>g.modif).length]);
