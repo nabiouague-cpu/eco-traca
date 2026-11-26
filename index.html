@@ -5275,7 +5275,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-26-705';
+const APP_VERSION = '2026-11-26-706';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -9761,7 +9761,7 @@ function finDechClasseur(ExcelJS, ctx, A, avecRecap){
   const ENTETE='FFC55A11', VERT='FFCCFFCC', GRIS='FFF2F2F2', ROUGE='FFFFC7CE', NOIR={argb:'FF000000'}, bord={style:'thin',color:NOIR}, cadre={top:bord,bottom:bord,left:bord,right:bord};
   const NB='#,##0_ ;[Red]\\-#,##0\\ ', NJ='0;[Red]\\-0', F=o=>Object.assign({name:'Calibri',size:10},o||{});
   const dateXl = iso=>{ const m=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso||'')); return m ? new Date(Date.UTC(+m[1],+m[2]-1,+m[3])) : null; };
-  const cols = [['COOPERATIVES',24],['PRODUITS',20],['DATE DU CONNAISSEMENT',15.5],['N° CONNAISSEMENT',22.7],['SACS ACCEPTÉS (usine)',13],['POIDS NET PAYÉ (après réfaction, kg)',17],['JOURS AVANT EXPIRATION DE LA LICENCE',17],['VOLUME À DÉCLARER (kg)',16],['PRIME DUE (FCFA)',14],['STATUT DÉCLARATION',26],['DATE DÉCLARATION',16]];
+  const cols = [['COOPERATIVES',24],['PRODUITS',20],['DATE DU CONNAISSEMENT',15.5],['N° CONNAISSEMENT',22.7],['SACS ACCEPTÉS (usine)',13],['POIDS NET PAYÉ (après réfaction, kg)',17],['JOURS AVANT EXPIRATION DE LA LICENCE',17],['POIDS DÉCLARÉ (kg)',16],['VOLUME À DÉCLARER (kg)',16],['PRIME DUE (FCFA)',14],['STATUT DÉCLARATION',26],['DATE DÉCLARATION',16]];
   const wb = new ExcelJS.Workbook(); wb.creator='ORIGEN · ECORIGINE'; wb.created=new Date();
   const noms = new Set(); const nomFeuille = n=>{ let b = String(n).replace(/[\\\/\?\*\[\]:]/g,' ').trim().slice(0,31) || 'Coopérative', k = b, i = 2; while (noms.has(k.toLowerCase())){ k = b.slice(0,28)+' '+i; i++; } noms.add(k.toLowerCase()); return k; };
   const coops = Array.from(new Set(A.map(a=>a.cooperative_id))).map(id=>coopById(id)||{ id, nom:String(id) }).sort((x,y)=>String(x.nom).localeCompare(String(y.nom),'fr',{sensitivity:'base'}));
@@ -9787,23 +9787,29 @@ function finDechClasseur(ExcelJS, ctx, A, avecRecap){
       const cli = achatClientEffectif(a), cle = cli ? ccClefClient(cli) : '';
       const contrats = cle ? (state.contratsClients||[]).filter(k=>ccClefClient(k.client||'')===cle && (!camp || k.campagne_id===camp) && k.statut!=='annule' && k.statut!=='annulé') : [];
       const nivs = Array.from(new Set(contrats.map(k=>k.niveau_tracabilite).filter(Boolean))), niv = livrNiveauCode(nivs.length===1 ? nivs[0] : '');
-      const doublon = nbConn[String(a.connaissement||'').trim().toUpperCase()] > 1, declare = /^Déclaré/.test(sd.txt), aDecl = declare ? 0 : (pn||0);
+      const doublon = nbConn[String(a.connaissement||'').trim().toUpperCase()] > 1, declare = /^Déclaré/.test(sd.txt), aDecl = declare ? 0 : (pn||0), dejaDecl = declare ? (pn||0) : 0;
       const v = [c.nom||'', livrProduit(a, niv), dateXl(a.date), a.connaissement||'', sacc, pn,
-        licD ? { formula:'$C$3-TODAY()', result:jours } : '', { formula:'IF(LEFT(K'+r+',7)="Déclaré",0,G'+r+')', result:aDecl }, calcPrime(a)||0, sd.txt+(doublon ? ' ⚠ connaissement en double' : ''), sd.date||''];
+        licD ? { formula:'$C$3-TODAY()', result:jours } : '', { formula:'IF(LEFT(L'+r+',7)="Déclaré",G'+r+',0)', result:dejaDecl }, { formula:'IF(LEFT(L'+r+',7)="Déclaré",0,G'+r+')', result:aDecl }, calcPrime(a)||0, sd.txt+(doublon ? ' ⚠ connaissement en double' : ''), sd.date||''];
       const row = ws.getRow(r);
-      v.forEach((val,k)=>{ const x = row.getCell(k+2); x.value = val; x.border = cadre; x.font = F(k>=4 && k<=8 ? {bold:true} : {});
-        x.alignment = (k===0 || k>=9) ? { horizontal:'left' } : { horizontal:'right', indent:1 };
+      v.forEach((val,k)=>{ const x = row.getCell(k+2); x.value = val; x.border = cadre; x.font = F(k>=4 && k<=9 ? {bold:true} : {});
+        x.alignment = (k===0 || k>=10) ? { horizontal:'left' } : { horizontal:'right', indent:1 };
         if (k===1 || k===2) x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:VERT } };
-        if (k===2) x.numFmt = 'dd/mm/yyyy'; if (k===4 || k===5 || k===7 || k===8) x.numFmt = NB; if (k===6) x.numFmt = NJ;
-        if ((k===6 || k===7) && !declare && jours!==null && jours<=DEFO_ENVOI_SEUIL_J) x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:ROUGE } };
-        if (k===9 && doublon) x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:ROUGE } }; });
+        if (k===2) x.numFmt = 'dd/mm/yyyy'; if (k===4 || k===5 || (k>=7 && k<=9)) x.numFmt = NB; if (k===6) x.numFmt = NJ;
+        if ((k===6 || k===8) && !declare && jours!==null && jours<=DEFO_ENVOI_SEUIL_J) x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:ROUGE } };
+        if (k===10 && doublon) x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:ROUGE } }; });
     });
     const r1 = 6, rl = 5+lignes.length, rt = rl+1, T = ws.getRow(rt);
     T.getCell('B').value = 'TOTAL'; T.getCell('C').value = lignes.length+' déchargement(s)';
-    ['F','G','I','J'].forEach(k=>{ T.getCell(k).value = { formula:`SUM(${k}${r1}:${k}${rl})` }; T.getCell(k).numFmt = NB; });
-    T.getCell('K').value = { formula:`COUNTIF(K${r1}:K${rl},"Déclaré*")&" déclaré(s) / "&COUNTIF(K${r1}:K${rl},"Non déclaré*")&" non déclaré(s)"` };
-    for (let k=2;k<=12;k++){ const x = T.getCell(k); x.border = cadre; x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:GRIS } }; x.font = F({bold:true}); }
-    ws.autoFilter = { from:{row:5,column:2}, to:{row:rl,column:12} };
+    ['F','G','I','J','K'].forEach(k=>{ T.getCell(k).value = { formula:`SUM(${k}${r1}:${k}${rl})` }; T.getCell(k).numFmt = NB; });
+    T.getCell('L').value = { formula:`COUNTIF(L${r1}:L${rl},"Déclaré*")&" déclaré(s) / "&COUNTIF(L${r1}:L${rl},"Non déclaré*")&" non déclaré(s)"` };
+    for (let k=2;k<=13;k++){ const x = T.getCell(k); x.border = cadre; x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:GRIS } }; x.font = F({bold:true}); }
+    // Mêmes totaux en haut (ligne 4, toujours visibles : volets figés) ; SOUS.TOTAL = suit les filtres posés sur le tableau
+    const T4 = ws.getRow(4);
+    T4.getCell('B').value = 'TOTAUX'; T4.getCell('C').value = { formula:`SUBTOTAL(103,E${r1}:E${rl})&" déchargement(s)"` };
+    ['F','G','I','J','K'].forEach(k=>{ T4.getCell(k).value = { formula:`SUBTOTAL(109,${k}${r1}:${k}${rl})` }; T4.getCell(k).numFmt = NB; });
+    T4.getCell('L').value = { formula:`COUNTIF(L${r1}:L${rl},"Déclaré*")&" déclaré(s) / "&COUNTIF(L${r1}:L${rl},"Non déclaré*")&" non déclaré(s)"` };
+    for (let k=2;k<=13;k++){ const x = T4.getCell(k); x.border = cadre; x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFFFE699' } }; x.font = F({bold:true}); if (k>=6 && k<=11) x.alignment = { horizontal:'right', indent:1 }; }
+    ws.autoFilter = { from:{row:5,column:2}, to:{row:rl,column:13} };
     feuilles.push({ coop:c, nom:ws.name, r1, rl, rt, n:lignes.length, licD, jours });
   });
   if (!avecRecap) return { wb, feuilles };
@@ -9818,10 +9824,10 @@ function finDechClasseur(ExcelJS, ctx, A, avecRecap){
   const qs = f=>"'"+String(f.nom).replace(/'/g,"''")+"'!", rg = (f,k)=>qs(f)+'$'+k+'$'+f.r1+':$'+k+'$'+f.rl;
   feuilles.forEach((f,i)=>{
     const r = 5+i, row = w2.getRow(r), payee = (state.paiementsPrimes||[]).filter(x=>x.cooperative_id===f.coop.id && (!camp || (x.campagne_id||'')===camp)).reduce((t,x)=>t+(Number(x.montant_fcfa)||0),0);
-    const decl = `${rg(f,'K')},"Déclaré*"`, non = `${rg(f,'K')},"Non déclaré*"`;
-    const v = [f.coop.nom, f.n, { formula:qs(f)+'F'+f.rt }, { formula:qs(f)+'G'+f.rt }, { formula:qs(f)+'J'+f.rt }, payee, { formula:`MAX(0,F${r}-G${r})` },
-      { formula:`COUNTIF(${decl})` }, { formula:`COUNTIF(${non})` }, { formula:`SUMIFS(${rg(f,'G')},${decl})` }, { formula:`SUMIFS(${rg(f,'G')},${non})` }, { formula:`SUMIFS(${rg(f,'J')},${non})` },
-      f.licD || 'n/a', f.licD ? { formula:'N'+r+'-TODAY()', result:f.jours } : '', { formula:qs(f)+'I'+f.rt }];
+    const decl = `${rg(f,'L')},"Déclaré*"`, non = `${rg(f,'L')},"Non déclaré*"`;
+    const v = [f.coop.nom, f.n, { formula:qs(f)+'F'+f.rt }, { formula:qs(f)+'G'+f.rt }, { formula:qs(f)+'K'+f.rt }, payee, { formula:`MAX(0,F${r}-G${r})` },
+      { formula:`COUNTIF(${decl})` }, { formula:`COUNTIF(${non})` }, { formula:`SUMIFS(${rg(f,'G')},${decl})` }, { formula:`SUMIFS(${rg(f,'G')},${non})` }, { formula:`SUMIFS(${rg(f,'K')},${non})` },
+      f.licD || 'n/a', f.licD ? { formula:'N'+r+'-TODAY()', result:f.jours } : '', { formula:qs(f)+'J'+f.rt }];
     v.forEach((val,k)=>{ const x = row.getCell(k+2); x.value = val; x.border = cadre; x.font = F(); x.alignment = k===0 ? { horizontal:'left' } : { horizontal:'right', indent:1 }; if (k>=1) x.numFmt = NB; if (k===12) x.numFmt = 'dd/mm/yyyy'; if (k===13) x.numFmt = NJ;
       if (k===13 && f.jours!==null && f.jours<=DEFO_ENVOI_SEUIL_J) x.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:ROUGE } }; });
   });
