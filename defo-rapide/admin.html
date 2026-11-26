@@ -46,10 +46,9 @@ progress{width:100%;height:10px}
     <option value="cours_eau">Cours d'eau (lignes)</option>
     <option value="plans_eau">Plans d'eau : retenues, lacs, lagunes (polygones)</option>
     <option value="habitat">Zones habitées (polygones)</option>
-    <option value="cacao">Carte cacao BNETD 2020 (polygones de cacao)</option>
+    <option value="cacao_grille">Carte cacao BNETD 2020 (grille de 500 m : fichier cacao_bnetd_grille_500m.json)</option>
   </select></div>
   <div class="ligne"><input type="file" id="c-fichier" accept=".zip,.geojson,.json"></div>
-  <div class="ligne" id="c-val-l" style="display:none"><input type="text" id="c-val" placeholder="Colonne du % de cacao (vide = tout est cacao)" style="width:340px"></div>
   <div class="ligne"><label><input type="checkbox" id="c-vider" checked> Remplacer la couche déjà chargée de ce type</label></div>
   <div class="ligne"><button class="btn" id="c-btn" disabled>Charger la couche</button></div>
   <progress id="c-prog" value="0" max="100" style="display:none"></progress>
@@ -67,7 +66,7 @@ async function maj(){
   const { data } = await SB.auth.getSession(); const u = data.session && data.session.user;
   $('cx-etat').textContent = u ? 'Connecté : '+u.email : 'Non connecté.';
   $('btn-charger').disabled = !u; $('c-btn').disabled = !u;
-  if (u){ const ct = await SB.rpc('couches_taille'); if (!ct.error){ const L = {protegees:'zones protégées',cours_eau:'cours d\'eau',plans_eau:'plans d\'eau',habitat:'zones habitées',cacao:'cacao'}; $('c-taille').textContent = 'Couches chargées : '+(Object.keys(ct.data).map(k=>(L[k]||k)+' '+Number(ct.data[k]).toLocaleString('fr-FR')).join(' · ')||'aucune')+'.'; }
+  if (u){ const ct = await SB.rpc('couches_taille'); if (!ct.error){ const L = {protegees:'zones protégées',cours_eau:'cours d\'eau',plans_eau:'plans d\'eau',habitat:'zones habitées',cacao:'lignes de la grille cacao'}; $('c-taille').textContent = 'Couches chargées : '+(Object.keys(ct.data).map(k=>(L[k]||k)+' '+Number(ct.data[k]).toLocaleString('fr-FR')).join(' · ')||'aucune')+'.'; }
     const t = await SB.rpc('base_externe_taille'); $('taille').textContent = t.error ? '' : 'Base actuelle : '+t.data.toLocaleString('fr-FR')+' polygones.'; }
 }
 $('btn-cx').onclick = async ()=>{ const r = await SB.auth.signInWithPassword({ email:$('email').value.trim(), password:$('mdp').value }); if (r.error) $('cx-etat').textContent = r.error.message; maj(); };
@@ -101,15 +100,27 @@ $('btn-charger').onclick = async ()=>{
   $('btn-charger').disabled = false; maj();
 };
 
-$('c-type').onchange = ()=>{ $('c-val-l').style.display = $('c-type').value==='cacao' ? 'flex' : 'none'; };
 const CLES_NOM = ['nom','NOM','Nom','NAME_ENG','NAME','name','Name','toponyme','TOPONYME','LOCALITE','localite','VILLAGE','village'];
 const horsGPS = c=>{ while (Array.isArray(c) && Array.isArray(c[0])) c = c[0]; return !(Math.abs(c[0])<=180 && Math.abs(c[1])<=90); };
 $('c-btn').onclick = async ()=>{
   const f = $('c-fichier').files[0]; if (!f){ $('c-etat').textContent = 'Choisis un fichier.'; return; }
-  const type = $('c-type').value, colVal = $('c-val').value.trim();
+  const type = $('c-type').value, colVal = '';
   $('c-btn').disabled = true; $('c-prog').style.display = 'block'; $('c-prog').value = 0;
   try{
     $('c-etat').textContent = 'Lecture du fichier…';
+    if (type==='cacao_grille'){
+      const g = JSON.parse(await f.text());
+      if (!g.lignes || !g.w || !g.h) throw new Error('Ce fichier n\'est pas une grille cacao (cacao_bnetd_grille_500m.json).');
+      const meta = { left:g.left, top:g.top, res:g.res, w:g.w, h:g.h, epsg:g.epsg, source:f.name };
+      let fait = 0;
+      for (let i=0;i<g.lignes.length;i+=100){
+        const r = await SB.rpc('charger_grille_cacao', { p_meta:meta, p_debut:i, p_lignes:g.lignes.slice(i,i+100), p_vider:(i===0 && $('c-vider').checked) });
+        if (r.error) throw new Error(r.error.message);
+        fait += r.data; $('c-prog').value = Math.round(fait/g.lignes.length*100); $('c-etat').textContent = fait+' lignes de la grille chargées sur '+g.lignes.length+'…';
+      }
+      $('c-etat').textContent = 'Terminé : grille cacao chargée ('+fait+' lignes de '+g.w+' cellules de '+g.res+' m).';
+      $('c-btn').disabled = false; maj(); return;
+    }
     let j;
     if (/\.zip$/i.test(f.name)){
       const buf = await f.arrayBuffer();
