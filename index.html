@@ -5275,7 +5275,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-25-703';
+const APP_VERSION = '2026-11-26-704';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -18129,6 +18129,7 @@ const JR_CSS = '<style>'
 + '.ad-act{display:flex;gap:10px;flex-wrap:wrap;align-items:center;border-top:1px solid var(--border);padding-top:14px}'
 + '.ad-ok{padding:11px 22px;border-radius:99px;border:0;background:#2E9E5B;color:#fff;font-weight:700;font-size:14px;cursor:pointer}.ad-ok:hover{background:#25874D}'
 + '.ad-lien,.ad-non{padding:10px 16px;border-radius:99px;border:1.5px solid var(--border);background:transparent;color:var(--ink);text-decoration:none;font-weight:600;font-size:13px;cursor:pointer;font-family:inherit}.ad-lien:hover,.ad-non:hover{background:var(--surface-2)}'
++ '.ad-expl{background:var(--surface-2);border:1px solid var(--border);border-left:4px solid #2C5FAE;border-radius:10px;padding:10px 14px}.ad-expl small{display:block;margin-top:6px;color:var(--ink-soft);font-size:12px}.ad-expl-f{background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:12px 14px}.ac-ex{margin:8px 0 0;padding:8px 12px;border-radius:8px;background:rgba(44,95,174,.09);font-size:12.5px;line-height:1.5}.jr-fond.sombre .ad-expl,.jr-fond.sombre .ad-expl-f{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.12)}.jr-fond.sombre .ac-ex{background:rgba(120,170,255,.14)}'
 + '.ad-aide{font-size:12px;color:var(--ink-soft);margin:10px 0 0}.ad-retour{border:0;background:transparent;color:var(--accent);font-weight:600;font-size:13px;cursor:pointer;padding:2px 0 8px;font-family:inherit}'
 + '.ac-f .jr-ok{width:auto;height:auto;border-radius:99px;padding:7px 14px;font-weight:700;font-size:12.5px;white-space:nowrap}'
 + '@media (max-width:760px){.ac-g{grid-template-columns:1fr}.ac-c{grid-template-columns:1fr}}'
@@ -18321,18 +18322,62 @@ function jrDetailCorps(id){
     + (m.alerte ? '<div class="ad-bloc"><h4>Point d\'attention</h4><p class="ac-al">⚠ '+esc(m.alerte)+'</p></div>' : '')
     + '<div class="ad-faits">'+fait('De', m.expediteur_nom||m.expediteur||'—')+fait('Reçu le', jrRecu(m))+fait('Échéance', m.echeance ? jrDateLong(m.echeance)+' · '+et.txt : 'Sans échéance')+fait('Ton rôle', role)+fait('Domaine', d.titre)+(m.lots?fait('Lots', m.lots):'')+'</div>'
     + (m.notes ? bloc('Notes', m.notes) : '')
+    + jrExplHtml(m)
     + '<div class="ad-act"><button class="ad-ok" onclick="jrRegler(\''+esc(m.id)+'\')">✓ C\'est réglé</button>'
+    + '<button class="ad-lien" onclick="jrExplOuvrir(\''+esc(m.id)+'\')" title="Noter l\'explication reçue du service concerné">💬 '+(m.explication?'Modifier l\'explication':'Ajouter une explication')+'</button>'
     + (lien ? '<a class="ad-lien" href="'+esc(lien)+'" target="_blank" rel="noopener">Ouvrir le mail pour le régler ↗</a>' : '')
     + '<button class="ad-non" onclick="jrRetour()">Pas encore réglé</button></div>'
     + '<p class="ad-aide">Si ce n\'est pas réglé : ouvre le mail, règle-le, puis reviens cliquer « C\'est réglé ». L\'alerte s\'arrête alors de clignoter.</p>' };
+}
+// ---- Explication d'une alerte : on note ce que le service concerné (shipping, usinier…) a répondu ; l'alerte se règle ou reste à suivre avec un rappel ----
+function jrExplOuvrir(id){
+  const m = (state.mailsSuivi||[]).find(x=>x.id===id); if (!m) return;
+  state.jrExpl = { id, texte:m.explication||'', par:m.explication_par||'', issue:m.explication_issue||'regle', rappel:m.echeance||jrDemain() };
+  render();
+}
+function jrExplDepuisCarte(id, rt, ri){ state.jrModal = { type:'detail', id, rt: rt||null, ri: ri==null ? null : Number(ri) }; jrExplOuvrir(id); }
+function jrExplFermer(){ state.jrExpl = null; render(); }
+async function jrExplEnregistrer(){
+  const e = state.jrExpl; if (!e) return;
+  const texte = String(e.texte||'').trim();
+  if (!texte){ showToast('Écris d\'abord l\'explication reçue.'); return; }
+  const champs = { explication:texte, explication_par:(String(e.par||'').trim()||null), explication_le:new Date().toISOString(), explication_issue:e.issue };
+  if (e.issue==='regle') champs.statut = 'traite';
+  else { if (!e.rappel){ showToast('Choisis la date du rappel.'); return; } champs.echeance = e.rappel; champs.derniere_alerte = null; }
+  const md = state.jrModal || {};
+  state.jrExpl = null;
+  if (e.issue==='regle') state.jrModal = md.rt ? { type:md.rt, idx:md.ri } : null;
+  await mailMaj(e.id, champs);
+  if (typeof showToast==='function') showToast(e.issue==='regle' ? 'Explication enregistrée : alerte réglée ✓' : 'Explication enregistrée : rappel le '+jrDateLong(e.rappel));
+}
+function jrExplHtml(m){
+  const ex = state.jrExpl && state.jrExpl.id===m.id ? state.jrExpl : null;
+  let h = '';
+  if (m.explication){
+    const suivi = m.explication_issue==='suivi';
+    h += '<div class="ad-bloc ad-expl"><h4>Explication reçue</h4><p>'+esc(m.explication)+'</p><small>'
+      + (m.explication_par ? 'De '+esc(m.explication_par)+' · ' : '')+(m.explication_le ? 'notée le '+esc(jrDateLong(String(m.explication_le).slice(0,10)))+' · ' : '')
+      + (suivi ? 'à suivre'+(m.echeance ? ', rappel le '+esc(jrDateLong(m.echeance)) : '') : 'alerte réglée')+'</small></div>';
+  }
+  if (ex){
+    h += '<div class="ad-bloc ad-expl-f"><h4>'+(m.explication?'Modifier l\'explication':'Ajouter une explication')+'</h4><div class="jr-form">'
+      + '<label>Ce qu\'on t\'a expliqué<textarea id="jr-expl-texte" rows="4" placeholder="Ex. Siaka (shipping) : les lots 3735 à 3744 ont été remplacés par 3730 à 3739, annulés et remplacés le 25/11." oninput="state.jrExpl.texte=this.value">'+esc(ex.texte)+'</textarea></label>'
+      + '<label>Donnée par (facultatif)<input id="jr-expl-par" type="text" value="'+esc(ex.par)+'" placeholder="Ex. Siaka, service shipping" oninput="state.jrExpl.par=this.value"></label>'
+      + '<label>Suite à donner<select id="jr-expl-issue" onchange="state.jrExpl.issue=this.value;render()"><option value="regle"'+(ex.issue==='regle'?' selected':'')+'>C\'est expliqué : l\'alerte peut se fermer</option><option value="suivi"'+(ex.issue==='suivi'?' selected':'')+'>Expliqué, mais il y a une suite : me le rappeler</option></select></label>'
+      + (ex.issue==='suivi' ? '<label>Me le rappeler le<input id="jr-expl-rappel" type="date" value="'+esc(ex.rappel||'')+'" oninput="state.jrExpl.rappel=this.value" onchange="state.jrExpl.rappel=this.value"></label>' : '')
+      + '<div class="ad-act" style="border:0;padding-top:2px"><button class="ad-ok" onclick="jrExplEnregistrer()">Enregistrer l\'explication</button><button class="ad-non" onclick="jrExplFermer()">Annuler</button></div>'
+      + '</div></div>';
+  }
+  return h;
 }
 function jrAlerteCarte(x, rt, ri){
   const m = x.m, g = jrGravite(x), et = mailEtatEcheance(m), d = jrDomaineDe(x), lien = /^https:\/\//.test(m.lien||'') ? m.lien : '';
   return '<div class="ac g-'+g+'"><div class="ac-h"><span class="ja-b '+x.niv+'">'+JR_NIV_ALERTE[x.niv].lib+'</span><b>'+esc(m.objet||'')+'</b>'+(m.echeance?'<span class="badge '+et.cls+'">'+esc(et.txt)+'</span>':'')+'</div>'
     + '<div class="ac-c"><div><h5>Ce que ça dit</h5><p>'+esc(m.resume||'Pas de résumé enregistré pour ce mail.')+'</p></div><div><h5>Ce que ça veut dire</h5><p>'+esc(m.implication||x.why)+'</p>'+(m.alerte?'<p class="ac-al">⚠ '+esc(m.alerte)+'</p>':'')+'</div></div>'
+    + (m.explication ? '<div class="ac-ex"><b>Explication</b> · '+esc(m.explication)+(m.explication_par?' <i>('+esc(m.explication_par)+')</i>':'')+'</div>' : '')
     + '<div class="ac-f"><small>'+esc(x.why)+' · De '+esc(m.expediteur_nom||m.expediteur||'—')+' · reçu le '+esc(jrRecu(m))+(rt==='alertes'?' · '+esc(d.titre):'')+'</small>'
     + (lien?'<a class="ad-lien" href="'+esc(lien)+'" target="_blank" rel="noopener">Mail ↗</a>':'')
-    + '<button class="jr-lien" onclick="jrOuvrirAlerte(\''+esc(m.id)+'\',\''+rt+'\','+(ri==null?'null':Number(ri))+')">Voir et régler</button><button class="jr-ok" title="Réglé : marquer traité" onclick="mailMaj(\''+esc(m.id)+'\',{statut:\'traite\'})">✓ Réglé</button></div></div>';
+    + '<button class="jr-lien" onclick="jrExplDepuisCarte(\''+esc(m.id)+'\',\''+rt+'\','+(ri==null?'null':Number(ri))+')" title="Noter ce que le service concerné a répondu">💬 Explication</button><button class="jr-lien" onclick="jrOuvrirAlerte(\''+esc(m.id)+'\',\''+rt+'\','+(ri==null?'null':Number(ri))+')">Voir et régler</button><button class="jr-ok" title="Réglé : marquer traité" onclick="mailMaj(\''+esc(m.id)+'\',{statut:\'traite\'})">✓ Réglé</button></div></div>';
 }
 function jrAlertesRiches(l, rt, ri, intro){
   if (!l.length) return (intro||'')+'<div class="ac g-vert"><div class="ac-h"><span class="ja-b alerte" style="background:rgba(126,214,154,.25);color:#2E7D46">OK</span><b>Rien à signaler ici</b></div><div class="ac-c"><div><p>Aucune alerte et aucune action en attente : tout est en ordre.</p></div></div></div>';
