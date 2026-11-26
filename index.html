@@ -5331,7 +5331,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-26-710';
+const APP_VERSION = '2026-11-26-711';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -28271,8 +28271,9 @@ function defoDossiersHtml(liste){
   const mur = '<div id="defo-mur-cadre" class="defo-mur-cadre"><div id="defo-mur" class="defo-mur" onscroll="defoMurFondu()"><div id="defo-ms-liste" class="defo-pile" style="height:'+defoPileHauteur(tri.length, idxSel)+'px">'+defoLignesHtml(tri, sel)+'</div></div>'
     + '<div class="defo-mur-fondu" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div></div>';
   return '<div id="defo-ms" class="defo-ms"><div id="defo-ms-col" class="defo-ms-col'+(ouvert?' ouvert':'')+(sel?' avec-sel':'')+'">'+env+mur+'</div>'
-    + '<div class="defo-ms-det">'+(sel ? defoDossierDetailHtml(sel) : '<div class="defo-ms-vide"><b>Aucune coopérative ouverte.</b><div class="hint" style="margin:4px 0 0">Sors les cartes de l\'enveloppe, puis choisis une analyse : son dossier s\'ouvre ici, seul, avec son nom en haut.</div></div>')+'</div></div>';
+    + '<div class="defo-ms-det">'+(sel ? defoDossierDetailHtml(sel) : defoDetVideHtml())+'</div></div>';
 }
+function defoDetVideHtml(){ return '<div class="defo-ms-vide"><b>Aucune coopérative ouverte.</b><div class="hint" style="margin:4px 0 0">Sors les cartes de l\'enveloppe, puis choisis une analyse : son dossier s\'ouvre ici, seul, avec son nom en haut.</div></div>'; }
 function defoMurFondu(){
   const m = document.getElementById('defo-mur'), c = document.getElementById('defo-mur-cadre'); if (!m || !c) return;
   c.classList.toggle('fin', m.scrollTop + m.clientHeight >= m.scrollHeight - 6);
@@ -28282,11 +28283,21 @@ function defoEnvBascule(){
   const ouvre = !col.classList.contains('ouvert');
   state.defoEnv = ouvre;
   if (ouvre){
+    if (state.defoPileSale){ state.defoPileSale = false; defoMajListe(); void col.offsetWidth; }   // les cartes ont été rangées avec une carte choisie : on remet la pile à plat avant de les sortir
     col.classList.add('ouvert');
     // une fois sorties, la pile fait un petit mouvement vers le bas puis revient : les cartes continuent plus bas
     setTimeout(()=>{ const m = document.getElementById('defo-mur'); if (!m || !state.defoEnv || m.scrollHeight <= m.clientHeight + 8 || m.scrollTop > 0) return;
       m.scrollTo({ top:64, behavior:'smooth' }); setTimeout(()=>{ if (m.scrollTop <= 80) m.scrollTo({ top:0, behavior:'smooth' }); }, 650); }, 750);
-  } else { col.classList.remove('ouvert'); const m0 = document.getElementById('defo-mur'); if (m0) m0.scrollTo({ top:0, behavior:'smooth' }); }
+  } else {
+    // ranger l'enveloppe = TOUT rentre : les cartes, la carte choisie aussi, et le dossier ouvert se ferme (comme s'il n'y avait aucune analyse en cours)
+    col.classList.remove('ouvert', 'avec-sel');
+    col.querySelectorAll('.defo-carte.sel').forEach(c=>c.classList.remove('sel'));
+    if (state.defoSel){
+      state.defoSel = null; state.defoPileSale = true;
+      const det = col.parentNode && col.parentNode.querySelector('.defo-ms-det'); if (det) det.innerHTML = defoDetVideHtml();
+    }
+    const m0 = document.getElementById('defo-mur'); if (m0) m0.scrollTo({ top:0, behavior:'smooth' });
+  }
   setTimeout(defoMurFondu, 700);
   const t = col.querySelector('.defo-env-ind'); if (t) t.textContent = ouvre ? 'Clique pour ranger les cartes' : 'Clique pour sortir les cartes';
   const b = col.querySelector('.defo-env'); if (b) b.setAttribute('aria-expanded', String(ouvre));
