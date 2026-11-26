@@ -745,7 +745,7 @@ function appliquerPlan(S, T){
 }
 
 // ====== ANALYSE SERVEUR (Whisp + base existante) ======
-// Réponse attendue : { resultats:[{plot_id, risk_pcrop, risk_acrop, risk_timber, perturbation_apres_2020, chevauchement_pct}] }
+// Réponse attendue : { resultats:[{plot_id, risk_pcrop, risk_acrop, risk_timber, perturbation_apres_2020, couvert_arbore, prioritaire, chevauchement_pct}] }
 async function appelerServeur(fc, nom){
   const { data } = await SB.auth.getSession();
   const jeton = data && data.session && data.session.access_token;
@@ -761,7 +761,7 @@ function analyseDemo(fc){   // résultats FICTIFS, uniquement pour voir le rappo
   const hash = s=>{ let h=0; for (const c of s) h=(h*31+c.charCodeAt(0))>>>0; return h; };
   const niveaux = ['low','low','low','medium','high'];
   return { demo:true, resultats: fc.features.map(f=>{ const h = hash(f.properties.PlotID);
-    return { plot_id:f.properties.PlotID, risk_pcrop:niveaux[h%5], risk_acrop:niveaux[(h>>3)%5], risk_timber:niveaux[(h>>5)%5], perturbation_apres_2020:(h%7===0), chevauchement_pct:(h%9===0)?(h%23)+2:0 }; }) };
+    return { plot_id:f.properties.PlotID, risk_pcrop:niveaux[h%5], risk_acrop:niveaux[(h>>3)%5], risk_timber:niveaux[(h>>5)%5], perturbation_apres_2020:(h%7===0), couvert_arbore:(h%4!==0), prioritaire:(h%7===0 && h%4!==0), chevauchement_pct:(h%9===0)?(h%23)+2:0 }; }) };
 }
 const TXT_BASE_EXISTANTE = "Certaines de vos parcelles se superposent à une base de données existante, probablement hébergée dans l'Union européenne. Cette information est indicative : elle ne bloque rien et vous pouvez l'ignorer, mais elle signale un risque de double déclaration ou de conflit de parcelles.";
 const CONTROLES_SERVEUR = ['Déforestation (perturbation après 2020, Whisp)','Forêts classées et aires protégées','Superposition avec la base de données existante','Cours d\'eau, plans d\'eau et zones habitées','Densité de cacao (carte BNETD, puis carte satellite de secours)'];
@@ -989,12 +989,12 @@ function afficher(){
   const cat = r=>r.ecartee ? 'ecarte' : r.statut;
   const lignes = S.res.map((r,i)=>({r,i})).filter(x=>filtre==='tout' || cat(x.r)===filtre);
   const srv = S.serveur ? Object.fromEntries(S.serveur.resultats.map(x=>[x.plot_id,x])) : null;
-  $('tbl').innerHTML = '<thead><tr><th>Parcelle</th><th>Surface (ha)</th><th>Sommets</th><th>Statut</th><th>Remarques</th>'+(srv?'<th>Risque cacao</th><th>Perturbation après 2020</th><th>Base existante</th>':'')+'</tr></thead><tbody>'+
+  $('tbl').innerHTML = '<thead><tr><th>Parcelle</th><th>Surface (ha)</th><th>Sommets</th><th>Statut</th><th>Remarques</th>'+(srv?'<th>Risque cacao</th><th>Perturbation après 2020</th><th>Prioritaire</th><th>Base existante</th>':'')+'</tr></thead><tbody>'+
     lignes.slice(0,1500).map(({r})=>{ const s = srv && srv[r.id]; const k = cat(r);
       return '<tr><td>'+esc(r.id)+'</td><td>'+(r.aireHa==null?'—':r.aireHa.toFixed(2))+'</td><td>'+(r.sommets==null?'—':r.sommets)+'</td>'+
         '<td><span class="pill p-'+(k==='ok'?'ok':k==='attention'?'att':k==='erreur'?'err':'gr')+'">'+LIB[k]+'</span></td>'+
         '<td>'+(r.ecartee?'<b>'+esc(r.ecartee)+'</b><br>':'')+(r.pb.length?r.pb.map(p=>esc(p.txt)).join('<br>'):(r.ecartee?'':'—'))+'</td>'+
-        (srv?('<td>'+esc(s&&s.risk_pcrop!=null?s.risk_pcrop:'—')+'</td><td>'+(s&&s.perturbation_apres_2020!=null?(s.perturbation_apres_2020?'Oui':'Non'):'—')+'</td><td>'+(s&&s.chevauchement_pct!=null?(s.chevauchement_pct>0?s.chevauchement_pct+' %':'Non'):'—')+'</td>'):'')+'</tr>'; }).join('')+'</tbody>';
+        (srv?('<td>'+esc(s&&s.risk_pcrop!=null?s.risk_pcrop:'—')+'</td><td>'+(s&&s.perturbation_apres_2020!=null?(s.perturbation_apres_2020?'Oui':'Non'):'—')+'</td><td>'+(s&&s.prioritaire!=null?(s.prioritaire?'<b>Oui</b>':'Non'):'—')+'</td><td>'+(s&&s.chevauchement_pct!=null?(s.chevauchement_pct>0?s.chevauchement_pct+' %':'Non'):'—')+'</td>'):'')+'</tr>'; }).join('')+'</tbody>';
   dessinerCarte(filtre);
   majParcours(); majTete(); if (S.disc) afficherDiscussion();
 }
@@ -1129,7 +1129,7 @@ async function telechargerExcel(){
   feuille(wb, 'Simplifications', ['Parcelle','Sommets avant','Sommets après','Écart de surface (%)','Précision (m)'], Object.keys(S.simpl).map(i=>[id(+i),S.simpl[i].avant,S.simpl[i].apres,+S.simpl[i].ecartAire.toFixed(2),S.simpl[i].tolerance]), [18,16,16,22,16]);
   feuille(wb, 'Écartées', ['Parcelle','Motif'], S.final.ecartees.map(e=>[id(e.i),e.motif]), [18,80]);
   if (S.serveur){ const srv = srvMap();
-    feuille(wb, 'Satellite'+(demo?' (FICTIF)':''), ['Parcelle','Risque cacao','Risque cultures annuelles','Risque bois','Perturbation après 2020','Superposition base existante (%)'], S.final.gardees.map(g=>{ const pid = S.feats[g.i].properties.PlotID, s = srv[pid]||{}; return [pid,s.risk_pcrop||'',s.risk_acrop||'',s.risk_timber||'',s.perturbation_apres_2020==null?'':(s.perturbation_apres_2020?'Oui':'Non'),s.chevauchement_pct==null?'':s.chevauchement_pct]; }), [16,16,24,14,24,30]); }
+    feuille(wb, 'Satellite'+(demo?' (FICTIF)':''), ['Parcelle','Risque cacao','Risque cultures annuelles','Risque bois','Couvert arboré 2020','Perturbation après 2020','Prioritaire (arboré 2020 ET perturbation)','Superposition base existante (%)'], S.final.gardees.map(g=>{ const pid = S.feats[g.i].properties.PlotID, s = srv[pid]||{}; return [pid,s.risk_pcrop||'',s.risk_acrop||'',s.risk_timber||'',s.couvert_arbore==null?'':(s.couvert_arbore?'Oui':'Non'),s.perturbation_apres_2020==null?'':(s.perturbation_apres_2020?'Oui':'Non'),s.prioritaire==null?'':(s.prioritaire?'Oui : ne pas livrer tant que non vérifié':'Non'),s.chevauchement_pct==null?'':s.chevauchement_pct]; }), [16,16,24,14,18,24,40,30]); }
   feuille(wb, 'Parcelles', ['Parcelle','Surface (ha)','Sommets','Statut','Remarques'], S.res.map(x=>[x.id, x.aireHa==null?null:+x.aireHa.toFixed(3), x.sommets, x.ecartee?'Écartée':LIB[x.statut], (x.ecartee?x.ecartee+' ; ':'')+x.pb.map(p=>p.txt).join(' ; ')]), [18,13,10,14,90]);
   const buf = await wb.xlsx.writeBuffer();
   telecharger(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}), 'Rapport_'+nomDossier()+'.xlsx');
