@@ -284,14 +284,16 @@ main{max-width:1240px;padding:20px 26px 10px}
 const CONFIG = {
   supaUrl: 'https://cvjqqupcbsbfjolkukjm.supabase.co',
   supaKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN2anFxdXBjYnNiZmpvbGt1a2ptIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTU2OTU2MTAsImV4cCI6MjExMTI3MTYxMH0.Ck0h0RkYBZL0sfGZ6kxYWZLMSrzZ5Pymv_Ha0uGL4TI',   // clé publique (anon) : sans danger dans une page web
-  seuilPetitHa: 0.1, seuilGrandHa: 50, seuilEUDRHa: 4,
+  seuilPetitHa: 0.1, seuilGrandHa: 10, seuilEUDRHa: 4,   // moins de 0,1 ha ou 10 ha et plus : « à contrôler » (règles ORIGEN)
   sommetsMin: 4, decimalesMin: 5,
-  chevIgnore: 5,            // % : en dessous, chevauchement ignoré (bruit GPS)
+  chevMinM2: 50,            // m² : recouvrement ignoré en dessous de 0,005 ha (seuil de détection interne d'ORIGEN, pas de plancher en %)
+  fragmentPct: 0.5,         // % : après réduction, les morceaux de moins de 0,5 % de la surface sont écartés
   chevReduit: 20,           // % : jusqu'à 20,99 on réduit le polygone, à partir de 21 on supprime
   fermetureM: 30,           // ligne ouverte fermée automatiquement si l'écart est inférieur à 30 m
-  mainSommetsMax: 8, mainHaMin: 3,       // polygone de 4 à 8 sommets pour plusieurs hectares : probablement dessiné à la main
+  mainScoreMin: 3, mainSegM: 40, mainAngleDeg: 8, mainDecimales: 5,   // score « dessiné à la main » sur 5 : ≥ 3 = à mettre de côté
+  compaciteMin: 0.2, sommetsMax: 1000, convexiteMin: 0.8,             // contour irrégulier ou trop détaillé : simplifiable
   detailSommets: 100, detailSegmentM: 8, // contour GPS très détaillé
-  simplM: 2, simplIrregM: 3, simplAireMax: 2, sommetsApresMin: 15,
+  simplM: 2, simplIrregM: 3, simplReplis: [1.5, 1, 0.5, 0.25], simplAireMax: 2, sommetsApresMin: 15, simplMargeM2: 0.1,
   similIoU: 0.5, similTempsMs: 60000,
   bboxCI: [-8.7, 4.3, -2.4, 10.8]        // Côte d'Ivoire (lon min, lat min, lon max, lat max)
 };
@@ -497,6 +499,29 @@ function segmentMedianM(g){
   const l = []; anneaux(g).forEach(r=>{ for (let i=0;i<r.length-1;i++) l.push(turf.distance(r[i], r[i+1], {units:'meters'})); });
   if (!l.length) return 0; l.sort((a,b)=>a-b); return l[Math.floor(l.length/2)];
 }
+// Score « dessiné à la main » sur 5 (règle ORIGEN du 10/11) : peu de sommets (≤8 : +2, ≤12 : +1) ; segment médian > 40 m (+1) ;
+// angles droits (à 8° près) sur la moitié des sommets au moins (+1) ; coordonnées à 5 décimales ou moins (+1). ≥ 3 = probablement dessiné à la main.
+function scoreMain(g, sommets, pos){
+  let sc = 0; const raisons = [];
+  if (sommets<=8){ sc += 2; raisons.push(sommets+' sommets'); } else if (sommets<=12){ sc += 1; raisons.push(sommets+' sommets'); }
+  if (segmentMedianM(g) > CONFIG.mainSegM){ sc += 1; raisons.push('segments de plus de '+CONFIG.mainSegM+' m'); }
+  let nb = 0, droits = 0;
+  anneaux(g).forEach(r=>{
+    const n = r.length-1; if (n<3) return;
+    const kx = 111320*Math.cos(r[0][1]*Math.PI/180), ky = 110540;
+    for (let i=0;i<n;i++){
+      const a = r[(i+n-1)%n], b = r[i], c = r[(i+1)%n];
+      const ux = (a[0]-b[0])*kx, uy = (a[1]-b[1])*ky, vx = (c[0]-b[0])*kx, vy = (c[1]-b[1])*ky;
+      const nu = Math.hypot(ux,uy), nv = Math.hypot(vx,vy); if (!nu || !nv) continue;
+      const ang = Math.acos(Math.max(-1, Math.min(1, (ux*vx+uy*vy)/(nu*nv))))*180/Math.PI;
+      nb++; if (Math.abs(ang-90) <= CONFIG.mainAngleDeg) droits++;
+    }
+  });
+  if (nb && droits/nb >= 0.5){ sc += 1; raisons.push('angles droits'); }
+  const dmax = Math.max.apply(null, pos.slice(0,50).map(c=>Math.max(decimales(c[0]),decimales(c[1]))));
+  if (isFinite(dmax) && dmax <= CONFIG.mainDecimales){ sc += 1; raisons.push(dmax+' décimale(s)'); }
+  return { score:sc, raisons };
+}
 function reparer(f){
   let kinks = 0; try { kinks = turf.kinks(f).features.length; } catch(e){ return { ok:true, kinks:0 }; }
   if (!kinks) return { ok:true, kinks:0 };
@@ -514,7 +539,7 @@ function reparer(f){
 function controlerParcelle(f){
   const pb = []; const g = f.geometry;
   const pos = positionsDe(g);
-  let aireHa = null, sommets = null, main = false, detail = false, repare = false;
+  let aireHa = null, sommets = null, main = false, detail = false, irreg = false, repare = false, scoreM = null;
   if (f._dupId) pb.push({niveau:'attention', code:'dup_id', txt:'Identifiant en double'});
   if (pos.some(c=>Math.abs(c[0])>180 || Math.abs(c[1])>90)) {
     pb.push({niveau:'erreur', code:'coord', txt:'Coordonnées impossibles (latitude et longitude inversées ?)'});
@@ -527,16 +552,21 @@ function controlerParcelle(f){
       aireHa = turf.area(f)/10000; sommets = nbSommets(gg);
       if (sommets < CONFIG.sommetsMin) pb.push({niveau:'erreur', code:'sommets', txt:'Trop peu de sommets ('+sommets+')'});
       if (aireHa < CONFIG.seuilPetitHa) pb.push({niveau:'attention', code:'petite', txt:'Très petite parcelle ('+aireHa.toFixed(3)+' ha)'});
-      if (aireHa > CONFIG.seuilGrandHa) pb.push({niveau:'attention', code:'grande', txt:'Très grande parcelle ('+aireHa.toFixed(1)+' ha) : à vérifier'});
-      if (sommets>=CONFIG.sommetsMin && sommets<=CONFIG.mainSommetsMax && aireHa>=CONFIG.mainHaMin) { main = true; pb.push({niveau:'attention', code:'main', txt:'Probablement dessiné à la main ('+sommets+' sommets pour '+aireHa.toFixed(1)+' ha) : à re-cartographier'}); }
+      if (aireHa >= CONFIG.seuilGrandHa) pb.push({niveau:'attention', code:'grande', txt:'Grande parcelle ('+aireHa.toFixed(1)+' ha, '+CONFIG.seuilGrandHa+' ha et plus) : à contrôler'});
+      if (sommets>=CONFIG.sommetsMin) {
+        const sm = scoreMain(gg, sommets, pos); scoreM = sm.score;
+        if (sm.score>=CONFIG.mainScoreMin){ main = true; pb.push({niveau:'attention', code:'main', txt:'Probablement dessiné à la main (score '+sm.score+'/5 : '+sm.raisons.join(', ')+') : à mettre de côté et re-cartographier'}); }
+      }
       if (sommets>=CONFIG.detailSommets && segmentMedianM(gg) < CONFIG.detailSegmentM) { detail = true; pb.push({niveau:'info', code:'detail', txt:'Contour GPS très détaillé ('+sommets+' sommets) : simplifiable'}); }
+      const per = perimetreM(gg), compac = per>0 ? 4*Math.PI*(aireHa*10000)/(per*per) : 1;
+      if (compac < CONFIG.compaciteMin || sommets > CONFIG.sommetsMax) { irreg = true; if (!detail) pb.push({niveau:'info', code:'irreg', txt:(sommets>CONFIG.sommetsMax ? 'Plus de '+CONFIG.sommetsMax+' sommets ('+sommets+')' : 'Contour irrégulier (compacité '+compac.toFixed(2)+')')+' : simplifiable'}); }
       const c = turf.centroid(f).geometry.coordinates, bb = CONFIG.bboxCI;
       if (c[0]<bb[0]||c[0]>bb[2]||c[1]<bb[1]||c[1]>bb[3]) pb.push({niveau:'attention', code:'zone', txt:'Hors de Côte d\'Ivoire'});
       const dmax = Math.max.apply(null, pos.slice(0,50).map(c=>Math.max(decimales(c[0]),decimales(c[1]))));
       if (isFinite(dmax) && dmax < CONFIG.decimalesMin) pb.push({niveau:'attention', code:'precision', txt:'Coordonnées peu précises ('+dmax+' décimale(s) au plus)'});
     } catch(e){ pb.push({niveau:'erreur', code:'illisible', txt:'Géométrie illisible'}); }
   }
-  return { id:f.properties.PlotID, aireHa, sommets, pb, main, detail, repare, statut:'ok', ecartee:null };
+  return { id:f.properties.PlotID, aireHa, sommets, pb, main, scoreMain:scoreM, detail, irreg, repare, statut:'ok', ecartee:null };
 }
 function statutDe(r){ return r.pb.some(p=>p.niveau==='erreur') ? 'erreur' : (r.pb.some(p=>p.niveau!=='info') ? 'attention' : 'ok'); }   // « information » (contour réparé, contour très détaillé) n'est pas une anomalie
 
@@ -557,7 +587,7 @@ async function chevauchements(feats, res, onProg){
       const ai = turf.area(inter); if (ai<=0) continue;
       const grand = A.a>=B.a ? A : B, petit = grand===A ? B : A;
       const pct = ai/petit.a*100;
-      if (pct < CONFIG.chevIgnore) continue;
+      if (ai < CONFIG.chevMinM2) continue;
       paires.push({ grand:grand.i, petit:petit.i, pct, m2:ai });
     }
     if (onProg && k%25===0){ onProg(k/items.length); await attendre(); }
@@ -606,25 +636,70 @@ function doublonsIdentiques(feats, res){
   return out;
 }
 
-// ====== SIMPLIFICATION (contours très détaillés) ======
-function simplifier(f, r){
+// ====== SIMPLIFICATION (contours très détaillés ou irréguliers) — règle ORIGEN ======
+// Douglas-Peucker à 2 m (3 m si convexité < 0,8), puis replis 1,5 / 1 / 0,5 / 0,25 m ; écart de surface ≤ 2 % ;
+// la nouvelle forme ne doit pas empiéter sur un voisin du fichier (sinon bords recalés par différence) ; au moins 15 sommets
+// (points ajoutés au milieu des plus longs segments, forme inchangée) ; si rien ne passe, on garde l'original.
+// Un polygone de moins de 15 sommets au départ n'est jamais touché ni densifié.
+function densifier(g, min){
+  const rings = anneaux(g);
+  let n = nbSommets(g), garde = 0;
+  while (n < min && garde++ < 200){
+    let best = null, bl = -1;
+    rings.forEach(r=>{ const kx = 111320*Math.cos(r[0][1]*Math.PI/180); for (let i=0;i<r.length-1;i++){ const l = Math.hypot((r[i+1][0]-r[i][0])*kx, (r[i+1][1]-r[i][1])*110540); if (l>bl){ bl = l; best = {r, i}; } } });
+    if (!best) break;
+    const a = best.r[best.i], b = best.r[best.i+1];
+    best.r.splice(best.i+1, 0, [(a[0]+b[0])/2, (a[1]+b[1])/2]); n++;
+  }
+  return g;
+}
+function simplifier(f, r, voisins){
+  if (r.sommets < CONFIG.sommetsApresMin) return null;
   const A0 = turf.area(f);
-  const irreg = (()=>{ const P = perimetreM(f.geometry); return P>0 ? 4*Math.PI*A0/(P*P) < 0.5 : false; })();
-  const essais = irreg ? [CONFIG.simplIrregM, CONFIG.simplM, 1] : [CONFIG.simplM, 1];
+  let convexe = 1; try { const h = turf.convex(f); if (h) convexe = A0/turf.area(h); } catch(e){}
+  const base = convexe < CONFIG.convexiteMin ? CONFIG.simplIrregM : CONFIG.simplM;
+  const essais = [base].concat(CONFIG.simplReplis);
+  const vois = (voisins||[]).map(v=>{ let a0 = 0; try { const x = turf.intersect(f, v); a0 = x ? turf.area(x) : 0; } catch(e){} return { v, a0 }; });
   for (const m of essais){
     try {
-      const s = turf.simplify(f, {tolerance: m/111320, highQuality:true, mutate:false});
-      const v = nbSommets(s.geometry); const A1 = turf.area(s);
-      if (v >= CONFIG.sommetsApresMin && Math.abs(A1-A0)/A0*100 <= CONFIG.simplAireMax) return { geom:s.geometry, avant:r.sommets, apres:v, ecartAire:(A1-A0)/A0*100, tolerance:m };
+      let s = turf.simplify(f, {tolerance: m/111320, highQuality:true, mutate:false});
+      if (!s || !s.geometry || nbSommets(s.geometry) < 3) continue;
+      let recale = false;
+      for (const w of vois){
+        let a1 = 0; try { const x = turf.intersect(s, w.v); a1 = x ? turf.area(x) : 0; } catch(e){}
+        if (a1 > w.a0 + CONFIG.simplMargeM2){
+          const d = turf.difference(s, w.v); if (!d) { s = null; break; }
+          s = { type:'Feature', properties:{}, geometry:d.geometry }; recale = true;
+        }
+      }
+      if (!s) continue;
+      const g = JSON.parse(JSON.stringify(s.geometry));
+      if (nbSommets(g) < CONFIG.sommetsApresMin) densifier(g, CONFIG.sommetsApresMin);
+      const v = nbSommets(g); const A1 = turf.area({type:'Feature',properties:{},geometry:g});
+      if (v >= CONFIG.sommetsApresMin && Math.abs(A1-A0)/A0*100 <= CONFIG.simplAireMax) return { geom:g, avant:r.sommets, apres:v, ecartAire:(A1-A0)/A0*100, tolerance:m, recale };
     } catch(e){}
   }
   return null;
+}
+// Voisins d'un polygone dans le fichier (boîtes qui se touchent), pour le contrôle d'empiètement
+function voisinsDe(i, feats, boites){
+  const b = boites[i], out = [];
+  for (let j=0;j<feats.length;j++){ if (j===i || !boites[j]) continue; const c = boites[j]; if (c[0]>b[2]||c[2]<b[0]||c[1]>b[3]||c[3]<b[1]) continue; out.push(feats[j]); }
+  return out;
+}
+// Écarte les morceaux de moins de 0,5 % de la surface d'origine ; renvoie null s'il ne reste rien
+function retirerFragments(g, aireOrigine){
+  if (g.type!=='MultiPolygon') return g;
+  const seuil = aireOrigine*CONFIG.fragmentPct/100;
+  const gardes = g.coordinates.filter(p=>turf.area({type:'Feature',properties:{},geometry:{type:'Polygon',coordinates:p}}) >= seuil);
+  if (!gardes.length) return null;
+  return gardes.length===1 ? { type:'Polygon', coordinates:gardes[0] } : { type:'MultiPolygon', coordinates:gardes };
 }
 
 // ====== PLAN DE NETTOYAGE ET BASE FINALE ======
 function construirePlan(S){
   const P = { main:[], simil:[], doublons:[], reduire:[], supprimer:[], simplifier:[] };
-  S.res.forEach((r,i)=>{ if (r.main) P.main.push(i); if (r.detail && S.simpl[i]) P.simplifier.push(i); });
+  S.res.forEach((r,i)=>{ if (r.main) P.main.push(i); if ((r.detail || r.irreg) && S.simpl[i]) P.simplifier.push(i); });
   P.doublons = doublonsIdentiques(S.feats, S.res);
   (S.simil||[]).forEach(p=>P.simil.push({ garde:Math.min(p.a,p.b), retire:Math.max(p.a,p.b), iou:p.iou, km:p.km }));
   (S.chev||[]).forEach(p=>{ if (p.pct < CONFIG.chevReduit+1) P.reduire.push(p); else P.supprimer.push(p); });
@@ -647,9 +722,11 @@ function appliquerPlan(S, T){
     const reduire = p.pct < CONFIG.chevReduit+1;
     if (reduire && T.reduire){
       try {
+        const a0 = turf.area({type:'Feature',properties:{},geometry:geom[p.petit]});
         const d = turf.difference({type:'Feature',properties:{},geometry:geom[p.petit]}, {type:'Feature',properties:{},geometry:geom[p.grand]});
-        if (!d) { motif(p.petit, 'Entièrement recouvert par '+S.res[p.grand].id); }
-        else { geom[p.petit] = d.geometry; modif[p.petit] = { type:'réduit', detail:'−'+p.pct.toFixed(0)+' % (chevauche '+S.res[p.grand].id+')' }; }
+        const g2 = d ? retirerFragments(d.geometry, a0) : null;
+        if (!g2) { motif(p.petit, 'Entièrement recouvert par '+S.res[p.grand].id); }
+        else { geom[p.petit] = g2; modif[p.petit] = { type:'réduit', detail:'−'+p.pct.toFixed(0)+' % (chevauche '+S.res[p.grand].id+')' }; }
       } catch(e){}
     } else if (!reduire && T.supprimer){
       motif(p.petit, 'Chevauche '+S.res[p.grand].id+' ('+p.pct.toFixed(0)+' %) : supprimé');
@@ -775,7 +852,7 @@ function majTete(){
 }
 
 // ====== DISCUSSION : l'assistant explique, tu décides ======
-const DESC = { main:'parcelle(s) probablement dessinée(s) à la main', doublons:'doublon(s) exact(s)', simil:'parcelle(s) de forme semblable à une autre', simplifier:'contour(s) GPS très détaillé(s) <i>(information, pas une anomalie)</i>', reduire:'parcelle(s) qui chevauchent une plus grande de 5 à 20 %', supprimer:'parcelle(s) qui chevauchent une plus grande de plus de 20 %' };
+const DESC = { main:'parcelle(s) probablement dessinée(s) à la main', doublons:'doublon(s) exact(s)', simil:'parcelle(s) de forme semblable à une autre', simplifier:'contour(s) très détaillé(s) ou irrégulier(s) <i>(information, pas une anomalie)</i>', reduire:'parcelle(s) qui chevauchent une plus grande jusqu\'à 20 %', supprimer:'parcelle(s) qui chevauchent une plus grande de plus de 20 %' };
 const MESURE = { main:'les mettre de côté', doublons:'retirer les copies', simil:'ne garder qu\'une seule parcelle par groupe', simplifier:'alléger le contour sans changer la surface (à 2 % près)', reduire:'réduire la parcelle à la partie qui ne chevauche pas', supprimer:'supprimer la parcelle' };
 function bilanHtml(){
   const c = compter();
@@ -801,10 +878,10 @@ function basculerDisc(k, v){ S.T[k] = v; afficherRegles(); recalculer(); affiche
 function reponse(q){
   const t = q.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
   const n = (a)=>S.plan?S.plan[a].length:0;
-  if (/chevauch/.test(t)) return 'Deux parcelles se chevauchent quand l\'une recouvre l\'autre. Règle appliquée : sous 5 % de la plus petite on ignore ; de 5 à 20,99 % on réduit la plus petite à sa partie libre ; à partir de 21 % on la supprime. Ici : '+S.chev.length+' paire(s) concernée(s), '+n('reduire')+' à réduire et '+n('supprimer')+' à supprimer.';
+  if (/chevauch/.test(t)) return 'Deux parcelles se chevauchent quand l\'une recouvre l\'autre. Règle appliquée (celle d\'ORIGEN, la même pour toutes les coopératives) : jusqu\'à 20 % inclus (tout 20,xx compte comme 20) on réduit la plus petite à sa partie libre, en écartant les morceaux de moins de 0,5 % de sa surface ; à partir de 21 % on la supprime. Seuls les recouvrements de moins de 50 m² sont ignorés. Ici : '+S.chev.length+' paire(s) concernée(s), '+n('reduire')+' à réduire et '+n('supprimer')+' à supprimer.';
   if (/semblab|forme/.test(t)) return 'Deux contours de forme presque identique, même éloignés, sont suspects (copie d\'un tracé). Seuil : ressemblance d\'au moins 50 %. Mesure : on ne garde qu\'une parcelle par groupe. Ici : '+S.simil.length+' paire(s).';
-  if (/main|dessin/.test(t)) return 'Un contour de 4 à 8 sommets pour au moins 3 ha ressemble à un tracé fait à la main sur une carte plutôt qu\'à une marche GPS. Mesure proposée : les mettre de côté. Ici : '+n('main')+' parcelle(s).';
-  if (/detail|simplif|sommet/.test(t)) return 'Un contour de 100 sommets ou plus avec des segments de moins de 8 m est un tracé GPS très fin. Ce n\'est pas une anomalie : on peut l\'alléger (précision 2 m, 3 m si le contour est irrégulier, au moins 15 sommets) sans changer la surface à plus de 2 % près. Ici : '+n('simplifier')+' contour(s).';
+  if (/main|dessin/.test(t)) return 'Chaque contour reçoit un score sur 5 : peu de sommets (8 ou moins : +2, 12 ou moins : +1), segments de plus de 40 m en médiane (+1), angles droits sur la moitié des sommets (+1), coordonnées à 5 décimales ou moins (+1). À partir de 3 sur 5, le tracé ressemble à un dessin sur écran plutôt qu\'à une marche GPS. C\'est un signal à examiner : la seule mesure possible est de les mettre de côté pour les re-cartographier ; on n\'ajoute jamais de sommets pour les faire ressembler à un relevé. Ici : '+n('main')+' parcelle(s).';
+  if (/detail|simplif|sommet/.test(t)) return 'Un contour de 100 sommets ou plus avec des segments de moins de 8 m est un tracé GPS très fin ; un contour très irrégulier (compacité sous 0,2) ou de plus de 1 000 sommets est simplifié de la même façon. Ce n\'est pas une anomalie : on peut l\'alléger (Douglas-Peucker à 2 m, 3 m si la forme est irrégulière, puis 1,5 / 1 / 0,5 / 0,25 m si besoin) sans changer la surface à plus de 2 % près, sans empiéter sur une parcelle voisine, avec au moins 15 sommets. La simplification enlève le bruit du relevé : elle n\'améliore pas sa précision. Un contour de moins de 15 sommets au départ n\'est jamais touché. Ici : '+n('simplifier')+' contour(s).';
   if (/doublon|identique/.test(t)) return 'Un doublon est une parcelle dont la géométrie est exactement la même qu\'une autre. On retire la copie. Ici : '+n('doublons')+' doublon(s).';
   if (/satellite|whisp|deforest/.test(t)) return 'À l\'étape Satellite, chaque parcelle de la base finale est comparée aux cartes de couvert forestier et de perturbation (méthode Whisp) et à une base existante. Rien n\'est envoyé avant que tu lances cette étape.';
   if (/telecharg|base finale|rapport|excel|geojson/.test(t)) return 'À l\'étape Base finale tu télécharges : la base finale (GeoJSON), le rapport Excel (une feuille par contrôle) et les parcelles écartées. Le rapport est une aide à l\'analyse : il ne remplace ni une visite de terrain ni l\'avis d\'un auditeur.';
@@ -860,7 +937,10 @@ async function analyserTout(){
   S.simil.forEach(p=>{ [[p.a,p.b],[p.b,p.a]].forEach(([x,y])=>S.res[x].pb.push({niveau:'attention', code:'simil', txt:'Forme semblable à '+S.res[y].id+' ('+Math.round(p.iou*100)+' %, à '+(p.km<1?Math.round(p.km*1000)+' m':p.km.toFixed(1)+' km')+')'})); });
   doublonsIdentiques(S.feats, S.res).forEach(d=>{ S.res[d.retire].pb.push({niveau:'erreur', code:'dup_geom', txt:'Même géométrie que '+S.res[d.garde].id}); });
   $('prog-txt').textContent = 'Simplification des contours détaillés…'; await attendre();
-  S.res.forEach((r,i)=>{ if (r.detail){ const s = simplifier(S.feats[i], r); if (s) S.simpl[i] = s; } });
+  const boites = S.feats.map(f=>{ try { return turf.bbox(f); } catch(e){ return null; } });
+  for (let i=0;i<S.res.length;i++){ const r = S.res[i];
+    if (r.detail || r.irreg){ const s = simplifier(S.feats[i], r, boites[i] ? voisinsDe(i, S.feats, boites) : []); if (s) S.simpl[i] = s; }
+    if (i%20===0) await attendre(); }
   S.res.forEach(r=>{ r.statut = statutDe(r); });
   S.plan = construirePlan(S);
   $('barre').classList.add('cache');
@@ -873,7 +953,7 @@ const REGLES = [
   ['main',      'Mettre de côté les polygones dessinés à la main', 'main'],
   ['doublons',  'Retirer les doublons identiques (même géométrie)', 'doublons'],
   ['simil',     'Garder une seule parcelle parmi les formes semblables (plus de 50 %)', 'simil'],
-  ['simplifier','Simplifier les contours GPS très détaillés (précision 2 m, surface conservée à 2 %, au moins 15 sommets)', 'simplifier'],
+  ['simplifier','Simplifier les contours très détaillés ou irréguliers (2 m, 3 m si forme irrégulière, surface conservée à 2 %, au moins 15 sommets)', 'simplifier'],
   ['reduire',   'Réduire les parcelles qui chevauchent une plus grande de 5 à 20 %', 'reduire'],
   ['supprimer', 'Supprimer les parcelles qui chevauchent une plus grande de plus de 20 %', 'supprimer']
 ];
@@ -1028,7 +1108,7 @@ async function telechargerExcel(){
   r.addRow(['CONTRÔLES','Parcelles concernées']).font = {bold:true};
   const cnt = code=>S.res.filter(x=>x.pb.some(p=>p.code===code)).length;
   r.addRow(['Géométrie : contours réparés', cnt('repare')]); r.addRow(['Géométrie : contours non réparables', cnt('croise')]); r.addRow(['Géométrie : trop peu de sommets', cnt('sommets')]);
-  r.addRow(['Géométrie : dessinés à la main (probable)', S.res.filter(x=>x.main).length]); r.addRow(['Géométrie : contours très détaillés', S.res.filter(x=>x.detail).length]);
+  r.addRow(['Géométrie : dessinés à la main (probable)', S.res.filter(x=>x.main).length]); r.addRow(['Géométrie : contours très détaillés', S.res.filter(x=>x.detail).length]); r.addRow(['Géométrie : contours irréguliers ou de plus de 1 000 sommets', S.res.filter(x=>x.irreg).length]);
   r.addRow(['Doublons : identifiants en double', cnt('dup_id')]); r.addRow(['Doublons : géométries identiques', cnt('dup_geom')]);
   r.addRow(['Formes semblables (plus de 50 %)', new Set(S.simil.flatMap(p=>[p.a,p.b])).size]);
   r.addRow(['Chevauchements entre parcelles', new Set(S.chev.flatMap(p=>[p.grand,p.petit])).size]); r.addRow([]);
@@ -1042,7 +1122,7 @@ async function telechargerExcel(){
   r.addRow(['Méthode Whisp : FAO / Open Foris. Produit ni approuvé ni recommandé par la FAO.']).font = {italic:true,color:{argb:'FF595959'}};
 
   feuille(wb, 'Fichiers lus', ['Fichier','Format','Contenu','État'], S.journal.map(j=>[j.nom,j.format,j.note,({ok:'Lu',ignore:'Ignoré',erreur:'Problème'})[j.statut]]), [60,14,60,12]);
-  feuille(wb, 'Géométrie', ['Parcelle','Surface (ha)','Sommets','Problème','Gravité'], S.res.flatMap(x=>x.pb.filter(p=>['repare','croise','sommets','coord','illisible','petite','grande','main','detail','zone','precision'].includes(p.code)).map(p=>[x.id, x.aireHa==null?null:+x.aireHa.toFixed(3), x.sommets, p.txt, p.niveau==='erreur'?'Bloquant':p.niveau==='info'?'Information':'À vérifier'])), [16,13,10,70,12]);
+  feuille(wb, 'Géométrie', ['Parcelle','Surface (ha)','Sommets','Problème','Gravité'], S.res.flatMap(x=>x.pb.filter(p=>['repare','croise','sommets','coord','illisible','petite','grande','main','detail','irreg','zone','precision'].includes(p.code)).map(p=>[x.id, x.aireHa==null?null:+x.aireHa.toFixed(3), x.sommets, p.txt, p.niveau==='erreur'?'Bloquant':p.niveau==='info'?'Information':'À vérifier'])), [16,13,10,70,12]);
   feuille(wb, 'Doublons', ['Parcelle','Problème'], S.res.flatMap(x=>x.pb.filter(p=>['dup_id','dup_geom'].includes(p.code)).map(p=>[x.id,p.txt])), [18,60]);
   feuille(wb, 'Formes semblables', ['Parcelle A','Parcelle B','Ressemblance (%)','Distance (m)'], S.simil.map(p=>[id(p.a),id(p.b),Math.round(p.iou*100),Math.round(p.km*1000)]), [18,18,18,14]);
   feuille(wb, 'Chevauchements', ['Parcelle (la plus grande)','Parcelle chevauchée','Part de la plus petite (%)','Surface commune (m²)','Traitement'], S.chev.map(p=>[id(p.grand),id(p.petit),+p.pct.toFixed(1),Math.round(p.m2),p.pct<CONFIG.chevReduit+1?'Réduction':'Suppression']), [24,22,24,20,14]);
