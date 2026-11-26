@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.58
+// @version      0.4.59
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.58';
+  const VERSION = '0.4.59';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -1141,7 +1141,15 @@
   }
   async function etapeBordereau(e) {
     const lot = e.lot, b = lot.bordereau;
-    if (await existeBordereau(e)) { e.fait[10] = 'déjà dans OBC'; journal(e, 'Bordereau déjà saisi'); return 'suivant'; }
+    let exB = await existeBordereau(e);
+    // Correction du BIC demandée depuis ORIGEN (lot.correction_bic) : le bordereau d'OBC porte l'ancienne retenue. On le supprime (lui seul), vérifié, puis on le refait avec les valeurs d'ORIGEN (BIC à 0).
+    if (exB && lot.correction_bic && !e.fait.bic_supprime) {
+      if (exB.illisible) throw new Error('Correction BIC : OBC plante en affichant le bordereau de ' + lot.connaissement.numero + ' : rien n\'a été supprimé. Corrige à la main ou dis-le-moi.');
+      await supprimerLigne('AgroAchatBordereauReception', exB); journal(e, 'Correction BIC : ancien bordereau supprimé dans OBC');
+      if (await existeBordereau(e)) throw new Error('Correction BIC : le bordereau est toujours dans OBC après suppression : arrêt');
+      e.fait.bic_supprime = true; ecrireEtat(e); exB = null;
+    }
+    if (exB) { e.fait[10] = 'déjà dans OBC'; journal(e, 'Bordereau déjà saisi'); return 'suivant'; }
     if (e.statut === 'attente_enregistrement' || e.statut === 'verifier') return 'attendre';
     const f = await ouvrirFormulaire(10); if (!f) return 'navigation';
     fixerCampagne(e);

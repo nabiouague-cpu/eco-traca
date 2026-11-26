@@ -5331,7 +5331,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-26-709';
+const APP_VERSION = '2026-11-26-710';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -15119,6 +15119,7 @@ function lotsModalsHtml(){
   if (m.type==='liasseBordRapport') return renderLiasseBordRapportModal(m);
   if (m.type==='potentielCoops') return renderPotentielCoopsModal(m);
   if (m.type==='bordereauParticulier') return renderBordereauParticulierModal(m);
+  if (m.type==='bicCorrection') return renderBicModal(m);
   if (m.type==='finLtdLots') return renderFinLtdLotsModal(m);
   if (m.type==='lotsPoidsEntrepot'){
     const pl = m.payload, lots = lotsPoidsEntrepotLots(pl);
@@ -32430,10 +32431,11 @@ function calcMontantPaiement(a){
   const prixEntreeUsine = Number(par && par.prix_entree_usine)||0;
   const tkm = Number(a.tkm)||0;
   const commission = Number(a.commission)||0;
-  const tauxBic = Number(par && par.taux_bic)||0;
+  const tauxBicInitial = Number(par && par.taux_bic)||0;
+  const tauxBic = a.bic_restitue ? 0 : tauxBicInitial;   // BIC restitué à la coopérative (document d'exonération présenté) : plus aucune retenue sur ce camion
   const aBic = coopABic(a.cooperative_id);   // informatif seulement (reversement fin de campagne) -- ne change pas le calcul
   const retenueBic = Math.round(tauxBic*poids);
-  const base = { poids, prixEntreeUsine, tkm, commission, tauxBic, retenueBic, aBic, campagneId:a.campagne_id, periode: a.periode==='intermediaire' ? 'intermediaire' : 'principale' };
+  const base = { poids, prixEntreeUsine, tkm, commission, tauxBic, retenueBic, tauxBicInitial, retenueBicInitiale: Math.round(tauxBicInitial*poids), bicRestitue: !!a.bic_restitue, aBic, campagneId:a.campagne_id, periode: a.periode==='intermediaire' ? 'intermediaire' : 'principale' };
   if (!(prixEntreeUsine>0)) return Object.assign(base, { manque:'prix', montant:null });
   if (!(tkm>0)) return Object.assign(base, { manque:'tkm', montant:null });
   return Object.assign(base, { manque:null, montant: Math.round(((prixEntreeUsine+tkm+commission)*poids) - retenueBic) });
@@ -33672,7 +33674,7 @@ function obcMajHtml(a){
   const m = obcMaj(a); if (!m.length) return '';
   return '<div style="font-size:10px;color:#B3261E;font-weight:700;border:1px solid #B3261E;border-radius:6px;padding:3px 6px;margin-bottom:3px;background:#fdecea">🔔 Mis à jour depuis la saisie OBC : '+m.map(x=>esc(x.champ)+' '+esc(x.avant)+' → '+esc(x.apres)).join(' ; ')+'<br><span style="font-weight:400">À corriger dans OBC (supprimer bordereau puis pesée, et refaire), puis </span><a href="#" onclick="obcMajAcquitter(\''+esc(a.id)+'\');return false" style="color:#0E3B36">marquer « corrigé dans OBC »</a></div>';
 }
-function obcFileMention(a){ return obcMajHtml(a)+obcFileMentionBase(a); }
+function obcFileMention(a){ return obcMajHtml(a)+bicMention(a)+obcFileMentionBase(a); }
 function obcFileMentionBase(a){
   const f = state.obcFile && state.obcFile[a.id]; if (f && a.obc_saisi_le && f.controle && f.controle.ok) return '<div style="font-size:10px;color:#2e7d32" title="Relu dans OBC : poids, récolte et montants conformes à ORIGEN">✓ Contrôlé dans OBC'+(f.controle.mineurs&&f.controle.mineurs.length?' <span style="color:#8a6d00" title="'+esc(f.controle.mineurs.map(x=>x.champ+' : ORIGEN '+x.attendu+', OBC '+x.trouve).join(' ; '))+'. Net payé et bordereau identiques à ORIGEN.">(arrondi OBC ≤ 1 : net payé et bordereau exacts)</span>':'')+'</div>'; if (!f || a.obc_saisi_le) return '';
   if (f.statut==='attente') return '<div class="vide" style="font-size:10px">⏳ En file d\'attente</div>';
@@ -34148,6 +34150,147 @@ async function bdPdfBlob(liste, progression){
     }
     return pdf.output('blob');
   } finally { cadre.remove(); }
+}
+// ====================== CORRIGER LE BIC (restitution de la retenue à une coopérative) ======================
+// La retenue BIC est faite à chaque livraison. Quand la coopérative présente son document d'exonération, on lui restitue la retenue :
+// ORIGEN marque le camion « BIC restitué » (retenue = 0 dans tous les calculs), le montant à payer augmente du BIC, Noah supprime dans OBC
+// le seul bordereau et le refait avec BIC à 0 (reprise à l'étape Bordereau), puis on télécharge le nouveau bordereau à coller sur la liasse.
+function bicAchats(){ return (state.achats||[]).filter(a=>!a.producteur_id && a.connaissement && !a.refoulee && Number(a.poids_net_produit)>0 && (a.obc_saisi_le || a.bic_restitue)); }
+function bicEstBobivo(a){ const s = sachSiteDe(a.usine_dechargement); return !!s && /bobby|sicocoa/i.test(String(s.traitant||'')+' '+String(s.nom||'')); }
+function bicRetenue(a){ const m = calcMontantPaiement(a); return m ? (m.bicRestitue ? (Number(a.bic_restitue_montant)||m.retenueBicInitiale||0) : (m.retenueBic||0)) : 0; }
+function bicEtat(a){
+  if (!a.bic_restitue) return { cle:'retenu', txt:'BIC retenu' };
+  const f = state.obcFile && state.obcFile[a.id];
+  if (f && f.statut==='saisi' && a.obc_saisi_le) return { cle:'fait', txt:'✓ Corrigé dans OBC' };
+  if (f && f.statut==='en_cours') return { cle:'cours', txt:'🤖 Noah corrige…' };
+  if (f && f.statut==='echec') return { cle:'echec', txt:'⚠ Échec : '+String(f.message||'').slice(0,60) };
+  return { cle:'attente', txt:'⏳ À lancer dans OBC (Noah)' };
+}
+function bicMention(a){
+  if (!a.bic_restitue) return '';
+  const e = bicEtat(a), ok = e.cle==='fait';
+  return '<div style="font-size:10px;font-weight:700;color:'+(ok?'#2e7d32':'#8a6d00')+'" title="Le BIC retenu ('+fmtNum(Number(a.bic_restitue_montant)||0)+' FCFA) a été restitué à la coopérative">💸 BIC restitué'+(ok?'':' — '+esc(e.txt))+'</div>';
+}
+function bicOuvrir(){ state.modal = { type:'bicCorrection', payload:{ q:'', sel:[], toutes:false } }; render(); if (!state.obcFileLance){ state.obcFileLance = true; } obcFileCharger().then(()=>{ if (state.modal && state.modal.type==='bicCorrection') bicMajListe(); }); }
+let bicAffiches = [];
+function bicListeHtml(){
+  const pl = state.modal && state.modal.payload; if (!pl) return '';
+  const q = bdNorm(pl.q).trim(), sel = new Set(pl.sel);
+  let liste = bicAchats().filter(a=>pl.toutes || bicEstBobivo(a) || a.bic_restitue);
+  liste = liste.filter(a=>bicRetenue(a)>0 || a.bic_restitue);
+  if (q) liste = liste.filter(a=> bdNorm(bdCoopNom(a)).includes(q) || bdNorm(a.connaissement).includes(q));
+  bicAffiches = [];
+  if (!liste.length) return '<div class="hint" style="padding:14px;text-align:center">'+(q ? 'Aucun camion pour « '+esc(pl.q)+' ».' : 'Aucun camion saisi dans OBC avec une retenue BIC'+(pl.toutes?'':' chez Bobivo (coche « toutes les coopératives » pour élargir)')+'.')+'</div>';
+  const groupes = new Map();
+  liste.forEach(a=>{ const k = bdCoopNom(a); if (!groupes.has(k)) groupes.set(k, []); groupes.get(k).push(a); });
+  let h = '', n = 0;
+  Array.from(groupes.keys()).sort((x,y)=>x.localeCompare(y,'fr')).forEach(nom=>{
+    const ls = groupes.get(nom).sort((x,y)=>String(y.date||'').localeCompare(String(x.date||'')) || String(y.connaissement).localeCompare(String(x.connaissement),'fr',{numeric:true}));
+    const aBic = coopABic(ls[0].cooperative_id), tot = ls.filter(a=>!a.bic_restitue).reduce((t,a)=>t+bicRetenue(a),0);
+    h += '<div class="bd-coop"><span>'+esc(nom)+(aBic?' <small title="Le document BIC figure dans les documents de la coopérative">· document BIC fourni</small>':'')+'</span><small>'+(tot?fmtNum(tot)+' FCFA de BIC retenu':'tout restitué')+'</small></div>';
+    ls.forEach(a=>{
+      if (n>=300) return; n++; bicAffiches.push(a.id);
+      const e = bicEtat(a), on = sel.has(a.id), couleur = e.cle==='fait' ? '#2e7d32' : e.cle==='echec' ? '#B3261E' : e.cle==='retenu' ? '#555' : '#8a6d00';
+      h += '<div onclick="bicBascule(\''+a.id+'\')" style="display:flex;gap:10px;align-items:center;padding:7px 10px;cursor:pointer;border-bottom:1px solid #eee;font-size:13px;'+(on?'background:#fff3d6;':'')+'">'
+        + '<input type="checkbox" '+(on?'checked':'')+' style="pointer-events:none;width:16px;height:16px"><b style="min-width:120px">'+esc(a.connaissement)+'</b><span style="min-width:84px">'+esc(dateFr(a.date))+'</span>'
+        + '<span style="min-width:80px;text-align:right">'+fmtNum(Math.round(Number(a.poids_net_produit)))+' kg</span><span style="min-width:90px;text-align:right">'+fmtNum(bicRetenue(a))+' F</span>'
+        + '<span style="flex:1;text-align:right;font-size:12px;font-weight:700;color:'+couleur+'">'+esc(e.txt)+'</span></div>';
+    });
+  });
+  return h;
+}
+function bicSelParEtat(){ const pl = state.modal && state.modal.payload; const as = (pl ? pl.sel : []).map(id=>(state.achats||[]).find(x=>x.id===id)).filter(Boolean); return { aCorriger:as.filter(a=>!a.bic_restitue), aTelecharger:as.filter(a=>bicEtat(a).cle==='fait') }; }
+function bicMajListe(){
+  const el = document.getElementById('bic-liste'); if (el){ const t = el.scrollTop; el.innerHTML = bicListeHtml(); el.scrollTop = t; }
+  const s = bicSelParEtat(), pl = state.modal && state.modal.payload;
+  const b1 = document.getElementById('bic-ok'), b2 = document.getElementById('bic-dl'), c = document.getElementById('bic-compte');
+  const tot = s.aCorriger.reduce((t,a)=>t+bicRetenue(a),0);
+  if (b1){ b1.disabled = !s.aCorriger.length; b1.textContent = s.aCorriger.length ? '💸 Restituer le BIC : '+s.aCorriger.length+' camion'+(s.aCorriger.length>1?'s':'')+' · '+fmtNum(tot)+' FCFA' : '💸 Restituer le BIC'; }
+  if (b2){ b2.disabled = !s.aTelecharger.length; b2.textContent = s.aTelecharger.length ? '⬇ Nouveau bordereau ('+s.aTelecharger.length+')' : '⬇ Nouveau bordereau'; }
+  if (c && pl) c.textContent = pl.sel.length ? pl.sel.length+' camion'+(pl.sel.length>1?'s':'')+' sélectionné'+(pl.sel.length>1?'s':'') : 'Aucun camion sélectionné';
+}
+function bicRecherche(v){ const pl = state.modal && state.modal.payload; if (!pl) return; pl.q = v; bicMajListe(); }
+function bicBascule(id){ const pl = state.modal && state.modal.payload; if (!pl) return; const i = pl.sel.indexOf(id); if (i>=0) pl.sel.splice(i,1); else pl.sel.push(id); bicMajListe(); }
+function bicToutCocher(){ const pl = state.modal && state.modal.payload; if (!pl) return; bicAffiches.forEach(id=>{ if (pl.sel.indexOf(id)<0) pl.sel.push(id); }); bicMajListe(); }
+function bicToutDecocher(){ const pl = state.modal && state.modal.payload; if (!pl) return; pl.sel = []; bicMajListe(); }
+function bicToutes(v){ const pl = state.modal && state.modal.payload; if (!pl) return; pl.toutes = !!v; bicMajListe(); }
+function renderBicModal(m){
+  const pl = m.payload;
+  return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>💸 Corriger le BIC</h3><div id="modal-fields">'
+    + '<div class="hint" style="margin-bottom:8px">La coopérative a présenté son document d\'exonération : on lui restitue le BIC retenu. Coche les camions concernés puis « Restituer le BIC ». Le montant à payer augmente du BIC, puis Noah refait le bordereau dans OBC sans BIC (rien d\'autre n\'est touché). Quand c\'est fini, télécharge le nouveau bordereau pour la liasse.</div>'
+    + '<input id="bic-q" class="bd-q" type="search" placeholder="Rechercher une coopérative ou un n° de connaissement…" value="'+esc(pl.q)+'" oninput="bicRecherche(this.value)" autocomplete="off">'
+    + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0"><span id="bic-compte" style="font-weight:700;flex:1;min-width:150px">Aucun camion sélectionné</span>'
+    + '<label style="display:flex;gap:4px;align-items:center;font-size:13px"><input type="checkbox"'+(pl.toutes?' checked':'')+' onchange="bicToutes(this.checked)"> toutes les coopératives (pas seulement Bobivo)</label>'
+    + '<button type="button" class="btn btn-compact" onclick="bicToutCocher()">Tout cocher</button><button type="button" class="btn btn-compact" onclick="bicToutDecocher()">Tout décocher</button></div>'
+    + '<div id="bic-liste" style="max-height:46vh;overflow:auto;border:1px solid #d7ded9;border-radius:8px">'+bicListeHtml()+'</div>'
+    + '<div class="hint" style="margin-top:8px">Seuls les camions déjà saisis dans OBC sont proposés. Après « Restituer le BIC », ouvre OBC dans Chrome et clique « Lancer la file » (Noah). Quand la ligne affiche « ✓ Corrigé dans OBC », coche-la et télécharge le nouveau bordereau.</div>'
+    + '</div><div class="actions"><button class="btn" onclick="closeModal()">Fermer</button><button id="bic-dl" class="btn" onclick="bicTelecharger()" disabled>⬇ Nouveau bordereau</button><button id="bic-ok" class="btn btn-primary" onclick="bicAppliquer()" disabled>💸 Restituer le BIC</button></div></div></div>';
+}
+async function bicAppliquer(){
+  const s = bicSelParEtat(), liste = s.aCorriger;
+  if (!liste.length){ showToast('Coche d\'abord au moins un camion dont le BIC n\'est pas encore restitué.'); return; }
+  if (!state.prefCharge) await chargerPrefinancements();
+  await obcFileCharger();
+  const dejaDemande = a=>{ const f = state.obcFile && state.obcFile[a.id]; return !!f && (f.statut==='attente' || f.statut==='en_cours'); };
+  const occupes = liste.filter(dejaDemande);
+  if (occupes.length){ showToast('Noah a déjà ce camion dans sa file : '+occupes.slice(0,3).map(a=>a.connaissement).join(', ')+'. Attends la fin avant de corriger.'); return; }
+  const total = liste.reduce((t,a)=>t+bicRetenue(a),0), coops = Array.from(new Set(liste.map(bdCoopNom)));
+  askConfirm('Restituer le BIC de '+liste.length+' camion'+(liste.length>1?'s':'')+' ('+coops.slice(0,3).join(', ')+(coops.length>3?'…':'')+') : '+fmtNum(total)+' FCFA ?\n\n• Le montant à payer de chaque camion augmente de son BIC (reste à payer = BIC à restituer).\n• Dans OBC, Noah supprime le seul bordereau de chaque camion et le refait avec BIC à 0.\n• Ensuite tu télécharges le nouveau bordereau.', async ()=>{
+    const quand = new Date().toISOString(), lignes = [], ok = [], ignores = [];
+    liste.forEach(a=>{
+      const montant = bicRetenue(a); const avant = { r:a.bic_restitue, m:a.bic_restitue_montant, l:a.bic_restitue_le, o:a.obc_saisi_le };
+      a.bic_restitue = true; a.bic_restitue_montant = montant; a.bic_restitue_le = quand;
+      try{
+        const lot = obcLot(a), manques = obcManques(lot);
+        if (manques.length){ ignores.push(a.connaissement+' ('+manques.join(', ')+')'); a.bic_restitue = avant.r; a.bic_restitue_montant = avant.m; a.bic_restitue_le = avant.l; return; }
+        lot.correction_bic = true;
+        lignes.push({ achat_id:a.id, connaissement:a.connaissement, lot, statut:'attente', message:null, bordereau_numero:null, controle:null, controle_le:null, refaire_depuis:10, envoye_le:quand, maj_le:quand }); ok.push(a);
+      }catch(e){ ignores.push(a.connaissement+' (lot illisible)'); a.bic_restitue = avant.r; a.bic_restitue_montant = avant.m; a.bic_restitue_le = avant.l; }
+    });
+    const annuler = ()=>{ ok.forEach(a=>{ a.bic_restitue = false; a.bic_restitue_montant = null; a.bic_restitue_le = null; }); };
+    if (!lignes.length){ showToast('Rien à envoyer : '+ignores.slice(0,3).join(' ; ')); return; }
+    const r1 = await supabaseClient.from('obc_file').upsert(lignes, { onConflict:'achat_id' });
+    if (r1.error){ annuler(); showToast('Échec de l\'envoi à Noah : '+r1.error.message); return; }
+    for (const a of ok){
+      const r2 = await supabaseClient.from('achats').update({ bic_restitue:true, bic_restitue_montant:a.bic_restitue_montant, bic_restitue_le:quand, obc_saisi_le:null }).eq('id', a.id);
+      if (r2.error){ showToast('Échec sur '+a.connaissement+' : '+r2.error.message+' (le camion est resté en file : relance depuis OBC si besoin)'); continue; }
+      a.obc_saisi_le = null;
+      // Montant à payer figé au 1er paiement : on y ajoute le BIC restitué, pour que le reste à payer soit exactement le BIC à rendre.
+      const pais = paiementsDeAchat(a.id).filter(p=>p.montant_a_payer!==null && p.montant_a_payer!==undefined);
+      if (pais.length){
+        const nv = Math.round(Number(pais[0].montant_a_payer)+a.bic_restitue_montant);
+        const r3 = await supabaseClient.from('paiements').update({ montant_a_payer:nv }).eq('achat_id', a.id);
+        if (r3.error) showToast('BIC marqué sur '+a.connaissement+', mais le montant à payer n\'a pas pu être mis à jour : '+r3.error.message);
+        else state.paiements = (state.paiements||[]).map(p=>p.achat_id===a.id ? Object.assign({}, p, { montant_a_payer:nv }) : p);
+      }
+    }
+    await obcFileCharger();
+    const pl = state.modal && state.modal.payload; if (pl) pl.sel = ok.map(a=>a.id);
+    showToast(ok.length+' camion(s) : BIC restitué'+(ignores.length?' · '+ignores.length+' ignoré(s) ('+ignores[0]+')':'')+'. Ouvre OBC (Chrome) et clique « Lancer la file » : Noah refait les bordereaux.', 'success');
+    render(); if (state.modal && state.modal.type==='bicCorrection') bicMajListe();
+  });
+}
+async function bicTelecharger(){
+  const s = bicSelParEtat(), achats = s.aTelecharger;
+  if (!achats.length){ showToast('Coche des camions marqués « ✓ Corrigé dans OBC » : le nouveau bordereau n\'est disponible qu\'après le passage de Noah.'); return; }
+  if (!state.prefCharge) await chargerPrefinancements();
+  achats.sort((x,y)=> bdCoopNom(x).localeCompare(bdCoopNom(y),'fr') || String(y.date||'').localeCompare(String(x.date||'')) || String(y.connaissement).localeCompare(String(x.connaissement),'fr',{numeric:true}));
+  const bs = achats.map(a=>bordereauReceptionData(a)).filter(b=>b.manque!=='prix');
+  if (!bs.length){ showToast('Renseigne d\'abord le prix d\'entrée usine de la campagne (paramètres de paiement).'); return; }
+  const btn = document.getElementById('bic-dl'), txt = btn ? btn.textContent : '';
+  if (btn){ btn.disabled = true; btn.textContent = 'Préparation du PDF…'; }
+  try{
+    const blob = await bdPdfBlob(bs, (i,n)=>{ if (btn && n>1) btn.textContent = 'Page '+i+' / '+n+'…'; });
+    const coops = Array.from(new Set(achats.map(bdCoopNom)));
+    const nom = bs.length===1 ? 'Bordereau corrigé BIC '+String(achats[0].connaissement).replace(/[\\\/:*?"<>|]/g,'-')+' '+bdCoopNom(achats[0]).replace(/[\\\/:*?"<>|]/g,'-')+'.pdf'
+      : 'Bordereaux corrigés BIC ('+bs.length+') '+(coops.length===1 ? coops[0].replace(/[\\\/:*?"<>|]/g,'-') : 'plusieurs coopératives')+' '+new Date().toISOString().slice(0,10)+'.pdf';
+    telechargerBlob(blob, nom);
+    showToast(bs.length===1 ? 'Nouveau bordereau '+achats[0].connaissement+' téléchargé.' : bs.length+' nouveaux bordereaux téléchargés dans un seul PDF.', 'success');
+  }catch(e){
+    showToast('Impossible de générer le PDF : '+e.message+' — ouverture des bordereaux à imprimer à la place.');
+    const f = window.open('', '_blank'); if (f){ f.document.open(); f.document.write(bordereauReceptionHTML(bs)); f.document.close(); }
+  }
+  if (btn){ btn.textContent = txt; btn.disabled = false; }
 }
 async function bdTelecharger(){
   const pl = state.modal && state.modal.type==='bordereauParticulier' ? state.modal.payload : null;
@@ -34704,7 +34847,8 @@ function renderSaisieObcTab(){
     + '<b>🧾 Bordereaux groupés</b> du <input type="date" value="'+esc(state.sobcDu||'')+'" onchange="setSobcPeriode(\'sobcDu\', this.value)"> au <input type="date" value="'+esc(state.sobcAu||'')+'" onchange="setSobcPeriode(\'sobcAu\', this.value)">'
     + '<label style="display:flex;gap:4px;align-items:center"><input type="checkbox"'+(state.sobcInclureNonSaisis?' checked':'')+' onchange="state.sobcInclureNonSaisis=this.checked;render()"> inclure ceux pas encore saisis</label>'
     + '<button type="button" class="btn btn-primary btn-compact" onclick="ouvrirBordereauxGroupes()" title="Réunit tous les bordereaux de la période dans un seul document : Imprimer › Enregistrer au format PDF = un seul fichier">⬇ Télécharger les '+fmtNum(bordereauxGroupesListe().length)+' bordereaux (un seul PDF)</button>'
-    + '<button type="button" class="btn btn-primary btn-compact" onclick="bdOuvrir()" title="Cocher un ou plusieurs déchargements (n° de connaissement), de une ou plusieurs coopératives : les bordereaux se téléchargent dans un seul PDF">🖨 Imprimer un bordereau</button></div>'
+    + '<button type="button" class="btn btn-primary btn-compact" onclick="bdOuvrir()" title="Cocher un ou plusieurs déchargements (n° de connaissement), de une ou plusieurs coopératives : les bordereaux se téléchargent dans un seul PDF">🖨 Imprimer un bordereau</button>'
+    + '<button type="button" class="btn btn-primary btn-compact" onclick="bicOuvrir()" title="La coopérative a présenté son document d\'exonération BIC : on lui restitue la retenue. Noah refait le bordereau dans OBC sans BIC, puis on télécharge le nouveau bordereau pour la liasse.">💸 Corriger le BIC</button></div>'
     + (function(){ const lots = obcLotsSaisie(), sel = state.obcRapportLot||'';
         return '<div class="sobc-groupe" style="display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;padding:0 18px 10px;font-size:13px">'
           + '<b>📄 Rapport de saisie OBC</b> <select id="obc-rapport-lot" onchange="state.obcRapportLot=this.value">'
