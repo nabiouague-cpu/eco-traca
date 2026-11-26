@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Administration — base de comparaison</title>
+<style>
+body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:#f5f7f6;color:#1d2a30;margin:0;font-size:15px;line-height:1.5}
+main{max-width:760px;margin:0 auto;padding:20px}
+.carte{background:#fff;border:1px solid #d9dee2;border-radius:12px;padding:16px;margin-bottom:16px}
+h1{font-size:18px} h2{font-size:16px;margin:0 0 8px}
+input[type=text],input[type=password]{padding:7px;border:1px solid #d9dee2;border-radius:8px;font-size:14px}
+.btn{background:#2e7d46;color:#fff;border:0;border-radius:8px;padding:9px 16px;font-size:14px;cursor:pointer}
+.btn:disabled{opacity:.45}
+.hint{font-size:13px;color:#5b6770}
+progress{width:100%;height:10px}
+.ligne{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:8px 0}
+</style>
+</head>
+<body>
+<main>
+<h1>Administration — base de comparaison</h1>
+<div class="hint">Réservé à l'administrateur. Cette page charge dans le serveur la base de polygones qui sert à la comparaison indicative (« superposition avec une base de données existante »). Les parcelles de cette base ne sont jamais renvoyées aux utilisateurs : seul un pourcentage l'est.</div>
+
+<div class="carte" id="c-connexion">
+  <h2>1. Connexion</h2>
+  <div class="ligne"><input type="text" id="email" placeholder="E-mail" style="width:230px"><input type="password" id="mdp" placeholder="Mot de passe" style="width:200px"><button class="btn" id="btn-cx">Se connecter</button></div>
+  <div class="hint" id="cx-etat"></div>
+</div>
+
+<div class="carte">
+  <h2>2. Charger la base</h2>
+  <div class="hint">Choisis le fichier de la base consolidée (zip ou GeoJSON), téléchargé depuis ORIGEN (Cartes &amp; déforestation → « Base consolidée ECORIGINE »).</div>
+  <div class="ligne"><input type="file" id="fichier" accept=".zip,.geojson,.json"></div>
+  <div class="ligne"><label><input type="checkbox" id="vider" checked> Remplacer la base déjà chargée</label></div>
+  <div class="ligne"><button class="btn" id="btn-charger" disabled>Charger dans le serveur</button><span class="hint" id="taille"></span></div>
+  <progress id="prog" value="0" max="100" style="display:none"></progress>
+  <div class="hint" id="etat"></div>
+</div>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script>
+const SB = supabase.createClient('https://cvjqqupcbsbfjolkukjm.supabase.co', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN2anFxdXBjYnNiZmpvbGt1a2ptIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTU2OTU2MTAsImV4cCI6MjExMTI3MTYxMH0.Ck0h0RkYBZL0sfGZ6kxYWZLMSrzZ5Pymv_Ha0uGL4TI');
+const $ = id=>document.getElementById(id);
+async function maj(){
+  const { data } = await SB.auth.getSession(); const u = data.session && data.session.user;
+  $('cx-etat').textContent = u ? 'Connecté : '+u.email : 'Non connecté.';
+  $('btn-charger').disabled = !u;
+  if (u){ const t = await SB.rpc('base_externe_taille'); $('taille').textContent = t.error ? '' : 'Base actuelle : '+t.data.toLocaleString('fr-FR')+' polygones.'; }
+}
+$('btn-cx').onclick = async ()=>{ const r = await SB.auth.signInWithPassword({ email:$('email').value.trim(), password:$('mdp').value }); if (r.error) $('cx-etat').textContent = r.error.message; maj(); };
+const arrondir = c=>typeof c[0]==='number' ? [Math.round(c[0]*1e6)/1e6, Math.round(c[1]*1e6)/1e6] : c.map(arrondir);
+$('btn-charger').onclick = async ()=>{
+  const f = $('fichier').files[0]; if (!f){ $('etat').textContent = 'Choisis un fichier.'; return; }
+  $('btn-charger').disabled = true; $('prog').style.display = 'block'; $('prog').value = 0;
+  try{
+    const sources = [];
+    if (/\.zip$/i.test(f.name)){
+      const z = await JSZip.loadAsync(f);
+      z.forEach((chemin, e)=>{ if (!e.dir && /\.(geojson|json)$/i.test(chemin) && !/__MACOSX/.test(chemin)) sources.push({ nom:chemin, texte:()=>e.async('string') }); });
+    } else sources.push({ nom:f.name, texte:()=>f.text() });
+    if (!sources.length) throw new Error('Aucun GeoJSON dans ce fichier.');
+    let total = 0, premier = $('vider').checked;
+    for (let k=0;k<sources.length;k++){
+      $('etat').textContent = 'Lecture de '+sources[k].nom+'…';
+      const j = JSON.parse(await sources[k].texte());
+      const feats = (j.type==='FeatureCollection' ? j.features : (j.type==='Feature' ? [j] : [])).filter(x=>x&&x.geometry&&/Polygon/.test(x.geometry.type));
+      for (let i=0;i<feats.length;i+=250){
+        const lot = feats.slice(i,i+250).map(x=>({ geometry:{ type:x.geometry.type, coordinates:arrondir(x.geometry.coordinates) } }));
+        const r = await SB.rpc('charger_base', { p_lot:lot, p_source:sources[k].nom, p_vider:premier });
+        if (r.error) throw new Error(r.error.message);
+        premier = false; total += r.data;
+        $('prog').value = Math.round(((k + Math.min(1,(i+250)/feats.length))/sources.length)*100);
+        $('etat').textContent = total.toLocaleString('fr-FR')+' polygones chargés…';
+      }
+    }
+    $('etat').textContent = 'Terminé : '+total.toLocaleString('fr-FR')+' polygones chargés.';
+  }catch(e){ $('etat').textContent = 'Échec : '+(e.message||e)+' (le chargement peut être repris : coche « Remplacer »).'; }
+  $('btn-charger').disabled = false; maj();
+};
+maj();
+</script>
+</body>
+</html>

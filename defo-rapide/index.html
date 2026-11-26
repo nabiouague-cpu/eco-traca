@@ -101,8 +101,17 @@ select,input[type=text]{padding:7px;border:1px solid var(--bord);border-radius:8
 <section class="carte cache" id="etape5">
   <h2>5. Analyse déforestation (satellite)</h2>
   <div class="hint">Compare chaque parcelle de la base finale aux cartes de couvert forestier et de perturbation (méthode Whisp) et à une base de données existante.</div>
+  <div class="ligne" id="zone-connexion" style="margin-top:10px">
+    <input type="text" id="cx-email" placeholder="Adresse e-mail" style="width:220px">
+    <input type="password" id="cx-mdp" placeholder="Mot de passe (8 caractères min.)" style="width:230px;padding:7px;border:1px solid var(--bord);border-radius:8px;font-size:14px">
+    <button class="btn sec" id="btn-connexion">Se connecter</button>
+    <button class="btn sec" id="btn-inscription">Créer un compte</button>
+  </div>
+  <div class="ligne cache" id="zone-connecte" style="margin-top:10px"><span class="hint" id="cx-qui"></span><button class="btn sec" id="btn-deconnexion">Se déconnecter</button></div>
+  <div class="hint" id="cx-etat" style="margin-top:4px"></div>
   <div class="ligne" style="margin-top:10px">
     <button class="btn" id="btn-analyse">Lancer l'analyse</button>
+    <button class="btn sec" id="btn-demo">Voir une démonstration (résultats fictifs)</button>
     <span class="hint" id="analyse-etat"></span>
   </div>
   <div id="avis-zone"></div>
@@ -128,10 +137,12 @@ select,input[type=text]{padding:7px;border:1px solid var(--bord);border-radius:8
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://unpkg.com/shpjs@4.0.4/dist/shp.min.js"></script>
 <script src="https://unpkg.com/@tmcw/togeojson@5.8.1/dist/togeojson.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script>
 // ====== RÉGLAGES ======
 const CONFIG = {
-  apiUrl: '',               // serveur d'analyse (Whisp + base existante). Vide = mode démonstration (résultats FICTIFS)
+  supaUrl: 'https://cvjqqupcbsbfjolkukjm.supabase.co',
+  supaKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN2anFxdXBjYnNiZmpvbGt1a2ptIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTU2OTU2MTAsImV4cCI6MjExMTI3MTYxMH0.Ck0h0RkYBZL0sfGZ6kxYWZLMSrzZ5Pymv_Ha0uGL4TI',   // clé publique (anon) : sans danger dans une page web
   seuilPetitHa: 0.1, seuilGrandHa: 50, seuilEUDRHa: 4,
   sommetsMin: 4, decimalesMin: 5,
   chevIgnore: 5,            // % : en dessous, chevauchement ignoré (bruit GPS)
@@ -491,11 +502,16 @@ function appliquerPlan(S, T){
 
 // ====== ANALYSE SERVEUR (Whisp + base existante) ======
 // Réponse attendue : { resultats:[{plot_id, risk_pcrop, risk_acrop, risk_timber, perturbation_apres_2020, chevauchement_pct}] }
-async function appelerServeur(fc){
-  if (!CONFIG.apiUrl) return analyseDemo(fc);
-  const r = await fetch(CONFIG.apiUrl, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({geojson:fc})});
-  if (!r.ok) throw new Error("Le serveur d'analyse a répondu "+r.status);
-  return r.json();
+async function appelerServeur(fc, nom){
+  const { data } = await SB.auth.getSession();
+  const jeton = data && data.session && data.session.access_token;
+  if (!jeton) throw new Error('Connecte-toi pour lancer l\'analyse.');
+  const r = await fetch(CONFIG.supaUrl+'/functions/v1/analyser', { method:'POST',
+    headers:{ 'Content-Type':'application/json', 'apikey':CONFIG.supaKey, 'Authorization':'Bearer '+jeton },
+    body:JSON.stringify({ geojson:fc, nom }) });
+  let j = null; try { j = await r.json(); } catch(e){}
+  if (!r.ok) throw new Error((j && j.error) || ("Le serveur d'analyse a répondu "+r.status));
+  return j;
 }
 function analyseDemo(fc){   // résultats FICTIFS, uniquement pour voir le rapport final
   const hash = s=>{ let h=0; for (const c of s) h=(h*31+c.charCodeAt(0))>>>0; return h; };
@@ -507,6 +523,7 @@ const TXT_BASE_EXISTANTE = "Certaines de vos parcelles se superposent à une bas
 const CONTROLES_SERVEUR = ['Déforestation (perturbation après 2020, Whisp)','Forêts classées et aires protégées','Superposition avec la base de données existante','Cours d\'eau, plans d\'eau et zones habitées','Densité de cacao (carte BNETD, puis carte satellite de secours)'];
 
 // ====== INTERFACE ======
+const SB = (typeof supabase!=='undefined') ? supabase.createClient(CONFIG.supaUrl, CONFIG.supaKey) : null;
 const S = { entrees:[], journal:[], feats:[], res:[], points:[], lignes:[], chev:[], simil:[], simplCoupe:false, simpl:{}, plan:null, T:{main:true,simil:true,doublons:true,reduire:true,supprimer:true,simplifier:true}, final:null, serveur:null, carte:null, couche:null };
 const $ = id=>typeof document!=='undefined' ? document.getElementById(id) : null;
 const COUL = {ok:'#2e7d46', attention:'#d98200', erreur:'#c0392b', ecarte:'#6b7780'};
@@ -533,7 +550,12 @@ if (typeof document !== 'undefined' && $('depot')) {
     demarrer(entrees);
   });
   $('filtre').addEventListener('change', afficher);
-  $('btn-analyse').addEventListener('click', lancerAnalyse);
+  $('btn-analyse').addEventListener('click', ()=>lancerAnalyse(false));
+  $('btn-demo').addEventListener('click', ()=>lancerAnalyse(true));
+  $('btn-connexion').addEventListener('click', ()=>connexion(false));
+  $('btn-inscription').addEventListener('click', ()=>connexion(true));
+  $('btn-deconnexion').addEventListener('click', async ()=>{ await SB.auth.signOut(); majConnexion(); });
+  if (SB) { SB.auth.onAuthStateChange(()=>majConnexion()); majConnexion(); }
   $('btn-excel').addEventListener('click', telechargerExcel);
   $('btn-geojson').addEventListener('click', telechargerBase);
   $('btn-ecartees').addEventListener('click', telechargerEcartees);
@@ -591,7 +613,7 @@ async function analyserTout(){
   S.plan = construirePlan(S);
   $('barre').classList.add('cache');
   ['etape4','etape5','etape6'].forEach(i=>$(i).classList.remove('cache'));
-  $('attente').innerHTML = 'Contrôles satellite à brancher côté serveur : '+CONTROLES_SERVEUR.map(esc).join(' · ')+'.';
+  $('attente').innerHTML = 'Pas encore branchés (à venir) : '+CONTROLES_SERVEUR.filter((t,k)=>k!==0&&k!==2).map(esc).join(' · ')+'.';
   afficherRegles(); recalculer();
 }
 
@@ -639,7 +661,7 @@ function afficher(){
       return '<tr><td>'+esc(r.id)+'</td><td>'+(r.aireHa==null?'—':r.aireHa.toFixed(2))+'</td><td>'+(r.sommets==null?'—':r.sommets)+'</td>'+
         '<td><span class="pill p-'+(k==='ok'?'ok':k==='attention'?'att':k==='erreur'?'err':'gr')+'">'+LIB[k]+'</span></td>'+
         '<td>'+(r.ecartee?'<b>'+esc(r.ecartee)+'</b><br>':'')+(r.pb.length?r.pb.map(p=>esc(p.txt)).join('<br>'):(r.ecartee?'':'—'))+'</td>'+
-        (srv?('<td>'+esc(s?s.risk_pcrop:'—')+'</td><td>'+(s?(s.perturbation_apres_2020?'Oui':'Non'):'—')+'</td><td>'+(s&&s.chevauchement_pct>0?s.chevauchement_pct+' %':'Non')+'</td>'):'')+'</tr>'; }).join('')+'</tbody>';
+        (srv?('<td>'+esc(s&&s.risk_pcrop!=null?s.risk_pcrop:'—')+'</td><td>'+(s&&s.perturbation_apres_2020!=null?(s.perturbation_apres_2020?'Oui':'Non'):'—')+'</td><td>'+(s&&s.chevauchement_pct!=null?(s.chevauchement_pct>0?s.chevauchement_pct+' %':'Non'):'—')+'</td>'):'')+'</tr>'; }).join('')+'</tbody>';
   dessinerCarte(filtre);
 }
 
@@ -662,16 +684,33 @@ function dessinerCarte(filtre){
   setTimeout(()=>S.carte.invalidateSize(), 50);
 }
 
-async function lancerAnalyse(){
+async function majConnexion(){
+  if (!SB) return;
+  const { data } = await SB.auth.getSession(); const u = data && data.session && data.session.user;
+  $('zone-connexion').classList.toggle('cache', !!u); $('zone-connecte').classList.toggle('cache', !u);
+  if (u) $('cx-qui').textContent = 'Connecté : '+u.email;
+}
+async function connexion(creer){
+  const email = $('cx-email').value.trim(), mdp = $('cx-mdp').value;
+  if (!email || mdp.length<8){ $('cx-etat').textContent = 'Indique ton e-mail et un mot de passe de 8 caractères au moins.'; return; }
+  $('cx-etat').textContent = '…';
+  const r = creer ? await SB.auth.signUp({ email, password:mdp }) : await SB.auth.signInWithPassword({ email, password:mdp });
+  if (r.error){ $('cx-etat').textContent = ({ 'Invalid login credentials':'E-mail ou mot de passe incorrect.', 'Email not confirmed':'Confirme d\'abord ton adresse avec le message reçu par e-mail.' })[r.error.message] || r.error.message; return; }
+  $('cx-etat').textContent = creer && !(r.data && r.data.session) ? 'Compte créé. Ouvre le message reçu par e-mail pour confirmer ton adresse, puis connecte-toi.' : '';
+  majConnexion();
+}
+async function lancerAnalyse(demo){
   const b = $('btn-analyse'); b.disabled = true; $('analyse-etat').textContent = 'Analyse en cours…';
   try{
     const fc = { type:'FeatureCollection', features:S.final.gardees.map(g=>({type:'Feature', properties:{PlotID:S.feats[g.i].properties.PlotID}, geometry:g.geom})) };
-    S.serveur = await appelerServeur(fc);
+    S.serveur = demo ? analyseDemo(fc) : await appelerServeur(fc, nomDossier());
     $('analyse-etat').textContent = 'Analyse terminée.';
     const n = S.serveur.resultats.filter(x=>x.chevauchement_pct>0).length;
     let h = '';
     if (S.serveur.demo) h += '<div class="avis demo"><b>MODE DÉMONSTRATION.</b> Les résultats ci-dessous sont fictifs : le serveur d\'analyse satellite n\'est pas encore branché. Ne les utilise pas pour une décision.</div>';
-    if (n>0) h += '<div class="avis"><b>'+n+' parcelle(s) concernée(s).</b> '+esc(TXT_BASE_EXISTANTE)+'</div>';
+    if (!S.serveur.demo && S.serveur.whisp===false) h += '<div class="avis"><b>Analyse satellite (Whisp) non réalisée.</b> '+esc(S.serveur.message_whisp||'')+'</div>';
+    if (!S.serveur.demo && S.serveur.base_comparee===false) h += '<div class="avis">La comparaison avec une base de données existante n\'est pas encore disponible.</div>';
+    else if (n>0) h += '<div class="avis"><b>'+n+' parcelle(s) concernée(s).</b> '+esc(TXT_BASE_EXISTANTE)+'</div>';
     else h += '<div class="avis">Aucune superposition détectée avec la base de données existante.</div>';
     $('avis-zone').innerHTML = h; $('attente').innerHTML = '';
     afficher();
@@ -724,7 +763,7 @@ async function telechargerExcel(){
   r.addRow(['BASE FINALE','']).font = {bold:true};
   r.addRow(['Parcelles gardées', S.final.gardees.length]); r.addRow(['Parcelles écartées', S.final.ecartees.length]); r.addRow(['Parcelles modifiées', S.final.gardees.filter(g=>g.modif).length]);
   r.addRow([]); r.addRow(['CONTRÔLES SATELLITE','']).font = {bold:true};
-  CONTROLES_SERVEUR.forEach(t=>r.addRow([t, S.serveur ? (demo ? 'fictif (démonstration)' : 'réalisé') : 'non réalisé']));
+  CONTROLES_SERVEUR.forEach((t,k)=>r.addRow([t, !S.serveur ? 'non réalisé' : (demo ? 'fictif (démonstration)' : ((k===0 && S.serveur.whisp) || (k===2 && S.serveur.base_comparee) ? 'réalisé' : 'non réalisé'))]));
   if (S.serveur){ const n = S.serveur.resultats.filter(x=>x.chevauchement_pct>0).length; r.addRow([]); r.addRow(['Parcelles superposées à une base existante', n]);
     if (n>0){ const t = r.addRow([TXT_BASE_EXISTANTE]); r.mergeCells(t.number,1,t.number,2); t.alignment={wrapText:true,vertical:'top'}; t.height=75; } }
   r.addRow([]); r.addRow(['Ce rapport est une aide à l\'analyse. Il ne remplace ni une visite de terrain ni l\'avis d\'un auditeur.']).font = {italic:true,color:{argb:'FF595959'}};
@@ -738,7 +777,7 @@ async function telechargerExcel(){
   feuille(wb, 'Simplifications', ['Parcelle','Sommets avant','Sommets après','Écart de surface (%)','Précision (m)'], Object.keys(S.simpl).map(i=>[id(+i),S.simpl[i].avant,S.simpl[i].apres,+S.simpl[i].ecartAire.toFixed(2),S.simpl[i].tolerance]), [18,16,16,22,16]);
   feuille(wb, 'Écartées', ['Parcelle','Motif'], S.final.ecartees.map(e=>[id(e.i),e.motif]), [18,80]);
   if (S.serveur){ const srv = srvMap();
-    feuille(wb, 'Satellite'+(demo?' (FICTIF)':''), ['Parcelle','Risque cacao','Risque cultures annuelles','Risque bois','Perturbation après 2020','Superposition base existante (%)'], S.final.gardees.map(g=>{ const pid = S.feats[g.i].properties.PlotID, s = srv[pid]||{}; return [pid,s.risk_pcrop||'',s.risk_acrop||'',s.risk_timber||'',s.perturbation_apres_2020?'Oui':'Non',s.chevauchement_pct||0]; }), [16,16,24,14,24,30]); }
+    feuille(wb, 'Satellite'+(demo?' (FICTIF)':''), ['Parcelle','Risque cacao','Risque cultures annuelles','Risque bois','Perturbation après 2020','Superposition base existante (%)'], S.final.gardees.map(g=>{ const pid = S.feats[g.i].properties.PlotID, s = srv[pid]||{}; return [pid,s.risk_pcrop||'',s.risk_acrop||'',s.risk_timber||'',s.perturbation_apres_2020==null?'':(s.perturbation_apres_2020?'Oui':'Non'),s.chevauchement_pct==null?'':s.chevauchement_pct]; }), [16,16,24,14,24,30]); }
   feuille(wb, 'Parcelles', ['Parcelle','Surface (ha)','Sommets','Statut','Remarques'], S.res.map(x=>[x.id, x.aireHa==null?null:+x.aireHa.toFixed(3), x.sommets, x.ecartee?'Écartée':LIB[x.statut], (x.ecartee?x.ecartee+' ; ':'')+x.pb.map(p=>p.txt).join(' ; ')]), [18,13,10,14,90]);
   const buf = await wb.xlsx.writeBuffer();
   telecharger(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}), 'Rapport_'+nomDossier()+'.xlsx');
