@@ -230,6 +230,17 @@ function decoder(buf){
 
 // ====== LECTURE DES FICHIERS (tous formats, zip, dossiers) ======
 // Une « entrée » = { nom:'dossier/fichier.ext', buf:()=>Promise<ArrayBuffer> }
+let _unrarPret = null;
+function chargerUnrar(){
+  if (_unrarPret) return _unrarPret;
+  _unrarPret = new Promise((ok, ko)=>{
+    const fin = async ()=>{ try { const r = await fetch('unrar.wasm'); if (!r.ok) throw new Error('unrar.wasm introuvable'); ok(await r.arrayBuffer()); } catch(e){ ko(e); } };
+    if (window.NodeUnrar) return fin();
+    const sc = document.createElement('script'); sc.src = 'unrar.bundle.js'; sc.onload = fin; sc.onerror = ()=>ko(new Error('module RAR introuvable')); document.head.appendChild(sc);
+  }).catch(e=>{ _unrarPret = null; throw e; });
+  return _unrarPret;
+}
+const EXT_UTILES = /\.(geojson|json|kml|kmz|gpx|csv|tsv|txt|xlsx|xls|shp|dbf|prj|cpg|zip|rar)$/i;
 async function developper(entrees, profondeur){
   const sortie = [];
   for (const e of entrees){
@@ -243,6 +254,21 @@ async function developper(entrees, profondeur){
         sortie.push(...await developper(dedans, profondeur+1));
         continue;
       } catch(err){ sortie.push({ nom, buf:e.buf, erreurZip:true }); continue; }
+    }
+    if (ext==='rar' && profondeur < 6){
+      try {
+        const wasmBinary = await chargerUnrar();
+        const ex = await window.NodeUnrar.createExtractorFromData({ data: await e.buf(), wasmBinary });
+        const noms = [...ex.getFileList().fileHeaders].filter(h=>!h.flags.directory && !h.flags.encrypted && EXT_UTILES.test(h.name)).map(h=>h.name);
+        const dedans = [];
+        for (const f of ex.extract({ files: noms }).files){
+          if (!f.extraction) continue;
+          const u8 = f.extraction;
+          dedans.push({ nom: nom+'/'+f.fileHeader.name, buf:()=>Promise.resolve(u8.buffer.slice(u8.byteOffset, u8.byteOffset+u8.byteLength)) });
+        }
+        sortie.push(...await developper(dedans, profondeur+1));
+        continue;
+      } catch(err){ sortie.push({ nom, buf:e.buf, erreurZip:true, motif:String(err && err.message || err) }); continue; }
     }
     sortie.push(e);
   }
@@ -282,7 +308,7 @@ async function lireEntrees(entrees){
   for (const e of autres){
     const ext = extDe(e.nom); let feats = [], note = '', format = ext.toUpperCase();
     try {
-      if (e.erreurZip) { note = 'archive illisible'; }
+      if (e.erreurZip) { note = 'archive illisible' + (e.motif ? ' (' + e.motif + ')' : ''); }
       else if (['geojson','json'].includes(ext)) {
         const j = JSON.parse(decoder(await e.buf()));
         if (j.type==='FeatureCollection') feats = j.features||[]; else if (j.type==='Feature') feats = [j]; else if (j.type && j.coordinates) feats = [{type:'Feature',properties:{},geometry:j}];
@@ -642,7 +668,7 @@ async function demarrer(entrees){
     S.feats = prep.polys; S.points = prep.points; S.lignes = prep.lignes;
     $('etape2').classList.remove('cache'); afficherFichiers();
     if (!S.feats.length) { $('barre').classList.add('cache'); $('etape3').classList.add('cache'); alert("Aucun polygone exploitable dans ces fichiers. Regarde le tableau « Fichiers lus » pour comprendre pourquoi."); return; }
-    if (!$('nom-dossier').value.trim()){ const f0 = journal.find(j=>j.statut==='ok'); if (f0) $('nom-dossier').value = baseDe(f0.nom.split('/').filter(x=>!/\.(zip|kmz)$/i.test(x)).slice(-1)[0]||''); }
+    if (!$('nom-dossier').value.trim()){ const f0 = journal.find(j=>j.statut==='ok'); if (f0) $('nom-dossier').value = baseDe(f0.nom.split('/').filter(x=>!/\.(zip|kmz|rar)$/i.test(x)).slice(-1)[0]||''); }
     await analyserTout();
   } catch(e){ alert('Erreur : '+(e.message||e)); }
 }
