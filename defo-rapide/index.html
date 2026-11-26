@@ -291,6 +291,10 @@ const CONFIG = {
   chevReduit: 20,           // % : jusqu'à 20,99 on réduit la parcelle (on lui enlève la partie qui chevauche), à partir de 21 on la supprime
   chevGardeMax: 50, resteGrandMinHa: 1,   // de 21 à 50 % : on garde la parcelle réduite à son plus grand morceau si celui-ci fait au moins 1 ha ; au-delà de 50 % : suppression
   resteMinHa: 0.5,          // ha : après réduction, une parcelle qui reste sous 0,5 ha est retirée ; au-dessus on la garde réduite
+  protMinPct: 1,            // % : zone protégée / forêt classée : une parcelle dont 1 % ou plus est dedans est retirée (polygone complet testé)
+  bandeEauM: 25,            // m : distance à garder entre le bord de la parcelle et un cours d'eau (la découpe est faite côté serveur)
+  eauSuppPct: 20, resteEauMinHa: 0.1,   // eau (lit ±5 m, plans d'eau) ou zone habitée : plus de 20 % de la parcelle = supprimée ; sinon découpée, reste d'au moins 0,1 ha
+  cacaoMinPct: 20, cacaoFiableMinPct: 5,   // plus grand morceau gardé (21 à 50 % de chevauchement) : au moins 20 % de cacao autour (2 km, carte BNETD) ; sous 5 % la carte n'est pas fiable : à vérifier, pas retirée
   fermetureM: 30,           // ligne ouverte fermée automatiquement si l'écart est inférieur à 30 m
   mainScoreMin: 3, mainSegM: 40, mainAngleDeg: 8, mainDecimales: 5,   // score « dessiné à la main » sur 5 : ≥ 3 = à mettre de côté
   compaciteMin: 0.2, sommetsMax: 1000, convexiteMin: 0.8,             // contour irrégulier ou trop détaillé : simplifiable
@@ -764,7 +768,47 @@ function appliquerPlan(S, T){
     let ha = null; try { ha = turf.area({type:'Feature',properties:{},geometry:g})/10000; } catch(e){}
     gardees.push({ i, geom:g, modif:modif[i], ha });
   });
+  appliquerCouches(S, gardees, ecartees);
   return { gardees, ecartees };
+}
+
+// Couches de référence (zones protégées, eau, habitat, cacao) : appliquées après l'analyse serveur, sur la base finale
+function appliquerCouches(S, gardees, ecartees){
+  S.couchesLignes = [];
+  if (!S.serveur || S.serveur.demo || !S.envoye) return;
+  const srv = Object.fromEntries(S.serveur.resultats.map(x=>[x.plot_id,x]));
+  for (let k=gardees.length-1;k>=0;k--){
+    const g = gardees[k], pid = S.feats[g.i].properties.PlotID, r = srv[pid];
+    if (!r || r.prot_pct==null) continue;
+    if (S.envoye[pid] !== JSON.stringify(g.geom)) continue;     // la forme a changé depuis l'analyse : relancer l'analyse
+    const ligne = { pid, r, trait:'' };
+    let motif = null;
+    if (r.prot_pct >= CONFIG.protMinPct) motif = 'Zone protégée / forêt classée'+(r.prot_nom?' ('+r.prot_nom+')':'')+' : '+r.prot_pct+' % de la parcelle : retirée';
+    else if (r.eau_pct > CONFIG.eauSuppPct) motif = 'Eau : '+r.eau_pct+' % de la parcelle dans le lit du cours d\'eau (±5 m) ou un plan d\'eau (plus de '+CONFIG.eauSuppPct+' %) : supprimée';
+    else if (r.habitat_pct > CONFIG.eauSuppPct) motif = 'Zone habitée : '+r.habitat_pct+' % de la parcelle (plus de '+CONFIG.eauSuppPct+' %) : supprimée';
+    else if (r.coupe && (r.eau_pct>0 || r.habitat_pct>0 || r.bande_pct>0)){
+      const a0 = turf.area({type:'Feature',properties:{},geometry:g.geom});
+      let c = r.coupe; try { c = retirerFragments(c, a0); } catch(e){ c = null; }
+      const reste = c ? turf.area({type:'Feature',properties:{},geometry:c})/10000 : 0;
+      if (!c || reste < CONFIG.resteEauMinHa) motif = 'Après découpe ('+CONFIG.bandeEauM+' m autour des cours d\'eau, plans d\'eau, zones habitées) il resterait '+reste.toFixed(2)+' ha (moins de '+CONFIG.resteEauMinHa+' ha) : retirée';
+      else {
+        const av = (a0/10000);
+        if (nbSommets(c) < CONFIG.sommetsApresMin) c = densifier(JSON.parse(JSON.stringify(c)), CONFIG.sommetsApresMin);
+        g.geom = c; g.ha = reste;
+        const det = 'bande de '+CONFIG.bandeEauM+' m des cours d\'eau, plans d\'eau, zones habitées : '+av.toFixed(2)+' → '+reste.toFixed(2)+' ha';
+        g.modif = g.modif ? { type:g.modif.type+' + découpé (eau / habitat)', detail:g.modif.detail+' ; '+det } : { type:'découpé (eau / habitat)', detail:det };
+        ligne.trait = 'Découpée ('+av.toFixed(2)+' → '+reste.toFixed(2)+' ha)';
+      }
+    }
+    if (!motif && g.modif && /plus grand morceau/.test(g.modif.type)){      // règle des 21–50 % : le plus grand morceau doit être en zone cacaoyère
+      if (r.cacao_pct==null) ligne.trait = (ligne.trait?ligne.trait+' ; ':'')+'Cacao non vérifié (carte non chargée)';
+      else if (r.cacao_pct < CONFIG.cacaoFiableMinPct) ligne.trait = (ligne.trait?ligne.trait+' ; ':'')+'À vérifier : carte cacao peu fiable ici ('+r.cacao_pct+' %)';
+      else if (r.cacao_pct < CONFIG.cacaoMinPct) motif = 'Plus grand morceau gardé (chevauchement de 21 à 50 %), mais seulement '+r.cacao_pct+' % de cacao autour (moins de '+CONFIG.cacaoMinPct+' %) : retirée';
+      else ligne.trait = (ligne.trait?ligne.trait+' ; ':'')+'Gardée : '+r.cacao_pct+' % de cacao autour';
+    }
+    if (motif){ ligne.trait = motif; gardees.splice(k,1); ecartees.push({ i:g.i, motif }); }
+    if (motif || ligne.trait || r.prot_pct>0 || r.eau_pct>0 || r.habitat_pct>0 || r.bande_pct>0) S.couchesLignes.unshift(ligne);
+  }
 }
 
 // ====== ANALYSE SERVEUR (Whisp + base existante) ======
@@ -968,7 +1012,7 @@ async function analyserTout(){
   S.plan = construirePlan(S);
   $('barre').classList.add('cache');
   ['etape4','etape5','etape6'].forEach(i=>$(i).classList.remove('cache'));
-  $('attente').innerHTML = 'Pas encore branchés (à venir) : '+CONTROLES_SERVEUR.filter((t,k)=>k!==0&&k!==2).map(esc).join(' · ')+'.';
+  $('attente').innerHTML = 'Contrôles faits par le serveur au lancement de l\'analyse (selon les couches chargées) : '+CONTROLES_SERVEUR.filter((t,k)=>k!==0&&k!==2).map(esc).join(' · ')+'.';
   afficherRegles(); recalculer(); ouvrirDiscussion(); majParcours(); majTete();
 }
 
@@ -1080,6 +1124,7 @@ async function lancerAnalyse(demo){
   const b = $('btn-analyse'); b.disabled = true; $('analyse-etat').textContent = 'Analyse en cours…';
   try{
     const fc = { type:'FeatureCollection', features:S.final.gardees.map(g=>({type:'Feature', properties:{PlotID:S.feats[g.i].properties.PlotID}, geometry:g.geom})) };
+    S.envoye = Object.fromEntries(fc.features.map(f=>[f.properties.PlotID, JSON.stringify(f.geometry)]));
     S.serveur = demo ? analyseDemo(fc) : await appelerServeur(fc, nomDossier());
     $('analyse-etat').textContent = 'Analyse terminée.';
     const n = S.serveur.resultats.filter(x=>x.chevauchement_pct>0).length;
@@ -1089,8 +1134,14 @@ async function lancerAnalyse(demo){
     if (!S.serveur.demo && S.serveur.base_comparee===false) h += '<div class="avis">La comparaison avec une base de données existante n\'est pas encore disponible.</div>';
     else if (n>0) h += '<div class="avis"><b>'+n+' parcelle(s) concernée(s).</b> '+esc(TXT_BASE_EXISTANTE)+'</div>';
     else h += '<div class="avis">Aucune superposition détectée avec la base de données existante.</div>';
+    if (!S.serveur.demo){
+      const noms = { protegees:'forêts classées et zones protégées', cours_eau:'cours d\'eau', plans_eau:'plans d\'eau', habitat:'zones habitées', cacao:'carte cacao' };
+      const manque = Object.keys(noms).filter(t=>!((S.serveur.couches||{})[t]>0)).map(t=>noms[t]);
+      if (S.serveur.message_couches) h += '<div class="avis">'+esc(S.serveur.message_couches)+'</div>';
+      if (manque.length) h += '<div class="avis"><b>Couches non chargées sur le serveur : '+esc(manque.join(', '))+'.</b> Ces contrôles n\'ont pas été faits.</div>';
+    }
     $('avis-zone').innerHTML = h; $('attente').innerHTML = '';
-    afficher();
+    recalculer();
   }catch(e){ $('analyse-etat').textContent = 'Échec : '+e.message; }
   b.disabled = false;
 }
@@ -1140,7 +1191,7 @@ async function telechargerExcel(){
   r.addRow(['BASE FINALE','']).font = {bold:true};
   r.addRow(['Parcelles gardées', S.final.gardees.length]); r.addRow(['Parcelles écartées', S.final.ecartees.length]); r.addRow(['Parcelles modifiées', S.final.gardees.filter(g=>g.modif).length]);
   r.addRow([]); r.addRow(['CONTRÔLES SATELLITE','']).font = {bold:true};
-  CONTROLES_SERVEUR.forEach((t,k)=>r.addRow([t, !S.serveur ? 'non réalisé' : (demo ? 'fictif (démonstration)' : ((k===0 && S.serveur.whisp) || (k===2 && S.serveur.base_comparee) ? 'réalisé' : 'non réalisé'))]));
+  CONTROLES_SERVEUR.forEach((t,k)=>r.addRow([t, !S.serveur ? 'non réalisé' : (demo ? 'fictif (démonstration)' : ((k===0 && S.serveur.whisp) || (k===2 && S.serveur.base_comparee) || (k===1 && ((S.serveur.couches||{}).protegees>0)) || (k===3 && (((S.serveur.couches||{}).cours_eau>0)||((S.serveur.couches||{}).plans_eau>0)||((S.serveur.couches||{}).habitat>0))) || (k===4 && ((S.serveur.couches||{}).cacao>0)) ? 'réalisé' : 'non réalisé'))]));
   if (S.serveur){ const n = S.serveur.resultats.filter(x=>x.chevauchement_pct>0).length; r.addRow([]); r.addRow(['Parcelles superposées à une base existante', n]);
     if (n>0){ const t = r.addRow([TXT_BASE_EXISTANTE]); r.mergeCells(t.number,1,t.number,2); t.alignment={wrapText:true,vertical:'top'}; t.height=75; } }
   r.addRow([]); r.addRow(['Ce rapport est une aide à l\'analyse. Il ne remplace ni une visite de terrain ni l\'avis d\'un auditeur.']).font = {italic:true,color:{argb:'FF595959'}};
@@ -1153,6 +1204,7 @@ async function telechargerExcel(){
   feuille(wb, 'Chevauchements', ['Parcelle gardée entière','Parcelle réduite ou retirée','Part de cette parcelle couverte (%)','Surface commune (m²)','Traitement'], S.chev.map(p=>[id(p.grand),id(p.petit),+p.pct.toFixed(1),Math.round(p.m2),p.cat==='reduire'?'Réduction':p.cat==='garder'?'Plus grand morceau (≥ 1 ha) ou retrait':'Suppression']), [24,22,24,20,14]);
   feuille(wb, 'Simplifications', ['Parcelle','Sommets avant','Sommets après','Écart de surface (%)','Précision (m)'], Object.keys(S.simpl).map(i=>[id(+i),S.simpl[i].avant,S.simpl[i].apres,+S.simpl[i].ecartAire.toFixed(2),S.simpl[i].tolerance]), [18,16,16,22,16]);
   feuille(wb, 'Écartées', ['Parcelle','Motif'], S.final.ecartees.map(e=>[id(e.i),e.motif]), [18,80]);
+  if (S.serveur && !S.serveur.demo && (S.couchesLignes||[]).length) feuille(wb, 'Zones, eau, habitat, cacao', ['Parcelle','Zone protégée (% de la parcelle)','Nom de la zone','Eau : lit ±5 m ou plan d\'eau (%)','Zone habitée (%)','Bande de '+CONFIG.bandeEauM+' m des cours d\'eau (%)','Cacao autour, 2 km (%)','Traitement'], S.couchesLignes.map(l=>[l.pid,l.r.prot_pct,l.r.prot_nom||'',l.r.eau_pct,l.r.habitat_pct,l.r.bande_pct,l.r.cacao_pct==null?'':l.r.cacao_pct,l.trait||'—']), [16,18,28,22,16,26,20,70]);
   if (S.serveur){ const srv = srvMap();
     feuille(wb, 'Satellite'+(demo?' (FICTIF)':''), ['Parcelle','Risque cacao','Risque cultures annuelles','Risque bois','Couvert arboré 2020','Perturbation après 2020','Prioritaire (arboré 2020 ET perturbation)','Superposition base existante (%)'], S.final.gardees.map(g=>{ const pid = S.feats[g.i].properties.PlotID, s = srv[pid]||{}; return [pid,s.risk_pcrop||'',s.risk_acrop||'',s.risk_timber||'',s.couvert_arbore==null?'':(s.couvert_arbore?'Oui':'Non'),s.perturbation_apres_2020==null?'':(s.perturbation_apres_2020?'Oui':'Non'),s.prioritaire==null?'':(s.prioritaire?'Oui : ne pas livrer tant que non vérifié':'Non'),s.chevauchement_pct==null?'':s.chevauchement_pct]; }), [16,16,24,14,18,24,40,30]); }
   feuille(wb, 'Parcelles', ['Parcelle','Surface (ha)','Sommets','Statut','Remarques'], S.res.map(x=>[x.id, x.aireHa==null?null:+x.aireHa.toFixed(3), x.sommets, x.ecartee?'Écartée':LIB[x.statut], (x.ecartee?x.ecartee+' ; ':'')+x.pb.map(p=>p.txt).join(' ; ')]), [18,13,10,14,90]);

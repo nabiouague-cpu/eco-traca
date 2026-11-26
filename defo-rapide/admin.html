@@ -9,7 +9,7 @@ body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background
 main{max-width:760px;margin:0 auto;padding:20px}
 .carte{background:#fff;border:1px solid #d9dee2;border-radius:12px;padding:16px;margin-bottom:16px}
 h1{font-size:18px} h2{font-size:16px;margin:0 0 8px}
-input[type=text],input[type=password]{padding:7px;border:1px solid #d9dee2;border-radius:8px;font-size:14px}
+select,input[type=text],input[type=password]{padding:7px;border:1px solid #d9dee2;border-radius:8px;font-size:14px}
 .btn{background:#2e7d46;color:#fff;border:0;border-radius:8px;padding:9px 16px;font-size:14px;cursor:pointer}
 .btn:disabled{opacity:.45}
 .hint{font-size:13px;color:#5b6770}
@@ -37,7 +37,27 @@ progress{width:100%;height:10px}
   <progress id="prog" value="0" max="100" style="display:none"></progress>
   <div class="hint" id="etat"></div>
 </div>
+
+<div class="carte">
+  <h2>3. Charger une couche de référence</h2>
+  <div class="hint">Une couche à la fois. Fichier accepté : shapefile zippé (.zip avec .shp, .dbf et .prj), GeoJSON ou JSON. Les couches restent sur le serveur : l'outil n'en reçoit que des pourcentages et la parcelle découpée.</div>
+  <div class="ligne"><select id="c-type">
+    <option value="protegees">Forêts classées et zones protégées (polygones)</option>
+    <option value="cours_eau">Cours d'eau (lignes)</option>
+    <option value="plans_eau">Plans d'eau : retenues, lacs, lagunes (polygones)</option>
+    <option value="habitat">Zones habitées (polygones)</option>
+    <option value="cacao">Carte cacao BNETD 2020 (polygones de cacao)</option>
+  </select></div>
+  <div class="ligne"><input type="file" id="c-fichier" accept=".zip,.geojson,.json"></div>
+  <div class="ligne" id="c-val-l" style="display:none"><input type="text" id="c-val" placeholder="Colonne du % de cacao (vide = tout est cacao)" style="width:340px"></div>
+  <div class="ligne"><label><input type="checkbox" id="c-vider" checked> Remplacer la couche déjà chargée de ce type</label></div>
+  <div class="ligne"><button class="btn" id="c-btn" disabled>Charger la couche</button></div>
+  <progress id="c-prog" value="0" max="100" style="display:none"></progress>
+  <div class="hint" id="c-etat"></div>
+  <div class="hint" id="c-taille"></div>
+</div>
 </main>
+<script src="https://cdn.jsdelivr.net/npm/shpjs@4.0.4/dist/shp.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script>
@@ -46,8 +66,9 @@ const $ = id=>document.getElementById(id);
 async function maj(){
   const { data } = await SB.auth.getSession(); const u = data.session && data.session.user;
   $('cx-etat').textContent = u ? 'Connecté : '+u.email : 'Non connecté.';
-  $('btn-charger').disabled = !u;
-  if (u){ const t = await SB.rpc('base_externe_taille'); $('taille').textContent = t.error ? '' : 'Base actuelle : '+t.data.toLocaleString('fr-FR')+' polygones.'; }
+  $('btn-charger').disabled = !u; $('c-btn').disabled = !u;
+  if (u){ const ct = await SB.rpc('couches_taille'); if (!ct.error){ const L = {protegees:'zones protégées',cours_eau:'cours d\'eau',plans_eau:'plans d\'eau',habitat:'zones habitées',cacao:'cacao'}; $('c-taille').textContent = 'Couches chargées : '+(Object.keys(ct.data).map(k=>(L[k]||k)+' '+Number(ct.data[k]).toLocaleString('fr-FR')).join(' · ')||'aucune')+'.'; }
+    const t = await SB.rpc('base_externe_taille'); $('taille').textContent = t.error ? '' : 'Base actuelle : '+t.data.toLocaleString('fr-FR')+' polygones.'; }
 }
 $('btn-cx').onclick = async ()=>{ const r = await SB.auth.signInWithPassword({ email:$('email').value.trim(), password:$('mdp').value }); if (r.error) $('cx-etat').textContent = r.error.message; maj(); };
 const arrondir = c=>typeof c[0]==='number' ? [Math.round(c[0]*1e6)/1e6, Math.round(c[1]*1e6)/1e6] : c.map(arrondir);
@@ -78,6 +99,41 @@ $('btn-charger').onclick = async ()=>{
     $('etat').textContent = 'Terminé : '+total.toLocaleString('fr-FR')+' polygones chargés.';
   }catch(e){ $('etat').textContent = 'Échec : '+(e.message||e)+' (le chargement peut être repris : coche « Remplacer »).'; }
   $('btn-charger').disabled = false; maj();
+};
+
+$('c-type').onchange = ()=>{ $('c-val-l').style.display = $('c-type').value==='cacao' ? 'flex' : 'none'; };
+const CLES_NOM = ['nom','NOM','Nom','NAME_ENG','NAME','name','Name','toponyme','TOPONYME','LOCALITE','localite','VILLAGE','village'];
+const horsGPS = c=>{ while (Array.isArray(c) && Array.isArray(c[0])) c = c[0]; return !(Math.abs(c[0])<=180 && Math.abs(c[1])<=90); };
+$('c-btn').onclick = async ()=>{
+  const f = $('c-fichier').files[0]; if (!f){ $('c-etat').textContent = 'Choisis un fichier.'; return; }
+  const type = $('c-type').value, colVal = $('c-val').value.trim();
+  $('c-btn').disabled = true; $('c-prog').style.display = 'block'; $('c-prog').value = 0;
+  try{
+    $('c-etat').textContent = 'Lecture du fichier…';
+    let j;
+    if (/\.zip$/i.test(f.name)){
+      const buf = await f.arrayBuffer();
+      const z = await JSZip.loadAsync(buf);
+      const gj = []; z.forEach((chemin,e)=>{ if (!e.dir && /\.(geojson|json)$/i.test(chemin) && !/__MACOSX/.test(chemin)) gj.push(e); });
+      if (gj.length) j = JSON.parse(await gj[0].async('string')); else j = await shp(buf);
+    } else j = JSON.parse(await f.text());
+    const feats = [].concat(j).flatMap(x=>x && x.type==='FeatureCollection' ? x.features : (x && x.type==='Feature' ? [x] : [])).filter(x=>x && x.geometry);
+    if (!feats.length) throw new Error('Aucun objet géographique dans ce fichier.');
+    if (horsGPS(feats[0].geometry.coordinates)) throw new Error('Les coordonnées ne sont pas en degrés (projection inconnue). Zippe le shapefile avec son fichier .prj.');
+    let total = 0, premier = $('c-vider').checked;
+    const taille = type==='cacao' ? 60 : 150;
+    for (let i=0;i<feats.length;i+=taille){
+      const lot = feats.slice(i,i+taille).map(x=>{ const pr = x.properties||{}; const cle = CLES_NOM.find(k=>pr[k]!=null&&pr[k]!=='');
+        return { geometry:{ type:x.geometry.type, coordinates:arrondir(x.geometry.coordinates) }, nom: cle?String(pr[cle]):null, valeur: colVal && pr[colVal]!=null ? pr[colVal] : null }; });
+      const r = await SB.rpc('charger_couche', { p_type:type, p_lot:lot, p_source:f.name, p_vider:premier });
+      if (r.error) throw new Error(r.error.message);
+      premier = false; total += r.data;
+      $('c-prog').value = Math.round(Math.min(1,(i+taille)/feats.length)*100);
+      $('c-etat').textContent = total.toLocaleString('fr-FR')+' objets chargés sur '+feats.length.toLocaleString('fr-FR')+'…';
+    }
+    $('c-etat').textContent = 'Terminé : '+total.toLocaleString('fr-FR')+' objets chargés ('+(feats.length-total)+' ignorés : type de géométrie inadapté à cette couche).';
+  }catch(e){ $('c-etat').textContent = 'Échec : '+(e.message||e)+' (le chargement peut être repris : coche « Remplacer »).'; }
+  $('c-btn').disabled = false; maj();
 };
 maj();
 </script>
