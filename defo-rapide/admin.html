@@ -39,7 +39,17 @@ progress{width:100%;height:10px}
 </div>
 
 <div class="carte">
-  <h2>3. Charger une couche de référence</h2>
+  <h2>3. Charger toutes les couches d'un coup</h2>
+  <div class="hint">Ajoute tes fichiers (autant que tu veux, en plusieurs fois si ils sont dans des dossiers différents). La page reconnaît le type de chaque fichier d'après son nom ; tu peux le corriger dans la liste. Puis un seul clic charge tout, l'un après l'autre. Les couches déjà chargées du même type sont remplacées.</div>
+  <div class="ligne"><input type="file" id="m-fichiers" multiple accept=".zip,.geojson,.json"></div>
+  <div id="m-liste"></div>
+  <div class="ligne"><button class="btn" id="m-btn" disabled>Tout charger</button><button class="btn" id="m-vide" style="background:#fff;color:#0b3d2e;border:1px solid #0b3d2e" disabled>Vider la liste</button></div>
+  <progress id="m-prog" value="0" max="100" style="display:none"></progress>
+  <div class="hint" id="m-etat"></div>
+</div>
+
+<div class="carte">
+  <h2>4. (Facultatif) Charger une seule couche</h2>
   <div class="hint">Une couche à la fois. Fichier accepté : shapefile zippé (.zip avec .shp, .dbf et .prj), GeoJSON ou JSON. Les couches restent sur le serveur : l'outil n'en reçoit que des pourcentages et la parcelle découpée.</div>
   <div class="ligne"><select id="c-type">
     <option value="protegees">Forêts classées et zones protégées (polygones)</option>
@@ -65,7 +75,7 @@ const $ = id=>document.getElementById(id);
 async function maj(){
   const { data } = await SB.auth.getSession(); const u = data.session && data.session.user;
   $('cx-etat').textContent = u ? 'Connecté : '+u.email : 'Non connecté.';
-  $('btn-charger').disabled = !u; $('c-btn').disabled = !u;
+  $('btn-charger').disabled = !u; $('c-btn').disabled = !u; window.CONNECTE = !!u; if (window.majMulti) majMulti();
   if (u){ const ct = await SB.rpc('couches_taille'); if (!ct.error){ const L = {protegees:'zones protégées',cours_eau:'cours d\'eau',plans_eau:'plans d\'eau',habitat:'zones habitées',cacao:'lignes de la grille cacao'}; $('c-taille').textContent = 'Couches chargées : '+(Object.keys(ct.data).map(k=>(L[k]||k)+' '+Number(ct.data[k]).toLocaleString('fr-FR')).join(' · ')||'aucune')+'.'; }
     const t = await SB.rpc('base_externe_taille'); $('taille').textContent = t.error ? '' : 'Base actuelle : '+t.data.toLocaleString('fr-FR')+' polygones.'; }
 }
@@ -102,49 +112,106 @@ $('btn-charger').onclick = async ()=>{
 
 const CLES_NOM = ['nom','NOM','Nom','NAME_ENG','NAME','name','Name','toponyme','TOPONYME','LOCALITE','localite','VILLAGE','village'];
 const horsGPS = c=>{ while (Array.isArray(c) && Array.isArray(c[0])) c = c[0]; return !(Math.abs(c[0])<=180 && Math.abs(c[1])<=90); };
+async function chargerCouche(f, type, vider, rap){
+  rap('Lecture du fichier…', 0);
+  if (type==='cacao_grille'){
+    const g = JSON.parse(await f.text());
+    if (!g.lignes || !g.w || !g.h) throw new Error('Ce fichier n\'est pas une grille cacao (cacao_bnetd_grille_500m.json).');
+    const meta = { left:g.left, top:g.top, res:g.res, w:g.w, h:g.h, epsg:g.epsg, source:f.name };
+    let fait = 0;
+    for (let i=0;i<g.lignes.length;i+=100){
+      const r = await SB.rpc('charger_grille_cacao', { p_meta:meta, p_debut:i, p_lignes:g.lignes.slice(i,i+100), p_vider:(i===0 && vider) });
+      if (r.error) throw new Error(r.error.message);
+      fait += r.data; rap(fait+' lignes de la grille chargées sur '+g.lignes.length+'…', Math.round(fait/g.lignes.length*100));
+    }
+    return 'grille cacao chargée ('+fait+' lignes de '+g.w+' cellules de '+g.res+' m)';
+  }
+  let j;
+  if (/\.zip$/i.test(f.name)){
+    const buf = await f.arrayBuffer();
+    const z = await JSZip.loadAsync(buf);
+    const gj = []; z.forEach((chemin,e)=>{ if (!e.dir && /\.(geojson|json)$/i.test(chemin) && !/__MACOSX/.test(chemin)) gj.push(e); });
+    if (gj.length) j = JSON.parse(await gj[0].async('string')); else j = await shp(buf);
+  } else j = JSON.parse(await f.text());
+  const feats = [].concat(j).flatMap(x=>x && x.type==='FeatureCollection' ? x.features : (x && x.type==='Feature' ? [x] : [])).filter(x=>x && x.geometry);
+  if (!feats.length) throw new Error('Aucun objet géographique dans ce fichier.');
+  if (horsGPS(feats[0].geometry.coordinates)) throw new Error('Les coordonnées ne sont pas en degrés (projection inconnue). Zippe le shapefile avec son fichier .prj.');
+  let total = 0, premier = vider;
+  const taille = type==='cacao' ? 60 : 150;
+  for (let i=0;i<feats.length;i+=taille){
+    const lot = feats.slice(i,i+taille).map(x=>{ const pr = x.properties||{}; const cle = CLES_NOM.find(k=>pr[k]!=null&&pr[k]!=='');
+      return { geometry:{ type:x.geometry.type, coordinates:arrondir(x.geometry.coordinates) }, nom: cle?String(pr[cle]):null, valeur:null }; });
+    const r = await SB.rpc('charger_couche', { p_type:type, p_lot:lot, p_source:f.name, p_vider:premier });
+    if (r.error) throw new Error(r.error.message);
+    premier = false; total += r.data;
+    rap(total.toLocaleString('fr-FR')+' objets chargés sur '+feats.length.toLocaleString('fr-FR')+'…', Math.round(Math.min(1,(i+taille)/feats.length)*100));
+  }
+  return total.toLocaleString('fr-FR')+' objets chargés ('+(feats.length-total)+' ignorés : type de géométrie inadapté à cette couche)';
+}
+
+// --- une seule couche (facultatif)
 $('c-btn').onclick = async ()=>{
   const f = $('c-fichier').files[0]; if (!f){ $('c-etat').textContent = 'Choisis un fichier.'; return; }
-  const type = $('c-type').value, colVal = '';
+  const type = $('c-type').value;
   $('c-btn').disabled = true; $('c-prog').style.display = 'block'; $('c-prog').value = 0;
   try{
-    $('c-etat').textContent = 'Lecture du fichier…';
-    if (type==='cacao_grille'){
-      const g = JSON.parse(await f.text());
-      if (!g.lignes || !g.w || !g.h) throw new Error('Ce fichier n\'est pas une grille cacao (cacao_bnetd_grille_500m.json).');
-      const meta = { left:g.left, top:g.top, res:g.res, w:g.w, h:g.h, epsg:g.epsg, source:f.name };
-      let fait = 0;
-      for (let i=0;i<g.lignes.length;i+=100){
-        const r = await SB.rpc('charger_grille_cacao', { p_meta:meta, p_debut:i, p_lignes:g.lignes.slice(i,i+100), p_vider:(i===0 && $('c-vider').checked) });
-        if (r.error) throw new Error(r.error.message);
-        fait += r.data; $('c-prog').value = Math.round(fait/g.lignes.length*100); $('c-etat').textContent = fait+' lignes de la grille chargées sur '+g.lignes.length+'…';
-      }
-      $('c-etat').textContent = 'Terminé : grille cacao chargée ('+fait+' lignes de '+g.w+' cellules de '+g.res+' m).';
-      $('c-btn').disabled = false; maj(); return;
-    }
-    let j;
-    if (/\.zip$/i.test(f.name)){
-      const buf = await f.arrayBuffer();
-      const z = await JSZip.loadAsync(buf);
-      const gj = []; z.forEach((chemin,e)=>{ if (!e.dir && /\.(geojson|json)$/i.test(chemin) && !/__MACOSX/.test(chemin)) gj.push(e); });
-      if (gj.length) j = JSON.parse(await gj[0].async('string')); else j = await shp(buf);
-    } else j = JSON.parse(await f.text());
-    const feats = [].concat(j).flatMap(x=>x && x.type==='FeatureCollection' ? x.features : (x && x.type==='Feature' ? [x] : [])).filter(x=>x && x.geometry);
-    if (!feats.length) throw new Error('Aucun objet géographique dans ce fichier.');
-    if (horsGPS(feats[0].geometry.coordinates)) throw new Error('Les coordonnées ne sont pas en degrés (projection inconnue). Zippe le shapefile avec son fichier .prj.');
-    let total = 0, premier = $('c-vider').checked;
-    const taille = type==='cacao' ? 60 : 150;
-    for (let i=0;i<feats.length;i+=taille){
-      const lot = feats.slice(i,i+taille).map(x=>{ const pr = x.properties||{}; const cle = CLES_NOM.find(k=>pr[k]!=null&&pr[k]!=='');
-        return { geometry:{ type:x.geometry.type, coordinates:arrondir(x.geometry.coordinates) }, nom: cle?String(pr[cle]):null, valeur: colVal && pr[colVal]!=null ? pr[colVal] : null }; });
-      const r = await SB.rpc('charger_couche', { p_type:type, p_lot:lot, p_source:f.name, p_vider:premier });
-      if (r.error) throw new Error(r.error.message);
-      premier = false; total += r.data;
-      $('c-prog').value = Math.round(Math.min(1,(i+taille)/feats.length)*100);
-      $('c-etat').textContent = total.toLocaleString('fr-FR')+' objets chargés sur '+feats.length.toLocaleString('fr-FR')+'…';
-    }
-    $('c-etat').textContent = 'Terminé : '+total.toLocaleString('fr-FR')+' objets chargés ('+(feats.length-total)+' ignorés : type de géométrie inadapté à cette couche).';
+    const res = await chargerCouche(f, type, $('c-vider').checked, (m,p)=>{ $('c-etat').textContent = m; if (p!=null) $('c-prog').value = p; });
+    $('c-etat').textContent = 'Terminé : '+res+'.';
   }catch(e){ $('c-etat').textContent = 'Échec : '+(e.message||e)+' (le chargement peut être repris : coche « Remplacer »).'; }
   $('c-btn').disabled = false; maj();
+};
+
+// --- toutes les couches d'un coup
+const TYPES_COUCHE = { protegees:'Forêts classées et zones protégées', cours_eau:'Cours d\'eau', plans_eau:'Plans d\'eau', habitat:'Zones habitées', cacao_grille:'Carte cacao BNETD (grille)' };
+function devinerType(nom){
+  const n = nom.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
+  if (/cours.?d.?eau|hydro|riviere|river/.test(n)) return 'cours_eau';
+  if (/plans?.?d.?eau|plans?.?eau|lagune|retenue|\blacs?\b|water/.test(n)) return 'plans_eau';
+  if (/cacao/.test(n)) return 'cacao_grille';
+  if (/habit|village|localit/.test(n)) return 'habitat';
+  if (/prot|classe|foret|parc|reserve|espace/.test(n)) return 'protegees';
+  return '';
+}
+const LISTE = []; let enCours = false;
+function majMulti(){
+  const box = $('m-liste'); box.innerHTML = '';
+  LISTE.forEach((it,i)=>{
+    const d = document.createElement('div'); d.className = 'ligne'; d.style.cssText = 'align-items:center;gap:8px;flex-wrap:wrap';
+    const nom = document.createElement('span'); nom.style.cssText = 'min-width:260px;font-size:13px'; nom.textContent = it.f.name+' ('+(it.f.size/1048576).toFixed(1).replace('.',',')+' Mo)';
+    const sel = document.createElement('select'); sel.disabled = enCours;
+    sel.innerHTML = '<option value="">— choisir le type —</option>'+Object.keys(TYPES_COUCHE).map(k=>'<option value="'+k+'"'+(it.type===k?' selected':'')+'>'+TYPES_COUCHE[k]+'</option>').join('');
+    sel.onchange = ()=>{ it.type = sel.value; majMulti(); };
+    const st = document.createElement('span'); st.className = 'hint'; st.id = 'm-st-'+i; st.textContent = it.statut || '';
+    const x = document.createElement('button'); x.className = 'btn'; x.textContent = 'Retirer'; x.style.cssText = 'background:#fff;color:#a33;border:1px solid #a33;padding:3px 8px'; x.disabled = enCours;
+    x.onclick = ()=>{ LISTE.splice(i,1); majMulti(); };
+    d.append(nom, sel, x, st); box.appendChild(d);
+  });
+  const pret = LISTE.length>0 && LISTE.every(it=>it.type) && window.CONNECTE && !enCours;
+  $('m-btn').disabled = !pret; $('m-vide').disabled = enCours || !LISTE.length;
+  const dbl = LISTE.map(it=>it.type).filter((t,i,a)=>t && a.indexOf(t)!==i);
+  if (!enCours) $('m-etat').textContent = !LISTE.length ? '' : !window.CONNECTE ? 'Connecte-toi d\'abord (boîte 1).' : dbl.length ? 'Attention : deux fichiers du même type — le second remplacerait le premier.' : (LISTE.every(it=>it.type) ? LISTE.length+' fichier(s) prêt(s) à charger.' : 'Choisis le type des fichiers non reconnus.');
+}
+window.majMulti = majMulti;
+$('m-fichiers').onchange = ()=>{
+  Array.from($('m-fichiers').files).forEach(f=>{ if (!LISTE.some(it=>it.f.name===f.name && it.f.size===f.size)) LISTE.push({ f, type:devinerType(f.name), statut:'' }); });
+  $('m-fichiers').value = ''; majMulti();
+};
+$('m-vide').onclick = ()=>{ LISTE.length = 0; $('m-prog').style.display = 'none'; majMulti(); };
+$('m-btn').onclick = async ()=>{
+  enCours = true; majMulti(); $('m-prog').style.display = 'block';
+  const bilan = [];
+  for (let i=0;i<LISTE.length;i++){
+    const it = LISTE[i], st = ()=>$('m-st-'+i);
+    $('m-etat').textContent = 'Couche '+(i+1)+' sur '+LISTE.length+' : '+TYPES_COUCHE[it.type]+'…'; $('m-prog').value = 0;
+    try{
+      const res = await chargerCouche(it.f, it.type, true, (m,p)=>{ if (st()) st().textContent = m; if (p!=null) $('m-prog').value = p; });
+      it.statut = '✔ '+res; bilan.push('✔ '+TYPES_COUCHE[it.type]+' : '+res);
+    }catch(e){ it.statut = '✘ '+(e.message||e); bilan.push('✘ '+TYPES_COUCHE[it.type]+' : '+(e.message||e)); }
+    if (st()) st().textContent = it.statut;
+  }
+  enCours = false; majMulti(); $('m-prog').value = 100;
+  $('m-etat').innerHTML = '<b>Terminé.</b><br>'+bilan.map(l=>l.replace(/&/g,'&amp;').replace(/</g,'&lt;')).join('<br>');
+  maj();
 };
 maj();
 </script>
