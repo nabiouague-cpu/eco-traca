@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Analyse déforestation rapide — prototype</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+:root{--vert:#2e7d46;--vert2:#e8f3ec;--orange:#d98200;--rouge:#c0392b;--gris:#5b6770;--bord:#d9dee2;--fond:#f5f7f6;--texte:#1d2a30}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--fond);color:var(--texte);font-size:15px;line-height:1.5}
+header{background:#fff;border-bottom:1px solid var(--bord);padding:14px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+header h1{font-size:18px;margin:0}
+.tag{font-size:12px;background:#fff3d6;color:#8a5a00;border:1px solid #f0d58a;border-radius:99px;padding:2px 10px}
+main{max-width:1100px;margin:0 auto;padding:18px}
+.carte{background:#fff;border:1px solid var(--bord);border-radius:12px;padding:16px;margin-bottom:16px}
+.carte h2{font-size:16px;margin:0 0 10px}
+#depot{border:2px dashed #aab6bd;border-radius:12px;padding:28px;text-align:center;color:var(--gris);cursor:pointer;background:#fafcfb}
+#depot.survol{border-color:var(--vert);background:var(--vert2)}
+#depot b{color:var(--texte)}
+.btn{background:var(--vert);color:#fff;border:0;border-radius:8px;padding:9px 16px;font-size:14px;cursor:pointer}
+.btn:disabled{opacity:.45;cursor:default}
+.btn.sec{background:#fff;color:var(--vert);border:1px solid var(--vert)}
+.ligne{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:6px}
+.kpi{border:1px solid var(--bord);border-radius:10px;padding:10px 12px;background:#fff}
+.kpi .v{font-size:24px;font-weight:700}
+.kpi .l{font-size:12px;color:var(--gris)}
+.kpi.ok .v{color:var(--vert)}.kpi.att .v{color:var(--orange)}.kpi.err .v{color:var(--rouge)}
+#carte-map{height:420px;border-radius:10px;border:1px solid var(--bord)}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{border-bottom:1px solid #edf0f2;padding:6px 8px;text-align:left;vertical-align:top}
+th{background:#f0f4f2;position:sticky;top:0}
+.tbl{max-height:380px;overflow:auto;border:1px solid var(--bord);border-radius:10px}
+.pill{display:inline-block;border-radius:99px;padding:1px 9px;font-size:12px;color:#fff}
+.p-ok{background:var(--vert)}.p-att{background:var(--orange)}.p-err{background:var(--rouge)}
+.avis{border-left:4px solid #3a6ea5;background:#eef4fb;padding:10px 14px;border-radius:6px;margin:10px 0;font-size:14px}
+.avis.demo{border-color:var(--rouge);background:#fdeeee}
+.hint{font-size:13px;color:var(--gris)}
+.cache{display:none}
+progress{width:100%;height:10px}
+footer{max-width:1100px;margin:0 auto;padding:6px 18px 30px;font-size:12px;color:var(--gris)}
+select,input[type=text]{padding:7px;border:1px solid var(--bord);border-radius:8px;font-size:14px}
+</style>
+</head>
+<body>
+<header>
+  <h1>🌳 Analyse déforestation rapide</h1>
+  <span class="tag">Prototype · sans facturation</span>
+</header>
+<main>
+
+<section class="carte" id="etape1">
+  <h2>1. Dépose tes parcelles</h2>
+  <div id="depot">
+    <div><b>Glisse ici ton fichier GeoJSON</b> ou clique pour le choisir</div>
+    <div class="hint" style="margin-top:6px">Polygones (ou points) des parcelles. Une propriété <code>PlotID</code> (ou <code>id</code>) par parcelle est recommandée.</div>
+    <input type="file" id="fichier" accept=".geojson,.json,application/geo+json,application/json" class="cache">
+  </div>
+  <div class="hint" style="margin-top:8px">Tes données restent dans ton navigateur pour les contrôles de base. Elles ne sont envoyées nulle part tant que tu ne lances pas l'analyse satellite (étape 3).</div>
+</section>
+
+<section class="carte cache" id="etape2">
+  <h2>2. Contrôles de base</h2>
+  <div class="kpis" id="kpis"></div>
+  <div id="barre" class="cache"><progress id="prog" value="0" max="100"></progress><div class="hint" id="prog-txt"></div></div>
+  <div id="carte-map" style="margin-top:10px"></div>
+  <div class="ligne" style="margin:10px 0">
+    <label class="hint">Afficher :
+      <select id="filtre"><option value="tout">Toutes les parcelles</option><option value="erreur">Erreurs seulement</option><option value="attention">À vérifier seulement</option><option value="ok">Correctes seulement</option></select>
+    </label>
+  </div>
+  <div class="tbl"><table id="tbl"></table></div>
+</section>
+
+<section class="carte cache" id="etape3">
+  <h2>3. Analyse déforestation (satellite)</h2>
+  <div class="hint">Compare chaque parcelle aux cartes de couvert forestier et de perturbation (méthode Whisp) et à une base de données existante.</div>
+  <div class="ligne" style="margin-top:10px">
+    <button class="btn" id="btn-analyse">Lancer l'analyse</button>
+    <span class="hint" id="analyse-etat"></span>
+  </div>
+  <div id="avis-zone"></div>
+</section>
+
+<section class="carte cache" id="etape4">
+  <h2>4. Rapport</h2>
+  <div class="ligne">
+    <button class="btn" id="btn-excel">📊 Télécharger le rapport Excel</button>
+    <button class="btn sec" id="btn-geojson">Télécharger le GeoJSON annoté</button>
+  </div>
+  <div class="hint" style="margin-top:8px">Ce rapport est une aide à l'analyse. Il ne remplace ni une visite de terrain ni l'avis d'un auditeur.</div>
+</section>
+
+</main>
+<footer>Prototype de démonstration. Méthode Whisp : FAO / Open Foris (code open source, licence MIT). Ce produit n'est ni approuvé ni recommandé par la FAO.</footer>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<script>
+// ====== RÉGLAGES ======
+const CONFIG = {
+  // Adresse du serveur d'analyse (Whisp + comparaison). Vide = mode démonstration (résultats FICTIFS).
+  apiUrl: '',
+  seuilPetitHa: 0.1,        // en dessous : très petite parcelle
+  seuilGrandHa: 50,         // au dessus : très grande parcelle (à vérifier)
+  seuilEUDRHa: 4,           // à partir de 4 ha un polygone est exigé (un point ne suffit pas)
+  seuilChevAttention: 5,    // % de chevauchement entre parcelles déposées : à vérifier
+  seuilChevErreur: 20,      // % de chevauchement entre parcelles déposées : erreur
+  sommetsMin: 4,            // sommets minimum d'un polygone
+  decimalesMin: 5           // précision minimale des coordonnées
+};
+
+// ====== LOGIQUE (testable) ======
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+function lireGeoJSON(txt){
+  let j; try { j = JSON.parse(txt); } catch(e){ throw new Error("Ce fichier n'est pas un GeoJSON valide."); }
+  let feats = [];
+  if (j.type==='FeatureCollection') feats = j.features||[];
+  else if (j.type==='Feature') feats = [j];
+  else if (j.type && j.coordinates) feats = [{type:'Feature',properties:{},geometry:j}];
+  else throw new Error("Aucune parcelle trouvée dans ce fichier.");
+  feats = feats.filter(f=>f && f.geometry && ['Polygon','MultiPolygon','Point'].includes(f.geometry.type));
+  if (!feats.length) throw new Error("Aucun polygone ni point dans ce fichier.");
+  const vus = {};
+  const comptes = {};
+  feats.forEach((f,i)=>{ const p=f.properties||{}; let id = p.PlotID ?? p.plot_id ?? p.plotid ?? p.id ?? p.ID ?? p.Id ?? p.name ?? p.Name ?? ('P'+(i+1)); id=String(id).trim()||('P'+(i+1)); comptes[id]=(comptes[id]||0)+1; });
+  return feats.map((f,i)=>{
+    const p = f.properties||{};
+    let id = p.PlotID ?? p.plot_id ?? p.plotid ?? p.id ?? p.ID ?? p.Id ?? p.name ?? p.Name ?? ('P'+(i+1));
+    id = String(id).trim()||('P'+(i+1));
+    return { type:'Feature', properties:Object.assign({}, p, {PlotID:id}), geometry:f.geometry, _dup: comptes[id]>1, _i:i };
+  });
+}
+
+function positions(g){
+  const out=[];
+  (function rec(c){ if (typeof c[0]==='number') out.push(c); else c.forEach(rec); })(g.coordinates);
+  return out;
+}
+function anneaux(g){
+  if (g.type==='Polygon') return [g.coordinates[0]];
+  if (g.type==='MultiPolygon') return g.coordinates.map(p=>p[0]);
+  return [];
+}
+function decimales(n){ const s = String(n); const k = s.indexOf('.'); return k<0 ? 0 : (s.length-k-1); }
+
+function controlerParcelle(f){
+  const pb = [];   // [{niveau:'erreur'|'attention', txt}]
+  const g = f.geometry;
+  const pos = positions(g);
+  const horsLimites = pos.some(c=>Math.abs(c[0])>180 || Math.abs(c[1])>90);
+  let aireHa = null, sommets = null;
+  if (f._dup) pb.push({niveau:'erreur', txt:"Identifiant en double"});
+  if (horsLimites) {
+    pb.push({niveau:'erreur', txt:"Coordonnées impossibles (latitude et longitude inversées ?)"});
+  } else if (g.type==='Point') {
+    pb.push({niveau:'attention', txt:"Point seul : accepté seulement si la parcelle fait moins de "+CONFIG.seuilEUDRHa+" ha"});
+  } else {
+    try {
+      aireHa = turf.area(f)/10000;
+      sommets = anneaux(g).reduce((s,r)=>s+Math.max(0,r.length-1),0);
+      if (sommets < CONFIG.sommetsMin) pb.push({niveau:'erreur', txt:"Trop peu de sommets ("+sommets+")"});
+      let croise = 0; try { croise = turf.kinks(f).features.length; } catch(e){}
+      if (croise>0) pb.push({niveau:'erreur', txt:"Le contour se croise ("+croise+" point(s))"});
+      if (aireHa < CONFIG.seuilPetitHa) pb.push({niveau:'attention', txt:"Très petite parcelle ("+aireHa.toFixed(3)+" ha)"});
+      if (aireHa > CONFIG.seuilGrandHa) pb.push({niveau:'attention', txt:"Très grande parcelle ("+aireHa.toFixed(1)+" ha) : à vérifier"});
+    } catch(e){ pb.push({niveau:'erreur', txt:"Géométrie illisible"}); }
+    const dmax = Math.max.apply(null, pos.slice(0,50).map(c=>Math.max(decimales(c[0]),decimales(c[1]))));
+    if (isFinite(dmax) && dmax < CONFIG.decimalesMin) pb.push({niveau:'attention', txt:"Coordonnées peu précises ("+dmax+" décimale(s) au plus)"});
+  }
+  const statut = pb.some(p=>p.niveau==='erreur') ? 'erreur' : (pb.length ? 'attention' : 'ok');
+  return { id:f.properties.PlotID, type:g.type==='Point'?'Point':'Polygone', aireHa, sommets, pb, statut, chevPct:null };
+}
+
+// Chevauchements entre parcelles déposées (balayage sur les boîtes englobantes)
+async function chevauchementsInternes(feats, resultats, onProg){
+  const items = [];
+  feats.forEach((f,i)=>{ if (f.geometry.type==='Point') return; const r = resultats[i]; if (r.aireHa==null) return;
+    let b; try { b = turf.bbox(f); } catch(e){ return; } items.push({i, f, b, a:r.aireHa*10000}); });
+  items.sort((x,y)=>x.b[0]-y.b[0]);
+  for (let k=0;k<items.length;k++){
+    const A = items[k];
+    for (let m=k+1;m<items.length;m++){
+      const B = items[m];
+      if (B.b[0] > A.b[2]) break;
+      if (B.b[1] > A.b[3] || B.b[3] < A.b[1]) continue;
+      let inter = null; try { inter = turf.intersect(A.f, B.f); } catch(e){}
+      if (!inter) continue;
+      const ai = turf.area(inter); if (ai<=0) continue;
+      const pct = ai/Math.min(A.a,B.a)*100;
+      if (pct < CONFIG.seuilChevAttention) continue;
+      const niveau = pct >= CONFIG.seuilChevErreur ? 'erreur' : 'attention';
+      [[A,B],[B,A]].forEach(([x,y])=>{
+        const r = resultats[x.i];
+        r.pb.push({niveau, txt:"Chevauche "+resultats[y.i].id+" ("+pct.toFixed(0)+" %)"});
+        r.chevInterne = Math.max(r.chevInterne||0, pct);
+        if (niveau==='erreur') r.statut='erreur'; else if (r.statut==='ok') r.statut='attention';
+      });
+    }
+    if (onProg && k%25===0){ onProg(k/items.length); await new Promise(r=>setTimeout(r)); }
+  }
+}
+
+// ====== ANALYSE SERVEUR (Whisp + base existante) ======
+// Réponse attendue : { resultats:[{plot_id, risk_pcrop, risk_acrop, risk_timber, perturbation_apres_2020, chevauchement_pct}], demo:false }
+async function appelerServeur(fc){
+  if (!CONFIG.apiUrl) return analyseDemo(fc);
+  const r = await fetch(CONFIG.apiUrl, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({geojson:fc})});
+  if (!r.ok) throw new Error("Le serveur d'analyse a répondu "+r.status);
+  return r.json();
+}
+// Résultats FICTIFS, uniquement pour voir à quoi ressemble le rapport final.
+function analyseDemo(fc){
+  const hash = s=>{ let h=0; for (const c of s) h=(h*31+c.charCodeAt(0))>>>0; return h; };
+  const niveaux = ['low','low','low','medium','high'];
+  return { demo:true, resultats: fc.features.map(f=>{
+    const h = hash(f.properties.PlotID);
+    return { plot_id:f.properties.PlotID, risk_pcrop:niveaux[h%5], risk_acrop:niveaux[(h>>3)%5], risk_timber:niveaux[(h>>5)%5],
+      perturbation_apres_2020: (h%7===0), chevauchement_pct: (h%9===0) ? (h%23)+2 : 0 };
+  })};
+}
+
+const TXT_BASE_EXISTANTE = "Certaines de vos parcelles se superposent à une base de données existante, probablement hébergée dans l'Union européenne. Cette information est indicative : elle ne bloque rien et vous pouvez l'ignorer, mais elle signale un risque de double déclaration ou de conflit de parcelles.";
+
+// ====== INTERFACE ======
+const S = { feats:[], res:[], serveur:null, carte:null, couche:null };
+const $ = id=>document.getElementById(id);
+const COUL = {ok:'#2e7d46', attention:'#d98200', erreur:'#c0392b'};
+
+$('depot').addEventListener('click', ()=>$('fichier').click());
+['dragenter','dragover'].forEach(e=>$('depot').addEventListener(e, ev=>{ ev.preventDefault(); $('depot').classList.add('survol'); }));
+['dragleave','drop'].forEach(e=>$('depot').addEventListener(e, ev=>{ ev.preventDefault(); $('depot').classList.remove('survol'); }));
+$('depot').addEventListener('drop', ev=>{ const f = ev.dataTransfer.files[0]; if (f) charger(f); });
+$('fichier').addEventListener('change', ev=>{ const f = ev.target.files[0]; if (f) charger(f); });
+$('filtre').addEventListener('change', afficher);
+$('btn-analyse').addEventListener('click', lancerAnalyse);
+$('btn-excel').addEventListener('click', telechargerExcel);
+$('btn-geojson').addEventListener('click', telechargerGeoJSON);
+
+async function charger(file){
+  try{
+    const txt = await file.text();
+    S.feats = lireGeoJSON(txt); S.serveur = null; $('avis-zone').innerHTML=''; $('analyse-etat').textContent='';
+    S.res = S.feats.map(controlerParcelle);
+    ['etape2','etape3','etape4'].forEach(i=>$(i).classList.remove('cache'));
+    $('barre').classList.remove('cache'); $('prog').value=0; $('prog-txt').textContent='Recherche des chevauchements…';
+    afficher();
+    await chevauchementsInternes(S.feats, S.res, p=>{ $('prog').value = Math.round(p*100); });
+    $('barre').classList.add('cache');
+    afficher();
+  }catch(e){ alert(e.message); }
+}
+
+function compter(){ const c={ok:0,attention:0,erreur:0}; S.res.forEach(r=>c[r.statut]++); return c; }
+function surfaceTotale(){ return S.res.reduce((s,r)=>s+(r.aireHa||0),0); }
+
+function afficher(){
+  const c = compter();
+  $('kpis').innerHTML =
+    '<div class="kpi"><div class="v">'+S.res.length+'</div><div class="l">parcelles</div></div>'+
+    '<div class="kpi"><div class="v">'+surfaceTotale().toFixed(1)+'</div><div class="l">hectares (polygones)</div></div>'+
+    '<div class="kpi ok"><div class="v">'+c.ok+'</div><div class="l">correctes</div></div>'+
+    '<div class="kpi att"><div class="v">'+c.attention+'</div><div class="l">à vérifier</div></div>'+
+    '<div class="kpi err"><div class="v">'+c.erreur+'</div><div class="l">erreurs</div></div>';
+  const filtre = $('filtre').value;
+  const lignes = S.res.map((r,i)=>({r,i})).filter(x=>filtre==='tout' || x.r.statut===filtre);
+  const srv = S.serveur ? Object.fromEntries(S.serveur.resultats.map(x=>[x.plot_id,x])) : null;
+  $('tbl').innerHTML = '<thead><tr><th>Parcelle</th><th>Type</th><th>Surface (ha)</th><th>Sommets</th><th>Statut</th><th>Remarques</th>'+(srv?'<th>Risque cacao</th><th>Perturbation après 2020</th><th>Base existante</th>':'')+'</tr></thead><tbody>'+
+    lignes.slice(0,1500).map(({r})=>{
+      const s = srv && srv[r.id];
+      return '<tr><td>'+esc(r.id)+'</td><td>'+r.type+'</td><td>'+(r.aireHa==null?'—':r.aireHa.toFixed(2))+'</td><td>'+(r.sommets==null?'—':r.sommets)+'</td>'+
+        '<td><span class="pill p-'+(r.statut==='ok'?'ok':r.statut==='attention'?'att':'err')+'">'+({ok:'Correcte',attention:'À vérifier',erreur:'Erreur'})[r.statut]+'</span></td>'+
+        '<td>'+(r.pb.length?r.pb.map(p=>esc(p.txt)).join('<br>'):'—')+'</td>'+
+        (srv?('<td>'+esc(s?s.risk_pcrop:'—')+'</td><td>'+(s?(s.perturbation_apres_2020?'Oui':'Non'):'—')+'</td><td>'+(s&&s.chevauchement_pct>0?s.chevauchement_pct+' %':'Non')+'</td>'):'')+'</tr>';
+    }).join('')+'</tbody>';
+  dessinerCarte(filtre);
+}
+
+function dessinerCarte(filtre){
+  if (!S.carte){
+    S.carte = L.map('carte-map');
+    const osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'});
+    const sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'Imagerie © Esri'});
+    sat.addTo(S.carte); L.control.layers({'Satellite':sat,'Plan':osm}).addTo(S.carte);
+  }
+  if (S.couche) S.carte.removeLayer(S.couche);
+  const sel = S.feats.filter((f,i)=>filtre==='tout' || S.res[i].statut===filtre);
+  const coll = { type:'FeatureCollection', features: sel.map(f=>Object.assign({}, f, {properties:Object.assign({}, f.properties, {_s:S.res[f._i].statut})})) };
+  S.couche = L.geoJSON(coll, {
+    style: f=>({color:COUL[f.properties._s], weight:2, fillOpacity:.25}),
+    pointToLayer: (f,ll)=>L.circleMarker(ll,{radius:5,color:COUL[f.properties._s],fillOpacity:.6}),
+    onEachFeature: (f,l)=>l.bindPopup('<b>'+esc(f.properties.PlotID)+'</b><br>'+(S.res[f._i].pb.map(p=>esc(p.txt)).join('<br>')||'Aucun problème'))
+  }).addTo(S.carte);
+  try { S.carte.fitBounds(S.couche.getBounds(), {padding:[20,20]}); } catch(e){}
+  setTimeout(()=>S.carte.invalidateSize(), 50);
+}
+
+async function lancerAnalyse(){
+  const b = $('btn-analyse'); b.disabled = true; $('analyse-etat').textContent = 'Analyse en cours…';
+  try{
+    const fc = { type:'FeatureCollection', features:S.feats.map(f=>({type:'Feature', properties:{PlotID:f.properties.PlotID}, geometry:f.geometry})) };
+    S.serveur = await appelerServeur(fc);
+    $('analyse-etat').textContent = 'Analyse terminée.';
+    const n = S.serveur.resultats.filter(x=>x.chevauchement_pct>0).length;
+    let h = '';
+    if (S.serveur.demo) h += '<div class="avis demo"><b>MODE DÉMONSTRATION.</b> Les résultats ci-dessous sont fictifs : le serveur d\'analyse satellite n\'est pas encore branché. Ne les utilise pas pour une décision.</div>';
+    if (n>0) h += '<div class="avis"><b>'+n+' parcelle(s) concernée(s).</b> '+esc(TXT_BASE_EXISTANTE)+'</div>';
+    else h += '<div class="avis">Aucune superposition détectée avec la base de données existante.</div>';
+    $('avis-zone').innerHTML = h;
+    afficher();
+  }catch(e){ $('analyse-etat').textContent = 'Échec : '+e.message; }
+  b.disabled = false;
+}
+
+function nomFichierBase(){ return 'analyse_deforestation_'+new Date().toISOString().slice(0,10); }
+function telecharger(blob, nom){ const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=nom; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),2000); }
+
+function telechargerGeoJSON(){
+  const srv = S.serveur ? Object.fromEntries(S.serveur.resultats.map(x=>[x.plot_id,x])) : {};
+  const fc = { type:'FeatureCollection', features:S.feats.map((f,i)=>({type:'Feature', geometry:f.geometry, properties:Object.assign({}, f.properties, {
+    statut:S.res[i].statut, remarques:S.res[i].pb.map(p=>p.txt).join(' ; '), surface_ha:S.res[i].aireHa==null?null:+S.res[i].aireHa.toFixed(3),
+    risque_cacao:(srv[f.properties.PlotID]||{}).risk_pcrop||null })}))};
+  telecharger(new Blob([JSON.stringify(fc)],{type:'application/geo+json'}), nomFichierBase()+'.geojson');
+}
+
+async function telechargerExcel(){
+  const demo = !!(S.serveur && S.serveur.demo);
+  const wb = new ExcelJS.Workbook();
+  const c = compter();
+  const r = wb.addWorksheet('Résumé');
+  r.columns = [{width:42},{width:22}];
+  r.addRow(['Rapport d\'analyse déforestation rapide']).font = {bold:true,size:14};
+  if (demo) { const x = r.addRow(['DONNÉES SATELLITE FICTIVES (mode démonstration)']); x.font={bold:true,color:{argb:'FFC00000'}}; }
+  r.addRow(['Date', new Date().toLocaleDateString('fr-FR')]);
+  r.addRow([]);
+  r.addRow(['Parcelles', S.res.length]); r.addRow(['Surface totale des polygones (ha)', +surfaceTotale().toFixed(2)]);
+  r.addRow(['Correctes', c.ok]); r.addRow(['À vérifier', c.attention]); r.addRow(['Erreurs', c.erreur]);
+  if (S.serveur){
+    const n = S.serveur.resultats.filter(x=>x.chevauchement_pct>0).length;
+    r.addRow([]); r.addRow(['Parcelles superposées à une base existante', n]);
+    if (n>0){ const t = r.addRow([TXT_BASE_EXISTANTE]); r.mergeCells(t.number,1,t.number,2); t.alignment={wrapText:true,vertical:'top'}; t.height=75; }
+  }
+  r.addRow([]); const d = r.addRow(['Ce rapport est une aide à l\'analyse. Il ne remplace ni une visite de terrain ni l\'avis d\'un auditeur.']); d.font={italic:true,color:{argb:'FF595959'}};
+  r.addRow(['Méthode Whisp : FAO / Open Foris. Produit ni approuvé ni recommandé par la FAO.']).font={italic:true,color:{argb:'FF595959'}};
+
+  const w = wb.addWorksheet('Parcelles');
+  const srv = S.serveur ? Object.fromEntries(S.serveur.resultats.map(x=>[x.plot_id,x])) : null;
+  const cols = ['Parcelle','Type','Surface (ha)','Sommets','Statut','Remarques'].concat(srv?['Risque cacao','Risque cultures annuelles','Risque bois','Perturbation après 2020','Superposition base existante (%)']:[]);
+  w.addRow(cols); w.getRow(1).font={bold:true,color:{argb:'FFFFFFFF'}};
+  w.getRow(1).fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF2E7D46'}};
+  S.res.forEach(x=>{
+    const s = srv && srv[x.id];
+    const row = w.addRow([x.id,x.type,x.aireHa==null?null:+x.aireHa.toFixed(3),x.sommets,({ok:'Correcte',attention:'À vérifier',erreur:'Erreur'})[x.statut],x.pb.map(p=>p.txt).join(' ; ')].concat(srv?[s?s.risk_pcrop:'',s?s.risk_acrop:'',s?s.risk_timber:'',s?(s.perturbation_apres_2020?'Oui':'Non'):'',s?(s.chevauchement_pct||0):'']:[]));
+    const col = {ok:'FFE8F3EC',attention:'FFFFF1D6',erreur:'FFFBE3E0'}[x.statut];
+    row.getCell(5).fill = {type:'pattern',pattern:'solid',fgColor:{argb:col}};
+  });
+  [14,10,13,10,13,60,16,22,14,22,26].forEach((wd,i)=>w.getColumn(i+1).width=wd);
+  w.autoFilter = {from:{row:1,column:1},to:{row:1,column:cols.length}}; w.views=[{state:'frozen',ySplit:1}];
+  const buf = await wb.xlsx.writeBuffer();
+  telecharger(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}), nomFichierBase()+'.xlsx');
+}
+</script>
+</body>
+</html>
