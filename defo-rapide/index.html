@@ -288,7 +288,8 @@ const CONFIG = {
   sommetsMin: 4, decimalesMin: 5,
   chevMinM2: 50,            // m² : recouvrement ignoré en dessous de 0,005 ha (seuil de détection interne d'ORIGEN, pas de plancher en %)
   fragmentPct: 0.5,         // % : après réduction, les morceaux de moins de 0,5 % de la surface sont écartés
-  chevReduit: 20,           // % : jusqu'à 20,99 on réduit le polygone, à partir de 21 on supprime
+  chevReduit: 20,           // % : chevauchement avec la BASE existante (serveur, indicatif) : jusqu'à 20,99 on réduirait, à partir de 21 on supprimerait
+  chevInterne: 20,          // % : chevauchement INTERNE au fichier : à partir de 20 % on retire une des deux parcelles, en dessous on garde et on liste (règle ORIGEN)
   fermetureM: 30,           // ligne ouverte fermée automatiquement si l'écart est inférieur à 30 m
   mainScoreMin: 3, mainSegM: 40, mainAngleDeg: 8, mainDecimales: 5,   // score « dessiné à la main » sur 5 : ≥ 3 = à mettre de côté
   compaciteMin: 0.2, sommetsMax: 1000, convexiteMin: 0.8,             // contour irrégulier ou trop détaillé : simplifiable
@@ -585,7 +586,9 @@ async function chevauchements(feats, res, onProg){
       let inter = null; try { inter = turf.intersect(A.f, B.f); } catch(e){}
       if (!inter) continue;
       const ai = turf.area(inter); if (ai<=0) continue;
-      const grand = A.a>=B.a ? A : B, petit = grand===A ? B : A;
+      let grand = A.a>=B.a ? A : B, petit = grand===A ? B : A;
+      const nomA = !!String((A.f.properties||{}).Nom||'').trim(), nomB = !!String((B.f.properties||{}).Nom||'').trim();
+      if (nomA!==nomB){ petit = nomA ? B : A; grand = petit===A ? B : A; }   // on garde la parcelle qui porte un vrai nom plutôt qu'un simple code
       const pct = ai/petit.a*100;
       if (ai < CONFIG.chevMinM2) continue;
       paires.push({ grand:grand.i, petit:petit.i, pct, m2:ai });
@@ -702,7 +705,7 @@ function construirePlan(S){
   S.res.forEach((r,i)=>{ if (r.main) P.main.push(i); if ((r.detail || r.irreg) && S.simpl[i]) P.simplifier.push(i); });
   P.doublons = doublonsIdentiques(S.feats, S.res);
   (S.simil||[]).forEach(p=>P.simil.push({ garde:Math.min(p.a,p.b), retire:Math.max(p.a,p.b), iou:p.iou, km:p.km }));
-  (S.chev||[]).forEach(p=>{ if (p.pct < CONFIG.chevReduit+1) P.reduire.push(p); else P.supprimer.push(p); });
+  (S.chev||[]).forEach(p=>{ p.suppr = p.pct >= CONFIG.chevInterne; if (p.suppr) P.supprimer.push(p); });   // en dessous de 20 % : gardé, listé dans l'onglet Chevauchements
   return P;
 }
 
@@ -719,7 +722,7 @@ function appliquerPlan(S, T){
   const paires = S.plan.reduire.concat(S.plan.supprimer).sort((x,y)=>x.pct-y.pct);
   paires.forEach(p=>{
     if (ecart[p.petit]!==null || ecart[p.grand]!==null) return;
-    const reduire = p.pct < CONFIG.chevReduit+1;
+    const reduire = !p.suppr;
     if (reduire && T.reduire){
       try {
         const a0 = turf.area({type:'Feature',properties:{},geometry:geom[p.petit]});
@@ -852,8 +855,8 @@ function majTete(){
 }
 
 // ====== DISCUSSION : l'assistant explique, tu décides ======
-const DESC = { main:'parcelle(s) probablement dessinée(s) à la main', doublons:'doublon(s) exact(s)', simil:'parcelle(s) de forme semblable à une autre', simplifier:'contour(s) très détaillé(s) ou irrégulier(s) <i>(information, pas une anomalie)</i>', reduire:'parcelle(s) qui chevauchent une plus grande jusqu\'à 20 %', supprimer:'parcelle(s) qui chevauchent une plus grande de plus de 20 %' };
-const MESURE = { main:'les mettre de côté', doublons:'retirer les copies', simil:'ne garder qu\'une seule parcelle par groupe', simplifier:'alléger le contour sans changer la surface (à 2 % près)', reduire:'réduire la parcelle à la partie qui ne chevauche pas', supprimer:'supprimer la parcelle' };
+const DESC = { main:'parcelle(s) probablement dessinée(s) à la main', doublons:'doublon(s) exact(s)', simil:'parcelle(s) de forme semblable à une autre', simplifier:'contour(s) très détaillé(s) ou irrégulier(s) <i>(information, pas une anomalie)</i>', reduire:'parcelle(s) qui chevauchent une autre de moins de 20 %', supprimer:'parcelle(s) qui chevauchent une autre de 20 % ou plus' };
+const MESURE = { main:'les mettre de côté', doublons:'retirer les copies', simil:'ne garder qu\'une seule parcelle par groupe', simplifier:'alléger le contour sans changer la surface (à 2 % près)', reduire:'réduire la parcelle à la partie qui ne chevauche pas', supprimer:'retirer la parcelle (on garde celle qui porte un vrai nom, sinon la plus grande)' };
 function bilanHtml(){
   const c = compter();
   const lignes = REGLES.filter(([k,t,pk])=>S.plan[pk].length).map(([k,t,pk])=>{ const n = S.plan[pk].length, on = S.T[k];
@@ -878,7 +881,7 @@ function basculerDisc(k, v){ S.T[k] = v; afficherRegles(); recalculer(); affiche
 function reponse(q){
   const t = q.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
   const n = (a)=>S.plan?S.plan[a].length:0;
-  if (/chevauch/.test(t)) return 'Deux parcelles se chevauchent quand l\'une recouvre l\'autre. Règle appliquée (celle d\'ORIGEN, la même pour toutes les coopératives) : jusqu\'à 20 % inclus (tout 20,xx compte comme 20) on réduit la plus petite à sa partie libre, en écartant les morceaux de moins de 0,5 % de sa surface ; à partir de 21 % on la supprime. Seuls les recouvrements de moins de 50 m² sont ignorés. Ici : '+S.chev.length+' paire(s) concernée(s), '+n('reduire')+' à réduire et '+n('supprimer')+' à supprimer.';
+  if (/chevauch/.test(t)) return 'Deux parcelles se chevauchent quand l\'une recouvre l\'autre. Règle d\'ORIGEN pour les chevauchements entre parcelles d\'un même fichier : à partir de 20 %, on retire une des deux (on garde celle qui porte un vrai nom plutôt qu\'un simple code, sinon la plus grande) ; en dessous de 20 %, on garde les deux et on les liste dans l\'onglet Chevauchements du rapport. Seuls les recouvrements de moins de 50 m² sont ignorés. Pour la base existante, côté serveur, le calcul est indicatif : ORIGEN réduit jusqu\'à 20 % inclus et supprime à partir de 21 %, mais ici cela ne bloque rien. Ici : '+S.chev.length+' paire(s) concernée(s), dont '+n('supprimer')+' à retirer (20 % ou plus) ; les autres sont gardées.';
   if (/semblab|forme/.test(t)) return 'Deux contours de forme presque identique, même éloignés, sont suspects (copie d\'un tracé). Seuil : ressemblance d\'au moins 50 %. Mesure : on ne garde qu\'une parcelle par groupe. Ici : '+S.simil.length+' paire(s).';
   if (/main|dessin/.test(t)) return 'Chaque contour reçoit un score sur 5 : peu de sommets (8 ou moins : +2, 12 ou moins : +1), segments de plus de 40 m en médiane (+1), angles droits sur la moitié des sommets (+1), coordonnées à 5 décimales ou moins (+1). À partir de 3 sur 5, le tracé ressemble à un dessin sur écran plutôt qu\'à une marche GPS. C\'est un signal à examiner : la seule mesure possible est de les mettre de côté pour les re-cartographier ; on n\'ajoute jamais de sommets pour les faire ressembler à un relevé. Ici : '+n('main')+' parcelle(s).';
   if (/detail|simplif|sommet/.test(t)) return 'Un contour de 100 sommets ou plus avec des segments de moins de 8 m est un tracé GPS très fin ; un contour très irrégulier (compacité sous 0,2) ou de plus de 1 000 sommets est simplifié de la même façon. Ce n\'est pas une anomalie : on peut l\'alléger (Douglas-Peucker à 2 m, 3 m si la forme est irrégulière, puis 1,5 / 1 / 0,5 / 0,25 m si besoin) sans changer la surface à plus de 2 % près, sans empiéter sur une parcelle voisine, avec au moins 15 sommets. La simplification enlève le bruit du relevé : elle n\'améliore pas sa précision. Un contour de moins de 15 sommets au départ n\'est jamais touché. Ici : '+n('simplifier')+' contour(s).';
@@ -927,7 +930,7 @@ async function analyserTout(){
   $('etape3').classList.remove('cache'); afficher();
   $('prog-txt').textContent = 'Recherche des chevauchements…';
   S.chev = await chevauchements(S.feats, S.res, prog(0.05,0.35));
-  S.chev.forEach(p=>{ const niveau = p.pct < CONFIG.chevReduit+1 ? 'attention' : 'erreur';
+  S.chev.forEach(p=>{ const niveau = p.pct < CONFIG.chevInterne ? 'attention' : 'erreur';
     S.res[p.petit].pb.push({niveau, code:'chev', txt:'Chevauche '+S.res[p.grand].id+' ('+p.pct.toFixed(0)+' % de cette parcelle)'});
     S.res[p.grand].pb.push({niveau:'attention', code:'chev', txt:'Chevauchée par '+S.res[p.petit].id+' ('+p.pct.toFixed(0)+' % de la plus petite)'}); });
   $('prog-txt').textContent = 'Recherche des formes semblables…';
@@ -1125,7 +1128,7 @@ async function telechargerExcel(){
   feuille(wb, 'Géométrie', ['Parcelle','Surface (ha)','Sommets','Problème','Gravité'], S.res.flatMap(x=>x.pb.filter(p=>['repare','croise','sommets','coord','illisible','petite','grande','main','detail','irreg','zone','precision'].includes(p.code)).map(p=>[x.id, x.aireHa==null?null:+x.aireHa.toFixed(3), x.sommets, p.txt, p.niveau==='erreur'?'Bloquant':p.niveau==='info'?'Information':'À vérifier'])), [16,13,10,70,12]);
   feuille(wb, 'Doublons', ['Parcelle','Problème'], S.res.flatMap(x=>x.pb.filter(p=>['dup_id','dup_geom'].includes(p.code)).map(p=>[x.id,p.txt])), [18,60]);
   feuille(wb, 'Formes semblables', ['Parcelle A','Parcelle B','Ressemblance (%)','Distance (m)'], S.simil.map(p=>[id(p.a),id(p.b),Math.round(p.iou*100),Math.round(p.km*1000)]), [18,18,18,14]);
-  feuille(wb, 'Chevauchements', ['Parcelle (la plus grande)','Parcelle chevauchée','Part de la plus petite (%)','Surface commune (m²)','Traitement'], S.chev.map(p=>[id(p.grand),id(p.petit),+p.pct.toFixed(1),Math.round(p.m2),p.pct<CONFIG.chevReduit+1?'Réduction':'Suppression']), [24,22,24,20,14]);
+  feuille(wb, 'Chevauchements', ['Parcelle gardée','Parcelle chevauchée','Part de la parcelle chevauchée (%)','Surface commune (m²)','Traitement'], S.chev.map(p=>[id(p.grand),id(p.petit),+p.pct.toFixed(1),Math.round(p.m2),p.pct<CONFIG.chevInterne?'Gardé (petit chevauchement)':'Suppression']), [24,22,24,20,14]);
   feuille(wb, 'Simplifications', ['Parcelle','Sommets avant','Sommets après','Écart de surface (%)','Précision (m)'], Object.keys(S.simpl).map(i=>[id(+i),S.simpl[i].avant,S.simpl[i].apres,+S.simpl[i].ecartAire.toFixed(2),S.simpl[i].tolerance]), [18,16,16,22,16]);
   feuille(wb, 'Écartées', ['Parcelle','Motif'], S.final.ecartees.map(e=>[id(e.i),e.motif]), [18,80]);
   if (S.serveur){ const srv = srvMap();
