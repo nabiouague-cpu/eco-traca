@@ -294,7 +294,7 @@ body[data-vue]:not([data-vue="analyse"]) main{display:none}
 
 <div class="tete" id="tete">
   <div class="ln"><div class="pre">Dossier en cours</div><div class="nom" id="tete-nom">Nouvelle analyse</div><div class="sous" id="tete-sous">Dépose tes fichiers de géolocalisation pour commencer.</div></div>
-  <button class="nouv" id="btn-nouvelle" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Nouvelle analyse</button>
+  <button class="nouv" id="btn-retour" type="button" onclick="DEFO.vue('accueil')"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>Retour à l'accueil</button>
 </div>
 <div class="tuiles cache" id="tuiles"><div class="kpis" id="kpis" style="display:contents"></div></div>
 <div class="parcours" id="parcours" style="margin-top:14px"></div>
@@ -1057,7 +1057,6 @@ if (typeof document !== 'undefined' && $('depot')) {
   $('cx-mdp').addEventListener('keydown', e=>{ if (e.key==='Enter') connexion(); });
   $('btn-deconnexion').addEventListener('click', async ()=>{ await SB.auth.signOut(); majConnexion(); });
   if (SB) { SB.auth.onAuthStateChange(()=>majConnexion()); majConnexion(); }
-  $('btn-nouvelle').addEventListener('click', ()=>{ if (!S.feats.length || confirm('Commencer une nouvelle analyse ? L\'analyse en cours sera fermée.')) location.reload(); });
   $('nom-dossier').addEventListener('input', majTete);
   $('disc-form').addEventListener('submit', ev=>{ ev.preventDefault(); const q = $('disc-q').value.trim(); if (!q) return; $('disc-q').value=''; poserQuestion(q); });
   $('btn-excel').addEventListener('click', telechargerExcel);
@@ -1430,7 +1429,7 @@ if (typeof document !== 'undefined' && $('depot')) { majParcours(); majTete(); }
     if (!SB) return;
     const { data } = await SB.auth.getSession();
     if (!(data && data.session)) return;
-    V.chargement = true; V.erreur = ''; rendre();
+    V.chargement = !V.groupes.length; V.erreur = ''; if (V.chargement) rendre();
     const a = await SB.from('analyses').select('nom,nb_parcelles,whisp,base_comparee,resume,cree_le').order('cree_le',{ascending:false}).limit(2000);
     const r = await SB.from('rappels').select('id,texte,dossier,echeance,fait').order('echeance',{ascending:true});
     if (a.error) V.erreur = 'Impossible de lire tes analyses : '+a.error.message;
@@ -1529,13 +1528,18 @@ if (typeof document !== 'undefined' && $('depot')) { majParcours(); majTete(); }
     majNav();
     if (V.vue==='analyse') return;
     const f = { accueil:vueAccueil, analyses:vueAnalyses, calendrier:vueCalendrier, rappels:vueRappels }[V.vue] || vueAccueil;
-    $('vues').innerHTML = (V.erreur?'<div class="msg-v">'+esc(V.erreur)+'</div>':'')+f();
+    const h = (V.erreur?'<div class="msg-v">'+esc(V.erreur)+'</div>':'')+f();
+    if (h === V.html && V.htmlVue === V.vue) return;
+    V.html = h; V.htmlVue = V.vue; $('vues').innerHTML = h;
   }
   async function exec(p){ const r = await p; if (r && r.error) alert('Action impossible : '+r.error.message); await charger(); }
 
   window.DEFO = {
     vue(v){ V.vue = v; rendre(); window.scrollTo(0,0); if (v==='analyse' && S.carte) setTimeout(()=>S.carte.invalidateSize(), 80); },
-    demarrer(){ DEFO.vue('analyse'); },
+    demarrer(){
+      if (S.feats && S.feats.length){ if (!confirm('Une analyse est déjà ouverte. Commencer une nouvelle analyse la fermera. Continuer ?')) return; try { sessionStorage.setItem('defo-nouvelle','1'); } catch(e){} location.reload(); return; }
+      DEFO.vue('analyse');
+    },
     ouvrir(id){ V.ouvert = V.ouvert===id ? null : id; rendre(); },
     jour(k){ V.jour = k; rendre(); },
     mois(n){ V.mois = n===0 ? new Date(maintenant.getFullYear(), maintenant.getMonth(), 1) : new Date(V.mois.getFullYear(), V.mois.getMonth()+n, 1); if (n===0) V.jour = auj; rendre(); },
@@ -1554,8 +1558,10 @@ if (typeof document !== 'undefined' && $('depot')) { majParcours(); majTete(); }
   if (typeof lancerAnalyse==='function'){ const _la = lancerAnalyse; lancerAnalyse = async function(d){ await _la(d); if (!d) charger(); }; }
   // l'onglet « Analyse en cours » apparaît dès que des polygones sont lus
   new MutationObserver(majNav).observe($('tete-nom'), { childList:true, characterData:true, subtree:true });
-  if (SB){ SB.auth.onAuthStateChange((ev, s)=>{ if (s && s.user) setTimeout(charger, 0); else { V.groupes = []; V.rappels = []; rendre(); } }); }
-  V.jour = auj; rendre();
+  if (SB){ SB.auth.onAuthStateChange((ev, s)=>{ const u = s && s.user ? s.user.id : null; if (u === V.uid) return; V.uid = u; if (u) setTimeout(charger, 0); else { V.groupes = []; V.rappels = []; rendre(); } }); }
+  V.jour = auj;
+  try { if (sessionStorage.getItem('defo-nouvelle')){ sessionStorage.removeItem('defo-nouvelle'); V.vue = 'analyse'; } } catch(e){}
+  rendre();
 })();
 </script>
 
