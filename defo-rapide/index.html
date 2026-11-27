@@ -1535,6 +1535,8 @@ async function analyserTout(){
   afficher(); majParcours(); majTete();
 }
 
+// Version des règles de nettoyage : à changer à chaque modification des règles (elle est enregistrée avec l'avancement pour avertir à la réouverture)
+const REGLES_VERSION = '2026-11-27';
 const REGLES = [
   ['main',      'Mettre de côté les polygones dessinés à la main', 'main'],
   ['doublons',  'Retirer les doublons identiques (même géométrie)', 'doublons'],
@@ -1914,7 +1916,7 @@ async function lancerAnalyse(demo){
 function sauverEtat(){
   if (S.restaure) return;
   const id = S.jobOuvert; if (!id || !S.serveur || S.serveur.demo) return;
-  const e = { etape:S.etape, T:Object.assign({}, S.T), correction:!!S.correction, corrige:!!S.corrige, telecharge:!!S.telecharge, t:Date.now() };
+  const e = { etape:S.etape, T:Object.assign({}, S.T), correction:!!S.correction, corrige:!!S.corrige, telecharge:!!S.telecharge, v:REGLES_VERSION, t:Date.now() };
   try { localStorage.setItem('defo-etat-'+id, JSON.stringify(e)); localStorage.setItem('defo-courant', id); } catch(x){}
   clearTimeout(S._tEtat);
   S._tEtat = setTimeout(async ()=>{ try { const meta = Object.assign({}, S.metaJob||{}, { page:e }); S.metaJob = meta; await SB.from('analyses_jobs').update({ meta }).eq('id', id); } catch(x){} }, 1500);
@@ -1928,6 +1930,7 @@ function rejouerEtat(pg){
   if (!pg) return;
   S.restaure = true;
   try {
+    if (pg.v && pg.v !== REGLES_VERSION) $('avis-zone').insertAdjacentHTML('afterbegin', '<div class="avis"><b>Les règles de nettoyage ont été mises à jour</b> depuis ta dernière visite ('+esc(pg.v)+' → '+esc(REGLES_VERSION)+') : le nettoyage a été recalculé avec les règles actuelles. Vérifie la base finale avant de la télécharger.</div>');
     if (pg.T) Object.assign(S.T, pg.T);
     if (pg.correction) lancerCorrectionReelle();
     if (pg.corrige) validerCorrection();
