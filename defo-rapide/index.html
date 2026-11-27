@@ -817,15 +817,45 @@ async function appelerServeur(fc, nom){
   const { data } = await SB.auth.getSession();
   const jeton = data && data.session && data.session.access_token;
   if (!jeton) throw new Error('Connecte-toi pour lancer l\'analyse.');
+  const LOT = 500;   // Whisp accepte au plus 500 parcelles par demande
   const r = await fetch(CONFIG.supaUrl+'/functions/v1/analyser', { method:'POST',
     headers:{ 'Content-Type':'application/json', 'apikey':CONFIG.supaKey, 'Authorization':'Bearer '+jeton },
-    body:JSON.stringify({ geojson:fc, nom }) });
+    body:JSON.stringify({ geojson:fc, nom, sans_whisp: fc.features.length>LOT }) });
   let j = null; try { j = await r.json(); } catch(e){}
   if (!r.ok) throw new Error((j && j.error) || ("Le serveur d'analyse a répondu "+r.status));
   if (j && j.whisp_token) await suivreWhisp(j, fc);
+  else if (fc.features.length>LOT) await whispParLots(j, fc, LOT);
   return j;
 }
-// Suivi de l'analyse satellite : le serveur interroge Whisp à chaque appel, on répète jusqu'à la fin (max 45 min)
+// Analyse satellite par lots de 500 parcelles (limite de Whisp), un lot après l'autre
+async function whispParLots(j, fc, LOT){
+  const parId = Object.fromEntries(j.resultats.map(x=>[x.plot_id,x]));
+  const nbLots = Math.ceil(fc.features.length/LOT); let ok = 0, erreurs = [];
+  for (let k=0;k<nbLots;k++){
+    $('analyse-etat').textContent = 'Analyse satellite : lot '+(k+1)+' / '+nbLots+'…';
+    const lot = { type:'FeatureCollection', features: fc.features.slice(k*LOT,(k+1)*LOT) };
+    let res = null;
+    for (let t=0;t<3 && !res;t++){
+      try{
+        const { data } = await SB.auth.getSession();
+        const jeton = data && data.session && data.session.access_token;
+        const r = await fetch(CONFIG.supaUrl+'/functions/v1/analyser', { method:'POST',
+          headers:{ 'Content-Type':'application/json', 'apikey':CONFIG.supaKey, 'Authorization':'Bearer '+jeton },
+          body:JSON.stringify({ whisp_lot: lot }) });
+        const q = await r.json();
+        if (q.whisp_etat==='termine') res = q.whisp;
+        else if (q.whisp_etat==='jeton'){ const sub = { whisp_token:q.whisp_token, resultats:lot.features.map(f=>({plot_id:f.properties.PlotID})) }; await suivreWhisp(sub, lot); if (sub.whisp) res = Object.fromEntries(sub.resultats.filter(x=>x.risk_pcrop!==undefined).map(x=>[x.plot_id,{risk_pcrop:x.risk_pcrop,risk_acrop:x.risk_acrop,risk_timber:x.risk_timber,perturbation:x.perturbation_apres_2020,couvert:x.couvert_arbore}])); else erreurs.push('lot '+(k+1)+' : '+sub.message_whisp); break; }
+        else { erreurs[t]='lot '+(k+1)+' : '+(q.message||q.error||r.status); }
+      }catch(e){ erreurs[t]='lot '+(k+1)+' : '+(e.message||e); }
+    }
+    if (res){ Object.entries(res).forEach(([id,w])=>{ const x = parId[id]; if (!x) return; ok++;
+      x.risk_pcrop=w.risk_pcrop; x.risk_acrop=w.risk_acrop; x.risk_timber=w.risk_timber;
+      x.perturbation_apres_2020=w.perturbation; x.couvert_arbore=w.couvert; x.prioritaire=!!(w.perturbation && w.couvert); }); }
+  }
+  j.whisp = ok>0;
+  j.message_whisp = ok===fc.features.length ? '' : (ok+' parcelle(s) sur '+fc.features.length+' ont reçu un résultat satellite. '+erreurs.slice(-2).join(' / '));
+}
+// Suivi d'un jeton Whisp : le serveur l'interroge à chaque appel, on répète jusqu'à la fin (max 45 min)
 async function suivreWhisp(j, fc){
   const ids = fc.features.map(f=>f.properties.PlotID);
   const debut = Date.now(); let essais = 0, echecs = 0;
