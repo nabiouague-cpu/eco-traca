@@ -15120,6 +15120,7 @@ function lotsModalsHtml(){
   if (m.type==='potentielCoops') return renderPotentielCoopsModal(m);
   if (m.type==='bordereauParticulier') return renderBordereauParticulierModal(m);
   if (m.type==='bicCorrection') return renderBicModal(m);
+  if (m.type==='correction') return renderCorrectionModal(m);
   if (m.type==='finLtdLots') return renderFinLtdLotsModal(m);
   if (m.type==='lotsPoidsEntrepot'){
     const pl = m.payload, lots = lotsPoidsEntrepotLots(pl);
@@ -34225,6 +34226,51 @@ function bicBascule(id){ const pl = state.modal && state.modal.payload; if (!pl)
 function bicToutCocher(){ const pl = state.modal && state.modal.payload; if (!pl) return; bicAffiches.forEach(id=>{ if (pl.sel.indexOf(id)<0) pl.sel.push(id); }); bicMajListe(); }
 function bicToutDecocher(){ const pl = state.modal && state.modal.payload; if (!pl) return; pl.sel = []; bicMajListe(); }
 function bicToutes(v){ const pl = state.modal && state.modal.payload; if (!pl) return; pl.toutes = !!v; bicMajListe(); }
+// ====================== CATALOGUE « 🔧 CORRECTION » : problèmes OBC connus et déjà résolus ======================
+// À chaque nouveau problème repéré puis corrigé dans Noah (automate/origen-obc-automate.user.js, objet CORRECTIONS),
+// on ajoute ici une entrée avec le MÊME id : elle apparaît alors dans le bouton « 🔧 Correction » de cet onglet.
+const CORRECTIONS_CATALOGUE = [
+  { id:'compte_general_401110000', titre:'Compte général fournisseur cacao erroné (401100000 → 401110000)',
+    description:'Des fiches compte-tiers fournisseurs cacao (coopératives et gros traitants) ont été enregistrées dans OBC sur le compte 401100000 - Fournisseurs au lieu du bon compte 401110000 - Fournisseur Exploitation. Noah retrouve lui-même, dans OBC, tous les comptes encore sur l\'ancien compte et les corrige.' },
+];
+function correctionOuvrir(){ state.modal = { type:'correction', payload:{ sel: CORRECTIONS_CATALOGUE.length===1 ? CORRECTIONS_CATALOGUE[0].id : null } }; render(); if (!state.obcFileLance){ state.obcFileLance = true; } obcFileCharger().then(()=>{ if (state.modal && state.modal.type==='correction') render(); }); }
+function correctionEtatProbleme(id){
+  const lignes = Object.values(state.obcFile||{}).filter(x=>x.lot && x.lot.type==='correction' && x.lot.probleme===id).sort((a,b)=>String(b.maj_le||'').localeCompare(String(a.maj_le||'')));
+  return lignes[0] || null;
+}
+function correctionChoisir(id){ const pl = state.modal && state.modal.payload; if (!pl) return; pl.sel = id; render(); }
+function renderCorrectionModal(m){
+  const pl = m.payload;
+  const lignes = CORRECTIONS_CATALOGUE.map(p=>{
+    const f = correctionEtatProbleme(p.id);
+    const badge = !f ? '' : f.statut==='saisi' ? '<span style="color:#2e7d32;font-weight:700">✓ '+esc(f.message||'corrigé')+'</span>'
+      : f.statut==='echec' ? '<span style="color:#B3261E;font-weight:700">✗ '+esc(f.message||'échec')+'</span>'
+      : '<span style="color:#8a6d00;font-weight:700">… en cours dans Noah</span>';
+    const on = pl.sel===p.id;
+    return '<div onclick="correctionChoisir(\''+p.id+'\')" style="padding:10px;border:1px solid '+(on?'#0E3B36':'#d7ded9')+';border-radius:8px;margin-bottom:8px;cursor:pointer;'+(on?'background:#f3f8f6':'')+'">'
+      + '<div style="display:flex;gap:8px;align-items:flex-start"><input type="radio" name="correction-choix" '+(on?'checked':'')+' style="margin-top:3px;pointer-events:none">'
+      + '<div style="flex:1"><b>'+esc(p.titre)+'</b><div class="hint" style="margin-top:3px">'+esc(p.description)+'</div>'+(badge?'<div style="margin-top:4px;font-size:12px">'+badge+'</div>':'')+'</div></div></div>';
+  }).join('') || '<div class="hint" style="padding:14px;text-align:center">Aucun problème connu pour l\'instant.</div>';
+  return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>🔧 Correction</h3><div id="modal-fields">'
+    + '<div class="hint" style="margin-bottom:8px">Catalogue des problèmes OBC déjà identifiés et résolus dans Noah. Choisis le problème à régler puis « Valider ». La tâche est envoyée à Noah — ouvre ensuite OBC (Chrome) et clique « Lancer la file » : il s\'en occupe tout seul.</div>'
+    + lignes
+    + '</div><div class="actions"><button class="btn" onclick="closeModal()">Fermer</button><button class="btn btn-primary" onclick="correctionValider()" '+(pl.sel?'':'disabled')+'>🔧 Valider</button></div></div></div>';
+}
+async function correctionValider(){
+  const pl = state.modal && state.modal.payload; if (!pl || !pl.sel) return;
+  const probleme = CORRECTIONS_CATALOGUE.find(p=>p.id===pl.sel); if (!probleme) return;
+  const f = correctionEtatProbleme(probleme.id);
+  if (f && (f.statut==='attente' || f.statut==='en_cours')){ showToast('Ce problème est déjà dans la file de Noah : attends la fin avant de le relancer.'); return; }
+  askConfirm('Envoyer à Noah : « '+probleme.titre+' » ?\n\nOuvre ensuite OBC (Chrome) et clique « Lancer la file ».', async ()=>{
+    const quand = new Date().toISOString();
+    const ligne = { achat_id:'CORRECTION:'+probleme.id+':'+Date.now(), connaissement:'🔧 '+probleme.titre, lot:{ type:'correction', probleme:probleme.id }, statut:'attente', message:null, bordereau_numero:null, controle:null, controle_le:null, refaire_depuis:null, envoye_le:quand, maj_le:quand };
+    const r = await supabaseClient.from('obc_file').upsert([ligne], { onConflict:'achat_id' });
+    if (r.error){ showToast('Échec de l\'envoi à Noah : '+r.error.message); return; }
+    await obcFileCharger();
+    showToast('Envoyé à Noah. Ouvre OBC (Chrome) et clique « Lancer la file ».');
+    if (state.modal && state.modal.type==='correction') render();
+  });
+}
 function renderBicModal(m){
   const pl = m.payload;
   return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>💸 Corriger le BIC</h3><div id="modal-fields">'
@@ -34859,7 +34905,8 @@ function renderSaisieObcTab(){
     + '<label style="display:flex;gap:4px;align-items:center"><input type="checkbox"'+(state.sobcInclureNonSaisis?' checked':'')+' onchange="state.sobcInclureNonSaisis=this.checked;render()"> inclure ceux pas encore saisis</label>'
     + '<button type="button" class="btn btn-primary btn-compact" onclick="ouvrirBordereauxGroupes()" title="Réunit tous les bordereaux de la période dans un seul document : Imprimer › Enregistrer au format PDF = un seul fichier">⬇ Télécharger les '+fmtNum(bordereauxGroupesListe().length)+' bordereaux (un seul PDF)</button>'
     + '<button type="button" class="btn btn-primary btn-compact" onclick="bdOuvrir()" title="Cocher un ou plusieurs déchargements (n° de connaissement), de une ou plusieurs coopératives : les bordereaux se téléchargent dans un seul PDF">🖨 Imprimer un bordereau</button>'
-    + '<button type="button" class="btn btn-primary btn-compact" onclick="bicOuvrir()" title="La coopérative a présenté son document d\'exonération BIC : on lui restitue la retenue. Noah refait le bordereau dans OBC sans BIC, puis on télécharge le nouveau bordereau pour la liasse.">💸 Corriger le BIC</button></div>'
+    + '<button type="button" class="btn btn-primary btn-compact" onclick="bicOuvrir()" title="La coopérative a présenté son document d\'exonération BIC : on lui restitue la retenue. Noah refait le bordereau dans OBC sans BIC, puis on télécharge le nouveau bordereau pour la liasse.">💸 Corriger le BIC</button>'
+    + '<button type="button" class="btn btn-primary btn-compact" onclick="correctionOuvrir()" title="Catalogue des problèmes OBC déjà identifiés et résolus : choisis-en un, valide, puis « Lancer la file » dans Noah.">🔧 Correction</button></div>'
     + (function(){ const lots = obcLotsSaisie(), sel = state.obcRapportLot||'';
         return '<div class="sobc-groupe" style="display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;padding:0 18px 10px;font-size:13px">'
           + '<b>📄 Rapport de saisie OBC</b> <select id="obc-rapport-lot" onchange="state.obcRapportLot=this.value">'

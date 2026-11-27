@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.60
+// @version      0.4.61
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,11 +14,12 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.60';
+  const VERSION = '0.4.61';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
   const CLE_FILE = 'origen_obc_file';
+  const CLE_CORR = 'origen_obc_correction';   // 27/11/2026 : état (localStorage) d'une correction en masse en cours, lancée depuis le bouton « 🔧 Correction » d'ORIGEN
   const ENTITE = '1';                 // ECORIGINE
   const ATTENTE_MAX = 20000;
   const NB_ETAPES = 10;
@@ -124,8 +125,86 @@
     const g = lireFile();
     if (!r.lot) { g.actif = false; g.erreurApi = null; g.dernier = 'File terminée : ' + (g.saisis || 0) + ' saisi(s)' + ((g.rattrapes || []).length ? ', dont ' + g.rattrapes.length + ' échec(s) rattrapé(s)' : '') + ', ' + nbEchecs(g) + ' échec(s) non rattrapé(s). Les résultats sont dans ORIGEN › Saisie OBC.'; ecrireFile(g); afficherFile(); return false; }
     g.erreurApi = null; ecrireFile(g);
+    // Lot « 🔧 Correction » (catalogue de problèmes connus, déposé par ORIGEN) : traitement séparé de la saisie normale d'un camion.
+    if (r.lot && r.lot.type === 'correction') { demarrerCorrection(r.achat_id, r.lot); return false; }
     ecrireEtat({ v10: true, lot: r.lot, etape: Math.max(1, Math.min(NB_ETAPES, Number(r.refaire_depuis) || 1)), statut: 'a_faire', ids: {}, fait: {}, journal: [], pause: false, erreur: null, note: '', enFile: true });
     afficherEtat(); afficherFile(); return true;
+  }
+
+  // ---------- catalogue « 🔧 Correction » : problèmes connus d'OBC, ajoutés ici au fur et à mesure qu'on les résout ----------
+  // ORIGEN dépose dans obc_file un lot { type:'correction', probleme:<id> } ; Noah le reconnaît ici et répare lui-même,
+  // sans passer par les 10 étapes normales de saisie d'un camion. L'état (page à atteindre, compteurs) survit à une
+  // navigation/rechargement d'OBC via localStorage (CLE_CORR), comme l'état d'un lot normal survit via CLE.
+  function lireCorr() { try { return JSON.parse(localStorage.getItem(CLE_CORR) || 'null'); } catch (e) { return null; } }
+  function ecrireCorr(c) { localStorage.setItem(CLE_CORR, JSON.stringify(c)); }
+  function effacerCorr() { localStorage.removeItem(CLE_CORR); }
+  // Attend la boîte de confirmation/refus qu'OBC affiche après « Enregistrer » ; renvoie le texte du refus, ou null si tout est accepté (ou si rien ne s'affiche).
+  function attendreConfirmation() {
+    return new Promise((resolve) => {
+      let n = 0;
+      const t = setInterval(() => {
+        const boite = [...document.querySelectorAll('.swal2-popup, .swal-modal, .sweet-alert, .bootbox, .modal.show, .modal.in')].find((x) => x.offsetParent !== null);
+        const txt = boite ? String(boite.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 300) : '';
+        if (txt && /introuvable|erreur|impossible|invalide|refus|échec|echec|n'existe|obligatoire|interdit|doit |non enregistr|existe d[ée]j[àa]|d[ée]j[àa] (enregistr|dans la base|utilis)/i.test(txt)) { clearInterval(t); resolve(txt); return; }
+        const b = [...document.querySelectorAll('.swal2-confirm, .swal-button--confirm, .bootbox-accept, .sweet-alert .confirm')].find((x) => x.offsetParent !== null);
+        if (b) { clearInterval(t); try { b.click(); } catch (er) { /* ignoré */ } resolve(null); return; }
+        if (++n > 12) { clearInterval(t); resolve(null); }
+      }, 400);
+    });
+  }
+  // Chaque entrée : titre affiché dans ORIGEN, page OBC où agir, comment repérer la prochaine fiche à corriger
+  // dans la page courante (trouverProchain), et comment la corriger (corriger). Ajouter une entrée ici = l'ajouter
+  // au bouton « 🔧 Correction » d'ORIGEN (voir CORRECTIONS_CATALOGUE dans index.html — même id des deux côtés).
+  const CORRECTIONS = {
+    compte_general_401110000: {
+      titre: 'Compte général fournisseur cacao (401100000 → 401110000)',
+      url: '/PlanComptableTiersEntite/Index?filterEntite=' + ENTITE + '&filter=&pageSize=1000',
+      // Repère, dans la page Plan comptable tiers entité actuellement affichée, la prochaine fiche Fournisseur encore sur l'ancien compte.
+      trouverProchain(doc) { const l = lignesTable(doc).find((x) => x.c[2] === 'Fournisseur' && x.c[3] === '401100000'); return l ? { tr: l.tr, code: l.c[4] } : null; },
+      async corriger(cible) {
+        const lien = cible.tr.querySelector('a[title="Modifier"][href*="/PlanComptableTiersEntite/Edit/"]');
+        if (!lien) throw new Error('lien « Modifier » introuvable pour ' + cible.code);
+        lien.click();
+        const form = await attendre(() => q('#frmPlanComptableTiersEntiteEdit'), 8000, 200);
+        if (!form) throw new Error('formulaire d\'édition introuvable pour ' + cible.code);
+        await setSelectTexte(form.querySelector('#txtplan_comptable_entite_parentAdd'), /^401110000\b/, 'Compte général', '401110000 - Fournisseur Exploitation');
+        const btn = q('#btnPlanComptableEntiteEdit');
+        if (!btn) throw new Error('bouton « Enregistrer » introuvable pour ' + cible.code);
+        btn.click();
+        const refus = await attendreConfirmation();
+        if (refus) throw new Error('OBC a refusé (' + cible.code + ') : ' + refus);
+        await attendre(() => !q('#frmPlanComptableTiersEntiteEdit'), 8000, 200);
+        if (q('#frmPlanComptableTiersEntiteEdit')) throw new Error('le formulaire ne s\'est pas fermé après Enregistrer pour ' + cible.code);
+      },
+    },
+  };
+  async function demarrerCorrection(achatId, lot) {
+    const def = CORRECTIONS[lot.probleme];
+    if (!def) { await rapporter(achatId, 'echec', 'Type de correction inconnu dans Noah : ' + lot.probleme); dormir(600).then(boucle); return; }
+    ecrireCorr({ achatId, probleme: lot.probleme, ok: 0, echecs: [] });
+    afficherFile();
+    if (!connecte()) return; // le filet de sécurité (12 s) relancera après reconnexion
+    if (new RegExp('^' + def.url.split('?')[0]).test(location.pathname)) { await traiterCorrection(); return; }
+    location.href = def.url;
+  }
+  async function traiterCorrection() {
+    const corr = lireCorr(); if (!corr) return;
+    const def = CORRECTIONS[corr.probleme];
+    if (!def) { effacerCorr(); return; }
+    for (let garde = 0; garde < 500; garde++) {
+      let cible = null;
+      try { cible = def.trouverProchain(document); } catch (er) { cible = null; }
+      if (!cible) break;
+      try { await def.corriger(cible); corr.ok++; }
+      catch (er) { corr.echecs.push((cible.code || '?') + ' : ' + (er && er.message ? er.message : String(er))); }
+      ecrireCorr(corr); afficherFile();
+      await dormir(500);
+    }
+    effacerCorr();
+    const msg = corr.ok + ' compte(s) corrigé(s)' + (corr.echecs.length ? ', ' + corr.echecs.length + ' échec(s) : ' + corr.echecs.slice(0, 6).join(' | ') : '');
+    await rapporter(corr.achatId, (corr.ok === 0 && corr.echecs.length) ? 'echec' : 'saisi', msg);
+    noterResultat(corr.echecs.length === 0, '🔧 ' + (def.titre || corr.probleme) + ' : ' + msg);
+    afficherFile(); dormir(600).then(boucle);
   }
   function noterResultat(ok, texte) { const f = lireFile(); f.resultat = { ok, texte, quand: new Date().toLocaleTimeString('fr-FR') }; ecrireFile(f); }
   // Échecs non rattrapés (par connaissement) et échecs rattrapés par une reprise réussie
@@ -1371,6 +1450,15 @@
     if (enCours) return; enCours = true;
     try {
       veille.demarrer();
+      // Une correction en masse (🔧 Correction) est en cours : elle a priorité sur tout lot normal tant qu'elle n'est pas finie.
+      const corr = lireCorr();
+      if (corr) {
+        const def = CORRECTIONS[corr.probleme];
+        if (!def) { effacerCorr(); }
+        else if (!connecte()) { return; } // le filet de sécurité (12 s) relancera après reconnexion
+        else if (new RegExp('^' + def.url.split('?')[0]).test(location.pathname)) { await traiterCorrection(); return; }
+        else { location.href = def.url; return; }
+      }
       let e = lireEtat();
       if ((!e || e.statut === 'termine') && fileActive()) { if (!(await suivantFile())) return; e = lireEtat(); }
       if (!e || e.pause || e.statut === 'termine') return;
@@ -1464,9 +1552,10 @@
   setInterval(() => {
     try {
       if (enCours) return;
-      const e = lireEtat(); if (!e) return;
-      if (e.pause || e.erreur || e.statut === 'termine') return;
-      if (document.hidden && !e.enFile) return;
+      const e = lireEtat(); const corr = lireCorr();
+      if (!e && !corr) return;
+      if (e && (e.pause || e.erreur || e.statut === 'termine')) return;
+      if (document.hidden && !(e && e.enFile) && !corr) return;
       boucle();
     } catch (er) { /* ignoré */ }
   }, 12000);
