@@ -822,7 +822,40 @@ async function appelerServeur(fc, nom){
     body:JSON.stringify({ geojson:fc, nom }) });
   let j = null; try { j = await r.json(); } catch(e){}
   if (!r.ok) throw new Error((j && j.error) || ("Le serveur d'analyse a répondu "+r.status));
+  if (j && j.whisp_token) await suivreWhisp(j, fc);
   return j;
+}
+// Suivi de l'analyse satellite : le serveur interroge Whisp à chaque appel, on répète jusqu'à la fin (max 45 min)
+async function suivreWhisp(j, fc){
+  const ids = fc.features.map(f=>f.properties.PlotID);
+  const debut = Date.now(); let essais = 0, echecs = 0;
+  while (Date.now()-debut < 45*60*1000){
+    await new Promise(res=>setTimeout(res, essais<3 ? 3000 : 8000)); essais++;
+    $('analyse-etat').textContent = 'Analyse satellite en cours… '+Math.round((Date.now()-debut)/1000)+' s';
+    const { data } = await SB.auth.getSession();
+    const jeton = data && data.session && data.session.access_token;
+    let k = null;
+    try{
+      const r = await fetch(CONFIG.supaUrl+'/functions/v1/analyser', { method:'POST',
+        headers:{ 'Content-Type':'application/json', 'apikey':CONFIG.supaKey, 'Authorization':'Bearer '+jeton },
+        body:JSON.stringify({ whisp_token:j.whisp_token, ids }) });
+      k = await r.json();
+      if (!r.ok) throw new Error((k && (k.error||k.message)) || r.status);
+    }catch(e){ if (++echecs>=5){ j.whisp=false; j.message_whisp='Suivi Whisp interrompu : '+(e.message||e); return; } continue; }
+    echecs = 0;
+    if (k.whisp_etat==='echec'){ j.whisp=false; j.message_whisp=k.message||'Analyse Whisp échouée.'; return; }
+    if (k.whisp_etat==='termine'){
+      let n = 0;
+      j.resultats.forEach(x=>{ const w = k.whisp[x.plot_id]; if (!w) return; n++;
+        x.risk_pcrop=w.risk_pcrop; x.risk_acrop=w.risk_acrop; x.risk_timber=w.risk_timber;
+        x.perturbation_apres_2020=w.perturbation; x.couvert_arbore=w.couvert; x.prioritaire=!!(w.perturbation && w.couvert); });
+      j.whisp = n>0; j.whisp_token = null;
+      if (n<j.resultats.length) j.message_whisp = n+' parcelle(s) sur '+j.resultats.length+' ont reçu un résultat satellite.';
+      if (!n) j.message_whisp = 'Résultats Whisp reçus mais impossibles à rattacher aux parcelles.';
+      return;
+    }
+  }
+  j.whisp=false; j.message_whisp="Délai dépassé (45 min) : l'analyse satellite n'a pas fini.";
 }
 function analyseDemo(fc){   // résultats FICTIFS, uniquement pour voir le rapport final
   const hash = s=>{ let h=0; for (const c of s) h=(h*31+c.charCodeAt(0))>>>0; return h; };
