@@ -295,6 +295,10 @@ body[data-vue]:not([data-vue="analyse"]) main{display:none}
 .cm-2{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}@media(max-width:560px){.cm-2{grid-template-columns:1fr}}
 .cm-cgu{display:flex!important;gap:9px;align-items:flex-start;font-weight:400!important;font-size:13px!important}.cm-cgu input{margin-top:3px}.cm-cgu a{color:var(--teal)}
 .cm-boite.sans-fermer .cm-x{display:none}
+.cm-docs{display:flex;flex-direction:column;gap:8px;margin:10px 0 14px}
+.cm-doc{display:flex;align-items:center;gap:12px;width:100%;text-align:left;background:rgba(15,92,70,.05);border:1px solid var(--bord);border-radius:12px;padding:11px 14px;font:inherit;color:var(--texte);cursor:pointer}
+.cm-doc:hover{border-color:var(--teal);background:rgba(15,92,70,.09)}
+.cm-doc svg{color:var(--teal);flex:none}.cm-doc span{flex:1}.cm-doc b{display:block;font-size:14px}.cm-doc small{display:block;margin-top:1px}.cm-doc i{font-style:normal;font-size:13px;font-weight:600;color:var(--teal)}
 .cm-boite small{font-weight:400;color:var(--gris)}
 .cm-boite select{width:100%;box-sizing:border-box}
 </style>
@@ -1941,7 +1945,7 @@ if (typeof document !== 'undefined' && $('depot')) { majParcours(); majTete(); }
       C.pret = true;
     } catch(e){ C.pret = !!C.uid; }
     barre();
-    if (C.pret && !C.meta.profil_ok && !window.__ficheOuverte){ window.__ficheOuverte = true; compte(null, null, true); }
+    if (C.pret && !window.__ficheOuverte && (!C.meta.cgu_accepte_le || !C.meta.profil_ok)){ window.__ficheOuverte = true; if (!C.meta.cgu_accepte_le) acceptation(); else compte(null, null, true); }
   }
 
   function barre(){
@@ -1963,6 +1967,30 @@ if (typeof document !== 'undefined' && $('depot')) { majParcours(); majTete(); }
   document.addEventListener('keydown', e=>{ if (e.key==='Escape') fermer(); });
   window.__ficheObligatoire = false;
 
+  // ---------- Étape 1 de la première connexion : conditions générales et confidentialité ----------
+  function acceptation(){
+    window.__ficheObligatoire = true;
+    const ico = d=>'<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'+d+'</svg>';
+    const ligne = (k, d, t, sous)=>'<button type="button" class="cm-doc" onclick="LEGAL.ouvrir(\''+k+'\',true)">'+ico(d)+'<span><b>'+t+'</b><small>'+sous+'</small></span><i>Lire ›</i></button>';
+    ouvrir('<h3>Bienvenue sur ORIGEN</h3><p class="hint">Avant de remplir ta fiche, prends connaissance des deux documents ci-dessous. Clique sur une ligne pour la lire.</p>'
+      +'<div class="cm-docs">'
+      +ligne('cgu','<path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M10 13h6M10 17h6"/>','Conditions générales d\'utilisation','Ce que couvre le service, les prix, le paiement, le crédit rendu en cas d\'échec technique')
+      +ligne('confidentialite','<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>','Politique de confidentialité','Comment tes fichiers, ton compte et tes paiements sont traités')
+      +'</div>'
+      +'<label class="cm-cgu"><input type="checkbox" id="ac-ok"> <span>Je reconnais avoir lu les conditions générales d\'utilisation et la politique de confidentialité, et je les accepte.</span></label>'
+      +'<div id="mc-msg"></div><div class="cm-act"><button class="btn" type="button" onclick="COMPTE.accepter()">Accepter et continuer</button></div>');
+  }
+  async function accepter(){
+    const err = t=>{ q('mc-msg').innerHTML = '<div class="cm-err">'+esc(t)+'</div>'; };
+    if (!q('ac-ok').checked) return err('Coche la case pour confirmer que tu as lu et que tu acceptes les deux documents.');
+    const quand = new Date().toISOString();
+    const r = await SB.auth.updateUser({ data:{ cgu_accepte_le:quand } });
+    if (r.error) return err(r.error.message);
+    C.meta = (r.data && r.data.user && r.data.user.user_metadata) || Object.assign({}, C.meta, { cgu_accepte_le:quand });
+    window.__ficheObligatoire = false;
+    if (!C.meta.profil_ok) compte(null, null, true); else fermer();
+  }
+
   // ---------- Fiche d'entrée / Mon compte ----------
   // Première connexion : la fiche s'ouvre et ne se ferme qu'une fois remplie (identité, paiement habituel, acceptation des conditions).
   function compte(apres, msg, obligatoire){
@@ -1979,7 +2007,7 @@ if (typeof document !== 'undefined' && $('depot')) { majParcours(); majTete(); }
       +'<h4>Informations de paiement</h4><div class="cm-2"><label>Moyen de paiement habituel<select id="fp-moy">'+moy.map(x=>'<option value="'+esc(x.code)+'"'+(x.code===m.moyen_paiement?' selected':'')+'>'+esc(x.libelle)+'</option>').join('')+'</select></label>'
       +'<label id="fp-numl">Numéro utilisé pour payer<input type="tel" id="fp-num" value="'+esc(m.numero_paiement||'')+'" placeholder="Numéro Mobile Money"></label></div>'
       +'<p class="hint" style="margin:2px 0 6px">Aucun numéro de carte ni de compte bancaire n\'est demandé. Ce numéro sert à retrouver ton paiement.</p>'
-      +'<label class="cm-cgu"><input type="checkbox" id="fp-cgu"'+(m.cgu_accepte_le?' checked':'')+'> <span>J\'ai lu et j\'accepte les <a href="#" onclick="LEGAL.ouvrir(\'cgu\',true);return false">conditions générales</a> et la <a href="#" onclick="LEGAL.ouvrir(\'confidentialite\',true);return false">politique de confidentialité</a>.</span></label>'
+      +(m.cgu_accepte_le ? '<p class="hint" style="margin:4px 0 0">Conditions générales et politique de confidentialité acceptées le '+new Date(m.cgu_accepte_le).toLocaleDateString('fr-FR')+'.</p>' : '')
       +'<div id="mc-msg"></div><div class="cm-act"><button class="btn" type="button" onclick="COMPTE.enregistrer()">'+(premiere?'Ouvrir mon espace':'Enregistrer')+'</button>'+(premiere?'':'<button class="btn sec" type="button" onclick="COMPTE.fermer()">Fermer</button>')+'</div>');
     const maj = ()=>{ const v = q('fp-moy').value; q('fp-numl').style.display = mob(v) ? '' : 'none'; };
     q('fp-moy').onchange = maj; maj();
@@ -1991,7 +2019,6 @@ if (typeof document !== 'undefined' && $('depot')) { majParcours(); majTete(); }
     const err = t=>{ q('mc-msg').innerHTML = '<div class="cm-err">'+esc(t)+'</div>'; };
     if (!prenom || !nomf || !loc || !tel) return err('Prénom, nom, localité et contact sont à renseigner.');
     if (mob && num.replace(/\D/g,'').length < 8) return err('Indique le numéro Mobile Money utilisé pour payer.');
-    if (!q('fp-cgu').checked) return err('Pour continuer, accepte les conditions générales et la politique de confidentialité.');
     const data = { prenom, nom_famille:nomf, nom:prenom+' '+nomf, localite:loc, contact:tel, fonction:g('fp-fonction'), entreprise:g('fp-ent'), moyen_paiement:moy, numero_paiement: mob ? num : '', profil_ok:true, cgu_accepte_le:(C.meta && C.meta.cgu_accepte_le) || new Date().toISOString() };
     const r = await SB.auth.updateUser({ data });
     if (r.error) return err(r.error.message);
@@ -2224,9 +2251,12 @@ if (typeof document !== 'undefined' && $('depot')) { majParcours(); majTete(); }
   window.LEGAL = { ouvrir(k, parDessus){
     const t = TXT[k]; if (!t) return;
     window.__retourFiche = !!parDessus && !!window.__ficheObligatoire;
-    if (window.__retourFiche){ window.__ficheSauve = q('cm-corps').innerHTML; }
+    if (window.__retourFiche){
+      q('cm-corps').querySelectorAll('input,select').forEach(e=>{ if (e.type==='checkbox'){ e.checked ? e.setAttribute('checked','') : e.removeAttribute('checked'); } else if (e.tagName==='SELECT'){ Array.from(e.options).forEach(o=>{ o.selected ? o.setAttribute('selected','') : o.removeAttribute('selected'); }); } else { e.setAttribute('value', e.value); } });
+      window.__ficheSauve = q('cm-corps').innerHTML;
+    }
     const ob = window.__ficheObligatoire; window.__ficheObligatoire = false;
-    ouvrir('<div class="lgl-corps"><h3>'+t[0]+'</h3>'+t[1]+'<p class="lgl-note">Version de travail du '+new Date().toLocaleDateString('fr-FR')+'.</p></div><div class="cm-act"><button class="btn" type="button" onclick="LEGAL.fermer()">'+(ob?'Retour à ma fiche':'Fermer')+'</button></div>', true);
+    ouvrir('<div class="lgl-corps"><h3>'+t[0]+'</h3>'+t[1]+'<p class="lgl-note">Version de travail du '+new Date().toLocaleDateString('fr-FR')+'.</p></div><div class="cm-act"><button class="btn" type="button" onclick="LEGAL.fermer()">'+(ob?'Retour':'Fermer')+'</button></div>', true);
     window.__ficheObligatoire = ob; q('cm-boite').classList.toggle('sans-fermer', !!ob);
   }, fermer(){
     if (window.__retourFiche){ window.__retourFiche = false; q('cm-corps').innerHTML = window.__ficheSauve; q('cm-boite').classList.remove('large'); const m = q('fp-moy'); if (m){ const mob = ['orange_money','mtn_momo','wave'].includes(m.value); q('fp-numl').style.display = mob?'':'none'; m.onchange = ()=>{ q('fp-numl').style.display = ['orange_money','mtn_momo','wave'].includes(m.value)?'':'none'; }; } return; }
@@ -2241,7 +2271,7 @@ if (typeof document !== 'undefined' && $('depot')) { majParcours(); majTete(); }
     applique(on); t.addEventListener('change', ()=>applique(t.checked));
   })();
 
-  window.COMPTE = { ouvrir, rendre, charger, acheter, recalc, commander, essai, payer, majInstr, enLigne, declarer, paiements, regler, accepterDevis, compte, enregistrer, avantDemarrer, reserver, correction, demanderDevis, correctionInterne, fermer, etat:()=>C };
+  window.COMPTE = { accepter, ouvrir, rendre, charger, acheter, recalc, commander, essai, payer, majInstr, enLigne, declarer, paiements, regler, accepterDevis, compte, enregistrer, avantDemarrer, reserver, correction, demanderDevis, correctionInterne, fermer, etat:()=>C };
   if (typeof SB !== 'undefined' && SB){ SB.auth.onAuthStateChange((ev,ses)=>{ setTimeout(()=>{ if (ses && ses.user) charger(); else { C.pret = false; window.__ficheOuverte = false; barre(); } }, 0); }); charger().then(retourPaiement); }
 })();
 </script>
