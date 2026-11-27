@@ -5331,7 +5331,7 @@ function pickFieldContains(row, phrases){
 /* ============================================================
    Connexion Supabase (base de données partagée)
    ============================================================ */
-const APP_VERSION = '2026-11-27-712';
+const APP_VERSION = '2026-11-27-713';
 const SUPABASE_URL = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_P4v62H4iEYLyD5uE2PVQig_MY4AnL_Y';
 let supabaseClient = null;
@@ -34243,13 +34243,26 @@ function correctionEtatProbleme(id){
   return lignes[0] || null;
 }
 function correctionChoisir(id){ const pl = state.modal && state.modal.payload; if (!pl) return; pl.sel = id; render(); }
+async function correctionAnnuler(id){
+  const f = correctionEtatProbleme(id); if (!f || (f.statut!=='attente' && f.statut!=='en_cours')) return;
+  askConfirm('Annuler cette correction envoyée à Noah ?\n\nElle n\'a pas encore été faite (bloquée ou pas démarrée). Tu pourras la relancer tout de suite après, puis « Lancer la file » dans Noah.', async ()=>{
+    const r = await supabaseClient.from('obc_file').delete().eq('achat_id', f.achat_id);
+    if (r.error){ showToast('Échec de l\'annulation : '+r.error.message); return; }
+    delete state.obcFile[f.achat_id];
+    await obcFileCharger();
+    showToast('Correction annulée : tu peux la relancer.', 'success');
+    if (state.modal && state.modal.type==='correction') render();
+  });
+}
 function renderCorrectionModal(m){
   const pl = m.payload;
   const lignes = CORRECTIONS_CATALOGUE.map(p=>{
     const f = correctionEtatProbleme(p.id);
+    const bloque = f && (f.statut==='attente' || f.statut==='en_cours');
     const badge = !f ? '' : f.statut==='saisi' ? '<span style="color:#2e7d32;font-weight:700">✓ '+esc(f.message||'corrigé')+'</span>'
       : f.statut==='echec' ? '<span style="color:#B3261E;font-weight:700">✗ '+esc(f.message||'échec')+'</span>'
       : '<span style="color:#8a6d00;font-weight:700">… en cours dans Noah</span>';
+    const annulerBtn = (!p.ouvrir && bloque) ? ' <button type="button" class="btn-ghost btn-compact" onclick="event.stopPropagation();correctionAnnuler(\''+p.id+'\')" title="Retire cette tâche de la file de Noah pour pouvoir relancer tout de suite">✕ Annuler</button>' : '';
     if (p.ouvrir){
       return '<div style="padding:10px;border:1px solid #d7ded9;border-radius:8px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:flex-start;gap:10px">'
         + '<div style="flex:1"><b>'+esc(p.titre)+'</b><div class="hint" style="margin-top:3px">'+esc(p.description)+'</div></div>'
@@ -34258,7 +34271,7 @@ function renderCorrectionModal(m){
     const on = pl.sel===p.id;
     return '<div onclick="correctionChoisir(\''+p.id+'\')" style="padding:10px;border:1px solid '+(on?'#0E3B36':'#d7ded9')+';border-radius:8px;margin-bottom:8px;cursor:pointer;'+(on?'background:#f3f8f6':'')+'">'
       + '<div style="display:flex;gap:8px;align-items:flex-start"><input type="radio" name="correction-choix" '+(on?'checked':'')+' style="margin-top:3px;pointer-events:none">'
-      + '<div style="flex:1"><b>'+esc(p.titre)+'</b><div class="hint" style="margin-top:3px">'+esc(p.description)+'</div>'+(badge?'<div style="margin-top:4px;font-size:12px">'+badge+'</div>':'')+'</div></div></div>';
+      + '<div style="flex:1"><b>'+esc(p.titre)+'</b><div class="hint" style="margin-top:3px">'+esc(p.description)+'</div>'+(badge?'<div style="margin-top:4px;font-size:12px">'+badge+annulerBtn+'</div>':'')+'</div></div></div>';
   }).join('') || '<div class="hint" style="padding:14px;text-align:center">Aucun problème connu pour l\'instant.</div>';
   const unChoisissable = CORRECTIONS_CATALOGUE.some(p=>!p.ouvrir);
   return '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><h3>🔧 Correction</h3><div id="modal-fields">'
