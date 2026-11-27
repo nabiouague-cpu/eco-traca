@@ -604,7 +604,7 @@ main{max-width:1840px;padding:18px 22px 10px}
     <input type="file" id="fichiers" multiple class="cache">
     <input type="file" id="dossier" webkitdirectory directory multiple class="cache">
   </div>
-  <div class="hint" style="margin-top:8px">Tes données restent dans ton navigateur pour toute la préparation et les contrôles. Elles ne sont envoyées nulle part tant que tu ne lances pas l'analyse satellite (étape 3). Pour afficher la carte, seule la zone couverte par tes parcelles est demandée au serveur.</div>
+  <div class="hint" style="margin-top:8px">Tes données restent dans ton navigateur pour toute la préparation et les contrôles. Dès la fin des contrôles, l'analyse satellite (étape 3) démarre toute seule : c'est à ce moment-là seulement que les contours de tes parcelles sont envoyés au serveur d'analyse. Pour afficher la carte, seule la zone couverte par tes parcelles est demandée au serveur.</div>
   <div class="ligne" style="margin-top:10px">
     <label class="hint">Nom du dossier (ex. nom de la coopérative) : <input type="text" id="nom-dossier" placeholder="Ma coopérative" style="width:260px"></label>
   </div>
@@ -634,9 +634,9 @@ main{max-width:1840px;padding:18px 22px 10px}
 
 <section class="carte cache" id="etape3">
   <h2>3. Analyse satellite (déforestation)</h2>
-  <div class="hint">Compare chaque parcelle préparée aux cartes de couvert forestier et de perturbation (méthode Whisp), aux forêts classées et zones protégées, aux cours d'eau, aux zones habitées, à la carte du cacao et à une base de données existante. Les résultats servent ensuite à décider du nettoyage.</div>
+  <div class="hint"><b>Cette étape démarre toute seule</b> à la fin des contrôles ; le bouton ci-dessous ne sert qu'à la relancer. Compare chaque parcelle préparée aux cartes de couvert forestier et de perturbation (méthode Whisp), aux forêts classées et zones protégées, aux cours d'eau, aux zones habitées, à la carte du cacao et à une base de données existante. Les résultats servent ensuite à décider du nettoyage.</div>
   <div class="ligne" style="margin-top:10px">
-    <button class="btn" id="btn-analyse">Lancer l'analyse</button>
+    <button class="btn" id="btn-analyse">Relancer l'analyse</button>
     <button class="btn sec" id="btn-demo">Voir une démonstration (résultats fictifs)</button>
     <span class="hint" id="analyse-etat"></span>
   </div>
@@ -1446,7 +1446,7 @@ function afficherDiscussion(){
 }
 function ouvrirDiscussion(){ S.disc = [{ r:'a', bilan:true }]; $('res-dispo').classList.add('cache'); $('discussion').classList.remove('cache'); afficherDiscussion(); }
 async function rapportDirect(){ if (!S.final) recalculer(); S.telecharge = true; await telechargerExcel(); majParcours(); }
-function lancerCorrection(){ if (window.COMPTE) return COMPTE.correction(); lancerCorrectionReelle(); }
+function lancerCorrection(){ if (window.COMPTE && !COMPTE.etat().admin) return COMPTE.correction(); lancerCorrectionReelle(); }   // compte interne : on continue directement, sans fenêtre de forfait
 function lancerCorrectionReelle(){ S.correction = true; $('bloc-correction').classList.remove('cache'); afficherRegles(); recalculer(); $('bloc-correction').scrollIntoView({behavior:'smooth',block:'start'}); majParcours(); }
 function validerCorrection(){ if (!S.final) recalculer(); S.corrige = true; $('etape5').classList.remove('cache'); allerEtape(5); }
 function basculerDisc(k, v){ S.T[k] = v; afficherRegles(); recalculer(); afficherDiscussion(); }
@@ -1458,7 +1458,7 @@ function reponse(q){
   if (/main|dessin/.test(t)) return 'Chaque contour reçoit un score sur 5 : peu de sommets (8 ou moins : +2, 12 ou moins : +1), segments de plus de 40 m en médiane (+1), angles droits sur la moitié des sommets (+1), coordonnées à 5 décimales ou moins (+1). À partir de 3 sur 5, le tracé ressemble à un dessin sur écran plutôt qu\'à une marche GPS. C\'est un signal à examiner : la seule mesure possible est de les mettre de côté pour les re-cartographier ; on n\'ajoute jamais de sommets pour les faire ressembler à un relevé. Ici : '+n('main')+' parcelle(s).';
   if (/detail|simplif|sommet|densif/.test(t)) return 'Un contour de 100 sommets ou plus avec des segments de moins de 8 m est un tracé GPS très fin ; un contour très irrégulier (compacité sous 0,2) ou de plus de 1 000 sommets est simplifié de la même façon. Ce n\'est pas une anomalie : on peut l\'alléger (Douglas-Peucker à 2 m, 3 m si la forme est irrégulière, puis 1,5 / 1 / 0,5 / 0,25 m si besoin) sans changer la surface à plus de 2 % près, sans empiéter sur une parcelle voisine, avec au moins 15 sommets. La simplification enlève le bruit du relevé : elle n\'améliore pas sa précision. Un contour de moins de 15 sommets reçoit au contraire des sommets ajoutés au milieu de ses plus longs segments (forme et surface inchangées), sauf s\'il est signalé « dessiné à la main » (il est alors mis de côté, on ne l\'habille pas). Ici : '+n('simplifier')+' contour(s).';
   if (/doublon|identique/.test(t)) return 'Un doublon est une parcelle dont la géométrie est exactement la même qu\'une autre. On retire la copie. Ici : '+n('doublons')+' doublon(s).';
-  if (/satellite|whisp|deforest/.test(t)) return 'À l\'étape Satellite, chaque parcelle de la base finale est comparée aux cartes de couvert forestier et de perturbation (méthode Whisp) et à une base existante. Rien n\'est envoyé avant que tu lances cette étape.';
+  if (/satellite|whisp|deforest/.test(t)) return 'À l\'étape Satellite, chaque parcelle de la base finale est comparée aux cartes de couvert forestier et de perturbation (méthode Whisp) et à une base existante. Elle démarre toute seule à la fin des contrôles : c\'est à ce moment-là que les contours sont envoyés au serveur d\'analyse, pas avant.';
   if (/telecharg|base finale|rapport|excel|geojson/.test(t)) return 'À l\'étape Base finale tu télécharges : la base finale (GeoJSON), le rapport Excel (une feuille par contrôle) et les parcelles écartées. Le rapport est une aide à l\'analyse : il ne remplace ni une visite de terrain ni l\'avis d\'un auditeur.';
   if (/ecart|retir|supprim/.test(t)) return 'Rien n\'est supprimé de tes fichiers d\'origine : le nettoyage travaille sur une copie, et les parcelles écartées sont téléchargeables à part avec leur motif.';
   return 'Je peux t\'expliquer : les chevauchements, les formes semblables, les parcelles dessinées à la main, les contours détaillés, les doublons, l\'analyse satellite ou les fichiers à télécharger.';
@@ -1481,7 +1481,17 @@ async function demarrer(entrees){
     if (!S.feats.length) { $('barre').classList.add('cache'); $('etape2').classList.add('cache'); alert("Aucun polygone exploitable dans ces fichiers. Regarde le tableau « Fichiers lus » pour comprendre pourquoi."); return; }
     if (!$('nom-dossier').value.trim()){ const f0 = journal.find(j=>j.statut==='ok'); if (f0) $('nom-dossier').value = baseDe(f0.nom.split('/').filter(x=>!/\.(zip|kmz|rar)$/i.test(x)).slice(-1)[0]||''); }
     await analyserTout();
+    await enchainerAnalyse();
   } catch(e){ alert('Erreur : '+(e.message||e)); }
+}
+// Parcours continu : dès que les contrôles sont faits, l'analyse satellite part toute seule (plus rien à lancer à la main).
+// Le paiement a déjà été réglé avant « Démarrer une analyse » (ou le compte est interne) : la formule est réservée au lancement.
+// Si la réservation échoue (formule trop petite pour le fichier, rien de réglé), la fenêtre d'achat s'ouvre et l'analyse
+// repart d'elle-même dès qu'une formule suffisante est disponible ; le bouton « Lancer l'analyse » reste en secours.
+async function enchainerAnalyse(){
+  if (!S.plan || !S.res.length || !parcellesAEnvoyer().length) return;
+  allerEtape(3);
+  await lancerAnalyse(false);
 }
 
 function afficherFichiers(){
@@ -1731,12 +1741,16 @@ function finSatellite(){
   $('etape4').classList.remove('cache'); $('res-dispo').classList.remove('cache');
   ['discussion','bloc-correction','etape5'].forEach(i=>$(i).classList.add('cache'));
   afficher(); allerEtape(4);
+  // Plus de clic : la présentation des résultats s'ouvre toute seule.
+  const adm = !!(window.COMPTE && COMPTE.etat().admin);
+  $('btn-correction').textContent = adm ? 'Lancer la correction' : 'Demander la correction à notre équipe (devis)';
+  ouvrirDiscussion();
 }
 async function lancerAnalyse(demo){
   const b = $('btn-analyse'); b.disabled = true; $('analyse-etat').textContent = 'Analyse en cours…';
   try{
     const fc = { type:'FeatureCollection', features:parcellesAEnvoyer().map(i=>({type:'Feature', properties:{PlotID:S.feats[i].properties.PlotID}, geometry:S.feats[i].geometry})) };
-    if (!demo && window.COMPTE){ const ok = await COMPTE.reserver(fc.features.length); if (!ok){ $('analyse-etat').textContent = 'Analyse non lancée : paiement requis.'; b.disabled = false; return; } }
+    if (!demo && window.COMPTE){ const ok = await COMPTE.reserver(fc.features.length); if (!ok){ S.attendCredit = true; $('analyse-etat').textContent = 'Analyse en attente : une formule réglée est nécessaire. Elle démarrera toute seule dès qu\'elle sera disponible.'; b.disabled = false; return; } S.attendCredit = false; }
     S.envoye = Object.fromEntries(fc.features.map(f=>[f.properties.PlotID, JSON.stringify(f.geometry)]));
     S.serveur = demo ? analyseDemo(fc) : await appelerServeur(fc, nomDossier());
     let creditRendu = false;
@@ -2200,7 +2214,14 @@ if (typeof document !== 'undefined' && $('depot')) { majParcours(); majTete(); }
   }
 
   function ouvrir(html, large){ q('cm-corps').innerHTML = html; q('cm-boite').classList.toggle('large', !!large); q('cm-boite').classList.toggle('sans-fermer', !!window.__ficheObligatoire); q('cm').classList.remove('cache'); }
-  function fermer(){ if (window.__ficheObligatoire) return; q('cm').classList.add('cache'); CTX = null; }
+  function fermer(){ if (window.__ficheObligatoire) return; q('cm').classList.add('cache'); CTX = null; relancerSiPret(); }
+  // L'analyse mise en attente faute de formule réglée repart d'elle-même quand le client ferme la fenêtre avec un crédit suffisant.
+  async function relancerSiPret(){
+    if (!S.attendCredit || S.enRelance) return;
+    S.enRelance = true;
+    try { await charger(); const nb = parcellesAEnvoyer().length; if (C.admin || credits().some(c=>Math.ceil(c.nb_polygones*1.02) >= nb)){ S.attendCredit = false; setTimeout(()=>lancerAnalyse(false), 0); } }
+    catch(e){} finally { S.enRelance = false; }
+  }
   document.addEventListener('keydown', e=>{ if (e.key==='Escape') fermer(); });
   window.__ficheObligatoire = false;
 
