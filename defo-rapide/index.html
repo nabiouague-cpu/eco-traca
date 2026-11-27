@@ -577,6 +577,17 @@ function controlerParcelle(f){
 function statutDe(r){ return r.pb.some(p=>p.niveau==='erreur') ? 'erreur' : (r.pb.some(p=>p.niveau!=='info') ? 'attention' : 'ok'); }   // « information » (contour réparé, contour très détaillé) n'est pas une anomalie
 
 // ====== CHEVAUCHEMENTS ENTRE PARCELLES (balayage sur les boîtes) ======
+// Intersection robuste : la bibliothèque échoue parfois sur deux contours presque confondus (« Unable to complete output ring ») ;
+// on réessaie avec un très léger décalage (3 à 8 cm) de la 2e parcelle, sans quoi le chevauchement (donc le doublon) passerait inaperçu.
+function intersectSure(a, b){
+  try { return turf.intersect(a, b); } catch(e){}
+  const dec = [[3e-7,1e-7],[-4e-7,2e-7],[8e-7,-5e-7]];
+  for (const [dx,dy] of dec){
+    try { return turf.intersect(a, { type:'Feature', properties:b.properties||{}, geometry:translater(b.geometry, dx, dy) }); } catch(e){}
+  }
+  return null;
+}
+
 async function chevauchements(feats, res, onProg){
   const items = [];
   feats.forEach((f,i)=>{ const r = res[i]; if (r.aireHa==null) return; let b; try { b = turf.bbox(f); } catch(e){ return; } items.push({i, f, b, a:r.aireHa*10000}); });
@@ -588,7 +599,7 @@ async function chevauchements(feats, res, onProg){
       const B = items[m];
       if (B.b[0] > A.b[2]) break;
       if (B.b[1] > A.b[3] || B.b[3] < A.b[1]) continue;
-      let inter = null; try { inter = turf.intersect(A.f, B.f); } catch(e){}
+      let inter = intersectSure(A.f, B.f);
       if (!inter) continue;
       const ai = turf.area(inter); if (ai<=0) continue;
       let grand = A.a>=B.a ? A : B, petit = grand===A ? B : A;
@@ -842,8 +853,8 @@ async function whispParLots(j, fc, LOT){
   for (let k=0;k<nbLots;k++){
     $('analyse-etat').textContent = 'Analyse satellite : lot '+(k+1)+' / '+nbLots+'…';
     const lot = { type:'FeatureCollection', features: fc.features.slice(k*LOT,(k+1)*LOT) };
-    let res = null;
-    for (let t=0;t<3 && !res;t++){
+    let res = null, faux = 0;
+    for (let t=0;t<24 && !res;t++){   // 3 vrais essais ; une analyse déjà en cours chez Whisp (429) fait attendre 15 s, jusqu'à 5 min
       try{
         const { data } = await SB.auth.getSession();
         const jeton = data && data.session && data.session.access_token;
@@ -853,7 +864,8 @@ async function whispParLots(j, fc, LOT){
         const q = await r.json();
         if (q.whisp_etat==='termine') res = q.whisp;
         else if (q.whisp_etat==='jeton'){ const sub = { whisp_token:q.whisp_token, resultats:lot.features.map(f=>({plot_id:f.properties.PlotID})) }; await suivreWhisp(sub, lot); if (sub.whisp) res = Object.fromEntries(sub.resultats.filter(x=>x.risk_pcrop!==undefined).map(x=>[x.plot_id,{risk_pcrop:x.risk_pcrop,risk_acrop:x.risk_acrop,risk_timber:x.risk_timber,perturbation:x.perturbation_apres_2020,couvert:x.couvert_arbore}])); else erreurs.push('lot '+(k+1)+' : '+sub.message_whisp); break; }
-        else { erreurs[t]='lot '+(k+1)+' : '+(q.message||q.error||r.status); }
+        else if (/429|concurrent/.test(q.message||'')){ $('analyse-etat').textContent = 'Analyse satellite : une autre analyse est en cours, attente…'; await new Promise(z=>setTimeout(z,15000)); }
+        else { erreurs[t]='lot '+(k+1)+' : '+(q.message||q.error||r.status); if (++faux>=3) break; }
       }catch(e){ erreurs[t]='lot '+(k+1)+' : '+(e.message||e); }
     }
     if (res){ Object.entries(res).forEach(([id,w])=>{ (parId[id]||[]).forEach(x=>{ ok++;
