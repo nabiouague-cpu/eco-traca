@@ -1368,7 +1368,7 @@ if (typeof document !== 'undefined' && $('depot')) {
   $('btn-rapport').addEventListener('click', rapportDirect);
   $('btn-correction').addEventListener('click', lancerCorrection);
   $('btn-valider').addEventListener('click', validerCorrection);
-  ['btn-excel','btn-geojson','btn-ecartees'].forEach(id=>$(id).addEventListener('click', ()=>{ S.telecharge = true; majParcours(); }));
+  ['btn-excel','btn-geojson','btn-ecartees'].forEach(id=>$(id).addEventListener('click', ()=>{ S.telecharge = true; majParcours(); sauverEtat(); }));
   $('btn-excel').addEventListener('click', telechargerExcel);
   $('btn-geojson').addEventListener('click', telechargerBase);
   $('btn-ecartees').addEventListener('click', telechargerEcartees);
@@ -1397,7 +1397,7 @@ function majParcours(){
         return '<button type="button" class="'+e[n]+(on?' on':'')+'" '+(ok?'':'disabled ')+'onclick="allerEtape('+n+')"><span class="c">'+(e[n]==='fait'?'✓':e[n]==='travail'?'<span class="pastille-travail"></span>':ICONES[i])+'</span><span class="nom">'+ETAPES[i]+'</span><span class="etat">'+lib[e[n]]+'</span></button>'; }).join('')+'</div>';
 }
 function allerEtape(n){
-  S.etape = n;
+  S.etape = n; if (n>=4) sauverEtat();
   for (let i=1;i<=5;i++){ const el = $('etape'+i); if (el) el.classList.toggle('actif', i===n); }
   majParcours();
   if (n===2 && S.carte) setTimeout(()=>{ try { ajusterCarte(); } catch(e){} }, 60);
@@ -1447,9 +1447,9 @@ function afficherDiscussion(){
 function ouvrirDiscussion(){ S.disc = [{ r:'a', bilan:true }]; $('res-dispo').classList.add('cache'); $('discussion').classList.remove('cache'); afficherDiscussion(); }
 async function rapportDirect(){ if (!S.final) recalculer(); S.telecharge = true; await telechargerExcel(); majParcours(); }
 function lancerCorrection(){ if (window.COMPTE && !COMPTE.etat().admin) return COMPTE.correction(); lancerCorrectionReelle(); }   // compte interne : on continue directement, sans fenêtre de forfait
-function lancerCorrectionReelle(){ S.correction = true; $('bloc-correction').classList.remove('cache'); afficherRegles(); recalculer(); $('bloc-correction').scrollIntoView({behavior:'smooth',block:'start'}); majParcours(); }
-function validerCorrection(){ if (!S.final) recalculer(); S.corrige = true; $('etape5').classList.remove('cache'); allerEtape(5); }
-function basculerDisc(k, v){ S.T[k] = v; afficherRegles(); recalculer(); afficherDiscussion(); }
+function lancerCorrectionReelle(){ S.correction = true; sauverEtat(); $('bloc-correction').classList.remove('cache'); afficherRegles(); recalculer(); $('bloc-correction').scrollIntoView({behavior:'smooth',block:'start'}); majParcours(); }
+function validerCorrection(){ if (!S.final) recalculer(); S.corrige = true; sauverEtat(); $('etape5').classList.remove('cache'); allerEtape(5); }
+function basculerDisc(k, v){ S.T[k] = v; afficherRegles(); recalculer(); afficherDiscussion(); sauverEtat(); }
 function reponse(q){
   const t = q.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
   const n = (a)=>S.plan?S.plan[a].length:0;
@@ -1550,7 +1550,7 @@ function afficherRegles(){
     return '<label class="regle"><input type="checkbox" '+(S.T[k]?'checked':'')+' onchange="basculer(\''+k+'\',this.checked)"><span class="n">'+n+'</span><span>'+esc(txt)+'</span></label>'; }).join('')+
     (S.simplCoupe ? '<div class="hint" style="margin-top:6px">La recherche des formes semblables a été interrompue au bout d\'une minute : certaines formes n\'ont pas été comparées.</div>' : '');
 }
-function basculer(k, v){ S.T[k] = v; recalculer(); }
+function basculer(k, v){ S.T[k] = v; recalculer(); sauverEtat(); }
 function recalculer(){
   S.final = appliquerPlan(S, S.T);
   S.res.forEach(r=>{ r.ecartee = null; });
@@ -1877,8 +1877,10 @@ async function terminerJob(e){
   $('analyse-etat').textContent = 'Récupération des résultats…';
   const J = await lireJob(e.id);
   S.serveur = serveurDe(J);
+  S.jobOuvert = e.id; S.metaJob = J.meta;
   $('analyse-etat').textContent = 'Analyse terminée.';
   presenterResultats();
+  sauverEtat();
 }
 async function lancerAnalyse(demo){
   if (!demo && (JOB.boucle || JOB.envoi)) return;
@@ -1907,6 +1909,33 @@ async function lancerAnalyse(demo){
   b.disabled = false;
 }
 
+// ====== REPRISE EXACTE : où en est l'utilisateur (résultats, nettoyage, base finale) est conservé, sur cet appareil ET sur le serveur ======
+// Une analyse arrivée aux résultats ne repart plus de zéro : mise à jour, coupure de courant, onglet fermé, autre appareil.
+function sauverEtat(){
+  if (S.restaure) return;
+  const id = S.jobOuvert; if (!id || !S.serveur || S.serveur.demo) return;
+  const e = { etape:S.etape, T:Object.assign({}, S.T), correction:!!S.correction, corrige:!!S.corrige, telecharge:!!S.telecharge, t:Date.now() };
+  try { localStorage.setItem('defo-etat-'+id, JSON.stringify(e)); localStorage.setItem('defo-courant', id); } catch(x){}
+  clearTimeout(S._tEtat);
+  S._tEtat = setTimeout(async ()=>{ try { const meta = Object.assign({}, S.metaJob||{}, { page:e }); S.metaJob = meta; await SB.from('analyses_jobs').update({ meta }).eq('id', id); } catch(x){} }, 1500);
+}
+function etatSauve(id, serveur){
+  let loc = null; try { loc = JSON.parse(localStorage.getItem('defo-etat-'+id)||'null'); } catch(x){}
+  if (loc && serveur) return (loc.t||0) >= (serveur.t||0) ? loc : serveur;
+  return loc || serveur || null;
+}
+function rejouerEtat(pg){
+  if (!pg) return;
+  S.restaure = true;
+  try {
+    if (pg.T) Object.assign(S.T, pg.T);
+    if (pg.correction) lancerCorrectionReelle();
+    if (pg.corrige) validerCorrection();
+    if (pg.telecharge){ S.telecharge = true; majParcours(); }
+    if (pg.etape && !pg.corrige) allerEtape(pg.etape);
+  } finally { S.restaure = false; }
+}
+
 // Rouvrir une analyse du serveur (en cours ou terminée) depuis « Mes analyses »
 async function ouvrirJob(id, auto){
   if (JOB.envoi){ alert('Patiente un instant : le dossier est en cours d\'envoi au serveur.'); return; }
@@ -1931,11 +1960,15 @@ async function ouvrirJob(id, auto){
     afficherFichiers();
     await analyserTout();
     S.envoye = Object.fromEntries(J.lignes.filter(l=>l.a_analyser).map(l=>[l.plot_id, JSON.stringify(l.entree.geometry)]));
-    S.jobOuvert = id;
-    if (J.etat.statut==='termine'){ S.serveur = serveurDe(J); $('analyse-etat').textContent = 'Analyse terminée.'; allerEtape(3); presenterResultats(); }
+    S.jobOuvert = id; S.metaJob = J.meta;
+    if (J.etat.statut==='termine'){ S.serveur = serveurDe(J); $('analyse-etat').textContent = 'Analyse terminée.'; allerEtape(3); S.restaure = true; try { presenterResultats(); } finally { S.restaure = false; } rejouerEtat(etatSauve(id, J.meta.page)); sauverEtat(); }
     else if (J.etat.statut==='echec'){ allerEtape(3); $('analyse-etat').textContent = 'Échec : '+(J.etat.message||'l\'analyse a été interrompue.'); }
     else { allerEtape(3); S.jobActif = id; $('btn-analyse').disabled = true; await terminerJob(await suivreJob(id)); $('btn-analyse').disabled = false; }
-  }catch(e){ $('prog-txt').textContent = ''; $('barre').classList.add('cache'); alert('Impossible de rouvrir cette analyse : '+(e.message||e)); }
+  }catch(e){
+    $('prog-txt').textContent = ''; $('barre').classList.add('cache');
+    if (e && (e.statut===404 || /introuvable|n\'est plus disponible/.test(e.message||''))){ try { localStorage.removeItem('defo-courant'); } catch(x){} }
+    if (!auto) alert('Impossible de rouvrir cette analyse : '+(e.message||e));
+  }
 }
 // Quitter pendant l'envoi du dossier, ou avec un dossier préparé mais pas encore envoyé, ferait perdre le travail : on prévient.
 window.addEventListener('beforeunload', e=>{
@@ -2330,7 +2363,7 @@ if (typeof document !== 'undefined' && $('depot')) { majParcours(); majTete(); }
     vue(v){ V.vue = v; rendre(); window.scrollTo(0,0); if (v==='analyse' && S.carte) setTimeout(()=>{ try { ajusterCarte(); } catch(e){} }, 80); },
     demarrer(){
       const suite = ()=>{
-        if (S.feats && S.feats.length){ if (!confirm('Une analyse est déjà ouverte. Commencer une nouvelle analyse la fermera (si elle tourne sur le serveur, elle continue). Continuer ?')) return; try { sessionStorage.setItem('defo-nouvelle','1'); } catch(e){} window.__sansAlerte = true; location.reload(); return; }
+        if (S.feats && S.feats.length){ if (!confirm('Une analyse est déjà ouverte. Commencer une nouvelle analyse la fermera (si elle tourne sur le serveur, elle continue). Continuer ?')) return; try { sessionStorage.setItem('defo-nouvelle','1'); localStorage.removeItem('defo-courant'); } catch(e){} window.__sansAlerte = true; location.reload(); return; }
         DEFO.vue('analyse');
       };
       if (window.COMPTE) COMPTE.avantDemarrer().then(ok=>{ if (ok) suite(); }); else suite();
@@ -2351,6 +2384,7 @@ if (typeof document !== 'undefined' && $('depot')) { majParcours(); majTete(); }
       if (!confirm('Supprimer ce dossier du serveur ? Le dossier et ses résultats seront effacés ; cette action est définitive.')) return;
       const r = await SB.from('analyses_jobs').delete().eq('id', id).in('statut',['termine','echec']);
       if (r.error) alert('Suppression impossible : '+r.error.message);
+      try { if (localStorage.getItem('defo-courant')===id) localStorage.removeItem('defo-courant'); localStorage.removeItem('defo-etat-'+id); } catch(e){}
       V.jobs = V.jobs.filter(j=>j.id!==id); rendre();
     },
     recharger: charger
@@ -2362,9 +2396,14 @@ if (typeof document !== 'undefined' && $('depot')) { majParcours(); majTete(); }
   new MutationObserver(majNav).observe($('tete-nom'), { childList:true, characterData:true, subtree:true });
   if (SB){ SB.auth.onAuthStateChange((ev, s)=>{ const u = s && s.user ? s.user.id : null; if (u === V.uid) return; V.uid = u; if (u) setTimeout(charger, 0); else { V.groupes = []; V.rappels = []; rendre(); } }); }
   V.jour = auj;
-  try { if (sessionStorage.getItem('defo-nouvelle')){ sessionStorage.removeItem('defo-nouvelle'); V.vue = 'analyse'; } } catch(e){}
+  let nouvelleAnalyse = false;
+  try { if (sessionStorage.getItem('defo-nouvelle')){ sessionStorage.removeItem('defo-nouvelle'); V.vue = 'analyse'; nouvelleAnalyse = true; } } catch(e){}
   // une analyse du serveur à rouvrir après rechargement de la page
-  try { const o = sessionStorage.getItem('defo-ouvrir'); if (o){ sessionStorage.removeItem('defo-ouvrir'); V.vue = 'analyse'; setTimeout(()=>ouvrirJob(o, true), 0); } } catch(e){}
+  try {
+    const o = sessionStorage.getItem('defo-ouvrir'), cour = localStorage.getItem('defo-courant');
+    if (o){ sessionStorage.removeItem('defo-ouvrir'); V.vue = 'analyse'; setTimeout(()=>ouvrirJob(o, true), 0); }
+    else if (cour && !nouvelleAnalyse){ V.vue = 'analyse'; setTimeout(()=>ouvrirJob(cour, true), 0); }   // on retombe là où on en était, même après une mise à jour ou une coupure
+  } catch(e){}
   // tant qu'une analyse tourne sur le serveur, la liste se rafraîchit toute seule (sauf quand on est dans l'analyse elle-même)
   setInterval(async ()=>{ if (document.hidden || !V.jobs.some(actif) || V.vue==='analyse' || !V.uid) return; await chargerJobs(V.uid); if (V.jobs.some(j=>!actif(j))) charger(); else rendre(); }, 15000);
   rendre();
