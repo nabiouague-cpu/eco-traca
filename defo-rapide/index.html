@@ -814,22 +814,30 @@ function appliquerCouches(S, gardees, ecartees){
 // ====== ANALYSE SERVEUR (Whisp + base existante) ======
 // Réponse attendue : { resultats:[{plot_id, risk_pcrop, risk_acrop, risk_timber, perturbation_apres_2020, couvert_arbore, prioritaire, chevauchement_pct}] }
 async function appelerServeur(fc, nom){
-  const { data } = await SB.auth.getSession();
-  const jeton = data && data.session && data.session.access_token;
-  if (!jeton) throw new Error('Connecte-toi pour lancer l\'analyse.');
   const LOT = 350;   // Whisp : 500 géométries max par demande, un multipolygone compte pour chacune de ses parties (350 laisse de la marge)
-  const r = await fetch(CONFIG.supaUrl+'/functions/v1/analyser', { method:'POST',
-    headers:{ 'Content-Type':'application/json', 'apikey':CONFIG.supaKey, 'Authorization':'Bearer '+jeton },
-    body:JSON.stringify({ geojson:fc, nom, sans_whisp: fc.features.length>LOT }) });
-  let j = null; try { j = await r.json(); } catch(e){}
-  if (!r.ok) throw new Error((j && j.error) || ("Le serveur d'analyse a répondu "+r.status));
+  const CH = 100;    // couches de référence : par paquets de 100 parcelles (sinon le calcul dépasse le délai du serveur)
+  let j = null;
+  for (let k=0; k<fc.features.length; k+=CH){
+    $('analyse-etat').textContent = 'Contrôles zones, eau, habitat, cacao : '+Math.min(k+CH,fc.features.length)+' / '+fc.features.length+'…';
+    const { data } = await SB.auth.getSession();
+    const jeton = data && data.session && data.session.access_token;
+    if (!jeton) throw new Error('Connecte-toi pour lancer l\'analyse.');
+    const sous = { type:'FeatureCollection', features: fc.features.slice(k,k+CH) };
+    const r = await fetch(CONFIG.supaUrl+'/functions/v1/analyser', { method:'POST',
+      headers:{ 'Content-Type':'application/json', 'apikey':CONFIG.supaKey, 'Authorization':'Bearer '+jeton },
+      body:JSON.stringify({ geojson:sous, nom, sans_whisp: fc.features.length>LOT }) });
+    let q = null; try { q = await r.json(); } catch(e){}
+    if (!r.ok) throw new Error((q && q.error) || ("Le serveur d'analyse a répondu "+r.status));
+    if (!j) j = q; else { j.resultats = j.resultats.concat(q.resultats); if (q.message_couches) j.message_couches = q.message_couches; }
+    if (fc.features.length<=LOT) break;
+  }
   if (j && j.whisp_token) await suivreWhisp(j, fc);
   else if (fc.features.length>LOT) await whispParLots(j, fc, LOT);
   return j;
 }
 // Analyse satellite par lots de 350 parcelles (limite de Whisp : 500 géométries), un lot après l'autre
 async function whispParLots(j, fc, LOT){
-  const parId = Object.fromEntries(j.resultats.map(x=>[x.plot_id,x]));
+  const parId = {}; j.resultats.forEach(x=>{ (parId[x.plot_id] = parId[x.plot_id] || []).push(x); });
   const nbLots = Math.ceil(fc.features.length/LOT); let ok = 0, erreurs = [];
   for (let k=0;k<nbLots;k++){
     $('analyse-etat').textContent = 'Analyse satellite : lot '+(k+1)+' / '+nbLots+'…';
@@ -848,9 +856,9 @@ async function whispParLots(j, fc, LOT){
         else { erreurs[t]='lot '+(k+1)+' : '+(q.message||q.error||r.status); }
       }catch(e){ erreurs[t]='lot '+(k+1)+' : '+(e.message||e); }
     }
-    if (res){ Object.entries(res).forEach(([id,w])=>{ const x = parId[id]; if (!x) return; ok++;
+    if (res){ Object.entries(res).forEach(([id,w])=>{ (parId[id]||[]).forEach(x=>{ ok++;
       x.risk_pcrop=w.risk_pcrop; x.risk_acrop=w.risk_acrop; x.risk_timber=w.risk_timber;
-      x.perturbation_apres_2020=w.perturbation; x.couvert_arbore=w.couvert; x.prioritaire=!!(w.perturbation && w.couvert); }); }
+      x.perturbation_apres_2020=w.perturbation; x.couvert_arbore=w.couvert; x.prioritaire=!!(w.perturbation && w.couvert); }); }); }
   }
   j.whisp = ok>0;
   j.message_whisp = ok===fc.features.length ? '' : (ok+' parcelle(s) sur '+fc.features.length+' ont reçu un résultat satellite. '+erreurs.slice(-2).join(' / '));
