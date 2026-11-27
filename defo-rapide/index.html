@@ -263,6 +263,7 @@ main{max-width:1840px;padding:18px 22px 10px}
 .col-d{min-width:0;position:sticky;top:64px}
 .st-t{font-size:12px;letter-spacing:.08em;text-transform:uppercase;font-weight:600;color:var(--gris);margin-top:6px}
 .tbl-haut{max-height:520px}
+.leg-carte .pt{display:inline-block;width:9px;height:9px;border-radius:2px;vertical-align:-1px}
 .carte-boite{position:relative;border-radius:14px;overflow:hidden;border:1px solid var(--bord)}
 #carte-map{height:calc(100vh - 130px);min-height:560px;max-height:860px;border:0;border-radius:0;margin:0}
 .leg-carte{position:absolute;right:10px;bottom:10px;z-index:1000;background:rgba(255,255,255,.93);border:1px solid var(--bord);border-radius:10px;padding:8px 11px;font-size:12px;box-shadow:0 4px 14px rgba(0,0,0,.15);max-width:240px}
@@ -422,7 +423,7 @@ const CONFIG = {
   chevGardeMax: 50, resteGrandMinHa: 1,   // de 21 à 50 % : on garde la parcelle réduite à son plus grand morceau si celui-ci fait au moins 1 ha ; au-delà de 50 % : suppression
   resteMinHa: 0.5,          // ha : après réduction, une parcelle qui reste sous 0,5 ha est retirée ; au-dessus on la garde réduite
   protMinPct: 1,            // % : zone protégée / forêt classée : une parcelle dont 1 % ou plus est dedans est retirée (polygone complet testé)
-  bandeEauM: 25,            // m : distance à garder entre le bord de la parcelle et un cours d'eau (la découpe est faite côté serveur)
+  bandeEauM: 10,            // m : distance à garder entre le bord de la parcelle et un cours d'eau (25 m jusqu'au 27/11/2026) (la découpe est faite côté serveur)
   eauSuppPct: 20, resteEauMinHa: 0.1,   // eau (lit ±5 m, plans d'eau) ou zone habitée : plus de 20 % de la parcelle = supprimée ; sinon découpée, reste d'au moins 0,1 ha
   cacaoMinPct: 10, cacaoFiableMinPct: 5,   // plus grand morceau gardé (21 à 50 % de chevauchement) : au moins 10 % de cacao autour (2 km, carte BNETD ; seuil abaissé de 20 à 10 % le 27/11/2026 : à 20 %, 48 % des vraies parcelles SOCAMEA auraient été retirées) ; sous 5 % la carte n'est pas fiable : à vérifier, pas retirée
   fermetureM: 30,           // ligne ouverte fermée automatiquement si l'écart est inférieur à 30 m
@@ -1127,7 +1128,7 @@ function allerEtape(n){
   S.etape = n;
   for (let i=1;i<=5;i++){ const el = $('etape'+i); if (el) el.classList.toggle('actif', i===n); }
   majParcours();
-  if (n===2 && S.carte) setTimeout(()=>S.carte.invalidateSize(), 60);
+  if (n===2 && S.carte) setTimeout(()=>{ try { ajusterCarte(); } catch(e){} }, 60);
 }
 function majTete(){
   const nom = ($('nom-dossier').value||'').trim();
@@ -1304,11 +1305,28 @@ function afficher(){
   majParcours(); majTete(); if (S.disc) afficherDiscussion();
 }
 
-const COUL_P = { ok:'#1fa35a', attention:'#e67e22', erreur:'#111111', ecarte:'#6b7780' };
+const COUL_P = { ok:'#1fa35a', attention:'#e67e22', erreur:'#000000', ecarte:'#6b7780' };           // remplissage
+const BORD_P = { ok:'#0b5d2e', attention:'#9a4a00', erreur:'#ffffff', ecarte:'#4b545a' };           // bordure fine, plus foncée (blanche pour l'erreur)
+const FOND_CARTE = '#F4F6F1';
+// Zone de la carte = uniquement l'emprise de TOUTES les parcelles (+ une petite marge), rien autour
+function zoneParcelles(){
+  const b = L.geoJSON({ type:'FeatureCollection', features:S.feats.map(f=>({ type:'Feature', geometry:f.geometry, properties:{} })) }).getBounds();
+  if (!b.isValid()) return null;
+  const dx = Math.max(0.0008, (b.getEast()-b.getWest())*0.04), dy = Math.max(0.0008, (b.getNorth()-b.getSouth())*0.04);
+  return L.latLngBounds([b.getSouth()-dy, b.getWest()-dx], [b.getNorth()+dy, b.getEast()+dx]);
+}
+function ajusterCarte(){
+  if (!S.carte || !S.zone) return;
+  S.carte.invalidateSize();
+  S.carte.setMinZoom(0); S.carte.setMaxBounds(null);
+  S.carte.fitBounds(S.zone, {animate:false});
+  S.carte.setMinZoom(S.carte.getBoundsZoom(S.zone, false));
+  S.carte.setMaxBounds(S.zone.pad(0.02)); S.carte.options.maxBoundsViscosity = 1;
+}
 function dessinerCarte(filtre){
   if (!S.carte){
-    S.carte = L.map('carte-map');
-    [['pCacao',250],['pZones',350],['pBase',420],['pParc',450]].forEach(([n,z])=>{ S.carte.createPane(n).style.zIndex = z; });
+    S.carte = L.map('carte-map', { zoomSnap:0.25 }); $('carte-map').style.background = FOND_CARTE;
+    [['pCacao',250],['pZones',350],['pBase',420],['pParc',450],['pMasque',520]].forEach(([n,z])=>{ S.carte.createPane(n).style.zIndex = z; });
     const osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'});
     const sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'Imagerie © Esri'});
     osm.addTo(S.carte); L.control.layers({'Plan':osm,'Satellite':sat},null,{position:'topleft'}).addTo(S.carte);
@@ -1320,19 +1338,26 @@ function dessinerCarte(filtre){
   const coll = { type:'FeatureCollection', features: sel.map(f=>({ type:'Feature', geometry:f.geometry, properties:{ PlotID:f.properties.PlotID, _s:cat(f._i), _i:f._i } })) };
   S.couche = L.geoJSON(coll, {
     pane:'pParc',
-    style: f=>({color:COUL_P[f.properties._s], weight: f.properties._s==='ok' ? 1 : 1.6, fillColor:COUL_P[f.properties._s], fillOpacity: f.properties._s==='ecarte' ? .06 : (f.properties._s==='ok' ? .18 : .3), dashArray: f.properties._s==='ecarte' ? '4 4' : null}),
+    style: f=>{ const k = f.properties._s; return { color:BORD_P[k], weight:1, opacity:1, fillColor:COUL_P[k], fillOpacity: k==='ecarte' ? .12 : (k==='erreur' ? .85 : (k==='attention' ? .35 : .25)), dashArray: k==='ecarte' ? '4 3' : null }; },
     onEachFeature: (f,l)=>{ const r = S.res[f.properties._i]; l.bindPopup('<b>'+esc(f.properties.PlotID)+'</b><br>'+(r.ecartee?esc(r.ecartee)+'<br>':'')+(r.pb.map(p=>esc(p.txt)).join('<br>')||'Aucune anomalie')); }
   });
   if (S.visible.parcelles) S.couche.addTo(S.carte);
-  try { S.carte.fitBounds(S.couche.getBounds(), {padding:[20,20]}); } catch(e){}
-  setTimeout(()=>S.carte.invalidateSize(), 50);
+  const z = zoneParcelles(), cleZ = z ? z.toBBoxString() : '';
+  if (z && S.cleZone !== cleZ){
+    S.cleZone = cleZ; S.zone = z;
+    if (S.masque) S.carte.removeLayer(S.masque);
+    const n = z.getNorth(), sd = z.getSouth(), e = z.getEast(), w = z.getWest();
+    const o = z.pad(30); S.masque = L.polygon([[[o.getSouth(),o.getWest()],[o.getSouth(),o.getEast()],[o.getNorth(),o.getEast()],[o.getNorth(),o.getWest()]], [[sd,w],[sd,e],[n,e],[n,w]]], { pane:'pMasque', stroke:false, fillColor:FOND_CARTE, fillOpacity:1, interactive:false }).addTo(S.carte);
+  }
+  try { ajusterCarte(); } catch(e){}
+  setTimeout(()=>{ try { ajusterCarte(); } catch(e){} }, 60);
   chargerCouchesCarte();
 }
 // Couches de référence autour des parcelles (zones protégées, cours d'eau, bande, habitat, cacao, base existante)
 async function chargerCouchesCarte(){
   if (!S.feats.length || !SB) return;
-  const b = S.couche && S.couche.getBounds(); if (!b || !b.isValid()) return;
-  const m = 0.02, bb = [b.getWest()-m, b.getSouth()-m, b.getEast()+m, b.getNorth()+m];
+  const b = S.zone; if (!b) return;
+  const bb = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
   const cle = bb.map(x=>x.toFixed(3)).join(',');
   if (S.cleCouches === cle) return;
   S.cleCouches = cle;
@@ -1365,7 +1390,7 @@ function construireCouches(d, bb){
   S.groupes.plans_eau = geo(d.plans_eau, { style:{ color:'#1565c0', weight:1, fillColor:'url(#h-bleu)', fillOpacity:1 } });
   S.groupes.eau = L.layerGroup([ geo(d.eau_lit, { style:{ color:'#1565c0', weight:.8, fillColor:'url(#h-bleu)', fillOpacity:1 } }), geo(d.cours_eau, { style:{ color:'#1565c0', weight:2, fill:false } }) ].filter(Boolean));
   S.groupes.protegees = L.geoJSON(d.protegees, { pane:'pZones', style:{ color:'#c62828', weight:1.4, fillColor:'url(#h-rouge)', fillOpacity:1 }, onEachFeature:(f,l)=>{ if (f.properties && f.properties.nom) l.bindTooltip(esc(f.properties.nom)+' (zone interdite)'); } });
-  if (d.base) S.groupes.base = geo(d.base, { pane:'pBase', style:{ color:'#8e24aa', weight:1.2, fillColor:'#8e24aa', fillOpacity:.22 } });
+  if (d.base) S.groupes.base = geo(d.base, { pane:'pBase', style:{ color:'#4a148c', weight:1, fillColor:'#9c4dcc', fillOpacity:.22 } });
   Object.keys(S.groupes).forEach(k=>{ if (S.groupes[k] && S.visible[k]) S.groupes[k].addTo(S.carte); });
   legendeCarte();
 }
@@ -1378,14 +1403,14 @@ function legendeCarte(){
   const sw = (css)=>'<span class="sw" style="'+css+'"></span>';
   const ligne = (k, swatch, txt)=>'<label><input type="checkbox" '+(S.visible[k]?'checked':'')+' onchange="basculerCouche(\''+k+'\',this.checked)">'+swatch+'<span>'+txt+'</span></label>';
   let h = '<div class="leg-t">Couches</div>'
-    + ligne('parcelles', sw('border:2px solid #1fa35a;background:rgba(31,163,90,.25)'), 'Parcelles <small>(orange : à vérifier, noir : erreur)</small>')
+    + ligne('parcelles', sw('border:1px solid #0b5d2e;background:rgba(31,163,90,.3)'), 'Parcelles <small>(<i class="pt" style="background:#e67e22"></i> à vérifier, <i class="pt" style="background:#000;border:1px solid #fff;box-shadow:0 0 0 1px #888"></i> anomalie)</small>')
     + ligne('protegees', sw('border:1px solid #c62828;background:repeating-linear-gradient(135deg,rgba(198,40,40,.15) 0 3px,#c62828 3px 5px)'), 'Forêts classées, zones protégées')
     + ligne('eau', sw('border:1px solid #1565c0;background:repeating-linear-gradient(45deg,rgba(21,101,192,.15) 0 3px,#1565c0 3px 5px)'), 'Cours d\'eau (lit ±5 m)')
     + ligne('plans_eau', sw('border:1px solid #1565c0;background:repeating-linear-gradient(45deg,rgba(21,101,192,.15) 0 3px,#1565c0 3px 5px)'), 'Plans d\'eau')
     + ligne('bande', sw('background:rgba(244,208,63,.55)'), 'Bande de '+CONFIG.bandeEauM+' m des cours d\'eau')
     + ligne('habitat', sw('background:rgba(141,148,154,.7)'), 'Zones habitées')
     + ligne('cacao', sw('background:linear-gradient(90deg,#e9c46a,#6e3c14)'), 'Couverture cacao <small>(dessous)</small>');
-  if (S.groupes.base) h += ligne('base', sw('border:1px solid #8e24aa;background:rgba(142,36,170,.25)'), 'Base de données existante <small>(violet : à comparer au vert)</small>');
+  if (S.groupes.base) h += ligne('base', sw('border:1px solid #4a148c;background:rgba(156,77,204,.3)'), 'Base de données existante <small>(violet)</small>');
   $('legende-carte').innerHTML = h;
 }
 
@@ -1666,7 +1691,7 @@ if (typeof document !== 'undefined' && $('depot')) { majParcours(); majTete(); }
   async function exec(p){ const r = await p; if (r && r.error) alert('Action impossible : '+r.error.message); await charger(); }
 
   window.DEFO = {
-    vue(v){ V.vue = v; rendre(); window.scrollTo(0,0); if (v==='analyse' && S.carte) setTimeout(()=>S.carte.invalidateSize(), 80); },
+    vue(v){ V.vue = v; rendre(); window.scrollTo(0,0); if (v==='analyse' && S.carte) setTimeout(()=>{ try { ajusterCarte(); } catch(e){} }, 80); },
     demarrer(){
       if (S.feats && S.feats.length){ if (!confirm('Une analyse est déjà ouverte. Commencer une nouvelle analyse la fermera. Continuer ?')) return; try { sessionStorage.setItem('defo-nouvelle','1'); } catch(e){} location.reload(); return; }
       DEFO.vue('analyse');
