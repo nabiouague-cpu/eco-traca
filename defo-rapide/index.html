@@ -254,6 +254,14 @@ body[data-vue]:not([data-vue="analyse"]) main{display:none}
 .msg-v{background:#fdeeee;border-left:4px solid var(--rouge);border-radius:6px;padding:9px 12px;font-size:13px;margin-bottom:12px}
 </style>
 
+<style id="style-maj">
+#bandeau-maj{position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:6000;display:flex;align-items:center;gap:12px;background:#0e3b36;color:#fff;border-radius:14px;padding:10px 12px 10px 18px;box-shadow:0 14px 40px -10px rgba(9,42,38,.55);font-size:14px;max-width:calc(100vw - 24px)}
+#bandeau-maj[hidden]{display:none}
+#bandeau-maj b{font-weight:600}
+#bandeau-maj button{border:0;border-radius:9px;padding:7px 14px;font:inherit;font-weight:600;cursor:pointer}
+#bandeau-maj .maj-ok{background:#5be3a4;color:#073b2b}
+#bandeau-maj .maj-non{background:transparent;color:rgba(255,255,255,.8);font-weight:400}
+</style>
 <style id="style-compte">
 .cx-plus{display:none}.lgc-card.creation .cx-plus{display:block}
 #compte-bar{margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap}#compte-bar+#qui{margin-left:0}
@@ -345,6 +353,7 @@ main{max-width:1840px;padding:18px 22px 10px}
   <div id="compte-bar"></div>
   <div id="qui"><span id="cx-qui"></span><button id="btn-deconnexion">Se déconnecter</button></div>
 </header>
+<div id="bandeau-maj" hidden role="status"><span><b>Nouvelle version disponible.</b> <span id="maj-aide">Actualise pour en profiter.</span></span><button type="button" class="maj-ok" id="maj-ok">Actualiser</button><button type="button" class="maj-non" id="maj-non">Plus tard</button></div>
 <div class="cm-fond cache" id="cm" onclick="if(event.target===this)COMPTE.fermer()"><div class="cm-boite" id="cm-boite" role="dialog" aria-modal="true"><button type="button" class="cm-x" onclick="COMPTE.fermer()" aria-label="Fermer">×</button><div id="cm-corps"></div></div></div>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs><pattern id="h-rouge" patternUnits="userSpaceOnUse" width="8" height="8" patternTransform="rotate(45)"><rect width="8" height="8" fill="rgba(198,40,40,.16)"/><line x1="0" y1="0" x2="0" y2="8" stroke="#c62828" stroke-width="2"/></pattern><pattern id="h-bleu" patternUnits="userSpaceOnUse" width="8" height="8" patternTransform="rotate(-45)"><rect width="8" height="8" fill="rgba(21,101,192,.16)"/><line x1="0" y1="0" x2="0" y2="8" stroke="#1565c0" stroke-width="2"/></pattern></defs></svg>
 <div id="vues"></div>
@@ -1505,11 +1514,13 @@ async function lancerAnalyse(demo){
     if (!demo && window.COMPTE){ const ok = await COMPTE.reserver(fc.features.length); if (!ok){ $('analyse-etat').textContent = 'Analyse non lancée : paiement requis.'; b.disabled = false; return; } }
     S.envoye = Object.fromEntries(fc.features.map(f=>[f.properties.PlotID, JSON.stringify(f.geometry)]));
     S.serveur = demo ? analyseDemo(fc) : await appelerServeur(fc, nomDossier());
+    let creditRendu = false;
+    if (!demo && S.serveur && S.serveur.whisp===false && window.COMPTE) creditRendu = await COMPTE.rendre();
     $('analyse-etat').textContent = 'Analyse terminée.';
     const n = S.serveur.resultats.filter(x=>x.chevauchement_pct>0).length;
     let h = '';
     if (S.serveur.demo) h += '<div class="avis demo"><b>MODE DÉMONSTRATION.</b> Les résultats ci-dessous sont fictifs : le serveur d\'analyse satellite n\'est pas encore branché. Ne les utilise pas pour une décision.</div>';
-    if (!S.serveur.demo && S.serveur.whisp===false) h += '<div class="avis"><b>Analyse satellite (Whisp) non réalisée.</b> '+esc(S.serveur.message_whisp||'')+'</div>';
+    if (!S.serveur.demo && S.serveur.whisp===false) h += '<div class="avis"><b>Analyse satellite (Whisp) non réalisée.</b> '+esc(S.serveur.message_whisp||'')+(creditRendu?' <b>Ton analyse payée t\'est rendue : tu pourras la relancer.</b>':'')+'</div>';
     if (!S.serveur.demo && S.serveur.base_comparee===false) h += '<div class="avis">La comparaison avec une base de données existante n\'est pas encore disponible.</div>';
     else if (n>0) h += '<div class="avis"><b>'+n+' parcelle(s) concernée(s).</b> '+esc(TXT_BASE_EXISTANTE)+'</div>';
     else h += '<div class="avis">Aucune superposition détectée avec la base de données existante.</div>';
@@ -1522,7 +1533,7 @@ async function lancerAnalyse(demo){
     $('avis-zone').innerHTML = h; $('attente').innerHTML = '';
     if (!demo && window.COMPTE) COMPTE.charger();
     finSatellite();
-  }catch(e){ $('analyse-etat').textContent = 'Échec : '+e.message; }
+  }catch(e){ let rendu = false; if (!demo && window.COMPTE) rendu = await COMPTE.rendre(); $('analyse-etat').textContent = 'Échec : '+e.message+(rendu?' Ton analyse payée t\'est rendue : tu peux relancer.':''); }
   b.disabled = false;
 }
 
@@ -2011,8 +2022,52 @@ if (typeof document !== 'undefined' && $('depot')) { majParcours(); majTete(); }
   }
   function correctionInterne(){ fermer(); lancerCorrectionReelle(); }
 
-  window.COMPTE = { charger, acheter, recalc, commander, essai, payer, majInstr, enLigne, declarer, paiements, regler, accepterDevis, compte, enregistrer, avantDemarrer, reserver, correction, demanderDevis, correctionInterne, fermer, etat:()=>C };
+  // Crédit rendu : si l'analyse échoue avant tout résultat satellite, la commande redevient disponible (le serveur vérifie qu'aucun résultat n'a été obtenu)
+  async function rendre(){
+    const id = S.commandeId; if (!id) return false;
+    try {
+      const { data:ses } = await SB.auth.getSession(); const jeton = ses && ses.session && ses.session.access_token;
+      const r = await fetch(CONFIG.supaUrl+'/functions/v1/analyser', { method:'POST', headers:{ 'Content-Type':'application/json', 'apikey':CONFIG.supaKey, 'Authorization':'Bearer '+jeton }, body:JSON.stringify({ rendre:true, commande_id:id }) });
+      const j = await r.json();
+      if (j && j.rendu){ S.commandeId = null; await charger(); return true; }
+    } catch(e){}
+    return false;
+  }
+
+  window.COMPTE = { rendre, charger, acheter, recalc, commander, essai, payer, majInstr, enLigne, declarer, paiements, regler, accepterDevis, compte, enregistrer, avantDemarrer, reserver, correction, demanderDevis, correctionInterne, fermer, etat:()=>C };
   if (typeof SB !== 'undefined' && SB){ SB.auth.onAuthStateChange((ev,ses)=>{ setTimeout(()=>{ if (ses && ses.user) charger(); else { C.pret = false; barre(); } }, 0); }); charger(); }
+})();
+</script>
+<script id="script-maj">
+// Bannière de mise à jour : on compare l'empreinte de la page publiée (ETag / date, sinon contenu) à celle du chargement.
+(function(){
+  const url = location.pathname + location.search;
+  const hash = t=>{ let h = 5381; for (let i=0;i<t.length;i++) h = ((h<<5)+h+t.charCodeAt(i))|0; return String(h); };
+  async function empreinte(){
+    const r = await fetch(url, { cache:'no-store', headers:{ 'Cache-Control':'no-cache' } });
+    if (!r.ok) throw new Error(r.status);
+    const e = r.headers.get('etag') || r.headers.get('last-modified');
+    return e ? 'h:'+e : 'c:'+hash(await r.text());
+  }
+  let base = null, refuse = null, enCours = false;
+  async function verifier(){
+    if (enCours) return; enCours = true;
+    try {
+      const e = await empreinte();
+      if (base === null) base = e;
+      else if (e !== base && e !== refuse){
+        const travail = typeof S !== 'undefined' && S && S.feats && S.feats.length;
+        document.getElementById('maj-aide').textContent = travail ? 'Ton dossier en cours sera fermé : termine ou télécharge d\'abord ce qu\'il te faut.' : 'Actualise pour en profiter.';
+        document.getElementById('bandeau-maj').hidden = false; document.getElementById('bandeau-maj').dataset.e = e;
+      }
+    } catch(x){ /* hors ligne : on réessaiera */ }
+    enCours = false;
+  }
+  document.getElementById('maj-ok').onclick = ()=>{ location.reload(); };
+  document.getElementById('maj-non').onclick = ()=>{ const b = document.getElementById('bandeau-maj'); refuse = b.dataset.e || null; b.hidden = true; };
+  verifier(); setInterval(verifier, 120000);
+  document.addEventListener('visibilitychange', ()=>{ if (!document.hidden) verifier(); });
+  window.addEventListener('focus', verifier);
 })();
 </script>
 </body>
