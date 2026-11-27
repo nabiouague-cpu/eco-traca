@@ -205,6 +205,9 @@ body[data-vue]:not([data-vue="analyse"]) main{display:none}
 .vc-tete{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
 .vlien{border:0;background:transparent;color:var(--teal);font:inherit;font-weight:600;font-size:13px;cursor:pointer;padding:2px 0}
 .vvide{color:var(--gris);font-size:13.5px;padding:14px 0}
+.rech-an{display:flex;align-items:center;gap:8px;margin:0 0 14px;padding:0 12px;height:42px;box-sizing:border-box;background:#fff;border:1px solid var(--bord,#d9dedc);border-radius:12px;color:var(--gris)}
+.rech-an:focus-within{border-color:#1F6E5C;box-shadow:0 0 0 3px rgba(31,110,92,.14)}
+.rech-an input{flex:1;min-width:0;border:0;outline:0;background:transparent;font:inherit;font-size:14px;color:inherit;padding:0}
 .an{border-top:1px solid rgba(14,59,54,.1)}
 .an-t{width:100%;display:flex;align-items:center;gap:14px;border:0;background:transparent;color:inherit;font:inherit;text-align:left;padding:14px 2px;cursor:pointer}
 .an-t .p{width:10px;height:10px;border-radius:50%;flex:none}
@@ -2157,11 +2160,15 @@ if (typeof document !== 'undefined' && $('depot')) { majParcours(); majTete(); }
     return '<div class="vc" style="border-left:4px solid #d98200;margin-bottom:14px;display:flex;align-items:center;gap:14px;flex-wrap:wrap"><div style="flex:1;min-width:200px"><b>Une analyse est en cours'+(nom?' : '+esc(nom):'')+'</b><div class="hint" style="margin:2px 0 0">'+esc(etape)+'. Elle continue sur le serveur même si tu es ailleurs.</div></div>'
       +'<button type="button" class="btn" onclick="DEFO.ouvrirJob(\''+id+'\')">Reprendre l\'analyse</button></div>';
   }
-  function blocJobs(max){
-    if (!V.jobs.length) return '';
+  // Recherche par nom (sans accents ni majuscules) dans la vue « Mes analyses »
+  const sansAccent = t => String(t||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,' ').trim();
+  function correspond(nom){ const q = sansAccent(V.rech); if (!q) return true; const n = sansAccent(nom); return n.includes(q) || n.replace(/ /g,'').includes(q.replace(/ /g,'')); }
+  function blocJobs(max, filtre){
+    const jobs = filtre ? V.jobs.filter(j=>correspond(j.nom)) : V.jobs;
+    if (!jobs.length) return '';
     return '<div class="vc" style="margin-bottom:18px"><div class="vc-tete"><h3>Analyses sur le serveur</h3>'+(max?'<button type="button" class="vlien" onclick="DEFO.vue(\'analyses\')">Tout voir</button>':'')+'</div>'
       +'<div class="hint" style="margin:0 0 6px">Elles continuent même si tu quittes la page, te déconnectes ou éteins ton ordinateur. Ouvre-les pour retrouver l\'avancement ou le résultat. Le dossier est conservé 30 jours après la fin de l\'analyse, puis effacé. Un e-mail te prévient quand elle est terminée.</div>'
-      +V.jobs.slice(0,max||999).map(ligneJob).join('')+'</div>';
+      +jobs.slice(0,max||999).map(ligneJob).join('')+'</div>';
   }
 
   // ----- éléments du calendrier : analyses faites + rappels -----
@@ -2198,10 +2205,12 @@ if (typeof document !== 'undefined' && $('depot')) { majParcours(); majTete(); }
       +'<div class="an-d"><div class="an-g"><div><small>Parcelles contrôlées</small><b>'+nb(g.nb)+'</b></div><div><small>Superposées à la base</small><b>'+(g.base?nb(g.sup):'n/d')+'</b></div><div><small>En zone protégée</small><b>'+nb(g.prot)+'</b></div></div>'
       +'<div class="hint">Les fichiers de cette analyse (base finale, rapport Excel, parcelles écartées) ne sont pas conservés tels quels : ils se téléchargent à l\'étape « Base finale ». Pendant 30 jours après la fin de l\'analyse, tu peux rouvrir le dossier depuis « Analyses sur le serveur » (en haut de cette page) pour les retélécharger.</div></div></div>';
   }
-  function listeAnalyses(max){
+  function listeAnalyses(max, filtre){
     if (V.chargement && !V.groupes.length) return '<div class="vvide">Chargement…</div>';
     if (!V.groupes.length) return '<div class="vvide">Aucune analyse pour l\'instant. Clique sur « Démarrer une analyse » pour commencer.</div>';
-    return V.groupes.slice(0,max||999).map(blocAnalyse).join('');
+    const g = filtre ? V.groupes.filter(x=>correspond(x.nom)) : V.groupes;
+    if (!g.length) return '<div class="vvide">Aucune analyse ne correspond à « '+esc(V.rech)+' ».</div>';
+    return g.slice(0,max||999).map(blocAnalyse).join('');
   }
   function formRappel(dateDef){
     return '<div class="fr-ajout"><b>Ajouter un rappel</b><input id="rp-texte" type="text" placeholder="Ex. relancer le fournisseur, vérifier les 180 parcelles" maxlength="200"><div class="l2"><input id="rp-dossier" type="text" placeholder="Dossier (facultatif)" maxlength="80"><input id="rp-date" type="date" value="'+esc(dateDef)+'"></div><button type="button" onclick="DEFO.ajouter()">Ajouter</button></div>';
@@ -2356,8 +2365,13 @@ if (typeof document !== 'undefined' && $('depot')) { majParcours(); majTete(); }
       +'<div class="vc etire"><div class="vc-tete"><h3>'+titreMois()+'</h3><button type="button" class="vlien" onclick="DEFO.vue(\'calendrier\')">Calendrier</button></div>'+grilleMois(false)+legende()+'</div></div></div>'
       +'<div class="vpied">Analyse satellite : méthode Whisp, FAO / Open Foris (open source, licence MIT).</div>';
   }
+  function listesAnalyses(){ return blocJobs(0, true)+'<div class="vc">'+listeAnalyses(999, true)+'</div>'; }
   function vueAnalyses(){
-    return haut('Mes analyses')+'<h1 class="vt-titre">Mes analyses</h1><div class="vt-sous">Toutes les analyses de ton espace. Clique sur une ligne pour voir le détail.</div>'+blocJobs(0)+'<div class="vc">'+listeAnalyses(999)+'</div>';
+    const barre = (V.jobs.length || V.groupes.length)
+      ? '<div class="rech-an"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>'
+        +'<input id="rech-an" type="search" autocomplete="off" placeholder="Rechercher une coopérative…" value="'+esc(V.rech||'')+'" oninput="DEFO.rech(this.value)" aria-label="Rechercher une analyse par nom de coopérative"></div>'
+      : '';
+    return haut('Mes analyses')+'<h1 class="vt-titre">Mes analyses</h1><div class="vt-sous">Toutes les analyses de ton espace. Clique sur une ligne pour voir le détail.</div>'+barre+'<div id="an-listes">'+listesAnalyses()+'</div>';
   }
   function vueCalendrier(){
     const k = V.jour || auj, d = cleDe(k), ev = (evenements()[k]||[]);
@@ -2394,12 +2408,15 @@ if (typeof document !== 'undefined' && $('depot')) { majParcours(); majTete(); }
     const f = { accueil:vueAccueil, analyses:vueAnalyses, calendrier:vueCalendrier, rappels:vueRappels }[V.vue] || vueAccueil;
     const h = (V.erreur?'<div class="msg-v">'+esc(V.erreur)+'</div>':'')+banniereJob()+f();
     if (h === V.html && V.htmlVue === V.vue) return;
+    const foc = document.activeElement && document.activeElement.id==='rech-an' ? document.activeElement.selectionStart : -1;
     V.html = h; V.htmlVue = V.vue; $('vues').innerHTML = h;
+    if (foc>=0){ const i = document.getElementById('rech-an'); if (i){ i.focus(); try { i.setSelectionRange(foc, foc); } catch(e){} } }   // une mise à jour en arrière-plan ne fait pas perdre la saisie
   }
   async function exec(p){ const r = await p; if (r && r.error) alert('Action impossible : '+r.error.message); await charger(); }
 
   window.DEFO = {
     rafraichir(){ if (V.vue!=='analyse') rendre(); },
+    rech(v){ V.rech = String(v||''); const el = $('an-listes'); if (el) el.innerHTML = listesAnalyses(); V.html = null; },
     vue(v){ V.vue = v; rendre(); window.scrollTo(0,0); if (v==='analyse' && S.carte) setTimeout(()=>{ try { ajusterCarte(); } catch(e){} }, 80); },
     demarrer(){
       const suite = ()=>{
