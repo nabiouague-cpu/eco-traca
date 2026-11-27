@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.61
+// @version      0.4.62
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.61';
+  const VERSION = '0.4.62';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -1460,6 +1460,9 @@
         else { location.href = def.url; return; }
       }
       let e = lireEtat();
+      // État local corrompu ou orphelin (ex. lot laissé sans son « lot » complet) : au lieu de planter en silence
+      // sur e.lot.connaissement plus bas (et de bloquer la file pour toujours), on l'efface et on repart à zéro.
+      if (e && (!e.lot || !e.lot.connaissement)) { effacerEtat(); e = null; }
       if ((!e || e.statut === 'termine') && fileActive()) { if (!(await suivantFile())) return; e = lireEtat(); }
       if (!e || e.pause || e.statut === 'termine') return;
       if (!connecte()) { e.erreur = 'Connecte-toi à OBC, puis « Continuer ».'; ecrireEtat(e); afficherEtat(); return; }
