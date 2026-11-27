@@ -1797,6 +1797,7 @@ async function envoyerJob(indices){
   await vider();
   const e = await avecReprises(()=>suite('demarrer', { job_id:JOB.id }));
   S.jobActif = JOB.id;
+  sauverPrepa(JOB.id);                     // le résultat des contrôles part au serveur (sans attendre) pour une réouverture instantanée
   if (window.DEFO) DEFO.recharger();     // la liste et le bandeau « Reprendre l'analyse » connaissent tout de suite la nouvelle analyse
   return e;
 }
@@ -1911,6 +1912,40 @@ async function lancerAnalyse(demo){
   b.disabled = false;
 }
 
+// ====== PRÉPARATION CONSERVÉE : le résultat des contrôles (compressé) est gardé sur le serveur avec l'analyse ======
+// Rouvrir une analyse ne refait donc plus les calculs lourds (chevauchements, formes semblables, simplification) : l'écran revient tout de suite.
+const b64 = u=>{ let s = ''; for (let i=0;i<u.length;i+=0x8000) s += String.fromCharCode.apply(null, u.subarray(i,i+0x8000)); return btoa(s); };
+const unb64 = t=>{ const b = atob(t), u = new Uint8Array(b.length); for (let i=0;i<b.length;i++) u[i] = b.charCodeAt(i); return u; };
+async function gzip64(txt){ const cs = new CompressionStream('gzip'), w = cs.writable.getWriter(); w.write(new TextEncoder().encode(txt)); w.close(); return b64(new Uint8Array(await new Response(cs.readable).arrayBuffer())); }
+async function gunzip64(t){ const ds = new DecompressionStream('gzip'), w = ds.writable.getWriter(); w.write(unb64(t)); w.close(); return new TextDecoder().decode(await new Response(ds.readable).arrayBuffer()); }
+async function sauverPrepa(id){
+  try {
+    const json = JSON.stringify({ res:S.res, chev:S.chev, simil:S.simil, simpl:S.simpl, simplCoupe:!!S.simplCoupe });
+    let data = json, gz = false;
+    if (typeof CompressionStream!=='undefined'){ data = await gzip64(json); gz = true; }
+    const tout = JSON.stringify({ v:REGLES_VERSION, nb:S.feats.length, gz, data });
+    const parts = []; for (let i=0;i<tout.length;i+=400000) parts.push(tout.slice(i,i+400000));
+    await SB.from('analyses_jobs_prep').delete().eq('job_id', id);
+    for (let k=0;k<parts.length;k++){ const r = await SB.from('analyses_jobs_prep').upsert({ job_id:id, n:k, part:parts[k] }); if (r.error) throw r.error; }
+  } catch(e){ console.warn('Préparation non sauvegardée :', e); }
+}
+async function lirePrepa(id){
+  try {
+    const r = await SB.from('analyses_jobs_prep').select('n,part').eq('job_id', id).order('n', { ascending:true });
+    if (r.error || !r.data || !r.data.length) return null;
+    const o = JSON.parse(r.data.map(x=>x.part).join(''));
+    if (o.v!==REGLES_VERSION || o.nb!==S.feats.length) return null;       // règles modifiées depuis : on recalcule avec les règles actuelles
+    return JSON.parse(o.gz ? await gunzip64(o.data) : o.data);
+  } catch(e){ return null; }
+}
+function restaurerPrepa(p){
+  S.res = p.res; S.chev = p.chev; S.simil = p.simil; S.simpl = p.simpl; S.simplCoupe = !!p.simplCoupe; S.final = null;
+  S.plan = construirePlan(S);
+  $('barre').classList.add('cache'); $('etape2').classList.remove('cache'); $('etape3').classList.remove('cache');
+  $('attente').innerHTML = 'Contrôles faits par le serveur au lancement de l\'analyse (selon les couches chargées) : '+CONTROLES_SERVEUR.filter((t,k)=>k!==0&&k!==2).map(esc).join(' · ')+'.';
+  afficher(); majParcours(); majTete();
+}
+
 // ====== REPRISE EXACTE : où en est l'utilisateur (résultats, nettoyage, base finale) est conservé, sur cet appareil ET sur le serveur ======
 // Une analyse arrivée aux résultats ne repart plus de zéro : mise à jour, coupure de courant, onglet fermé, autre appareil.
 function sauverEtat(){
@@ -1961,7 +1996,9 @@ async function ouvrirJob(id, auto){
     S.serveur = null; S.corrige = false; S.correction = false; S.telecharge = false; S.disc = null; S.plan = null; S.final = null; S.commandeId = null;
     $('avis-zone').innerHTML = ''; $('analyse-etat').textContent = '';
     afficherFichiers();
-    await analyserTout();
+    const prepa = await lirePrepa(id);
+    if (prepa) restaurerPrepa(prepa);
+    else { $('prog-txt').textContent = 'Réouverture : recalcul des contrôles, une seule fois (1 à 2 minutes pour un gros dossier)…'; await analyserTout(); sauverPrepa(id); }
     S.envoye = Object.fromEntries(J.lignes.filter(l=>l.a_analyser).map(l=>[l.plot_id, JSON.stringify(l.entree.geometry)]));
     S.jobOuvert = id; S.metaJob = J.meta;
     if (J.etat.statut==='termine'){ S.serveur = serveurDe(J); $('analyse-etat').textContent = 'Analyse terminée.'; allerEtape(3); S.restaure = true; try { presenterResultats(); } finally { S.restaure = false; } rejouerEtat(etatSauve(id, J.meta.page)); sauverEtat(); }
