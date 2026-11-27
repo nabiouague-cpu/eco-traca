@@ -442,6 +442,13 @@ body.apx-ouvert{overflow:hidden}
 .apx-vert .apx-vis{padding:4px}
 .apx-vert .apx-faits{gap:8px}.apx-vert .apx-faits b{font-size:19px}.apx-vert .apx-faits span{font-size:11px}
 .apx-vert .apx-kick{font-size:10px;letter-spacing:.12em}
+/* liste d'analyses (mode « choisir ») */
+.apx-ch{height:100%;display:grid;grid-template-columns:repeat(3,1fr);align-items:center;gap:4px;padding:0 10px;text-align:center}
+.apx-ch b{display:block;font-size:22px;line-height:1.1;color:#F2B705;font-weight:800}
+.apx-ch span{display:block;font-size:10.5px;color:rgba(255,255,255,.78);margin-top:3px}
+.apx-ch.vide{grid-template-columns:1fr}.apx-ch.vide b{font-size:15px;color:#F5C26B}
+#apx-voile .apx-pied>.apx-ouvrir{margin-bottom:2px;align-self:center}
+.apx-suiv:disabled{opacity:.4;cursor:default}
 .vc.apx-cell{background:linear-gradient(145deg,#0E3B36 0%,#092A26 100%)!important;border-color:transparent!important;color:#fff}
 
 /* tailles */
@@ -1978,7 +1985,7 @@ if (typeof document !== 'undefined' && $('depot')) { majParcours(); majTete(); }
     const KICK = '<div class="apx-kick">Analyse déforestation · pour comprendre</div>';
     const RESUME = '<p class="apx-resume">Toute analyse rencontre les mêmes cas : forêts classées, cours d\'eau, zones habitées, chevauchements, formes douteuses. Douze cartes montrent ce que fait ORIGEN pour chacun, et ce que cela change pour le potentiel de chaque parcelle.</p>';
     const ACT = '<div class="apx-act">'+BTN+'<span class="apx-duree">Environ 3 minutes</span></div>';
-    const APX = window.APX = { i:0, cartes:CARTES,
+    const APX = window.APX = { i:0, cartes:CARTES, cadre:FRAME, surChoix:null, titre:null,
       cellule(extra){   // cellule verte (carte d'une grille)
         return '<div class="apx-cell apx-vert '+(extra||'')+'" style="padding:18px 20px">'+FRAME+'<div class="apx-kick">Pour comprendre</div>'+'<h3>Pourquoi cette analyse déforestation ?</h3><div class="apx-vis">'+MINI+'</div>'+'<p class="apx-resume">Forêts classées, cours d\'eau, zones habitées, chevauchements : douze cartes montrent ce que fait ORIGEN et ce que cela change pour chaque parcelle.</p>'+FAITS+ACT+'</div>';
       },
@@ -1988,9 +1995,10 @@ if (typeof document !== 'undefined' && $('depot')) { majParcours(); majTete(); }
       html(){
         return '<div class="apx-lueur"></div><div class="apx-solbox"><div class="apx-sol"></div></div><div class="apx-horizon"></div>'
           + '<div class="apx-grains">'+[8,19,31,44,57,69,81,92].map((x,k)=>'<i style="left:'+x+'%;top:'+(52+(k%3)*10)+'%;animation-delay:-'+(k*0.9)+'s"></i>').join('')+'</div>'
-          + '<div class="apx-ent"><b>Analyse déforestation · les cas courants</b><button type="button" aria-label="Fermer" onclick="APX.fermer()">×</button></div>'
-          + '<div class="apx-stage"><div class="apx-monde">'+this.cartes.map((c,k)=>'<article class="apx-carte" data-k="'+k+'" onclick="APX.aller('+k+')"><div class="apx-flot"><div class="apx-demo">'+DEMO[c.d]+'</div><div class="apx-k">'+c.k+'</div><h4>'+c.t+'</h4><p>'+c.p+'</p></div></article>').join('')+'</div></div>'
+          + '<div class="apx-ent"><b>'+(this.titre||'Analyse déforestation · les cas courants')+'</b><button type="button" aria-label="Fermer" onclick="APX.fermer()">×</button></div>'
+          + '<div class="apx-stage"><div class="apx-monde">'+this.cartes.map((c,k)=>'<article class="apx-carte" data-k="'+k+'" onclick="APX.aller('+k+')"><div class="apx-flot"><div class="apx-demo">'+(c.vis||DEMO[c.d])+'</div><div class="apx-k">'+c.k+'</div><h4>'+c.t+'</h4><p>'+c.p+'</p></div></article>').join('')+'</div></div>'
           + '<div class="apx-pied"><div class="apx-pts">'+this.cartes.map((c,k)=>'<button type="button" aria-label="Carte '+(k+1)+'" onclick="APX.aller('+k+')"></button>').join('')+'</div>'
+          + (this.surChoix ? '<button type="button" class="apx-ouvrir" onclick="APX.choisir()">Ouvrir cette analyse <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>' : '')
           + '<div class="apx-btns"><button type="button" class="apx-prec" onclick="APX.precedent()">← Précédent</button><span class="apx-cpt"></span><button type="button" class="apx-suiv" onclick="APX.suivant()">Suivant →</button></div></div>';
       },
       placer(){
@@ -2008,14 +2016,16 @@ if (typeof document !== 'undefined' && $('depot')) { majParcours(); majTete(); }
         v.querySelectorAll('.apx-pts button').forEach((b,k)=>b.classList.toggle('on', k===this.i));
         const c = v.querySelector('.apx-cpt'); if (c) c.textContent = (this.i+1)+' / '+n;
         const pr = v.querySelector('.apx-prec'); if (pr) pr.disabled = this.i === 0;
-        const su = v.querySelector('.apx-suiv'); if (su) su.textContent = this.i === n-1 ? 'Terminer' : 'Suivant →';
+        const su = v.querySelector('.apx-suiv'); if (su){ su.textContent = this.i === n-1 && !this.surChoix ? 'Terminer' : 'Suivant →'; su.disabled = this.i === n-1 && !!this.surChoix; }
       },
-      ouvrir(){
+      ouvrir(opts){
         if (document.getElementById('apx-voile')) return;
         this.i = 0;
+        if (opts && opts.items && opts.items.length){ this.cartes = opts.items; this.surChoix = opts.choisir || null; this.titre = opts.titre || null; }
+        else { this.cartes = CARTES; this.surChoix = null; this.titre = null; }
         const v = document.createElement('div'); v.id = 'apx-voile'; v.setAttribute('role','dialog'); v.setAttribute('aria-modal','true'); v.setAttribute('aria-label','Analyse déforestation : les cas courants');
         v.innerHTML = this.html(); document.body.appendChild(v); document.body.classList.add('apx-ouvert');
-        this._clav = e=>{ if (e.key==='Escape') this.fermer(); else if (e.key==='ArrowRight') this.suivant(); else if (e.key==='ArrowLeft') this.precedent(); };
+        this._clav = e=>{ if (e.key==='Escape') this.fermer(); else if (e.key==='Enter' && this.surChoix) this.choisir(); else if (e.key==='ArrowRight') this.suivant(); else if (e.key==='ArrowLeft') this.precedent(); };
         document.addEventListener('keydown', this._clav);
         this.placer(); requestAnimationFrame(()=>requestAnimationFrame(()=>v.classList.add('on')));
       },
@@ -2023,8 +2033,9 @@ if (typeof document !== 'undefined' && $('depot')) { majParcours(); majTete(); }
         const v = document.getElementById('apx-voile'); if (!v) return;
         document.removeEventListener('keydown', this._clav); document.body.classList.remove('apx-ouvert'); v.classList.remove('on'); setTimeout(()=>v.remove(), 450);
       },
-      aller(k){ this.i = Math.max(0, Math.min(this.cartes.length-1, k)); this.placer(); },
-      suivant(){ if (this.i >= this.cartes.length-1) this.fermer(); else this.aller(this.i+1); },
+      aller(k){ k = Math.max(0, Math.min(this.cartes.length-1, k)); if (this.surChoix && k === this.i) return this.choisir(); this.i = k; this.placer(); },
+      choisir(){ const c = this.cartes[this.i], f = this.surChoix; if (!c || !f) return; this.fermer(); try { f(c.id); } catch(e){ console.error(e); } },
+      suivant(){ if (this.i >= this.cartes.length-1){ if (!this.surChoix) this.fermer(); } else this.aller(this.i+1); },
       precedent(){ this.aller(this.i-1); }
     };
   })();
