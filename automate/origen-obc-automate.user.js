@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ORIGEN → OBC (automate de saisie des achats)
 // @namespace    https://nabiouague-cpu.github.io/eco-traca/
-// @version      0.4.59
+// @version      0.4.60
 // @description  Renseigne l'ERP OBC (onpointsunrise.com) à partir d'un lot copié depuis ORIGEN : compte tiers, coopérative, transporteur, producteur, connaissement brousse, données livraison, pesée, bordereau. Cherche avant de créer, remplit chaque écran et s'arrête avant « Enregistrer » pour validation.
 // @author       ECORIGINE — ORIGEN
 // @match        https://onpointsunrise.com/*
@@ -14,7 +14,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '0.4.59';
+  const VERSION = '0.4.60';
   const CLE = 'origen_obc_etat';
   const ORIGEN_URL = 'https://nabiouague-cpu.github.io/eco-traca/index.html';
   const API = 'https://sfjvtwzrnzjvyhfqxswm.supabase.co/functions/v1/obc-file';   // file d'attente ORIGEN (lecture des lots, retour des résultats)
@@ -22,7 +22,7 @@
   const ENTITE = '1';                 // ECORIGINE
   const ATTENTE_MAX = 20000;
   const NB_ETAPES = 10;
-  const COMPTE_GENERAL = '401100000';   // « 401100000 - Fournisseurs » : compte général des coopératives (validé par l'utilisateur)
+  const COMPTE_GENERAL = '401110000';   // « 401110000 - Fournisseur Exploitation » : compte général des coopératives et gros traitants (corrigé le 27/11/2026 : 401100000 - Fournisseurs était faux)
   const ETAPES = ['Compte tiers gros traitant', 'Gros traitant', 'Compte tiers coopérative', 'Coopérative', 'Transporteur', 'Producteur', 'Connaissement brousse', 'Données livraison', 'Pesée', 'Bordereau de réception'];
   const PAGES = ['/PlanComptableTiersEntite/Index', '/Fournisseur/Index', '/PlanComptableTiersEntite/Index', '/Fournisseur/Index', '/AgroParametrage/ParametrageTransporteur', '/AgroAchatProducteur/Index', '/AgroAchatConnaissementBrousse/Index', '/AgroAchatConnaissementUsine/Index', '/AgroAchatPeseeBrousse/Index', '/AgroAchatBordereauReception/Index'];
   const BTN_NOUVEAU = ['#btnCreatePlanComptableEntiteIndex', 'a[href="/Fournisseur/Create"]', '#btnCreatePlanComptableEntiteIndex', 'a[href="/Fournisseur/Create"]', 'a[href="/AgroParametrageTransporteur/Create"]', 'a[href="/AgroAchatProducteur/Create"]', 'a[href="/AgroAchatConnaissementBrousse/Create"]', 'a[href="/AgroAchatConnaissementUsine/Create"]', 'a[href="/AgroAchatPeseeBrousse/Create"]', 'a[href="/AgroAchatBordereauReception/Create"]'];
@@ -533,7 +533,7 @@
 
   // ---------- les 10 étapes ----------
   // Étape 1 : compte tiers de la coopérative (Plan comptable tiers entité → Nouveau compte tiers).
-  // N° compte = code CCC ; intitulé = sigle de la coopérative ; classe 4 ; catégorie Fournisseur ; compte général 401100000.
+  // N° compte = code CCC ; intitulé = sigle de la coopérative ; classe 4 ; catégorie Fournisseur ; compte général 401110000 - Fournisseur Exploitation.
   async function trouverCompteTiers(ccc) {
     const plan = await getJson('/AppMethods1/LoadPlanComptableEntiteTiersFournisseurByEntiteId?EntiteId=' + ENTITE);
     return plan.find((p) => String(p.Value || '').trim().toUpperCase() === String(ccc).toUpperCase()) || null;
@@ -545,7 +545,7 @@
     if (ent && !/^ECORIGINE/i.test((ent.options[ent.selectedIndex] || {}).text || '')) await setSelectTexte(ent, /^ECORIGINE/i, 'Entité');
     await setSelectTexte(q('#txtplan_comptable_entite_natureAdd'), /^CLASSE 4/i, 'Classe');
     await dormir(800); await listeStable(q('#txtplan_comptable_entite_parentAdd'));
-    await setSelectTexte(q('#txtplan_comptable_entite_parentAdd'), new RegExp('^' + COMPTE_GENERAL + '\\b'), 'Compte général', COMPTE_GENERAL + ' - Fournisseurs');
+    await setSelectTexte(q('#txtplan_comptable_entite_parentAdd'), new RegExp('^' + COMPTE_GENERAL + '\\b'), 'Compte général', COMPTE_GENERAL + ' - Fournisseur Exploitation');
     await setSelectTexte(q('#txtplan_comptable_entite_type_tiersAdd'), exact('Fournisseur'), 'Catégorie tiers', 'Fournisseur');
     setInput(q('#txtplan_comptable_entite_numeroAdd'), ccc); setInput(q('#txtplan_comptable_entite_nomAdd'), intitule);
     { const m = await reappliquer(f); if (m.length) throw new Error('Liste non prise en compte par OBC : ' + m.join(', ')); }
