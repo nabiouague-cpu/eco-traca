@@ -599,7 +599,7 @@ main{max-width:1840px;padding:18px 22px 10px}
   <h2>1. Dépose tes fichiers</h2>
   <div id="depot">
     <div><b>Glisse ici tes fichiers, un dossier ou un zip</b></div>
-    <div class="hint" style="margin:6px 0 12px">GeoJSON, KML, KMZ, GPX, Shapefile (.shp + .dbf + .prj), CSV ou Excel avec latitude / longitude. Les zip, même contenant d'autres zip, sont ouverts automatiquement.</div>
+    <div class="hint" style="margin:6px 0 12px">GeoJSON, KML, KMZ, GPX, Shapefile (.shp + .dbf + .prj), CSV ou Excel avec latitude / longitude. <b>Ajoute aussi le registre de la coopérative</b> (Excel ou CSV, modèle GMR ou modèle libre) : il est rapproché des polygones et la concordance apparaît dans le rapport. Les zip, même contenant d'autres zip, sont ouverts automatiquement.</div>
     <div class="ligne" style="justify-content:center">
       <button class="btn" id="btn-fichiers">Choisir des fichiers ou un zip</button>
       <button class="btn sec" id="btn-dossier">Choisir un dossier</button>
@@ -620,6 +620,7 @@ main{max-width:1840px;padding:18px 22px 10px}
     <div class="col-g">
       <div class="tuiles cache" id="tuiles"><div class="kpis" id="kpis" style="display:contents"></div></div>
       <div class="hint" id="prep-resume"></div>
+      <div id="reg-bloc"></div>
       <div class="st-t">Fichiers lus</div>
       <div class="tbl" style="max-height:170px"><table id="tbl-fichiers"></table></div>
       <div class="ligne st-t" style="justify-content:space-between"><span>Parcelles</span>
@@ -790,7 +791,7 @@ function lireCSV(txt){
 }
 
 async function lireEntrees(entrees){
-  const journal = [], brut = [];
+  const journal = [], brut = [], registres = [];
   const groupes = {};   // shapefiles
   const autres = [];
   entrees.forEach(e=>{
@@ -814,14 +815,17 @@ async function lireEntrees(entrees){
         const doc = new DOMParser().parseFromString(decoder(await e.buf()), 'text/xml');
         feats = toGeoJSON.gpx(doc).features; format = 'GPX'; note = feats.length+' élément(s)';
       } else if (['csv','tsv','txt'].includes(ext)) {
-        const r = lireTableauPoints(lireCSV(decoder(await e.buf()))); feats = r.feats; note = r.note; format = 'Tableau';
+        const lignes = lireCSV(decoder(await e.buf()));
+        const reg = lireRegistre([{ titre:'csv', rows:lignes }], e.nom);
+        if (reg){ registres.push(reg); format = 'Registre'; note = 'Registre ('+reg.format+') : '+reg.prods.length+' producteur(s), '+reg.lignes.length+' ligne(s) : rapproché des polygones'; journal.push({ nom:e.nom, format, n:0, note, statut:'ok', registre:true }); continue; }
+        const r = lireTableauPoints(lignes); feats = r.feats; note = r.note; format = 'Tableau';
       } else if (['xlsx','xlsm'].includes(ext)) {
         const wb = new ExcelJS.Workbook(); await wb.xlsx.load(await e.buf());
-        let r = { feats:[], note:'aucune feuille avec latitude / longitude : fichier non utilisé pour les polygones' };
-        for (const ws of wb.worksheets){
-          const lignes = []; ws.eachRow({includeEmpty:false}, row=>{ lignes.push(row.values.slice(1).map(v=>v&&v.result!==undefined?v.result:(v&&v.text?v.text:v))); });
-          const t = lireTableauPoints(lignes); if (t.feats.length){ r = t; break; }
-        }
+        const tables = wb.worksheets.map(ws=>{ const lignes = []; ws.eachRow({includeEmpty:false}, row=>{ lignes.push(Array.from(row.values.slice(1)).map(v=>v&&v.result!==undefined?v.result:(v&&v.richText?v.richText.map(t=>t.text).join(''):(v&&v.text?v.text:v)))); }); return { titre:ws.name, rows:lignes }; });
+        const reg = lireRegistre(tables, e.nom);
+        if (reg){ registres.push(reg); format = 'Registre'; note = 'Registre ('+reg.format+', onglet « '+reg.feuille+' ») : '+reg.prods.length+' producteur(s), '+reg.lignes.length+' ligne(s) : rapproché des polygones'; journal.push({ nom:e.nom, format, n:0, note, statut:'ok', registre:true }); continue; }
+        let r = { feats:[], note:'aucune feuille avec latitude / longitude et pas de registre reconnu : fichier non utilisé pour les polygones' };
+        for (const t0 of tables){ const t = lireTableauPoints(t0.rows); if (t.feats.length){ r = t; break; } }
         feats = r.feats; note = r.note; format = 'Excel';
       } else if (['xls','doc','docx','pdf','png','jpg','jpeg','md'].includes(ext)) {
         note = 'type de fichier sans géométrie : ignoré';
@@ -848,7 +852,304 @@ async function lireEntrees(entrees){
       journal.push({ nom, format:'Shapefile', n:feats.length, note: feats.length+' élément(s)'+(g.prj?'':' (sans .prj : supposé en latitude / longitude)'), statut:'ok' });
     } catch(err){ journal.push({ nom, format:'Shapefile', n:0, note:'erreur de lecture : '+(err.message||err), statut:'erreur' }); }
   }
-  return { brut, journal };
+  return { brut, journal, registres };
+}
+
+// ====== REGISTRE : lecture, rapprochement avec les polygones, concordance (mêmes règles qu'ORIGEN, adaptées au navigateur) ======
+// Le registre ne bloque jamais rien : il sert à dire si le registre et les polygones sont synchrones (rapport, partenaires, Ryomen).
+const REG = { ecartSurfacePct:25, coordM:300, coordLoinM:5000, garde:0.5 };
+const regSa = t=>String(t==null?'':t).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/g,' ').trim();
+const regNum = x=>{ if (x==null || x==='') return null; const v = parseFloat(String(x).replace(/\s/g,'').replace(',','.')); return isFinite(v) ? v : null; };
+const regVal = x=>{ if (x==null) return ''; if (typeof x==='number') return Number.isInteger(x) ? String(x) : String(x); return String(x).trim(); };
+function normCode(c){ const s = String(c==null?'':c).replace(/\s+/g,'').toUpperCase(); return s.replace(/(\d)-?P(\d+)$/,'$1-P$2'); }
+function decouperUnite(code){ const c = normCode(code); const m = /^(.+?)(?:-?P(\d{1,2})|-(\d{1,2}))$/.exec(c); return (m && m[1].length>=4) ? m[1] : c; }
+const regAlnum = c=>String(c==null?'':c).toUpperCase().replace(/[^A-Z0-9]/g,'');
+const regChiffres = c=>{ const d = String(c==null?'':c).replace(/\D/g,'').replace(/^0+/,''); return d.length>=3 ? d : '\u0000'+c; };
+const REG_STRATS = [
+  ['code exact',                                  g=>normCode(g),                           r=>normCode(r)],
+  ['polygone sans suffixe de parcelle',           g=>decouperUnite(g),                      r=>normCode(r)],
+  ['registre sans suffixe de parcelle',           g=>normCode(g),                           r=>decouperUnite(r)],
+  ['les deux sans suffixe de parcelle',           g=>decouperUnite(g),                      r=>decouperUnite(r)],
+  ['lettres et chiffres seuls',                   g=>regAlnum(decouperUnite(g)),            r=>regAlnum(decouperUnite(r))],
+  ['chiffres seuls (préfixe ignoré)',             g=>regChiffres(decouperUnite(g)),         r=>regChiffres(decouperUnite(r))]
+];
+function regColonneCodes(vals){            // une colonne ne sert de code que si ce n'est pas un simple numéro d'ordre ni un libellé qui se répète
+  const v = vals.filter(x=>x!=='' && x!=null); if (!v.length) return false;
+  const court = v.filter(x=>/^\d{1,5}$/.test(String(x))).length / v.length;
+  if (v.length>=10 && new Set(v.map(String)).size / v.length < 0.2) return false;
+  return court < 0.8;
+}
+const REG_SYN = {
+  nb_parcelles:['nombre de parcelles','nombre parcelles','nbre de parcelles','nbre parcelles','nb de parcelles','nb parcelles','number of plots','number of parcels','nombre de champs','nb champs'],
+  parcelle:['code parcelle','id parcelle','numero parcelle','n parcelle','parcelle','plot id','plotid','plot code','plot','code plantation','id plantation','code unite','unite agricole','id polygone','polygone'],
+  producteur:['code producteur','id producteur','numero producteur','n producteur','code planteur','id planteur','code exploitant','id exploitant','code agriculteur','farmer id','farmerid','id farmer','producer code','producer id','code exploitation','id exploitation'],
+  nom:['nom et prenoms','nom prenoms','nom et prenom','nom complet','nom du producteur','nom producteur','nom du planteur','nom planteur','nom exploitant','nom de l exploitant','farmer name','lastname','last name','surname','family name','nom de famille','noms','nom','name','producteur','planteur'],
+  prenom:['prenoms','prenom','first name','firstname'],
+  surface:['superficie','surface','farm size','taille','area','hectares','ha'],
+  lat:['latitude','lat'],
+  lon:['longitude','long','lon','lng'],
+  village:['village','localite','campement','hameau']
+};
+function regColonnesLibres(entete){
+  const h = entete.map(regSa), res = {}, pris = new Set();
+  for (const champ in REG_SYN){
+    for (const exact of [true,false]){
+      for (const syn of REG_SYN[champ]){
+        if (syn.length<=2 && !exact) continue;
+        const re = exact ? null : new RegExp('(^| )'+syn.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'( |$)');
+        for (let k=0;k<h.length;k++){
+          const t = h[k]; if (!t || pris.has(k)) continue;
+          if (!exact && champ==='nom' && /village|cooperative|section|poste|campement/.test(t)) continue;
+          if (exact ? t===syn : re.test(t)){ res[champ] = k; pris.add(k); break; }
+        }
+        if (champ in res) break;
+      }
+      if (champ in res) break;
+    }
+  }
+  return res;
+}
+// Lit un registre : modèle GMR (onglets « 1. » et « 3. » à en-têtes numérotés), sinon modèle libre (colonnes repérées par leur nom).
+function lireRegistre(tables, fichier){
+  const get = (r,c)=> (c!=null && c<r.length) ? r[c] : null;
+  const feuille = pref=>tables.find(t=>String(t.titre).trim().startsWith(pref));
+  const entetesNum = rows=>{
+    for (let h=0; h<Math.min(6,rows.length); h++){
+      const num = {}; rows[h].forEach((v,k)=>{ const m = /^\s*(\d+)\s*[.,]/.exec(String(v==null?'':v)); if (m && !(+m[1] in num)) num[+m[1]] = k; });
+      if (1 in num && Object.keys(num).length>=3) return { rows:rows.slice(h+1), num };
+    }
+    return null;
+  };
+  const t1 = feuille('1.'), t3 = feuille('3.');
+  if (t1 && t3){
+    const a = entetesNum(t1.rows), b = entetesNum(t3.rows);
+    if (a && b){
+      const prods = [], idx = new Map(), lignes = [];
+      a.rows.forEach(r=>{ if (!(r && r[0] && String(r[0]).trim())) return;
+        const id = regVal(get(r,a.num[1])).toUpperCase(); if (!id) return;
+        const nom = [get(r,a.num[11]), get(r,a.num[10])].filter(x=>x).map(x=>regVal(x)).join(' ');
+        const p = { id, nom, village:regVal(get(r,a.num[3])), surface:regNum(get(r,a.num[6])), nbParc:null };
+        idx.set(id, prods.length); prods.push(p); });
+      b.rows.forEach(r=>{ if (!(r && r[0] && String(r[0]).trim())) return;
+        const fid = regVal(get(r,b.num[1])).toUpperCase(); if (!fid) return;
+        if (!idx.has(fid)){ idx.set(fid, prods.length); prods.push({ id:fid, nom:'', village:'', surface:null, nbParc:null }); }
+        lignes.push({ prod:idx.get(fid), unit:true, surface:regNum(get(r,b.num[3])), lat:regNum(get(r,b.num[4])), lon:regNum(get(r,b.num[5])),
+          codes:{ "Identifiant d'unité agricole":regVal(get(r,b.num[2])), "Identifiant d'exploitation":fid } }); });
+      const avec = new Set(lignes.map(l=>l.prod));
+      prods.forEach((p,i)=>{ if (!avec.has(i)) lignes.push({ prod:i, unit:false, surface:p.surface, lat:null, lon:null, codes:{ "Identifiant d'exploitation":p.id } }); });
+      if (prods.length && lignes.length) return { fichier, format:'GMR', feuille:t3.titre, prods, lignes };
+    }
+  }
+  let meilleur = null;
+  for (const t of tables){
+    for (let h=0; h<Math.min(15,t.rows.length); h++){
+      const c = regColonnesLibres(t.rows[h]); if (!('nom' in c)) continue;
+      const score = Object.keys(c).length + Math.min(t.rows.length-h,5000)/1000;
+      if (!meilleur || score>meilleur.score) meilleur = { score, t, h, c };
+    }
+  }
+  if (!meilleur) return null;
+  const { t, h, c } = meilleur;
+  const utile = ['producteur','parcelle','nb_parcelles','village','surface'].filter(k=>k in c);
+  const avecPts = ('lat' in c) && ('lon' in c);
+  if (!utile.length) return null;
+  if (avecPts && !('producteur' in c) && !('parcelle' in c) && !('nb_parcelles' in c)) return null;     // simple liste de points (nom + latitude + longitude)
+  const entete = t.rows[h].map((x,k)=>regVal(x) || ('colonne_'+(k+1)));
+  const rows = t.rows.slice(h+1).filter(r=>r && r.some(x=>x!=null && x!==''));
+  if (rows.length<3) return null;
+  const champs = new Set(['nom','prenom','surface','lat','lon','nb_parcelles','village'].filter(k=>k in c).map(k=>c[k]));
+  const unit = 'parcelle' in c;
+  const prods = [], idx = new Map(), lignes = [];
+  rows.forEach((r,n)=>{
+    const nom = [get(r,c.nom), 'prenom' in c ? get(r,c.prenom) : null].filter(x=>x!=null && x!=='').map(regVal).join(' ');
+    const cle = ('producteur' in c && regVal(get(r,c.producteur))) ? 'P:'+normCode(get(r,c.producteur)) : (nom ? 'N:'+regSa(nom) : 'L:'+n);
+    if (!idx.has(cle)){ idx.set(cle, prods.length); prods.push({ id: ('producteur' in c) ? regVal(get(r,c.producteur)) : '', nom, village:'village' in c ? regVal(get(r,c.village)) : '',
+      surface: unit ? null : regNum(get(r,c.surface)), nbParc: 'nb_parcelles' in c ? regNum(get(r,c.nb_parcelles)) : null }); }
+    const codes = {}; entete.forEach((e,k)=>{ if (!champs.has(k)){ const v = regVal(get(r,k)); if (v) codes[e] = v; } });
+    lignes.push({ prod:idx.get(cle), unit, surface:'surface' in c ? regNum(get(r,c.surface)) : null, lat:avecPts?regNum(get(r,c.lat)):null, lon:avecPts?regNum(get(r,c.lon)):null, codes });
+  });
+  return { fichier, format:'libre', feuille:t.titre, prods, lignes };
+}
+
+// ---------- rapprochement des noms (mots dans n'importe quel ordre, fautes de frappe, sonorité) ----------
+const REG_TITRES = new Set(['mr','mme','mlle','m','monsieur','madame','dame','feu','chef','dr','sieur']);
+function regPhon(t){ return t.replace(/ph/g,'f').replace(/ck/g,'k').replace(/[cq]/g,'k').replace(/ou/g,'u').replace(/[yw]/g,'i').replace(/h/g,'').replace(/(.)\1+/g,'$1'); }
+function regLev(a,b,maxd){
+  if (Math.abs(a.length-b.length)>maxd) return maxd+1;
+  let prev = Array.from({length:b.length+1},(_,i)=>i);
+  for (let i=1;i<=a.length;i++){
+    const cur = [i];
+    for (let j=1;j<=b.length;j++) cur.push(Math.min(prev[j]+1, cur[j-1]+1, prev[j-1]+(a[i-1]!==b[j-1]?1:0)));
+    if (Math.min.apply(null,cur)>maxd) return maxd+1;
+    prev = cur;
+  }
+  return prev[prev.length-1];
+}
+function regJetons(nom, exclus){ return regSa(String(nom==null?'':nom).replace(/['’]/g,'')).split(' ').filter(t=>t && !REG_TITRES.has(t) && !(exclus && exclus.has(t)) && !/^p\d+$/.test(t) && !/^\d+$/.test(t)); }
+function regJetonProche(x,y){
+  if (x===y) return 1;
+  if (regPhon(x)===regPhon(y)) return 0.95;
+  const m = Math.min(x.length,y.length);
+  if (m===1 && x[0]===y[0]) return 0.6;
+  if (m>=3 && (x.startsWith(y)||y.startsWith(x)) && m/Math.max(x.length,y.length)>=0.5) return 0.8;
+  if (x.length>=4 && y.length>=4){
+    const mx = Math.max(x.length,y.length)>=7 ? 2 : 1, d = regLev(x,y,mx);
+    if (d<=mx) return d===1 ? 0.85 : 0.75;
+    if (regLev(regPhon(x),regPhon(y),1)<=1) return 0.7;
+  }
+  return 0;
+}
+function regScoreNom(A,B){
+  if (!A.length || !B.length) return [0,0];
+  const B2 = B.slice(); let tot = 0;
+  A.forEach(x=>{ let best = 0, bj = -1; B2.forEach((y,j)=>{ const v = regJetonProche(x,y); if (v>best){ best = v; bj = j; } });
+    if (bj>=0 && best>=0.6){ tot += best; B2.splice(bj,1); } });
+  return [tot/Math.max(A.length,B.length), tot/Math.min(A.length,B.length)];
+}
+function regChercherProducteur(nom, prods, jet, exclus, deja){
+  const A = regJetons(nom, exclus); if (!A.length) return { p:null, motif:'nom vide' };
+  const cand = [];
+  prods.forEach((p,i)=>{ const B = jet[i]; if (!B.length) return;
+    const [sc,cov] = regScoreNom(A,B), petit = Math.min(A.length,B.length);
+    if (sc>=0.66 || (cov>=0.75 && petit>=2 && sc>=0.5) || (A.length===1 && cov>=0.85 && A[0].length>=4)) cand.push({ i, v:sc+(deja.has(i)?0:0.02), sc }); });
+  if (!cand.length) return { p:null, motif:'aucun producteur du registre ne ressemble à ce nom' };
+  cand.sort((a,b)=>b.v-a.v);
+  if (cand.length>1 && cand[0].v-cand[1].v<0.05) return { p:null, ambigu:true, motif:'nom ambigu : '+cand.slice(0,3).map(c=>prods[c.i].nom).join(' / ') };
+  return { p:cand[0].i, motif:'rapproché par le nom' };
+}
+const regEstCodeNom = nm=>/^[A-Za-z]{0,6}[- ]?\d{1,5}([- ]?P\d)?$/i.test(String(nm==null?'':nm).trim());
+
+// ---------- le rapprochement ----------
+function fusionnerRegistres(regs){
+  if (regs.length===1) return regs[0];
+  const prods = [], lignes = [];
+  regs.forEach(R=>{ const dec = prods.length; R.prods.forEach(p=>prods.push(p)); R.lignes.forEach(l=>lignes.push(Object.assign({}, l, { prod:l.prod+dec }))); });
+  return { fichier:regs.map(r=>r.fichier).join(' + '), format:regs.map(r=>r.format).join(' + '), feuille:regs.map(r=>r.feuille).join(' + '), prods, lignes };
+}
+function rapprocherRegistre(){
+  S.reg = null;
+  const regs = S.registres || []; if (!regs.length || !S.feats.length) return;
+  const R = fusionnerRegistres(regs), n = S.feats.length;
+  const haDe = i=>S.res[i] && S.res[i].aireHa!=null ? S.res[i].aireHa : null;
+  // 1. colonne de polygone × colonne de registre × règle qui se recoupent le mieux
+  const propVals = {};
+  S.feats.forEach((f,i)=>{ const p = Object.assign({}, f._p0||{}, { PlotID:f.properties.PlotID });
+    Object.keys(p).forEach(k=>{ if (k==='__source') return; const v = p[k]; if (v==null || typeof v==='object') return; (propVals[k] = propVals[k]||new Array(n).fill(''))[i] = String(v).trim(); }); });
+  const colsReg = {}; R.lignes.forEach((l,j)=>{ Object.keys(l.codes).forEach(k=>{ (colsReg[k] = colsReg[k]||new Array(R.lignes.length).fill(''))[j] = l.codes[k]; }); });
+  const essais = [];
+  Object.keys(propVals).forEach(gp=>{
+    const gv = propVals[gp].filter(v=>v!==''); if (!gv.length || !regColonneCodes(gv)) return;
+    Object.keys(colsReg).forEach(rc=>{
+      const rv = colsReg[rc].filter(v=>v!==''); if (!rv.length || !regColonneCodes(rv)) return;
+      REG_STRATS.forEach(([nom,fg,fr],s)=>{
+        const gset = new Map(); gv.forEach(x=>{ const k = fg(x); gset.set(k,(gset.get(k)||0)+1); });
+        const rset = new Set(rv.map(fr)); let hit = 0, dist = 0;
+        gset.forEach((c,k)=>{ if (rset.has(k)){ hit += c; dist++; } });
+        essais.push({ taux:hit/gv.length, dist, couv:dist/rset.size, gp, rc, s, hit });
+      });
+    });
+  });
+  essais.sort((a,b)=>(Math.round(b.taux*1e4)-Math.round(a.taux*1e4)) || (b.dist-a.dist) || (b.couv-a.couv));
+  const meil = essais[0] && essais[0].hit>0 ? essais[0] : null;
+  // 2. chaque polygone : ligne(s) du registre trouvée(s) par le code
+  const cible = new Array(n).fill(null);               // { prod, ligne|null, via:'code'|'nom' }
+  const lignesParCle = new Map();
+  const indexer = (rc, s)=>{ const m = new Map(); const fr = REG_STRATS[s][2];
+    R.lignes.forEach((l,j)=>{ const v = l.codes[rc]; if (!v) return; const k = fr(v); if (!m.has(k)) m.set(k,[]); m.get(k).push(j); }); return m; };
+  const appliquer = (gp, idxCle, s)=>{ let nb = 0, vus = 0; const fg = REG_STRATS[s][1];
+    S.feats.forEach((f,i)=>{ if (cible[i]) return; const v = (propVals[gp]||[])[i]; if (!v) return; vus++;
+      const L = idxCle.get(fg(v)); if (!L) return;
+      const prods = new Set(L.map(j=>R.lignes[j].prod)); if (prods.size>1) return;               // plusieurs producteurs possibles : on ne tranche pas
+      cible[i] = { prod:R.lignes[L[0]].prod, ligne: (L.length===1 && R.lignes[L[0]].unit) ? L[0] : null, via:'code' }; nb++; });
+    return { nb, vus }; };
+  if (meil){
+    indexer(meil.rc, meil.s).forEach((v,k)=>lignesParCle.set(k,v));
+    appliquer(meil.gp, lignesParCle, meil.s);
+    // un même fichier peut mélanger plusieurs écritures (code de producteur et code de parcelle) : on complète avec les meilleures autres colonnes, sans règle trop lâche
+    let essaisExtra = 0, acceptes = 0;
+    for (const e of essais){
+      if (acceptes>=2 || essaisExtra>=8) break;
+      if (e===meil || e.s===5 || e.hit===0 || (e.gp===meil.gp && e.rc===meil.rc && e.s===meil.s)) continue;
+      const idx = indexer(e.rc, e.s), fg = REG_STRATS[e.s][1];
+      let restant = 0, hit = 0;
+      S.feats.forEach((f,i)=>{ if (cible[i]) return; const v = (propVals[e.gp]||[])[i]; if (!v) return; restant++; if (idx.has(fg(v))) hit++; });
+      if (hit>=1){ essaisExtra++; if (restant && hit/restant>=0.3){ appliquer(e.gp, idx, e.s); acceptes++; } }
+    }
+  }
+  const parCode = cible.filter(x=>x).length;
+  // 3. polygones restants : par le nom (seulement si le nom n'est pas un simple code)
+  const villages = new Set(); R.prods.forEach(p=>regJetons(p.village).forEach(t=>villages.add(t)));
+  const avecNom = R.prods.map(p=>!!p.nom);
+  const prodsNom = R.prods.map((p,i)=>i).filter(i=>avecNom[i]);
+  const jet = prodsNom.map(i=>regJetons(R.prods[i].nom, villages));
+  const deja = new Set(cible.filter(x=>x).map(x=>x.prod));
+  const horsRegistre = [];
+  S.feats.forEach((f,i)=>{
+    if (cible[i]) return;
+    const nom = f.properties.Nom || '', id = f.properties.PlotID;
+    if (nom && !regEstCodeNom(nom) && prodsNom.length){
+      const r = regChercherProducteur(nom, prodsNom.map(k=>R.prods[k]), jet, villages, new Set([...deja].map(d=>prodsNom.indexOf(d)).filter(x=>x>=0)));
+      if (r.p!=null){ const pr = prodsNom[r.p]; cible[i] = { prod:pr, ligne:null, via:'nom' }; deja.add(pr); return; }
+      horsRegistre.push({ id, nom, cas: r.ambigu ? 'Sans code, nom ambigu (plusieurs producteurs possibles)' : 'Sans code, et le nom ne correspond à aucun producteur du registre', detail: r.ambigu ? r.motif.replace('nom ambigu : ','') : '' });
+    } else horsRegistre.push({ id, nom, cas:'Code absent du registre', detail:'' });
+  });
+  const nbAuRegistre = cible.filter(x=>x).length, nbParNom = cible.filter(x=>x && x.via==='nom').length;
+  const garde = n>0 && nbAuRegistre/n < REG.garde;
+  // 4. producteurs / unités du registre sans polygone
+  const prodsAvec = new Set(cible.filter(x=>x).map(x=>x.prod)), lignesAvec = new Set(cible.filter(x=>x && x.ligne!=null).map(x=>x.ligne));
+  const lignesDeProd = R.prods.map(()=>[]); R.lignes.forEach((l,j)=>lignesDeProd[l.prod].push(j));
+  const surfProd = k=>{ const p = R.prods[k]; if (p.surface!=null) return p.surface; const s = lignesDeProd[k].map(j=>R.lignes[j].surface).filter(x=>x!=null); return s.length ? s.reduce((a,b)=>a+b,0) : null; };
+  const libProd = k=>{ const p = R.prods[k]; return { code:p.id||'', nom:p.nom||'', village:p.village||'', surface:surfProd(k) }; };
+  const sansPolygone = garde ? [] : R.prods.map((p,k)=>k).filter(k=>!prodsAvec.has(k)).map(libProd);
+  const unitesSansPolygone = (garde || !meil) ? [] : R.lignes.map((l,j)=>j).filter(j=>R.lignes[j].unit && !lignesAvec.has(j) && prodsAvec.has(R.lignes[j].prod) && R.lignes[j].codes[meil.rc] && lignesParCle.get(REG_STRATS[meil.s][2](R.lignes[j].codes[meil.rc])).length===1)
+    .map(j=>{ const l = R.lignes[j], p = R.prods[l.prod]; return { prod:p.id||p.nom, nom:p.nom||'', code:l.codes[meil.rc], surface:l.surface }; });
+  // 5. codes en double dans le registre (colonne censée être unique)
+  const codesDouble = [];
+  if (meil){ const distinct = lignesParCle.size, total = [...lignesParCle.values()].reduce((s,L)=>s+L.length,0);
+    if (total && distinct/total >= 0.9) lignesParCle.forEach((L,k)=>{ if (L.length>1) codesDouble.push({ code:R.lignes[L[0]].codes[meil.rc], nb:L.length }); }); }
+  // 6. surfaces, positions, nombre de parcelles : une comparaison par « cible » (unité du registre, ou producteur)
+  const groupes = new Map();
+  cible.forEach((c,i)=>{ if (!c) return; const k = c.ligne!=null ? 'L'+c.ligne : 'P'+c.prod; if (!groupes.has(k)) groupes.set(k,{ c, ids:[], idx:[] }); const g = groupes.get(k); g.ids.push(S.feats[i].properties.PlotID); g.idx.push(i); });
+  const ecartSurface = [], coordLoin = [], nbParcelles = [];
+  groupes.forEach(g=>{
+    const p = R.prods[g.c.prod], l = g.c.ligne!=null ? R.lignes[g.c.ligne] : null;
+    const reg = l ? l.surface : surfProd(g.c.prod);
+    const ha = g.idx.map(haDe); const poly = ha.every(x=>x!=null) ? ha.reduce((a,b)=>a+b,0) : null;
+    if (reg!=null && reg>0 && poly!=null){ const pct = (poly-reg)/reg*100; if (Math.abs(pct)>REG.ecartSurfacePct) ecartSurface.push({ id:g.ids.join(', '), prod:p.id||p.nom, reg, poly, pct }); }
+    if (l && l.lat!=null && l.lon!=null && Math.abs(l.lat)<=90 && Math.abs(l.lon)<=180){
+      let d = null; g.idx.forEach(i=>{ try { const ce = turf.centroid(S.feats[i]).geometry.coordinates; const x = turf.distance(ce,[l.lon,l.lat],{units:'meters'}); if (d==null || x<d) d = x; } catch(e){} });
+      if (d!=null && d>REG.coordM) coordLoin.push({ id:g.ids.join(', '), prod:p.id||p.nom, dist:Math.round(d), niveau: d>REG.coordLoinM ? 'plus de '+(REG.coordLoinM/1000)+' km' : 'plus de '+REG.coordM+' m' });
+    }
+  });
+  const parProd = new Map(); cible.forEach(c=>{ if (c) parProd.set(c.prod,(parProd.get(c.prod)||0)+1); });
+  parProd.forEach((nb,k)=>{ const p = R.prods[k]; if (p.nbParc!=null && p.nbParc!==nb) nbParcelles.push({ prod:p.id||p.nom, nom:p.nom, registre:p.nbParc, polygones:nb }); });
+  ecartSurface.sort((a,b)=>Math.abs(b.pct)-Math.abs(a.pct)); coordLoin.sort((a,b)=>b.dist-a.dist);
+  const ecarts = horsRegistre.length + sansPolygone.length + unitesSansPolygone.length + codesDouble.length + ecartSurface.length + coordLoin.length + nbParcelles.length;
+  S.reg = { fichier:R.fichier, format:R.format, feuille:R.feuille, nbProd:R.prods.length, nbLignes:R.lignes.length, nbPoly:n, nbAuRegistre, nbParCode:parCode, nbParNom,
+    couple: meil ? { poly:meil.gp, reg:meil.rc, regle:REG_STRATS[meil.s][0] } : null, garde, concordance:Math.round(nbAuRegistre/n*1000)/10,
+    prodsAvecPolygone:prodsAvec.size, horsRegistre, sansPolygone, unitesSansPolygone, codesDouble, ecartSurface, coordLoin, nbParcelles, ecarts,
+    verdict: garde ? 'incoherent' : (ecarts ? 'ecarts' : 'concordant') };
+}
+function regPhrase(r){
+  if (!r) return '';
+  if (r.garde) return 'Le registre ne correspond pas aux polygones : seuls '+r.nbAuRegistre+' polygone(s) sur '+r.nbPoly+' ('+r.concordance.toFixed(0)+' %) sont retrouvés au registre. À vérifier avant toute exploitation : les deux fichiers ne viennent peut-être pas de la même coopérative ou de la même date.';
+  if (r.verdict==='concordant') return 'Le registre et les polygones concordent : les '+r.nbPoly+' polygone(s) sont retrouvés au registre, sans écart de surface ni de position.';
+  const L = [];
+  if (r.horsRegistre.length) L.push(r.horsRegistre.length+' polygone(s) sans correspondance au registre');
+  if (r.sansPolygone.length) L.push(r.sansPolygone.length+' producteur(s) du registre sans polygone');
+  if (r.unitesSansPolygone.length) L.push(r.unitesSansPolygone.length+' parcelle(s) du registre sans polygone');
+  if (r.ecartSurface.length) L.push(r.ecartSurface.length+' écart(s) de surface de plus de '+REG.ecartSurfacePct+' %');
+  if (r.coordLoin.length) L.push(r.coordLoin.length+' parcelle(s) à plus de '+REG.coordM+' m de la position du registre');
+  if (r.nbParcelles.length) L.push(r.nbParcelles.length+' producteur(s) dont le nombre de parcelles diffère');
+  if (r.codesDouble.length) L.push(r.codesDouble.length+' code(s) en double dans le registre');
+  return 'Le registre et les polygones ne sont pas synchrones : '+L.join(' ; ')+'. Le détail est dans le rapport Excel (feuilles « Registre … »).';
+}
+function regHtml(){
+  const r = S.reg; if (!r) return '';
+  const cls = r.verdict==='concordant' ? 'ok' : 'avis';
+  return '<div class="'+(r.verdict==='concordant'?'hint':'avis')+'" style="margin:8px 0"><b>Registre ↔ polygones.</b> '+esc(regPhrase(r))+
+    '<div class="hint" style="margin-top:4px">'+esc(r.fichier)+' · '+r.nbProd+' producteur(s), '+r.nbLignes+' ligne(s) · '+r.nbAuRegistre+' / '+r.nbPoly+' polygone(s) retrouvé(s) ('+r.nbParCode+' par le code'+(r.nbParNom?', '+r.nbParNom+' par le nom':'')+')'+
+    (r.couple ? ' · code « '+esc(r.couple.poly)+' » ↔ « '+esc(r.couple.reg)+' » ('+esc(r.couple.regle)+')' : ' · aucun code commun trouvé')+'</div></div>';
 }
 
 // ====== PRÉPARATION (même logique que la préparation ORIGEN : points retirés, lignes → polygones, champs identiques) ======
@@ -882,7 +1183,7 @@ function preparer(brut){
       const suffixe = parts.length>1 ? '-'+(j+1) : '';
       const g2 = { type:g.type, coordinates:sansZ(g.coordinates) };
       try {
-        if (g2.type==='Polygon' || g2.type==='MultiPolygon') { polys.push({ type:'Feature', properties:{ PlotID:id0+suffixe, Nom:nom, Source:source, Origine:'' }, geometry:g2 }); }
+        if (g2.type==='Polygon' || g2.type==='MultiPolygon') { polys.push({ type:'Feature', properties:{ PlotID:id0+suffixe, Nom:nom, Source:source, Origine:'' }, geometry:g2, _p0:p }); }
         else if (g2.type==='Point') { points.push({ id:id0+suffixe, source, coordinates:g2.coordinates }); }
         else if (g2.type==='MultiPoint') { g2.coordinates.forEach((c,m)=>points.push({ id:id0+suffixe+'-'+(m+1), source, coordinates:c })); }
         else if (g2.type==='LineString' || g2.type==='MultiLineString') {
@@ -890,7 +1191,7 @@ function preparer(brut){
           ls.forEach((l,m)=>{
             const fermee = fermerLigne(l);
             const id = id0+suffixe+(ls.length>1?'-'+(m+1):'');
-            if (fermee) polys.push({ type:'Feature', properties:{ PlotID:id, Nom:nom, Source:source, Origine:'ligne convertie en polygone' }, geometry:{ type:'Polygon', coordinates:[fermee] } });
+            if (fermee) polys.push({ type:'Feature', properties:{ PlotID:id, Nom:nom, Source:source, Origine:'ligne convertie en polygone' }, geometry:{ type:'Polygon', coordinates:[fermee] }, _p0:p });
             else lignes.push({ id, source, sommets:l.length });
           });
         }
@@ -1432,6 +1733,7 @@ function bilanHtml(){
   add(n(x=>x.chevauchement_pct>0), 'parcelle(s) superposée(s) à une base de données existante');
   add(n(x=>x.prioritaire), 'parcelle(s) prioritaire(s) (couvert arboré en 2020 puis perturbation)');
   add(n(x=>x.perturbation_apres_2020 && !x.prioritaire), 'parcelle(s) avec une perturbation après 2020 sans couvert arboré en 2020');
+  if (S.reg){ if (S.reg.garde) L.push('<li><b>Registre :</b> '+esc(regPhrase(S.reg))+'</li>'); else { add(S.reg.horsRegistre.length, 'polygone(s) sans correspondance au registre'); add(S.reg.sansPolygone.length, 'producteur(s) du registre sans polygone'); add(S.reg.unitesSansPolygone.length, 'parcelle(s) du registre sans polygone'); add(S.reg.ecartSurface.length, 'écart(s) de surface de plus de '+REG.ecartSurfacePct+' % entre registre et polygones'); add(S.reg.coordLoin.length, 'parcelle(s) à plus de '+REG.coordM+' m de la position du registre'); add(S.reg.nbParcelles.length, 'producteur(s) dont le nombre de parcelles diffère du registre'); add(S.reg.codesDouble.length, 'code(s) en double dans le registre'); if (!S.reg.ecarts) L.push('<li>Registre et polygones concordants.</li>'); } }
   add(S.plan.simplifier.length, 'contour(s) très détaillé(s) ou irrégulier(s) <i>(information, pas une anomalie)</i>');
   add(S.plan.densifier.length, 'polygone(s) de moins de '+CONFIG.sommetsApresMin+' sommets <i>(information)</i>');
   let h = (demo ? '<div class="avis demo" style="margin:0 0 8px"><b>MODE DÉMONSTRATION.</b> Les résultats satellite et des couches sont fictifs.</div>' : '')
@@ -1444,7 +1746,7 @@ function bilanHtml(){
 function afficherDiscussion(){
   if (!S.disc) return;
   $('disc-fil').innerHTML = S.disc.map(m=> m.r==='a' ? '<div class="msg a">'+(m.bilan ? bilanHtml() : m.html)+'</div>' : '<div class="msg u">'+esc(m.txt)+'</div>').join('');
-  $('disc-puces').innerHTML = ['Chevauchements','Formes semblables','Dessiné à la main','Contours détaillés','Doublons','Analyse satellite','Fichiers à télécharger'].map(t=>'<button type="button" onclick="poserQuestion(\''+t+'\')">'+t+'</button>').join('');
+  $('disc-puces').innerHTML = ['Chevauchements','Formes semblables','Dessiné à la main','Contours détaillés','Doublons','Analyse satellite','Fichiers à télécharger'].concat(S.reg?['Registre']:[]).map(t=>'<button type="button" onclick="poserQuestion(\''+t+'\')">'+t+'</button>').join('');
   const f = $('disc-fil'); f.scrollTop = f.scrollHeight;
 }
 function ouvrirDiscussion(){ S.disc = [{ r:'a', bilan:true }]; $('res-dispo').classList.add('cache'); $('discussion').classList.remove('cache'); afficherDiscussion(); }
@@ -1456,6 +1758,7 @@ function basculerDisc(k, v){ S.T[k] = v; afficherRegles(); recalculer(); affiche
 function reponse(q){
   const t = q.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
   const n = (a)=>S.plan?S.plan[a].length:0;
+  if (/registre|synchro|concord/.test(t)) return S.reg ? regPhrase(S.reg)+' Méthode : je cherche la colonne du registre et la propriété des polygones dont les codes se recoupent le mieux (code exact, sans suffixe de parcelle, lettres et chiffres seuls), puis je rattache par le nom (fautes de frappe, ordre des mots) les polygones restants. Seuils : écart de surface de plus de '+REG.ecartSurfacePct+' %, position à plus de '+REG.coordM+' m. Le registre ne bloque rien et ne modifie aucun polygone.' : 'Aucun registre n\'a été déposé avec ce dossier. Ajoute le registre (Excel ou CSV) avec les polygones pour comparer les deux.';
   if (/chevauch/.test(t)) return 'Deux parcelles se chevauchent quand l\'une recouvre l\'autre. Règle d\'ORIGEN : quand une parcelle en chevauche une autre jusqu\'à 20 % (tout 20,xx compte comme 20), on lui enlève la partie qui chevauche et on harmonise le contour : le reste est gardé, sans chevauchement. Si ce qui reste fait moins de 0,5 ha, la parcelle est retirée ; les morceaux de moins de 0,5 % de sa surface sont écartés. De 21 à 50 %, on garde la parcelle seulement si son plus grand morceau, une fois la partie qui chevauche enlevée, fait au moins 1 ha ; sinon elle est retirée. Au-delà de 50 %, on la supprime. Seuls les recouvrements de moins de 50 m² sont ignorés. Pour la base existante, côté serveur, le calcul est indicatif : il ne bloque rien. Ici : '+S.chev.length+' paire(s) concernée(s), '+n('reduire')+' à réduire, '+n('garder')+' à garder au plus grand morceau et '+n('supprimer')+' à supprimer.';
   if (/semblab|forme/.test(t)) return 'Deux contours de forme presque identique, même éloignés, sont suspects (copie d\'un tracé). Seuil : ressemblance d\'au moins 90 %. Mesure : on ne garde qu\'une parcelle par groupe. Ici : '+S.simil.length+' paire(s).';
   if (/main|dessin/.test(t)) return 'Chaque contour reçoit un score sur 5 : peu de sommets (8 ou moins : +2, 12 ou moins : +1), segments de plus de 40 m en médiane (+1), angles droits sur la moitié des sommets (+1), coordonnées à 5 décimales ou moins (+1). À partir de 3 sur 5, le tracé ressemble à un dessin sur écran plutôt qu\'à une marche GPS. C\'est un signal à examiner : la seule mesure possible est de les mettre de côté pour les re-cartographier ; on n\'ajoute jamais de sommets pour les faire ressembler à un relevé. Ici : '+n('main')+' parcelle(s).';
@@ -1476,8 +1779,8 @@ async function demarrer(entrees){
     $('etape2').classList.remove('cache'); $('barre').classList.remove('cache'); $('prog').value = 0; $('prog-txt').textContent = 'Lecture des fichiers…'; allerEtape(2);
     await attendre();
     const dev = await developper(entrees, 0);
-    const { brut, journal } = await lireEntrees(dev);
-    S.journal = journal; S.serveur = null; S.jobActif = null; S.jobOuvert = null; $('avis-zone').innerHTML=''; $('analyse-etat').textContent='';
+    const { brut, journal, registres } = await lireEntrees(dev);
+    S.journal = journal; S.registres = registres; S.reg = null; S.serveur = null; S.jobActif = null; S.jobOuvert = null; $('avis-zone').innerHTML=''; $('analyse-etat').textContent='';
     const prep = preparer(brut);
     S.feats = prep.polys; S.points = prep.points; S.lignes = prep.lignes;
     $('etape2').classList.remove('cache'); afficherFichiers();
@@ -1513,6 +1816,7 @@ async function analyserTout(){
   S.res = S.feats.map(controlerParcelle);
   S.chev = []; S.simil = []; S.simpl = {}; S.plan = null; S.final = null;
   S.res.forEach(r=>{ r.statut = statutDe(r); });
+  if ((S.registres||[]).length){ $('prog-txt').textContent = 'Rapprochement avec le registre…'; await attendre(); try { rapprocherRegistre(); } catch(e){ console.warn('Registre :', e); S.reg = null; } }
   $('etape2').classList.remove('cache'); afficher();
   $('prog-txt').textContent = 'Recherche des chevauchements…';
   S.chev = await chevauchements(S.feats, S.res, prog(0.05,0.35));
@@ -1590,6 +1894,7 @@ function afficher(){
         '<td>'+(r.ecartee?'<b>'+esc(r.ecartee)+'</b><br>':'')+(r.pb.length?r.pb.map(p=>esc(p.txt)).join('<br>'):(r.ecartee?'':'—'))+'</td>'+
         (srv?('<td>'+esc(s&&s.risk_pcrop!=null?s.risk_pcrop:'—')+'</td><td>'+(s&&s.perturbation_apres_2020!=null?(s.perturbation_apres_2020?'Oui':'Non'):'—')+'</td><td>'+(s&&s.prioritaire!=null?(s.prioritaire?'<b>Oui</b>':'Non'):'—')+'</td><td>'+(s&&s.chevauchement_pct!=null?(s.chevauchement_pct>0?s.chevauchement_pct+' %':'Non'):'—')+'</td>'):'')+'</tr>'; }).join('')+'</tbody>';
   dessinerCarte(filtre);
+  if ($('reg-bloc')) $('reg-bloc').innerHTML = regHtml();
   majParcours(); majTete(); if (S.disc) afficherDiscussion();
 }
 
@@ -1923,7 +2228,7 @@ async function gzip64(txt){ const cs = new CompressionStream('gzip'), w = cs.wri
 async function gunzip64(t){ const ds = new DecompressionStream('gzip'), w = ds.writable.getWriter(); w.write(unb64(t)); w.close(); return new TextDecoder().decode(await new Response(ds.readable).arrayBuffer()); }
 async function sauverPrepa(id){
   try {
-    const json = JSON.stringify({ res:S.res, chev:S.chev, simil:S.simil, simpl:S.simpl, simplCoupe:!!S.simplCoupe });
+    const json = JSON.stringify({ res:S.res, chev:S.chev, simil:S.simil, simpl:S.simpl, simplCoupe:!!S.simplCoupe, reg:S.reg||null });
     let data = json, gz = false;
     if (typeof CompressionStream!=='undefined'){ data = await gzip64(json); gz = true; }
     const tout = JSON.stringify({ v:REGLES_VERSION, nb:S.feats.length, gz, data });
@@ -1942,7 +2247,7 @@ async function lirePrepa(id){
   } catch(e){ return null; }
 }
 function restaurerPrepa(p){
-  S.res = p.res; S.chev = p.chev; S.simil = p.simil; S.simpl = p.simpl; S.simplCoupe = !!p.simplCoupe; S.final = null;
+  S.res = p.res; S.chev = p.chev; S.simil = p.simil; S.simpl = p.simpl; S.simplCoupe = !!p.simplCoupe; S.reg = p.reg||null; S.final = null;
   S.plan = construirePlan(S);
   $('barre').classList.add('cache'); $('etape2').classList.remove('cache'); $('etape3').classList.remove('cache');
   $('attente').innerHTML = 'Contrôles faits par le serveur au lancement de l\'analyse (selon les couches chargées) : '+CONTROLES_SERVEUR.filter((t,k)=>k!==0&&k!==2).map(esc).join(' · ')+'.';
@@ -2064,6 +2369,13 @@ async function telechargerExcel(){
   r.addRow(['Chevauchements entre parcelles', new Set(S.chev.flatMap(p=>[p.grand,p.petit])).size]); r.addRow([]);
   r.addRow(['BASE FINALE','']).font = {bold:true};
   r.addRow(['Parcelles gardées', S.final.gardees.length]); r.addRow(['Parcelles écartées', S.final.ecartees.length]); r.addRow(['Parcelles modifiées', S.final.gardees.filter(g=>g.modif).length]);
+  if (S.reg){ const g = S.reg; r.addRow([]); r.addRow(['REGISTRE ↔ POLYGONES','']).font = {bold:true};
+    r.addRow(['Registre lu', g.fichier]); r.addRow(['Producteurs / lignes au registre', g.nbProd+' / '+g.nbLignes]);
+    r.addRow(['Polygones retrouvés au registre', g.nbAuRegistre+' sur '+g.nbPoly+' ('+g.concordance.toFixed(1)+' %)']);
+    r.addRow(['Polygones sans correspondance au registre', g.horsRegistre.length]); r.addRow(['Producteurs du registre sans polygone', g.garde ? 'non calculé (registre incohérent)' : g.sansPolygone.length]);
+    r.addRow(['Parcelles du registre sans polygone', g.unitesSansPolygone.length]); r.addRow(['Écarts de surface (> '+REG.ecartSurfacePct+' %)', g.ecartSurface.length]);
+    r.addRow(['Positions à plus de '+REG.coordM+' m du registre', g.coordLoin.length]); r.addRow(['Nombre de parcelles différent du registre', g.nbParcelles.length]); r.addRow(['Codes en double au registre', g.codesDouble.length]);
+    const t = r.addRow([regPhrase(g)]); r.mergeCells(t.number,1,t.number,2); t.alignment={wrapText:true,vertical:'top'}; t.height=60; t.font = {bold:true,color:{argb: g.verdict==='concordant' ? 'FF2E7D46' : 'FFC00000'}}; }
   r.addRow([]); r.addRow(['CONTRÔLES SATELLITE','']).font = {bold:true};
   CONTROLES_SERVEUR.forEach((t,k)=>r.addRow([t, !S.serveur ? 'non réalisé' : (demo ? 'fictif (démonstration)' : ((k===0 && S.serveur.whisp) || (k===2 && S.serveur.base_comparee) || (k===1 && ((S.serveur.couches||{}).protegees>0)) || (k===3 && (((S.serveur.couches||{}).cours_eau>0)||((S.serveur.couches||{}).plans_eau>0)||((S.serveur.couches||{}).habitat>0))) || (k===4 && ((S.serveur.couches||{}).cacao>0)) ? 'réalisé' : 'non réalisé'))]));
   if (S.serveur){ const n = S.serveur.resultats.filter(x=>x.chevauchement_pct>0).length; r.addRow([]); r.addRow(['Parcelles superposées à une base existante', n]);
@@ -2073,6 +2385,14 @@ async function telechargerExcel(){
 
   feuille(wb, 'Fichiers lus', ['Fichier','Format','Contenu','État'], S.journal.map(j=>[j.nom,j.format,j.note,({ok:'Lu',ignore:'Ignoré',erreur:'Problème'})[j.statut]]), [60,14,60,12]);
   feuille(wb, 'Géométrie', ['Parcelle','Surface (ha)','Sommets','Problème','Gravité'], S.res.flatMap(x=>x.pb.filter(p=>['repare','croise','sommets','coord','illisible','petite','grande','main','detail','irreg','zone','precision'].includes(p.code)).map(p=>[x.id, x.aireHa==null?null:+x.aireHa.toFixed(3), x.sommets, p.txt, p.niveau==='erreur'?'Bloquant':p.niveau==='info'?'Information':'À vérifier'])), [16,13,10,70,12]);
+  if (S.reg){ const g = S.reg;
+    feuille(wb, 'Registre - polygones sans reg.', ['Polygone','Nom','Cas','Correspondance possible au registre'], g.horsRegistre.map(x=>[x.id,x.nom,x.cas,x.detail]), [26,30,60,50]);
+    feuille(wb, 'Registre - sans polygone', ['Code producteur','Nom','Village','Surface déclarée (ha)'], g.sansPolygone.map(x=>[x.code,x.nom,x.village,x.surface==null?null:+x.surface.toFixed(2)]), [18,36,24,20]);
+    if (g.unitesSansPolygone.length) feuille(wb, 'Registre - parcelles sans poly.', ['Producteur','Nom','Code parcelle','Surface déclarée (ha)'], g.unitesSansPolygone.map(x=>[x.prod,x.nom,x.code,x.surface==null?null:+x.surface.toFixed(2)]), [18,36,22,20]);
+    feuille(wb, 'Registre - codes en double', ['Code','Nombre de lignes'], g.codesDouble.map(x=>[x.code,x.nb]), [26,18]);
+    feuille(wb, 'Registre - écarts de surface', ['Polygone(s)','Producteur','Surface registre (ha)','Surface polygone(s) (ha)','Écart (%)'], g.ecartSurface.map(x=>[x.id,x.prod,+x.reg.toFixed(2),+x.poly.toFixed(2),+x.pct.toFixed(0)]), [26,22,20,24,12]);
+    feuille(wb, 'Registre - coordonnées loin', ['Polygone(s)','Producteur','Distance (m)','Niveau'], g.coordLoin.map(x=>[x.id,x.prod,x.dist,x.niveau]), [26,22,16,22]);
+    if (g.nbParcelles.length) feuille(wb, 'Registre - nb de parcelles', ['Producteur','Nom','Parcelles au registre','Polygones'], g.nbParcelles.map(x=>[x.prod,x.nom,x.registre,x.polygones]), [20,36,22,14]); }
   feuille(wb, 'Doublons', ['Parcelle','Problème'], S.res.flatMap(x=>x.pb.filter(p=>['dup_id','dup_geom'].includes(p.code)).map(p=>[x.id,p.txt])), [18,60]);
   feuille(wb, 'Formes semblables', ['Parcelle A','Parcelle B','Ressemblance (%)','Distance (m)'], S.simil.map(p=>[id(p.a),id(p.b),Math.round(p.iou*100),Math.round(p.km*1000)]), [18,18,18,14]);
   feuille(wb, 'Chevauchements', ['Parcelle gardée entière','Parcelle réduite ou retirée','Part de cette parcelle couverte (%)','Surface commune (m²)','Traitement'], S.chev.map(p=>[id(p.grand),id(p.petit),+p.pct.toFixed(1),Math.round(p.m2),p.cat==='reduire'?'Réduction':p.cat==='garder'?'Plus grand morceau (≥ 1 ha) ou retrait':'Suppression']), [24,22,24,20,14]);
