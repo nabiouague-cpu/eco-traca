@@ -971,8 +971,8 @@ function lireRegistre(tables, fichier){
   return { fichier, format:'libre', feuille:t.titre, prods, lignes };
 }
 
-// ---------- rapprochement des noms : STRICT (même ensemble de mots, dans n'importe quel ordre). Le reste est « à vérifier » : listé, jamais rattaché ----------
-const REG_TITRES = new Set(['mr','mme','mlle','m','monsieur','madame','dame','feu','chef','dr','sieur','ii','iii','dit']);
+// ---------- rapprochement des noms (règles d'ORIGEN, analyser_defo.py : chercher_producteur) ----------
+const REG_TITRES = new Set(['mr','mme','mlle','m','monsieur','madame','dame','feu','chef','dr','sieur']);
 function regPhon(t){ return t.replace(/ph/g,'f').replace(/ck/g,'k').replace(/[cq]/g,'k').replace(/ou/g,'u').replace(/[yw]/g,'i').replace(/h/g,'').replace(/(.)\1+/g,'$1'); }
 function regLev(a,b,maxd){
   if (Math.abs(a.length-b.length)>maxd) return maxd+1;
@@ -985,10 +985,7 @@ function regLev(a,b,maxd){
   }
   return prev[prev.length-1];
 }
-function regJetons(nom, exclus){
-  const brut = String(nom==null?'':nom).normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/\bn\s*['’`]?\s*guessan\b/g,'nguessan').replace(/['’`]/g,'');
-  return regSa(brut).split(' ').filter(t=>t && !REG_TITRES.has(t) && !(exclus && exclus.has(t)) && !/^p\d+$/.test(t) && !/^\d+$/.test(t));
-}
+function regJetons(nom, exclus){ return regSa(String(nom==null?'':nom).replace(/['’]/g,'')).split(' ').filter(t=>t && !REG_TITRES.has(t) && !(exclus && exclus.has(t)) && !/^p\d+$/.test(t) && !/^\d+$/.test(t)); }
 function regJetonProche(x,y){
   if (x===y) return 1;
   if (regPhon(x)===regPhon(y)) return 0.95;
@@ -1009,32 +1006,25 @@ function regScoreNom(A,B){
     if (bj>=0 && best>=0.6){ tot += best; B2.splice(bj,1); } });
   return [tot/Math.max(A.length,B.length), tot/Math.min(A.length,B.length)];
 }
-// Retourne { p } si UN SEUL producteur a exactement les mêmes mots (au moins deux mots) ; { ambigu } si plusieurs ; { propose } si un nom ressemble sans être identique (à vérifier, jamais rattaché).
-function regChercherProducteur(nom, prods, jet, exclus){
+// Même règle qu'ORIGEN (chercher_producteur) : un seul candidat net est retenu ; à égalité, on préfère le producteur qui n'a pas encore de polygone ; un nom ambigu n'est pas rattaché.
+function regChercherProducteur(nom, prods, jet, exclus, deja){
   const A = regJetons(nom, exclus); if (!A.length) return { motif:'nom vide' };
-  const cleA = A.slice().sort().join(' ');
-  if (A.length>=2){
-    const ident = []; jet.forEach((B,i)=>{ if (B.length && B.slice().sort().join(' ')===cleA) ident.push(i); });
-    if (ident.length===1) return { p:ident[0], motif:'même ensemble de mots' };
-    if (ident.length>1) return { ambigu:true, motif:'nom ambigu : '+ident.slice(0,3).map(i=>prods[i].nom).join(' / ') };
-  }
   const cand = [];
   prods.forEach((p,i)=>{ const B = jet[i]; if (!B.length) return;
     const [sc,cov] = regScoreNom(A,B), petit = Math.min(A.length,B.length);
-    if (sc>=0.66 || (cov>=0.75 && petit>=2 && sc>=0.5)) cand.push({ i, sc }); });
+    if (sc>=0.66 || (cov>=0.75 && petit>=2 && sc>=0.5) || (A.length===1 && cov>=0.85 && A[0].length>=4)) cand.push({ i, v:sc+(deja.has(i)?0:0.02), sc }); });
   if (!cand.length) return { motif:'aucun producteur du registre ne ressemble à ce nom' };
-  cand.sort((a,b)=>b.sc-a.sc);
-  if (cand.length>1 && cand[0].sc-cand[1].sc<0.05) return { ambigu:true, motif:'nom ambigu : '+cand.slice(0,3).map(c=>prods[c.i].nom).join(' / ') };
-  return { propose:cand[0].i, score:cand[0].sc, motif:'nom proche, pas identique : à vérifier' };
+  cand.sort((a,b)=>b.v-a.v);
+  if (cand.length>1 && cand[0].v-cand[1].v<0.05) return { ambigu:true, motif:'nom ambigu : '+cand.slice(0,3).map(c=>prods[c.i].nom).join(' / ') };
+  return { p:cand[0].i, motif:'rapproché par le nom' };
 }
 const regEstCodeNom = nm=>/^[A-Za-z]{0,6}[- ]?\d{1,5}([- ]?P\d)?$/i.test(String(nm==null?'':nm).trim());
 const REG_CLE_NOM = /name|nom|farmer|producteur|producer|planteur|owner|proprietaire|fournisseur|supplier|agriculteur|cultivat|exploitant|membre|member|benefici|titulaire|paysan|vendeur/i, REG_PAS_NOM = /code|barcode|id$|file|fichier|village|coop|source/i;
 
-// ---------- le rapprochement : 3 niveaux, rien n'est forcé ----------
-//  1. direct          : le code du polygone est le code du registre (même écriture)
-//  2. code corrigé    : même code après correction d'écriture (suffixe de parcelle -P1, tirets, espaces, lettres/chiffres)
-//  3. nom identique   : pas de code utilisable, mais exactement les mêmes mots qu'UN SEUL producteur du registre
-//  sinon « non résolu » : listé, jamais rattaché. Moins de 50 % de liens => aucun constat sur les producteurs (le registre ne correspond pas).
+// ---------- le rapprochement : mêmes règles qu'ORIGEN (appariement_registre) ----------
+//  1. colonne du polygone × colonne du registre × règle d'écriture qui se recoupent le mieux (GMR : unités d'abord, exploitations si elles recoupent moins de 50 %) ; sous 30 % : aucune correspondance par code
+//  2. polygones restants : par le nom (repli souple d'ORIGEN), un nom ambigu n'est pas rattaché
+//  3. moins de 50 % de polygones reliés => le registre ne correspond pas (aucun producteur retiré) ; rattachement absurde => même conclusion
 function fusionnerRegistres(regs){
   if (regs.length===1) return regs[0];
   const prods = [], lignes = [];
@@ -1086,16 +1076,6 @@ function rapprocherRegistre(){
   if (meil){
     indexer(meil.rc, meil.s).forEach((v,k)=>lignesParCle.set(k,v));
     appliquer(meil.gp, lignesParCle, meil.s);
-    // complément : un même fichier peut mélanger code producteur et code parcelle ; règles prudentes seulement (jamais « chiffres seuls »)
-    let essaisExtra = 0, acceptes = 0;
-    for (const e of essais.slice(0,120)){
-      if (acceptes>=2 || essaisExtra>=8) break;
-      if (e.s===5 || e.hit===0 || (e.gp===meil.gp && e.rc===meil.rc && e.s===meil.s)) continue;
-      const idx = indexer(e.rc, e.s), fg = REG_STRATS[e.s][1];
-      let restant = 0, hit = 0;
-      S.feats.forEach((f,i)=>{ if (cible[i]) return; const v = (propVals[e.gp]||[])[i]; if (!v) return; restant++; if (idx.has(fg(v))) hit++; });
-      if (hit>=1){ essaisExtra++; if (restant && hit/restant>=0.3){ appliquer(e.gp, idx, e.s); acceptes++; } }
-    }
   }
   const parCode = cible.filter(x=>x).length;
   // niveau 3 : par le nom, seulement pour les polygones sans code retrouvé, et seulement si le nom n'est qu'un nom (pas un code)
@@ -1103,23 +1083,22 @@ function rapprocherRegistre(){
   const villages = new Set(); R.prods.forEach(p=>regJetons(p.village).forEach(t=>villages.add(t)));
   const prodsNom = R.prods.map((p,i)=>i).filter(i=>R.prods[i].nom);
   const jet = prodsNom.map(i=>regJetons(R.prods[i].nom, villages));
-  const horsRegistre = [], aVerifier = [];
+  const horsRegistre = [];
   const prefixeProd = code=>{ const c = normCode(code); let m = null; R.prods.forEach(p=>{ if (p.id && c.startsWith(normCode(p.id)) && (!m || p.id.length>m.id.length)) m = p; }); return m; };
+  const deja = new Set(); cible.forEach(c=>{ if (c){ const k = prodsNom.indexOf(c.prod); if (k>=0) deja.add(k); } });
   S.feats.forEach((f,i)=>{
     if (cible[i]) return;
     const id = f.properties.PlotID, nomAff = f.properties.Nom || '';
     const textes = clesNom.map(k=>propVals[k][i]).filter(v=>v && !regEstCodeNom(v));
-    if (!textes.length){
-      const pr = regEstCodeNom(nomAff||id) ? prefixeProd(nomAff||id) : null;
-      horsRegistre.push({ id, nom:nomAff, cas: pr ? "Code inconnu, mais l'exploitation existe au registre (unité absente)" : 'Code absent du registre', detail: pr ? (pr.id+' — '+pr.nom) : '' });
+    if (textes.length && prodsNom.length){
+      const txt = textes.length>1 && textes.every(t=>t.split(/\s+/).length===1) ? textes.join(' ') : textes.reduce((a,b)=>b.length>a.length?b:a);
+      const r = regChercherProducteur(txt, prodsNom.map(k=>R.prods[k]), jet, villages, deja);
+      if (r.p!=null){ cible[i] = { prod:prodsNom[r.p], ligne:null, via:'nom', nom:txt }; deja.add(r.p); return; }
+      horsRegistre.push({ id, nom:txt, cas: r.ambigu ? 'Sans code, nom ambigu (plusieurs producteurs possibles)' : 'Sans code, et le nom ne correspond à aucun producteur du registre : producteur absent du registre', detail: r.ambigu ? r.motif.replace('nom ambigu : ','') : '' });
       return;
     }
-    const txt = textes.length>1 && textes.every(t=>t.split(/\s+/).length===1) ? textes.join(' ') : textes.reduce((a,b)=>b.length>a.length?b:a);
-    const r = prodsNom.length ? regChercherProducteur(txt, prodsNom.map(k=>R.prods[k]), jet, villages) : { motif:'registre sans noms' };
-    if (r.p!=null){ cible[i] = { prod:prodsNom[r.p], ligne:null, via:'nom', nom:txt }; return; }
-    if (r.propose!=null){ const p = R.prods[prodsNom[r.propose]]; aVerifier.push({ id, nom:txt, propose:(p.id?p.id+' — ':'')+p.nom, score:Math.round(r.score*100) });
-      horsRegistre.push({ id, nom:txt, cas:'Sans code ; un nom du registre y ressemble sans être identique : à vérifier, non rattaché', detail:(p.id?p.id+' — ':'')+p.nom }); return; }
-    horsRegistre.push({ id, nom:txt, cas: r.ambigu ? 'Sans code, nom ambigu (plusieurs producteurs possibles) : non rattaché' : 'Sans code, et le nom ne correspond à aucun producteur du registre : producteur absent du registre', detail: r.ambigu ? r.motif.replace('nom ambigu : ','') : '' });
+    const code = nomAff || id, pr = prefixeProd(code);
+    horsRegistre.push({ id, nom:nomAff, cas: pr ? "Code inconnu, mais l'exploitation existe au registre (unité absente)" : "Code inconnu : ni l'unité ni l'exploitation ne sont au registre", detail: pr ? (pr.id+' — '+pr.nom) : '' });
   });
   const nbAuRegistre = cible.filter(x=>x).length;
   const niveaux = { direct:cible.filter(x=>x&&x.via==='direct').length, corrige:cible.filter(x=>x&&x.via==='corrige').length, nom:cible.filter(x=>x&&x.via==='nom').length };
@@ -1169,16 +1148,16 @@ function rapprocherRegistre(){
   const ecarts = horsRegistre.length + sansPolygone.length + unitesSansPolygone.length + codesDouble.length + incoherents.length + ecartSurface.length + coordLoin.length + nbParcelles.length;
   S.reg = { fichier:R.fichier, format:R.format, feuille:R.feuille, nbProd:R.prods.length, nbLignes:R.lignes.length, nbPoly:n, nbAuRegistre, nbParCode:parCode, nbParNom:niveaux.nom, niveaux,
     couple: meil ? { poly:meil.gp, reg:meil.rc, regle:REG_STRATS[meil.s][0], taux:Math.round(meil.taux*1000)/10 } : null, garde, suspect, concordance:Math.round(nbAuRegistre/n*1000)/10,
-    prodsAvecPolygone:prodsAvec.size, horsRegistre, aVerifier, rattachesNom, sansPolygone, unitesSansPolygone, codesDouble, incoherents, ecartSurface, coordLoin, nbParcelles, ecarts,
+    prodsAvecPolygone:prodsAvec.size, horsRegistre, rattachesNom, sansPolygone, unitesSansPolygone, codesDouble, incoherents, ecartSurface, coordLoin, nbParcelles, ecarts,
     verdict: !fiable ? 'incoherent' : (ecarts ? 'ecarts' : 'concordant') };
 }
 function regPhrase(r){
   if (!r) return '';
   if (r.suspect) return 'Le registre ne correspond pas aux polygones : '+r.suspect+' Aucun constat sur les producteurs n\'est fait ; à vérifier avant toute exploitation.';
-  if (r.garde) return 'Le registre ne correspond pas aux polygones : seuls '+r.nbAuRegistre+' polygone(s) sur '+r.nbPoly+' ('+r.concordance.toFixed(0)+' %) sont retrouvés au registre. Aucun constat sur les producteurs n\'est fait (rien n\'est forcé) ; à vérifier avant toute exploitation : les deux fichiers ne viennent peut-être pas de la même coopérative ou de la même date.';
+  if (r.garde) return 'Le registre ne correspond pas aux polygones : seuls '+r.nbAuRegistre+' polygone(s) sur '+r.nbPoly+' ('+r.concordance.toFixed(0)+' %) sont retrouvés au registre. Aucun producteur n\'est déclaré sans polygone ; à vérifier avant toute exploitation : les deux fichiers ne viennent peut-être pas de la même coopérative ou de la même date.';
   if (r.verdict==='concordant') return 'Le registre et les polygones concordent : les '+r.nbPoly+' polygone(s) sont retrouvés au registre, sans écart de surface ni de position.';
   const L = [];
-  if (r.horsRegistre.length) L.push(r.horsRegistre.length+' polygone(s) sans correspondance au registre (non rattachés)');
+  if (r.horsRegistre.length) L.push(r.horsRegistre.length+' polygone(s) sans correspondance au registre');
   if (r.sansPolygone.length) L.push(r.sansPolygone.length+' producteur(s) du registre sans polygone');
   if (r.unitesSansPolygone.length) L.push(r.unitesSansPolygone.length+' parcelle(s) du registre sans polygone');
   if (r.ecartSurface.length) L.push(r.ecartSurface.length+' écart(s) de surface de plus de '+REG.ecartSurfacePct+' %');
@@ -1192,9 +1171,8 @@ function regHtml(){
   const r = S.reg; if (!r) return '';
   const nv = r.niveaux||{direct:r.nbParCode,corrige:0,nom:r.nbParNom};
   return '<div class="'+(r.verdict==='concordant'?'hint':'avis')+'" style="margin:8px 0"><b>Registre ↔ polygones.</b> '+esc(regPhrase(r))+
-    '<div class="hint" style="margin-top:4px">'+esc(r.fichier)+' · '+r.nbProd+' producteur(s), '+r.nbLignes+' ligne(s) · '+r.nbAuRegistre+' / '+r.nbPoly+' polygone(s) retrouvé(s) : '+nv.direct+' par le code tel quel, '+nv.corrige+' par le code corrigé (écriture), '+nv.nom+' par le nom identique ; '+r.horsRegistre.length+' non résolu(s), jamais forcé(s)'+
-    (r.aVerifier && r.aVerifier.length ? ' ('+r.aVerifier.length+' nom(s) proche(s) à vérifier, non rattaché(s))' : '')+
-    (r.couple ? ' · code « '+esc(r.couple.poly)+' » ↔ « '+esc(r.couple.reg)+' » ('+esc(r.couple.regle)+', '+r.couple.taux+' %)' : ' · aucun code commun trouvé')+'</div></div>';
+    '<div class="hint" style="margin-top:4px">'+esc(r.fichier)+' · '+r.nbProd+' producteur(s), '+r.nbLignes+' ligne(s) · '+r.nbAuRegistre+' / '+r.nbPoly+' polygone(s) retrouvé(s) : '+nv.direct+' par le code tel quel, '+nv.corrige+' par le code corrigé (écriture), '+nv.nom+' par le nom identique ; '+r.horsRegistre.length+' sans correspondance'+
+        (r.couple ? ' · code « '+esc(r.couple.poly)+' » ↔ « '+esc(r.couple.reg)+' » ('+esc(r.couple.regle)+', '+r.couple.taux+' %)' : ' · aucun code commun trouvé')+'</div></div>';
 }
 
 // ====== PRÉPARATION (même logique que la préparation ORIGEN : points retirés, lignes → polygones, champs identiques) ======
@@ -1778,7 +1756,7 @@ function bilanHtml(){
   add(n(x=>x.chevauchement_pct>0), 'parcelle(s) superposée(s) à une base de données existante');
   add(n(x=>x.prioritaire), 'parcelle(s) prioritaire(s) (couvert arboré en 2020 puis perturbation)');
   add(n(x=>x.perturbation_apres_2020 && !x.prioritaire), 'parcelle(s) avec une perturbation après 2020 sans couvert arboré en 2020');
-  if (S.reg){ if (S.reg.garde || S.reg.suspect) L.push('<li><b>Registre :</b> '+esc(regPhrase(S.reg))+'</li>'); else { add(S.reg.horsRegistre.length, 'polygone(s) sans correspondance au registre'); add(S.reg.sansPolygone.length, 'producteur(s) du registre sans polygone'); add(S.reg.unitesSansPolygone.length, 'parcelle(s) du registre sans polygone'); add(S.reg.ecartSurface.length, 'écart(s) de surface de plus de '+REG.ecartSurfacePct+' % entre registre et polygones'); add(S.reg.coordLoin.length, 'parcelle(s) à plus de '+REG.coordM+' m de la position du registre'); add(S.reg.nbParcelles.length, 'producteur(s) dont le nombre de parcelles diffère du registre'); add(S.reg.codesDouble.length, 'code(s) en double dans le registre'); add(S.reg.incoherents.length, 'ligne(s) incohérente(s) dans le registre'); add(S.reg.aVerifier.length, 'polygone(s) dont le nom ressemble à un producteur du registre sans être identique <i>(à vérifier, non rattaché)</i>'); add(S.reg.niveaux.nom, 'polygone(s) rattaché(s) par le nom identique <i>(à contrôler dans le rapport)</i>'); if (!S.reg.ecarts) L.push('<li>Registre et polygones concordants.</li>'); } }
+  if (S.reg){ if (S.reg.garde || S.reg.suspect) L.push('<li><b>Registre :</b> '+esc(regPhrase(S.reg))+'</li>'); else { add(S.reg.horsRegistre.length, 'polygone(s) sans correspondance au registre'); add(S.reg.sansPolygone.length, 'producteur(s) du registre sans polygone'); add(S.reg.unitesSansPolygone.length, 'parcelle(s) du registre sans polygone'); add(S.reg.ecartSurface.length, 'écart(s) de surface de plus de '+REG.ecartSurfacePct+' % entre registre et polygones'); add(S.reg.coordLoin.length, 'parcelle(s) à plus de '+REG.coordM+' m de la position du registre'); add(S.reg.nbParcelles.length, 'producteur(s) dont le nombre de parcelles diffère du registre'); add(S.reg.codesDouble.length, 'code(s) en double dans le registre'); add(S.reg.incoherents.length, 'ligne(s) incohérente(s) dans le registre'); add(S.reg.niveaux.nom, 'polygone(s) rattaché(s) par le nom <i>(liste dans le rapport)</i>'); if (!S.reg.ecarts) L.push('<li>Registre et polygones concordants.</li>'); } }
   add(S.plan.simplifier.length, 'contour(s) très détaillé(s) ou irrégulier(s) <i>(information, pas une anomalie)</i>');
   add(S.plan.densifier.length, 'polygone(s) de moins de '+CONFIG.sommetsApresMin+' sommets <i>(information)</i>');
   let h = (demo ? '<div class="avis demo" style="margin:0 0 8px"><b>MODE DÉMONSTRATION.</b> Les résultats satellite et des couches sont fictifs.</div>' : '')
@@ -1803,7 +1781,7 @@ function basculerDisc(k, v){ S.T[k] = v; afficherRegles(); recalculer(); affiche
 function reponse(q){
   const t = q.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
   const n = (a)=>S.plan?S.plan[a].length:0;
-  if (/registre|synchro|concord/.test(t)) return S.reg ? regPhrase(S.reg)+' Méthode, 3 niveaux, rien n\'est forcé : 1) code tel quel ; 2) code corrigé (suffixe de parcelle, tirets, espaces) ; 3) nom identique (exactement les mêmes mots qu\'un seul producteur). Un nom seulement proche est listé « à vérifier » mais jamais rattaché ; un polygone non résolu reste non résolu. Sous 50 % de liens, aucun constat n\'est fait sur les producteurs. Seuils : écart de surface de plus de '+REG.ecartSurfacePct+' %, position à plus de '+REG.coordM+' m. Le registre ne bloque rien et ne modifie aucun polygone.' : 'Aucun registre n\'a été déposé avec ce dossier. Ajoute le registre (Excel ou CSV) avec les polygones pour comparer les deux.';
+  if (/registre|synchro|concord/.test(t)) return S.reg ? regPhrase(S.reg)+' Méthode (celle d\'ORIGEN) : je cherche la colonne du registre et la propriété des polygones dont les codes se recoupent le mieux (code tel quel, sans suffixe de parcelle, lettres et chiffres seuls), puis je rattache par le nom les polygones restants (ordre des mots, fautes de frappe ; un nom ambigu n\'est pas rattaché). Sous 50 % de liens, aucun producteur n\'est déclaré sans polygone. Seuils : écart de surface de plus de '+REG.ecartSurfacePct+' %, position à plus de '+REG.coordM+' m. Le registre ne bloque rien et ne modifie aucun polygone.' : 'Aucun registre n\'a été déposé avec ce dossier. Ajoute le registre (Excel ou CSV) avec les polygones pour comparer les deux.';
   if (/chevauch/.test(t)) return 'Deux parcelles se chevauchent quand l\'une recouvre l\'autre. Règle d\'ORIGEN : quand une parcelle en chevauche une autre jusqu\'à 20 % (tout 20,xx compte comme 20), on lui enlève la partie qui chevauche et on harmonise le contour : le reste est gardé, sans chevauchement. Si ce qui reste fait moins de 0,5 ha, la parcelle est retirée ; les morceaux de moins de 0,5 % de sa surface sont écartés. De 21 à 50 %, on garde la parcelle seulement si son plus grand morceau, une fois la partie qui chevauche enlevée, fait au moins 1 ha ; sinon elle est retirée. Au-delà de 50 %, on la supprime. Seuls les recouvrements de moins de 50 m² sont ignorés. Pour la base existante, côté serveur, le calcul est indicatif : il ne bloque rien. Ici : '+S.chev.length+' paire(s) concernée(s), '+n('reduire')+' à réduire, '+n('garder')+' à garder au plus grand morceau et '+n('supprimer')+' à supprimer.';
   if (/semblab|forme/.test(t)) return 'Deux contours de forme presque identique, même éloignés, sont suspects (copie d\'un tracé). Seuil : ressemblance d\'au moins 90 %. Mesure : on ne garde qu\'une parcelle par groupe. Ici : '+S.simil.length+' paire(s).';
   if (/main|dessin/.test(t)) return 'Chaque contour reçoit un score sur 5 : peu de sommets (8 ou moins : +2, 12 ou moins : +1), segments de plus de 40 m en médiane (+1), angles droits sur la moitié des sommets (+1), coordonnées à 5 décimales ou moins (+1). À partir de 3 sur 5, le tracé ressemble à un dessin sur écran plutôt qu\'à une marche GPS. C\'est un signal à examiner : la seule mesure possible est de les mettre de côté pour les re-cartographier ; on n\'ajoute jamais de sommets pour les faire ressembler à un relevé. Ici : '+n('main')+' parcelle(s).';
@@ -2417,8 +2395,8 @@ async function telechargerExcel(){
   if (S.reg){ const g = S.reg; r.addRow([]); r.addRow(['REGISTRE ↔ POLYGONES','']).font = {bold:true};
     r.addRow(['Registre lu', g.fichier]); r.addRow(['Producteurs / lignes au registre', g.nbProd+' / '+g.nbLignes]);
     r.addRow(['Polygones retrouvés au registre', g.nbAuRegistre+' sur '+g.nbPoly+' ('+g.concordance.toFixed(1)+' %)']);
-    r.addRow(['Rattachés par le code tel quel / par le code corrigé / par le nom identique', g.niveaux.direct+' / '+g.niveaux.corrige+' / '+g.niveaux.nom]);
-    r.addRow(['Polygones sans correspondance au registre (jamais forcés)', g.horsRegistre.length]); r.addRow(['Noms proches à vérifier (non rattachés)', g.aVerifier.length]); r.addRow(['Producteurs du registre sans polygone', (g.garde||g.suspect) ? 'non calculé (le registre ne correspond pas)' : g.sansPolygone.length]);
+    r.addRow(['Rattachés par le code tel quel / par le code corrigé / par le nom', g.niveaux.direct+' / '+g.niveaux.corrige+' / '+g.niveaux.nom]);
+    r.addRow(['Polygones sans correspondance au registre', g.horsRegistre.length]); r.addRow(['Producteurs du registre sans polygone', (g.garde||g.suspect) ? 'non calculé (le registre ne correspond pas)' : g.sansPolygone.length]);
     r.addRow(['Parcelles du registre sans polygone', g.unitesSansPolygone.length]); r.addRow(['Écarts de surface (> '+REG.ecartSurfacePct+' %)', g.ecartSurface.length]);
     r.addRow(['Positions à plus de '+REG.coordM+' m du registre', g.coordLoin.length]); r.addRow(['Nombre de parcelles différent du registre', g.nbParcelles.length]); r.addRow(['Codes en double au registre', g.codesDouble.length]);
     const t = r.addRow([regPhrase(g)]); r.mergeCells(t.number,1,t.number,2); t.alignment={wrapText:true,vertical:'top'}; t.height=60; t.font = {bold:true,color:{argb: g.verdict==='concordant' ? 'FF2E7D46' : 'FFC00000'}}; }
@@ -2433,8 +2411,7 @@ async function telechargerExcel(){
   feuille(wb, 'Géométrie', ['Parcelle','Surface (ha)','Sommets','Problème','Gravité'], S.res.flatMap(x=>x.pb.filter(p=>['repare','croise','sommets','coord','illisible','petite','grande','main','detail','irreg','zone','precision'].includes(p.code)).map(p=>[x.id, x.aireHa==null?null:+x.aireHa.toFixed(3), x.sommets, p.txt, p.niveau==='erreur'?'Bloquant':p.niveau==='info'?'Information':'À vérifier'])), [16,13,10,70,12]);
   if (S.reg){ const g = S.reg;
     feuille(wb, 'Registre - polygones sans reg.', ['Polygone','Nom','Cas','Correspondance possible au registre'], g.horsRegistre.map(x=>[x.id,x.nom,x.cas,x.detail]), [26,30,70,50]);
-    if (g.rattachesNom.length) feuille(wb, 'Registre - rattachés par le nom', ['Polygone','Nom du polygone','Producteur du registre (mêmes mots)'], g.rattachesNom.map(x=>[x.id,x.nom,x.prod]), [26,34,50]);
-    if (g.aVerifier.length) feuille(wb, 'Registre - noms à vérifier', ['Polygone','Nom du polygone','Nom proche au registre','Ressemblance (%)','Décision'], g.aVerifier.map(x=>[x.id,x.nom,x.propose,x.score,'Non rattaché : à confirmer par la coopérative']), [26,34,40,16,44]);
+    if (g.rattachesNom.length) feuille(wb, 'Registre - noms remplacés', ['Polygone','Nom du polygone','Producteur du registre'], g.rattachesNom.map(x=>[x.id,x.nom,x.prod]), [26,34,50]);
     if (g.incoherents.length) feuille(wb, 'Registre - lignes incohérentes', ['Code','Exploitation','Constat'], g.incoherents.map(x=>[x.code,x.prod,x.cas]), [24,18,60]);
     feuille(wb, 'Registre - sans polygone', ['Code producteur','Nom','Village','Surface déclarée (ha)'], g.sansPolygone.map(x=>[x.code,x.nom,x.village,x.surface==null?null:+x.surface.toFixed(2)]), [18,36,24,20]);
     if (g.unitesSansPolygone.length) feuille(wb, 'Registre - parcelles sans poly.', ['Producteur','Nom','Code parcelle','Surface déclarée (ha)'], g.unitesSansPolygone.map(x=>[x.prod,x.nom,x.code,x.surface==null?null:+x.surface.toFixed(2)]), [18,36,22,20]);
